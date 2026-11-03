@@ -1646,7 +1646,7 @@ fn a_clean_file_editor_return_without_a_line_rereads_the_config_view() {
     });
     let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]));
     lp.app
-        .set_configure(Some(seam.clone() as std::sync::Arc<dyn crate::Configure>));
+        .set_configure(seam.clone() as std::sync::Arc<dyn crate::Configure>);
     let now = contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref());
     for ch in "/settings".chars() {
         lp.app.on_key(crate::keys::Key::Char(ch), now);

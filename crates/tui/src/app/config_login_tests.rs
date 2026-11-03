@@ -36,7 +36,7 @@ fn seam() -> Arc<Fake> {
 }
 
 /// An app on home at 80x24 in `/w`, with `seam`.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -46,13 +46,13 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         },
         ..Default::default()
     });
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app.set_size(80, 24);
     app
 }
 
 /// An app attached to a session, with `seam`.
-fn attached(seam: Option<Arc<Fake>>) -> App {
+fn attached(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app
@@ -84,7 +84,7 @@ fn screen(app: &App) -> Vec<String> {
 
 #[test]
 fn slash_login_opens_the_view_attached_and_on_home() {
-    let mut app = home(Some(seam()));
+    let mut app = home(seam());
     assert_eq!(slash_login(&mut app), Effect::None);
     assert!(app.config_view_open());
     assert!(app.input().is_empty());
@@ -97,7 +97,7 @@ fn slash_login_opens_the_view_attached_and_on_home() {
     assert!(rows.iter().any(|row| row.contains("▄")), "{rows:?}");
     assert!(rows.iter().any(|row| row.contains("acme  key")), "{rows:?}");
 
-    let mut app = attached(Some(seam()));
+    let mut app = attached(seam());
     slash_login(&mut app);
     assert!(app.config_view_open());
     let rows = screen(&app);
@@ -111,26 +111,9 @@ fn slash_login_opens_the_view_attached_and_on_home() {
 }
 
 #[test]
-fn without_a_seam_login_says_not_available() {
-    let mut app = attached(None);
-    slash_login(&mut app);
-    let frame = app.config_view_screen();
-    assert_eq!(
-        frame.as_ref().map(|frame| frame.title.as_str()),
-        Some("Log in")
-    );
-    assert_eq!(
-        frame.map(|frame| frame.below),
-        Some(vec!["Not available in this terminal.".to_owned()])
-    );
-    app.on_key(Key::Esc, now());
-    assert!(!app.config_view_open());
-}
-
-#[test]
 fn a_paste_reaches_the_key_field_not_the_draft() {
     let seam = seam();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     slash_login(&mut app);
     app.on_key(Key::Down, now());
     app.on_key(Key::Enter, now());
@@ -149,7 +132,7 @@ fn a_paste_reaches_the_key_field_not_the_draft() {
 
 #[test]
 fn ctrl_c_still_reaches_the_quit_flow_from_the_key_panel() {
-    let mut app = attached(Some(seam()));
+    let mut app = attached(seam());
     slash_login(&mut app);
     app.on_key(Key::Down, now());
     app.on_key(Key::Enter, now());
@@ -162,7 +145,7 @@ fn ctrl_c_still_reaches_the_quit_flow_from_the_key_panel() {
 
 #[test]
 fn the_failed_turns_log_in_line_opens_the_view() {
-    let mut app = attached(Some(seam()));
+    let mut app = attached(seam());
     assert_eq!(app.on_click(TargetId::Line(Target::Login)), Effect::None);
     assert!(app.config_view_open());
     let rows = screen(&app);
@@ -174,7 +157,7 @@ fn the_failed_turns_log_in_line_opens_the_view() {
     assert!(rows.iter().any(|row| row.contains("▄")), "{rows:?}");
 
     // Enter on the focused line reaches the same arm.
-    let mut app = attached(Some(seam()));
+    let mut app = attached(seam());
     app.focus = Some(TargetId::Line(Target::Login));
     assert!(app.focus_key(&Key::Enter).is_some());
     assert!(app.config_view_open());
@@ -182,7 +165,7 @@ fn the_failed_turns_log_in_line_opens_the_view() {
 
 #[test]
 fn the_key_never_appears_in_the_apps_debug() {
-    let mut app = attached(Some(seam()));
+    let mut app = attached(seam());
     slash_login(&mut app);
     app.on_key(Key::Down, now());
     app.on_key(Key::Enter, now());
@@ -208,7 +191,7 @@ fn browser_seam() -> Arc<Fake> {
 
 /// An app with the login view open on the browser row, selected.
 fn browser_login_app(seam: &Arc<Fake>) -> App {
-    let mut app = attached(Some(Arc::clone(seam)));
+    let mut app = attached(Arc::clone(seam));
     slash_login(&mut app);
     assert!(app.config_view_open());
     app.on_key(Key::Down, now());
@@ -429,7 +412,7 @@ fn start_key_reviewer(app: &mut App, seam: &Arc<Fake>) -> crate::login_worker::L
 #[test]
 fn a_stored_key_queues_a_reviewer_read_on_a_fresh_ticket() {
     let seam = two_key_seam();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     let start = start_key_reviewer(&mut app, &seam);
     assert_eq!(start.ticket, crate::login_worker::LoginTicket(1));
     assert_eq!(start.name, "acme");
@@ -454,7 +437,7 @@ fn a_declared_secret_ends_without_a_reviewer_read() {
         }]);
     }
     let seam = Arc::new(fake);
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     slash_login(&mut app);
     app.on_key(Key::Down, now());
     app.on_key(Key::Enter, now());
@@ -510,7 +493,7 @@ fn a_browser_done_keeps_its_ticket_into_preparation() {
 #[test]
 fn a_late_reviewer_after_dismissal_changes_nothing_and_saves_nothing() {
     let seam = two_key_seam();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     let start = start_key_reviewer(&mut app, &seam);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert_eq!(
@@ -527,7 +510,7 @@ fn a_late_reviewer_after_dismissal_changes_nothing_and_saves_nothing() {
 #[test]
 fn a_second_login_leaves_the_first_ticket_s_result_behind() {
     let seam = two_key_seam();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     let first = start_key_reviewer(&mut app, &seam);
     // Back to the rows, over to beta, and through its panel: the
     // second read runs on ticket 2.
@@ -565,7 +548,7 @@ fn a_second_login_leaves_the_first_ticket_s_result_behind() {
 #[test]
 fn ticket_exhaustion_hands_max_out_again_and_admits_its_old_result() {
     let seam = two_key_seam();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     app.config_views.tickets = crate::login_worker::LoginTicket(u64::MAX - 1);
     let first = start_key_reviewer(&mut app, &seam);
     assert_eq!(first.ticket, crate::login_worker::LoginTicket(u64::MAX));
@@ -615,7 +598,7 @@ fn closing_after_the_credential_commit_keeps_it() {
 #[test]
 fn the_key_never_reaches_the_apps_debug_through_the_reviewer_flow() {
     let seam = two_key_seam();
-    let mut app = attached(Some(Arc::clone(&seam)));
+    let mut app = attached(Arc::clone(&seam));
     let start = start_key_reviewer(&mut app, &seam);
     assert_eq!(
         app.on_login(
@@ -652,7 +635,7 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
 /// keeps its scroll (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_the_open_key_panel_is_swallowed() {
-    let mut app = attached(Some(seam()));
+    let mut app = attached(seam());
     app.on_wheel(&wheel(10, 5, false));
     assert!(app.top().is_some(), "setup scrolled the conversation up");
     slash_login(&mut app);

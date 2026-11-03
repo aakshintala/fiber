@@ -323,11 +323,7 @@ impl App {
             .insert(id.clone(), (Kind::Command, Draft::default()));
         self.config_views.credential.save = None;
         if !session_only {
-            if self.configure_seam().is_some() {
-                self.config_views.credential.save = Some(Save { id, label });
-            } else {
-                self.push_notice("io_failed", NO_SAVE.to_owned());
-            }
+            self.config_views.credential.save = Some(Save { id, label });
         }
         vec![line]
     }

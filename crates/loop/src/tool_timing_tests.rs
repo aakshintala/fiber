@@ -5741,7 +5741,9 @@ fn a_failed_diagnostics_file_changes_no_output() {
 // its release before it signals entry. The pause parks the held call
 // between the queue and the signal, so the pop below runs while the old
 // signal-then-queue order would still show an empty queue: it fails there
-// and passes here, with no wall-clock wait.
+// and passes here, with no wall-clock wait. The fake keeps the order the
+// held call keeps: a release before the next hold
+// (`docs/testing/fakes.md`, "Fakes").
 // A reviewer hold answers one tool call, then the turn completes.
 #[test]
 fn an_entered_hold_already_queues_its_release() {

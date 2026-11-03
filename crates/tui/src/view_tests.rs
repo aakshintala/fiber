@@ -5368,7 +5368,7 @@ fn a_drag_over_the_login_overlay_copies_its_row() {
     use crate::app::Effect;
     let mut app = empty();
     let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(Vec::new()));
-    app.set_configure(Some(seam));
+    app.set_configure(seam);
     app.open_config_view(crate::app::ConfigView::Login);
     let at = cell_at(&mut app, 80, 24, "No provider");
     let effect = drag_at(&mut app, 80, 24, at, (at.0 + 10, at.1));

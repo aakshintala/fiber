@@ -5,7 +5,10 @@
 //! `.rows`: acquiring a grid, or reading its cells, text or rows. The rule
 //! is deliberately outside-a-wait: a line inside a `wait_screen` call's
 //! span never counts, because the wait's own check settles the grid and its
-//! predicate reads are the assertion, not a read outside a wait. A
+//! predicate reads are the assertion, not a read outside a wait. The same
+//! holds for a line inside a listed wait helper's call span (`WAIT_HELPERS`):
+//! the helper passes its predicate argument to a `wait_screen` call, so the
+//! call site's predicate lines are the wait's own check too. A
 //! predicate that derives its expected value from the grid it asserts on
 //! sits inside the wait, where a line ratchet cannot tell it from the
 //! wait's own probe, so that shape stays outside this check.
@@ -41,6 +44,12 @@ const READS: &[&str] = &[".screen()", ".cell(", ".contents", ".rows"];
 /// The waits whose call span the ratchet skips: `wait_screen`,
 /// `wait_screen_leading`, `wait_screen_reporting`.
 const WAIT: &str = ".wait_screen";
+/// Helpers whose call span the ratchet skips like a wait's: a name joins
+/// only when the helper passes its predicate argument to a `wait_screen*`
+/// call, so the predicate lines at its call sites are the wait's own
+/// check. The reviewer checks that against the helper's body before
+/// listing it here.
+const WAIT_HELPERS: &[&str] = &["feed"];
 
 /// Parses the inline maxima table from stdin: one `<path> <maximum>` per
 /// line. Blank lines and `#` comment lines are ignored.
@@ -132,7 +141,8 @@ pub(crate) fn count_unmarked(source: &str) -> usize {
 }
 
 /// Whether `code` — a line with strings and comments stripped — opens a
-/// grid wait: a `.wait_screen*(` method call.
+/// grid wait: a `.wait_screen*(` method call, or a call to a listed wait
+/// helper (`WAIT_HELPERS`).
 fn opens_wait(code: &str) -> bool {
     let mut search = code;
     while let Some(at) = search.find(WAIT) {
@@ -142,6 +152,27 @@ fn opens_wait(code: &str) -> bool {
             return true;
         }
         search = &search[at + WAIT.len()..];
+    }
+    WAIT_HELPERS.iter().any(|name| calls_helper(code, name))
+}
+
+/// Whether `code` calls the wait helper `name`: the name as a whole word,
+/// not in its `fn` definition, followed by `(`.
+fn calls_helper(code: &str, name: &str) -> bool {
+    let mut search = code;
+    while let Some(at) = search.find(name) {
+        let before = &search[..at];
+        let after = &search[at + name.len()..];
+        let word_edge =
+            |side: Option<char>| side.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !word_edge(before.chars().next_back())
+            && !word_edge(after.chars().next())
+            && !before.trim_end().ends_with("fn")
+            && after.trim_start().starts_with('(')
+        {
+            return true;
+        }
+        search = after;
     }
     false
 }

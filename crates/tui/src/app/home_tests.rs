@@ -5998,7 +5998,7 @@ fn slash_resume_then_esc_returns_to_the_session_left() {
 /// An app on home with `seam` answering configuration reads.
 fn offered(seam: Arc<Fake>) -> App {
     let mut app = home_with(80, 24, launch());
-    app.set_configure(Some(seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app
 }
 

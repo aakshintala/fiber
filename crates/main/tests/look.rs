@@ -31,15 +31,21 @@ use support::pty::{
 use support::{Deadline, KillGroup, Setup, TRUECOLOUR};
 
 /// Feeds `bytes` into an attached run's terminal side and returns the
-/// grid once the bytes are published: the raw wait proves the reader
-/// took them, and the publish snapshots the grid before waking the
-/// test.
+/// grid once the bytes are published and drawn: the raw wait proves
+/// the reader took them, and `shown` proves their effect drew, since
+/// a raw-byte marker never settles a grid read. The publish snapshots
+/// the grid before waking the test.
 #[track_caller]
-fn feed(run: &mut Run, terminal: &mut fs::File, bytes: &[u8]) -> Grid {
+fn feed(
+    run: &mut Run,
+    terminal: &mut fs::File,
+    bytes: &[u8],
+    shown: impl FnMut(&Grid) -> bool,
+) -> Grid {
     let from = run.output().len();
     terminal.write_all(bytes).unwrap();
     run.wait_bytes(from, bytes, "the fed bytes");
-    run.screen()
+    run.wait_screen("the fed bytes drawn", shown)
 }
 
 /// An attached run with no child over a sized pty, with the terminal
@@ -53,7 +59,11 @@ fn grid_run(cols: u16, rows: u16) -> (Run, fs::File) {
 #[test]
 fn the_grid_moves_and_writes() {
     let (mut run, mut terminal) = grid_run(10, 6);
-    let grid = feed(&mut run, &mut terminal, b"\x1b[2;3Hab");
+    let grid = feed(&mut run, &mut terminal, b"\x1b[2;3Hab", |grid| {
+        grid.cursor == (1, 4)
+            && grid.cell(2, 1).symbol.as_str() == "a"
+            && grid.cell(3, 1).symbol.as_str() == "b"
+    });
     assert_eq!(grid.cell(2, 1).symbol.as_str(), "a");
     assert_eq!(grid.cell(3, 1).symbol.as_str(), "b");
 }
@@ -65,6 +75,12 @@ fn the_grid_reads_combined_sgr() {
         &mut run,
         &mut terminal,
         "\x1b[38;2;26;26;34;49m▄".as_bytes(),
+        |grid| {
+            grid.cursor == (0, 1)
+                && grid.cell(0, 0).symbol.as_str() == "▄"
+                && grid.cell(0, 0).fg == Colour::Rgb(26, 26, 34)
+                && grid.cell(0, 0).bg == Colour::Default
+        },
     );
     let edge = grid.cell(0, 0);
     assert_eq!(edge.symbol.as_str(), "▄");
@@ -74,21 +90,38 @@ fn the_grid_reads_combined_sgr() {
         &mut run,
         &mut terminal,
         "\x1b[38;5;75;48;5;234m▌".as_bytes(),
+        |grid| {
+            grid.cursor == (0, 2)
+                && grid.cell(1, 0).symbol.as_str() == "▌"
+                && grid.cell(1, 0).fg == Colour::Indexed(75)
+                && grid.cell(1, 0).bg == Colour::Indexed(234)
+        },
     );
     let stripe = grid.cell(1, 0);
     assert_eq!(stripe.symbol.as_str(), "▌");
     assert_eq!(stripe.fg, Colour::Indexed(75));
     assert_eq!(stripe.bg, Colour::Indexed(234));
-    let grid = feed(&mut run, &mut terminal, b"\x1b[0m ");
+    let grid = feed(&mut run, &mut terminal, b"\x1b[0m ", |grid| {
+        grid.cursor == (0, 3)
+            && grid.cell(2, 0).fg == Colour::Default
+            && grid.cell(2, 0).bg == Colour::Default
+            && !grid.cell(2, 0).dim
+    });
     let reset = grid.cell(2, 0);
     assert_eq!(reset.bg, Colour::Default);
     assert_eq!(reset.fg, Colour::Default);
     assert!(!reset.dim);
-    let grid = feed(&mut run, &mut terminal, b"\x1b[m ");
+    let grid = feed(&mut run, &mut terminal, b"\x1b[m ", |grid| {
+        grid.cursor == (0, 4) && grid.cell(3, 0).bg == Colour::Default
+    });
     assert_eq!(grid.cell(3, 0).bg, Colour::Default);
-    let grid = feed(&mut run, &mut terminal, b"\x1b[2m ");
+    let grid = feed(&mut run, &mut terminal, b"\x1b[2m ", |grid| {
+        grid.cursor == (0, 5) && grid.cell(4, 0).dim
+    });
     assert!(grid.cell(4, 0).dim);
-    let grid = feed(&mut run, &mut terminal, b"\x1b[22m ");
+    let grid = feed(&mut run, &mut terminal, b"\x1b[22m ", |grid| {
+        grid.cursor == (0, 6) && !grid.cell(5, 0).dim
+    });
     assert!(!grid.cell(5, 0).dim);
 }
 
@@ -106,11 +139,21 @@ fn the_grid_skips_other_sequences() {
         b"\x1b]0;t\x1b\\".as_slice(),
         "\x1bP…\x1b\\".as_bytes(),
     ] {
-        feed(&mut run, &mut terminal, bytes);
+        // These sequences draw nothing, so no effect of theirs can be
+        // waited for: the raw wait inside `feed` proves the reader took
+        // them.
+        feed(&mut run, &mut terminal, bytes, |_| true);
     }
-    let grid = run.screen();
+    // The sentinel draws last: the terminal parses in order, so its
+    // cell proves every earlier sequence was parsed.
+    let grid = feed(&mut run, &mut terminal, b"\x1b[4;10HZ", |grid| {
+        grid.cell(9, 3).symbol.as_str() == "Z"
+    });
     for y in 0..4 {
         for x in 0..10 {
+            if (x, y) == (9, 3) {
+                continue;
+            }
             assert_eq!(grid.cell(x, y).symbol.as_str(), " ", "({x}, {y})");
         }
     }
@@ -119,8 +162,10 @@ fn the_grid_skips_other_sequences() {
 #[test]
 fn erase_display_fills_with_the_pen_background() {
     let (mut run, mut terminal) = grid_run(4, 3);
-    feed(&mut run, &mut terminal, b"ab");
-    let grid = feed(&mut run, &mut terminal, b"\x1b[48;5;234m\x1b[2J");
+    feed(&mut run, &mut terminal, b"ab", |grid| grid.cursor == (0, 2));
+    let grid = feed(&mut run, &mut terminal, b"\x1b[48;5;234m\x1b[2J", |grid| {
+        grid.cell(3, 2).bg == Colour::Indexed(234)
+    });
     for y in 0..3 {
         for x in 0..4 {
             assert_eq!(grid.cell(x, y).symbol.as_str(), " ", "({x}, {y})");
@@ -143,7 +188,9 @@ fn a_sequence_split_across_feeds_completes() {
     let from = run.output().len();
     terminal.write_all(b"\x1b[2;").unwrap();
     run.wait_bytes(from, b"\x1b[2;", "the split sequence's first half");
-    let grid = feed(&mut run, &mut terminal, b"3Ha");
+    let grid = feed(&mut run, &mut terminal, b"3Ha", |grid| {
+        grid.cursor == (1, 3) && grid.cell(2, 1).symbol.as_str() == "a"
+    });
     assert_eq!(grid.cell(2, 1).symbol.as_str(), "a");
 }
 
@@ -155,7 +202,9 @@ fn a_character_split_across_feeds_completes() {
     let from = run.output().len();
     terminal.write_all(&[0xE2]).unwrap();
     run.wait_bytes(from, &[0xE2], "the split character's first byte");
-    let grid = feed(&mut run, &mut terminal, &[0x96, 0x8C]);
+    let grid = feed(&mut run, &mut terminal, &[0x96, 0x8C], |grid| {
+        grid.cursor == (0, 1) && grid.cell(0, 0).symbol.as_str() == "▌"
+    });
     assert_eq!(grid.cell(0, 0).symbol.as_str(), "▌");
 }
 
@@ -164,7 +213,16 @@ fn a_character_split_across_feeds_completes() {
 #[test]
 fn a_wide_char_takes_two_cells() {
     let (mut run, mut terminal) = grid_run(10, 4);
-    let grid = feed(&mut run, &mut terminal, "\x1b[1;1H漢\x1b[1;3Hx".as_bytes());
+    let grid = feed(
+        &mut run,
+        &mut terminal,
+        "\x1b[1;1H漢\x1b[1;3Hx".as_bytes(),
+        |grid| {
+            grid.cursor == (0, 3)
+                && grid.cell(0, 0).symbol.as_str() == "漢"
+                && grid.cell(2, 0).symbol.as_str() == "x"
+        },
+    );
     assert_eq!(grid.cell(0, 0).symbol.as_str(), "漢");
     assert_eq!(grid.cell(1, 0).symbol.as_str(), " ");
     assert_eq!(grid.cell(2, 0).symbol.as_str(), "x");
@@ -314,7 +372,7 @@ fn a_pending_resize_lands_before_its_chunk_parses() {
     let from = run.output().len();
     terminal.write_all(&[b'x'; 50]).unwrap();
     run.wait_bytes(from, &[b'x'; 50], "the fifty cells");
-    let grid = run.screen();
+    let grid = run.wait_screen("the wrapped fifty cells", |grid| grid.cursor != (0, 0));
     assert_eq!(grid.rows.len(), 10);
     assert_eq!(grid.cursor, (1, 10));
 }
@@ -384,15 +442,17 @@ fn a_failed_reply_never_publishes_its_query() {
 
 #[test]
 fn grid_cell_reads_the_last_cell() {
-    let (run, _terminal) = grid_run(10, 6);
-    assert_eq!(run.screen().cell(9, 5).symbol.as_str(), " ");
+    let (mut run, _terminal) = grid_run(10, 6);
+    let grid = run.wait_screen("the initial grid", |grid| grid.size() == (10, 6));
+    assert_eq!(grid.cell(9, 5).symbol.as_str(), " ");
 }
 
 #[test]
 #[should_panic]
 fn grid_cell_past_the_edges_panics() {
-    let (run, _terminal) = grid_run(10, 6);
-    let _ = run.screen().cell(10, 0);
+    let (mut run, _terminal) = grid_run(10, 6);
+    let grid = run.wait_screen("the initial grid", |grid| grid.size() == (10, 6));
+    let _ = grid.cell(10, 0);
 }
 
 /// `hub_pids` lists only this run's hub from a process table: a row

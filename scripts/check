@@ -174,13 +174,13 @@ crates/main/tests/ask_user_form_look.rs 66
 crates/main/tests/at_path_search.rs 1
 crates/main/tests/attach_first_frame.rs 4
 crates/main/tests/cache_countdown.rs 2
-crates/main/tests/call_view.rs 35
+crates/main/tests/call_view.rs 34
 crates/main/tests/change_workspace.rs 1
 crates/main/tests/changed_files_editor.rs 4
 crates/main/tests/clear.rs 2
 crates/main/tests/credential_signals.rs 3
-crates/main/tests/delegates.rs 32
-crates/main/tests/delete.rs 14
+crates/main/tests/delegates.rs 31
+crates/main/tests/delete.rs 13
 crates/main/tests/doctor_command.rs 3
 crates/main/tests/exit_alias.rs 1
 crates/main/tests/group_look.rs 38
@@ -191,13 +191,13 @@ crates/main/tests/hover_look.rs 9
 crates/main/tests/hub_pairing.rs 1
 crates/main/tests/hub_remote_terminal.rs 5
 crates/main/tests/hub_version.rs 11
-crates/main/tests/inline_images.rs 11
+crates/main/tests/inline_images.rs 10
 crates/main/tests/item_views_look.rs 31
 crates/main/tests/journeys.rs 19
 crates/main/tests/light_no_color_look.rs 61
 crates/main/tests/line_start_end.rs 6
 crates/main/tests/link_look.rs 21
-crates/main/tests/look.rs 166
+crates/main/tests/look.rs 163
 crates/main/tests/look_diff.rs 6
 crates/main/tests/look_markdown.rs 29
 crates/main/tests/main_journeys.rs 63
@@ -205,7 +205,7 @@ crates/main/tests/model_picker_keys.rs 14
 crates/main/tests/model_picker_name.rs 3
 crates/main/tests/opened_call_look.rs 52
 crates/main/tests/panel_look.rs 38
-crates/main/tests/pinned_call_row.rs 20
+crates/main/tests/pinned_call_row.rs 19
 crates/main/tests/placeholders_picker.rs 2
 crates/main/tests/pty_sync_output.rs 13
 crates/main/tests/quit_after_completed.rs 4
@@ -214,24 +214,162 @@ crates/main/tests/rail_focus.rs 17
 crates/main/tests/rail_look.rs 18
 crates/main/tests/rail_shown.rs 2
 crates/main/tests/rail_state_tints.rs 3
-crates/main/tests/release_notes.rs 6
+crates/main/tests/release_notes.rs 5
 crates/main/tests/reviewer_setup.rs 15
 crates/main/tests/search_look.rs 91
 crates/main/tests/slash_aliases.rs 8
-crates/main/tests/steer_drawn.rs 13
-crates/main/tests/stream_closed_notice.rs 15
+crates/main/tests/steer_drawn.rs 11
+crates/main/tests/stream_closed_notice.rs 13
 crates/main/tests/swapped_panels_look.rs 50
-crates/main/tests/terminal.rs 25
+crates/main/tests/terminal.rs 24
 crates/main/tests/tui_context_after_cd.rs 0
-crates/main/tests/tui_extensions.rs 8
+crates/main/tests/tui_extensions.rs 7
 crates/main/tests/tui_key_whole_screen.rs 8
 crates/main/tests/tui_timing_tests.rs 2
-crates/main/tests/wheel_scroll.rs 11
+crates/main/tests/wheel_scroll.rs 10
 crates/main/tests/working_line_look.rs 69
 crates/main/tests/workspace_picker.rs 1
 EOF
     echo "== kinds ratchet"
     cargo xtask kinds-ratchet --max 238 --support-max 36
+    echo "== census ratchet"
+    # String-typed closed-set sites (ticket #3982): each production file
+    # under crates/ holds at most its inline count of the census pattern
+    # (`kind: String`, `code: String` / `code: &str`, `.kind.as_str(`-style
+    # calls, `.kind == "`-style compares, `["kind"]`-style indexes and
+    # `.get("kind")`-style lookups, for kind, code, view and format). A file
+    # whose count rises fails; lowering a count is always free, and a file
+    # missing from the list holds none. Detection and the per-file
+    # comparison live in `cargo xtask census-ratchet`
+    # (docs/code-quality.md, "Types").
+    cargo xtask census-ratchet <<'EOF'
+crates/bench/examples/bench/attach.rs 3
+crates/bench/examples/bench/busy.rs 1
+crates/bench/examples/bench/debug.rs 1
+crates/bench/examples/bench/idle.rs 2
+crates/bench/examples/bench/resume.rs 1
+crates/bench/examples/bench/run.rs 1
+crates/bench/examples/bench/session_list.rs 2
+crates/bench/examples/bench/wheel.rs 2
+crates/cli/src/doctor/files.rs 2
+crates/cli/src/feedback.rs 1
+crates/cli/src/hub_pair.rs 2
+crates/cli/src/login/browser.rs 1
+crates/cli/src/login/reviewer.rs 1
+crates/cli/src/sessions.rs 1
+crates/contract/src/envelope.rs 2
+crates/contract/src/events.rs 1
+crates/doors/src/attach.rs 2
+crates/doors/src/client/writer.rs 3
+crates/doors/src/hub.rs 1
+crates/doors/src/isolation.rs 2
+crates/doors/src/session.rs 4
+crates/extensions/src/attend.rs 2
+crates/extensions/src/case/format.rs 1
+crates/extensions/src/case/run.rs 5
+crates/extensions/src/host.rs 2
+crates/extensions/src/host/failure.rs 1
+crates/extensions/src/host/script.rs 1
+crates/extensions/src/oauth/mod.rs 2
+crates/extensions/src/process/context.rs 1
+crates/extensions/src/process/context/native/oauth.rs 1
+crates/extensions/src/repository/store.rs 1
+crates/fakes/src/oauth_server.rs 1
+crates/hub/src/attention.rs 1
+crates/hub/src/device_login.rs 1
+crates/hub/src/fake.rs 1
+crates/hub/src/feed.rs 1
+crates/hub/src/pairing.rs 1
+crates/hub/src/resume.rs 2
+crates/hub/src/rewind.rs 2
+crates/hub/src/sessions_stop/transport.rs 1
+crates/hub/src/spawn.rs 2
+crates/hub/src/start.rs 2
+crates/jobs/src/error.rs 1
+crates/log/src/diag.rs 4
+crates/log/src/escalations.rs 2
+crates/log/src/escalations/reviewer_shell_calls.rs 2
+crates/log/src/name.rs 1
+crates/log/src/rate.rs 1
+crates/log/src/read.rs 1
+crates/log/src/scan.rs 3
+crates/log/src/search/session.rs 1
+crates/log/src/write.rs 4
+crates/loop/src/conversation.rs 2
+crates/loop/src/history.rs 7
+crates/loop/src/resume.rs 10
+crates/loop/src/rewind.rs 5
+crates/loop/src/rewind/command.rs 9
+crates/loop/src/rewind/stop.rs 1
+crates/loop/src/rewind/workspace.rs 1
+crates/loop/src/status.rs 3
+crates/loop/src/suspend.rs 2
+crates/main/src/configure/login.rs 1
+crates/main/src/configure/remote.rs 1
+crates/main/src/delegates.rs 5
+crates/main/src/main.rs 2
+crates/main/src/model_host.rs 1
+crates/main/src/rewind.rs 1
+crates/mcp/src/login.rs 3
+crates/mcp/src/rpc.rs 1
+crates/provider/src/error.rs 3
+crates/provider/src/hosted.rs 1
+crates/provider/src/openai_responses.rs 1
+crates/provider/src/scripted.rs 1
+crates/tools/src/error.rs 1
+crates/tools/src/files.rs 1
+crates/tools/src/web_search.rs 2
+crates/tui/src/app.rs 11
+crates/tui/src/app/attach_fold.rs 4
+crates/tui/src/app/call_view.rs 2
+crates/tui/src/app/change_workspace.rs 1
+crates/tui/src/app/clear.rs 1
+crates/tui/src/app/commands_testkit.rs 1
+crates/tui/src/app/config_views.rs 1
+crates/tui/src/app/config_views/credential.rs 1
+crates/tui/src/app/delegates.rs 2
+crates/tui/src/app/find/state.rs 1
+crates/tui/src/app/form.rs 1
+crates/tui/src/app/home.rs 8
+crates/tui/src/app/home/open.rs 3
+crates/tui/src/app/home/prompt.rs 1
+crates/tui/src/app/home/prompt/hooks_offer.rs 2
+crates/tui/src/app/home/recent.rs 1
+crates/tui/src/app/items.rs 3
+crates/tui/src/app/items/output.rs 1
+crates/tui/src/app/items/retry.rs 1
+crates/tui/src/app/overlay.rs 2
+crates/tui/src/app/panel.rs 3
+crates/tui/src/app/panel/quota.rs 1
+crates/tui/src/app/reviewer_setup.rs 3
+crates/tui/src/app/rewind/fold.rs 2
+crates/tui/src/app/rewind/send.rs 1
+crates/tui/src/app/session_views.rs 1
+crates/tui/src/approvals.rs 1
+crates/tui/src/configure.rs 1
+crates/tui/src/context_view.rs 1
+crates/tui/src/event_loop/hub.rs 1
+crates/tui/src/ext.rs 1
+crates/tui/src/highlight.rs 1
+crates/tui/src/history.rs 1
+crates/tui/src/jigs.rs 2
+crates/tui/src/link.rs 2
+crates/tui/src/login_view.rs 1
+crates/tui/src/login_worker.rs 2
+crates/tui/src/markdown.rs 3
+crates/tui/src/notices.rs 8
+crates/tui/src/offer.rs 1
+crates/tui/src/remote/decode.rs 4
+crates/tui/src/remote/login.rs 1
+crates/tui/src/remote/router.rs 1
+crates/tui/src/turn.rs 3
+crates/tui/src/turn/answers.rs 1
+crates/tui/src/turn/crash.rs 2
+crates/tui/src/turn/handoff.rs 1
+crates/tui/src/view/notice_rows.rs 5
+crates/tui/src/window.rs 3
+crates/tui/src/window/images.rs 1
+EOF
     # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
     # ships shellcheck, so a missing one fails rather than skips.
     if [ "$(uname -s)" = Linux ]; then
