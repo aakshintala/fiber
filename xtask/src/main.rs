@@ -972,5 +972,7 @@ fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
 }
 
 #[cfg(test)]
+mod check_resources_tests;
+#[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;
