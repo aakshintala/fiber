@@ -1048,43 +1048,7 @@ fn refused_connect_writes_only_first_render() {
         let clock: Arc<dyn Clock> = FakeClock::new();
         clock
     });
-    let mut pair = open();
-    let slave = pair
-        .slave
-        .try_clone()
-        .unwrap_or_else(|err| panic!("dup: {err}"));
-    let frames = watch(&pair.main, vec![b"\x1b]2;fiber\x07" as &[u8]]);
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("timing-refused".to_owned())
-        .spawn(move || {
-            let code = super::run_with(
-                slave,
-                launch(),
-                Box::new(|| Err(std::io::Error::other("refused"))),
-                Box::new(|_| {}),
-                FakeClock::new(),
-                super::Reader::spawn,
-                |builder, body| builder.spawn(body),
-                diag,
-                None,
-            )
-            .unwrap_or_else(|error| panic!("run: {error}"));
-            done.send(code).unwrap_or(());
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    watched(&frames, "the connect notice", &Deadline::after(DEADLINE));
-    pair.main
-        .write_all(&[0x03, 0x03])
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    pair.main
-        .flush()
-        .unwrap_or_else(|err| panic!("flush: {err}"));
-    let code = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
-    assert_eq!(code, 0);
-    let lines = op_lines(home.path());
+    let lines = refused_run_with_startup(home.path(), diag, None);
     // docs/state.md:430-432 promises the entry-to-first-draw operation.
     assert_terminal_wire(&lines, "tui.first_render");
     // The `None` guard this run passes writes no startup line: the only

@@ -327,8 +327,8 @@ pub enum Op {
     TuiAttachPrepare,
     /// The attached-history draw, through its completion.
     TuiAttachDraw,
-    /// The terminal's startup, from terminal entry through `run_with`
-    /// entry.
+    /// The terminal's startup, from after the diagnostic writer opens
+    /// through `run_with` entry.
     TuiStartup,
     /// One session-log write attempt.
     LogAppend,

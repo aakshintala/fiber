@@ -66,9 +66,9 @@ impl Error {
 /// never sent and nothing is tinted under the pointer. `Ok(0)` on quit
 /// and `Ok(1)` when the terminal cannot be set up or drawn. The terminal
 /// is restored on every return. Timed scopes write through `diag`, the
-/// process's diagnostic writer. `startup` is the terminal-entry guard,
-/// dropped at `run_with` entry so its line covers terminal entry through
-/// that entry and nothing else.
+/// process's diagnostic writer. `startup` is the startup guard, stamped
+/// once the level is known and dropped at `run_with` entry so its line
+/// covers guard construction through that entry and nothing else.
 pub fn run(
     tty: File,
     launch: Launch,
@@ -113,9 +113,9 @@ pub(crate) fn run_with(
     diag: Arc<log::diag::Diag>,
     startup: Option<log::diag::Timer>,
 ) -> Result<i32, Error> {
-    // The terminal-entry guard drops first: its line covers terminal
-    // entry through this entry, before any first-render or attach span
-    // opens. A `None` guard drops silently.
+    // The startup guard drops first: its line covers guard construction
+    // through this entry, before any first-render or attach span opens.
+    // A `None` guard drops silently.
     drop(startup);
     // The first render's span opens at entry: at `info` this is one level
     // check with no clock read. Every pre-draw return below discards it,
