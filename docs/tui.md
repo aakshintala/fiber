@@ -671,6 +671,7 @@ leaves the picker open; it installs only a row ↓ or a click has focused.
 Ctrl+L opens it, as `/model` does. It draws from the cached
 model lists at once and refreshes stale ones in the background; its refresh
 button refreshes every list (`docs/model-routing.md`, "Model discovery").
+The mouse wheel over the list scrolls it 3 displayed rows a step, counting headings, count rows and blank rows. A step that scrolls the focused row out of view moves the focus to the nearest focusable row still in view, the upper one on a tie; with no focusable row in view, the focus stays where it is. On a screen too short for two list rows, when there is no model for the list to keep, the list drops a provider's left-out count row together with its heading and separator, so a count never shows without its provider.
 
 Under the view's top row the picker is an overlay ("Look", "Overlays").
 Its first row is the filter: "Type to search" dim until something is
