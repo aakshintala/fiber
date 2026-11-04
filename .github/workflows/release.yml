@@ -939,8 +939,10 @@ jobs:
               exit 1
             fi
             # The extension-version decision lives in xtask, tested there on
-            # supplied lines.
-            printf '%s\n' "$list" | cargo xtask nightly-pair --check-extensions "$actual" || { printf 'release: %s\n' "an extension is not at the update target $actual." >&2; exit 1; }
+            # supplied lines. The cargo invocation runs from the checkout:
+            # this step works in $RUNNER_TEMP/nightly-work, where the
+            # .cargo/config.toml xtask alias is undiscoverable.
+            printf '%s\n' "$list" | (cd "$GITHUB_WORKSPACE" && cargo xtask nightly-pair --check-extensions "$actual") || { printf 'release: %s\n' "an extension is not at the update target $actual." >&2; exit 1; }
             if [ ! -d "$FIBER_HOME/docs" ]; then
               printf 'release: %s\n' "docs/ is missing from the updated home." >&2
               exit 1
