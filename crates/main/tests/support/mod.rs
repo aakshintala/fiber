@@ -3978,12 +3978,21 @@ fn holder_dies_with_the_test_process_that_parked_it() {
         .to_str()
         .expect("the holder's FIFO path is UTF-8")
         .to_owned();
-    // The outer writer is the controlled hold at the blocking point: the
+    // The outer writer is the controlled hold at the blocking point. The
     // FIFO has no pre-opened ends (no `Hold` release), so this write-end
-    // open blocks until the holder's `read` opens the FIFO. The open
-    // succeeding proves the holder is in its `read`, and the held end stays
-    // open across the kill without writing, so the holder's read cannot
-    // see end of file and only the watchdog's group kill can end it.
+    // open blocks until the holder's `read` opens the FIFO. With the end
+    // held open and unwritten, the holder has exactly one possible future:
+    // block in `read`. The open-to-`read` window holds no syscalls,
+    // signals, or exit paths. Alive-at-kill comes from the `matching`
+    // listing below containing the acked pid, not from the open alone.
+    // This is not kernel-level proof that the holder sits inside `read(2)`
+    // at the kill instant. The ack strictly precedes the block, so a
+    // scheduler preemption between them stays theoretically possible.
+    // Reading the holder's wait state instead (`/proc/<pid>/stat` or
+    // `wchan`) does not exist on Darwin. A proof that runs on only one of
+    // the two platforms the suite runs on is worse than a sound causal
+    // argument. #4077 asks that the holder not outlive its test process,
+    // not where in the kernel it is parked.
     let (writing_tx, writing) = mpsc::channel();
     thread::spawn({
         let fifo = fifo.clone();
