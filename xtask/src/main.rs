@@ -17,6 +17,9 @@
 //!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
+//! - `mutants-reuse --pr N --head H --base B --mutant-count C --run-id R --draft true|false --runs FILE --jobs FILE`:
+//!   prints `reuse=true` when an earlier completed run on the same pull
+//!   request, head and base passed every mutants shard, else `reuse=false`
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
@@ -233,6 +236,33 @@ fn run(args: &[String]) -> Result<bool, String> {
             println!(
                 "base_skip={}",
                 select::base_rows_skipped(&flag(rest, "--event")?, &release_paths).join(",")
+            );
+            Ok(true)
+        }
+        "mutants-reuse" => {
+            let current = select::ReuseCurrent {
+                pr: flag(rest, "--pr")?
+                    .parse()
+                    .map_err(|e| format!("--pr: {e}"))?,
+                head: flag(rest, "--head")?,
+                base: flag(rest, "--base")?,
+                mutant_count: flag(rest, "--mutant-count")?
+                    .parse()
+                    .map_err(|e| format!("--mutant-count: {e}"))?,
+                run_id: flag(rest, "--run-id")?
+                    .parse()
+                    .map_err(|e| format!("--run-id: {e}"))?,
+                draft: flag(rest, "--draft")? == "true",
+            };
+            let runs = read(&flag(rest, "--runs")?)?;
+            let jobs = read(&flag(rest, "--jobs")?)?;
+            println!(
+                "reuse={}",
+                if select::decide_reuse(&current, &runs, &jobs) {
+                    "true"
+                } else {
+                    "false"
+                }
             );
             Ok(true)
         }

@@ -2484,3 +2484,122 @@ fn stale_wait_ratchet_fails_an_unlisted_site_and_passes_at_its_maximum() {
     );
     assert_eq!((code, out.as_str()), (0, "stale-wait-ratchet: ok\n"));
 }
+
+/// Runs `mutants-reuse` in `dir` against two JSON fixture files.
+fn mutants_reuse(dir: &TempDir, runs: &str, jobs: &str) -> (i32, String) {
+    dir.write("runs.json", runs);
+    dir.write("jobs.json", jobs);
+    xtask(
+        dir,
+        &[
+            "mutants-reuse",
+            "--pr",
+            "3899",
+            "--head",
+            "abc123",
+            "--base",
+            "def456",
+            "--mutant-count",
+            "40",
+            "--run-id",
+            "100",
+            "--draft",
+            "false",
+            "--runs",
+            "runs.json",
+            "--jobs",
+            "jobs.json",
+        ],
+        &[],
+        "",
+    )
+}
+
+/// One completed candidate run on the same pull request, head and base.
+fn reuse_candidate(id: u64) -> serde_json::Value {
+    serde_json::json!({
+        "id": id,
+        "head_sha": "abc123",
+        "status": "completed",
+        "pull_requests": [{
+            "number": 3899,
+            "head": { "sha": "abc123" },
+            "base": { "sha": "def456" },
+        }],
+    })
+}
+
+fn reuse_shards(total: usize, conclusion: &str) -> serde_json::Value {
+    serde_json::Value::Array(
+        (0..total)
+            .map(|index| {
+                serde_json::json!({ "name": format!("Mutants (shard {index})"), "conclusion": conclusion })
+            })
+            .collect(),
+    )
+}
+
+#[test]
+fn mutants_reuse_missing_runs_file_errors() {
+    let dir = workspace();
+    dir.write("jobs.json", "{}");
+    let (code, out) = xtask(
+        &dir,
+        &[
+            "mutants-reuse",
+            "--pr",
+            "3899",
+            "--head",
+            "abc123",
+            "--base",
+            "def456",
+            "--mutant-count",
+            "40",
+            "--run-id",
+            "100",
+            "--draft",
+            "false",
+            "--runs",
+            "runs.json",
+            "--jobs",
+            "jobs.json",
+        ],
+        &[],
+        "",
+    );
+    assert_eq!(code, 2);
+    assert!(out.contains("runs.json"), "{out}");
+}
+
+#[test]
+fn mutants_reuse_malformed_runs_json_prints_false() {
+    let dir = workspace();
+    assert_eq!(
+        mutants_reuse(&dir, "not json", "{}"),
+        (0, "reuse=false\n".to_owned())
+    );
+}
+
+#[test]
+fn mutants_reuse_matching_fixture_prints_true() {
+    // 40 mutants derive a 3-shard total, and the candidate passed exactly
+    // those three shards.
+    let dir = workspace();
+    let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
+    let jobs = serde_json::json!({ "7": reuse_shards(3, "success") }).to_string();
+    assert_eq!(
+        mutants_reuse(&dir, &runs, &jobs),
+        (0, "reuse=true\n".to_owned())
+    );
+}
+
+#[test]
+fn mutants_reuse_shard_count_mismatch_prints_false() {
+    let dir = workspace();
+    let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
+    let jobs = serde_json::json!({ "7": reuse_shards(4, "success") }).to_string();
+    assert_eq!(
+        mutants_reuse(&dir, &runs, &jobs),
+        (0, "reuse=false\n".to_owned())
+    );
+}
