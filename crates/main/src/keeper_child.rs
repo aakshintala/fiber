@@ -61,7 +61,7 @@ impl Wake for Process {
     }
 }
 // The socket belongs to this writer. Unlink before Log's field drop clears
-// the label and releases the session lock (docs/state.md, "Sockets").
+// the label and releases the session lock (docs/state.md, "What each part holds").
 struct HeldLog {
     socket: PathBuf,
     log: Log,

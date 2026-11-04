@@ -23,7 +23,7 @@ fn dropping_a_keeper_log_unlinks_its_socket_and_releases_its_lock() {
     };
     assert!(socket.exists());
     assert_eq!(log::lock_label(&dir).as_deref(), Some("keeper 4242"));
-    // docs/state.md, "Sockets": the writer unlinks its own socket at exit.
+    // docs/state.md, "What each part holds": the writer unlinks its socket at exit.
     // Keep the listener alive: dropping it alone would not unlink the path.
     drop(held);
     assert!(!socket.exists());
