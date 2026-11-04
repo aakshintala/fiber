@@ -702,7 +702,7 @@ last passing `main` commit, the release job's stored-results lookup (one
 artifact listing per commit, at most 10, and one download), and the select
 job's same-head reuse lookup are the Actions API calls a workflow makes to
 find a run; the backstop's cache pruning also lists and deletes cache entries.
-The select job's same-head reuse lookup is a third such call ("Mutation testing").
+The select job's same-head reuse lookup is a third such call ("On every pull request that changes code").
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's

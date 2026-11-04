@@ -157,7 +157,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
-          # The shard count follows the diff's mutant count (docs/ci.md, "Mutation testing").
+          # The shard count follows the diff's mutant count (docs/ci.md, "On every pull request that changes code").
           # Every code pull request lists the diff's mutants, draft or not, so a
           # lane reads them before CI runs its shards; only `MUTANTS` starts shards.
           count=0
