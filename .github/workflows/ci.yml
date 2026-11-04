@@ -265,6 +265,7 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -Pk
           df -h
+          sudo du -sx /opt/* /usr/share/* /usr/local/* 2>/dev/null | sort -n | tail -n 40
       - *toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
