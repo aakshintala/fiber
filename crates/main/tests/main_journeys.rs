@@ -1042,7 +1042,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             run.write(b"second\r");
             let shown = run.wait_screen("the second turn's quota notice", |grid| {
                 grid.contents.contains("Fiber")
-                    && grid.contents.contains("used 90%")
+                    && grid.contents.matches("used 90%").count() == 1
                     && grid.contents.contains("second")
             });
             // Exactly one quota entry: the count the notice gives, never
@@ -1096,7 +1096,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             // The second answer drew beside the first: two turns, two
             // answers on the grid.
             let done = run.wait_screen("the second answer", |grid| {
-                grid.contents.matches("Hello.").count() >= 2
+                grid.contents.matches("Hello.").count() == 2
             });
             assert_eq!(
                 done.contents.matches("Hello.").count(),
@@ -1712,13 +1712,6 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
     );
 }
 
-/// The first row containing `needle`.
-fn find_row(rows: &[String], needle: &str) -> Option<u16> {
-    rows.iter()
-        .position(|row| row.contains(needle))
-        .map(|y| u16::try_from(y).expect("the screen fits in a u16"))
-}
-
 /// A solid-colour 120 by 80 PNG fixture.
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -1737,23 +1730,6 @@ const PNG: &[u8] = &[
     0xa2, 0x45, 0x23, 0x5a, 0x34, 0xa2, 0xff, 0x58, 0xd9, 0xb8, 0x78, 0xc2, 0xab, 0x96, 0xaa, 0xe8,
     0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ];
-
-/// A click at cell (`x`, `y`).
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
-}
-
-/// Clicks the first cell of `text` on `grid`.
-fn click_text(run: &mut Run, grid: &Grid, text: &str) {
-    let row = find_row(&grid.rows, text).expect("the text row");
-    let col = u16::try_from(
-        grid.rows[usize::from(row)]
-            .find(text)
-            .expect("the text column"),
-    )
-    .expect("the row fits in a u16");
-    click(run, col, row);
-}
 
 const FRAME_END: &[u8] = b"\x1b[?2026l";
 
@@ -2028,17 +2004,17 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
             // group row together with the completed paint has nothing left to
             // render: the group row's position in that grid is final
             // (`docs/testing/screens.md`, "Screens").
-            let grid = run.wait_screen("the settled reads group", |grid| {
+            run.wait_screen("the settled reads group", |grid| {
                 grid.contents.contains("completed")
                     && grid.rows.iter().any(|row| row.contains("Read 255 files"))
             });
             let from = run.output().len();
-            click_text(&mut run, &grid, "Read 255 files");
+            run.click_where("the reads group row", |grid| grid.text_at("Read 255 files"));
             run.wait_bytes(from, FRAME_END, "the opened group frame");
             // The opened group settles the same way: the past-range caption
             // together with the completed paint proves every call row drew and
-            // the caption row's position is final. The click uses this wait's
-            // grid, never a fresh read.
+            // the caption row's position is final. The helper finds the
+            // caption in the frame it clicks, never on a grid read earlier.
             let grid = run.wait_screen("the settled past-range caption", |grid| {
                 grid.contents.contains("completed")
                     && grid.rows.iter().any(|row| row.contains(&caption))
@@ -2047,7 +2023,7 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
             // transmit may follow it for the past-range image.
             // The viewer open is the click's signal, so the test waits for
             // the marker next.
-            click_text(&mut run, &grid, &caption);
+            run.click_where("the past-range caption", |grid| grid.text_at(&caption));
 
             // The click opens the viewer on the private copy, as for an
             // in-range image: the past-range target resolves.
