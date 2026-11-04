@@ -2,3 +2,7 @@ crates/tui/src/app.rs crates/tui/src/app/outbox.rs crates/tui/src/app/session_vi
 .github/workflows/ci.yml	fiber-3899	plan	2026-11-04T07:28:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/src/select/reuse.rs	fiber-3899	plan	2026-11-04T07:28:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 xtask/src/select/reuse_tests.rs	fiber-3899	plan	2026-11-04T07:28:06Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/tui.md	fiber-4026	plan	2026-11-04T09:20:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/model_picker_tests.rs	fiber-4026	plan	2026-11-04T09:20:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/snapshots/tui__view__model_picker__tests__trim-keep.snap	fiber-4026	plan	2026-11-04T09:20:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/view/snapshots/tui__view__model_picker__tests__trim-cut.snap	fiber-4026	plan	2026-11-04T09:20:17Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
