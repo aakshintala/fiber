@@ -464,9 +464,94 @@ fn narrow_status_rows_match_the_doc() {
     run.write(b"go\r");
     // Both status rows: the session's segments, then the running counts.
     let grid = run.wait_screen("the narrow status rows", |grid| {
-        grid.contents.contains("ctx")
+        // The wait hands the parse a settled frame: the segments row
+        // carries its countdown value past "cache 0% " with the
+        // delimiter behind it, in minutes, seconds or expired form, and
+        // the rows read as the asserts below will read them
+        // (`docs/testing.md`, "Waits and timeouts").
+        if !(grid.contents.contains("ctx")
             && grid.contents.contains("1 delegate running")
-            && grid.contents.contains("1 job running")
+            && grid.contents.contains("1 job running"))
+        {
+            return false;
+        }
+        let Some(second) = (0u16..40)
+            .rev()
+            .find(|y| grid.rows[*y as usize].contains("1 job running"))
+        else {
+            return false;
+        };
+        if second == 0 {
+            return false;
+        }
+        let first = second - 1;
+        if grid.rows[first as usize].contains("ctx") || grid.rows[second as usize].contains("ctx") {
+            return false;
+        }
+        let line: String = (1..100).map(|x| grid.cell(x, first).symbol).collect();
+        let line = line.trim_end();
+        let Some(countdown) = line
+            .split_once("cache 0% ")
+            .and_then(|(_, tail)| tail.split_once("  │  "))
+            .map(|(value, _)| value)
+        else {
+            return false;
+        };
+        let valued = countdown == "expired"
+            || countdown
+                .strip_suffix('m')
+                .or_else(|| countdown.strip_suffix('s'))
+                .is_some_and(|digits| digits.parse::<u64>().is_ok());
+        if !valued {
+            return false;
+        }
+        if line.replace(countdown, "[duration]")
+            != "▌0 waiting  │  $0.00  │  cache 0% [duration]  │  ± 3 files +3 −0"
+        {
+            return false;
+        }
+        for y in [first, second] {
+            for x in 1..90 {
+                if grid.cell(x, y).bg != SURFACE {
+                    return false;
+                }
+            }
+        }
+        let cells: Vec<char> = line.chars().collect();
+        let joiner: Vec<char> = "  │  ".chars().collect();
+        let Some(at) = cells
+            .windows(joiner.len())
+            .position(|window| window == joiner.as_slice())
+            .map(|at| at as u16)
+        else {
+            return false;
+        };
+        for x in 1 + at..1 + at + 5 {
+            if !grid.cell(x, first).dim {
+                return false;
+            }
+        }
+        let Some(status) = (0u16..first)
+            .rev()
+            .find(|y| grid.rows[*y as usize].contains("ctx"))
+        else {
+            return false;
+        };
+        let bar: String = (1..100).map(|x| grid.cell(x, status).symbol).collect();
+        let bar = bar.trim_end();
+        let stamped: Vec<char> = bar.chars().collect();
+        let needle: Vec<char> = "ctx".chars().collect();
+        let Some(ctx) = stamped
+            .windows(needle.len())
+            .position(|window| window == needle.as_slice())
+            .map(|at| at as u16)
+        else {
+            return false;
+        };
+        (0..8)
+            .filter(|n| grid.cell(1 + ctx + 4 + n, status).symbol.as_str() == "▆")
+            .count()
+            == 8
     });
     // The last two content rows: the running counts, then the segments
     // row above them. Neither carries a ctx segment: context lives on
