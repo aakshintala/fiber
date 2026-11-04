@@ -81,7 +81,9 @@ fn line(peer: &UnixStream) -> serde_json::Value {
             BufReader::new(&mut peer).read_line(&mut text)?;
             serde_json::from_str(&text).map_err(io::Error::other)
         })();
-        let _ = send.send(parsed);
+        match send.send(parsed) {
+            Ok(()) | Err(_) => {}
+        }
     });
     deadline()
         .recv_or_fail(&recv, "keeper control line")
