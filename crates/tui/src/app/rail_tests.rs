@@ -221,7 +221,7 @@ fn an_exited_row_gives_up_its_number() {
     assert_eq!(number(&app, B), Some(2));
 }
 
-/// A closing session has no card or rail number (`docs/tui.md`, "Clearing").
+/// A closing session has no card or rail number.
 #[test]
 fn a_closing_row_leaves_the_cards_and_gives_up_its_number() {
     let mut app = with(&[A, B]);
