@@ -160,7 +160,9 @@ fn parent_run_open(home: &Path, parent: &SessionId, job: &JobId) -> bool {
     false
 }
 
-/// Whether a live keeper, rather than a session, holds the log.
+/// Whether the label names a keeper. A crashed keeper leaves its label,
+/// but its socket refuses connections, so declining to connect is correct
+/// whether the keeper is live or crashed. A new session relabels before binding.
 pub(crate) fn keeper_holds(dir: &Path) -> bool {
     log::lock_label(dir).is_some_and(|label| label.starts_with("keeper "))
 }

@@ -45,7 +45,7 @@ fn a_keeper_label_names_only_a_live_holder() {
 }
 
 #[test]
-fn an_unlocked_keeper_label_is_not_a_live_holder() {
+fn a_stale_keeper_label_reads_until_the_next_open_relabels_it() {
     check_holder(|| {
         let sessions = fakes::TempDir::new("log-stale-keeper-holder");
         let id = SessionId("s_keeper".into());
@@ -54,7 +54,7 @@ fn an_unlocked_keeper_label_is_not_a_live_holder() {
         let dir = log.dir().to_path_buf();
         drop(log);
         fs::write(dir.join(LOCK), "keeper 4242\n").unwrap();
-        assert_eq!(lock_label(&dir), None);
+        assert_eq!(lock_label(&dir).as_deref(), Some("keeper 4242"));
         assert_eq!(fs::read_to_string(dir.join(LOCK)).unwrap(), "keeper 4242\n");
         let _log = Log::open(sessions.path(), id, clock).unwrap();
         assert_eq!(

@@ -370,33 +370,96 @@ fn a_trusted_resume_refuses_a_keeper_without_connecting() {
 }
 
 #[test]
-fn a_pid_held_socket_and_stale_keeper_text_still_attach() {
-    for held in [true, false] {
-        let temp = Temp::new();
-        temp.recorded();
-        let dir = temp.events(SID).parent().unwrap().to_path_buf();
-        let guard = log::try_hold(&dir).unwrap();
-        fs::write(
-            dir.join("session.lock"),
-            if held { "4242\n" } else { "keeper 4242\n" },
-        )
-        .unwrap();
-        let _guard = if held {
-            Some(guard)
-        } else {
-            drop(guard);
-            None
-        };
-        fs::create_dir_all(temp.dir.join("run")).unwrap();
-        let listener = UnixListener::bind(temp.dir.join("run").join(SID)).unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let starter =
-            FakeStarter::exit_with(&temp.dir, failure(ErrorCode::SessionHeld, "not started"));
-        let hub = temp.hub(starter.clone());
-        assert!(resumed(&hub).is_ok());
-        assert!(listener.accept().is_ok());
-        assert!(starter.resumed().is_empty());
+fn a_pid_held_socket_still_attaches() {
+    let temp = Temp::new();
+    temp.recorded();
+    let dir = temp.events(SID).parent().unwrap().to_path_buf();
+    let _guard = log::try_hold(&dir).unwrap();
+    fs::write(dir.join("session.lock"), "4242\n").unwrap();
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let listener = UnixListener::bind(temp.dir.join("run").join(SID)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let starter = FakeStarter::exit_with(&temp.dir, failure(ErrorCode::SessionHeld, "not started"));
+    let hub = temp.hub(starter.clone());
+    assert!(resumed(&hub).is_ok());
+    assert!(listener.accept().is_ok());
+    assert!(starter.resumed().is_empty());
+}
+
+#[test]
+fn a_crashed_keeper_socket_is_replaced_by_a_resumed_session() {
+    struct RelabelingStarter {
+        inner: FakeStarter,
+        dir: PathBuf,
+        socket: PathBuf,
+        held: Mutex<Option<log::Hold>>,
     }
+    impl Starter for RelabelingStarter {
+        fn start(
+            &self,
+            _id: &SessionId,
+            _workspace: &Path,
+            _model: Option<&str>,
+            _overrides: &[&str],
+            _worktree: bool,
+            _continues: Option<&SessionId>,
+            _supervised: bool,
+        ) -> std::io::Result<Box<dyn Started>> {
+            panic!("a crashed keeper is resumed, not started")
+        }
+        fn resume(
+            &self,
+            id: &SessionId,
+            workspace: &Path,
+            credential: Option<&str>,
+        ) -> std::io::Result<Box<dyn Started>> {
+            let held = log::try_hold(&self.dir).unwrap();
+            assert!(matches!(held, log::Hold::Held(_)));
+            *support::lock(&self.held) = Some(held);
+            fs::write(
+                self.dir.join("session.lock"),
+                format!("{}\n", std::process::id()),
+            )?;
+            // docs/state.md, "What each part holds": the writer replaces
+            // the crashed process's socket before binding its own.
+            assert_eq!(
+                UnixStream::connect(&self.socket).unwrap_err().kind(),
+                std::io::ErrorKind::ConnectionRefused
+            );
+            fs::remove_file(&self.socket)?;
+            self.inner.resume(id, workspace, credential)
+        }
+        fn rewind(
+            &self,
+            _id: &SessionId,
+            _workspace: &Path,
+            _from: &SessionId,
+        ) -> std::io::Result<Box<dyn Started>> {
+            panic!("a crashed keeper is resumed, not rewound")
+        }
+    }
+    let temp = Temp::new();
+    temp.recorded();
+    let dir = temp.events(SID).parent().unwrap().to_path_buf();
+    let guard = log::try_hold(&dir).unwrap();
+    fs::write(dir.join("session.lock"), "keeper 4242\n").unwrap();
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    let socket = temp.dir.join("run").join(SID);
+    let listener = UnixListener::bind(&socket).unwrap();
+    drop(listener);
+    drop(guard);
+    assert!(socket.exists());
+    assert_eq!(log::lock_label(&dir).as_deref(), Some("keeper 4242"));
+    let starter = FakeStarter::bind_and_hold(&temp.dir);
+    let hub = temp.hub_with(Arc::new(RelabelingStarter {
+        inner: starter.clone(),
+        dir: dir.clone(),
+        socket,
+        held: Mutex::new(None),
+    }));
+    assert!(resumed(&hub).is_ok());
+    assert!(!starter.resumed().is_empty());
+    assert_eq!(log::lock_label(&dir), Some(std::process::id().to_string()));
 }
 
 #[test]
