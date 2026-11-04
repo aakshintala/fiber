@@ -57,18 +57,28 @@ fn within_cleanup<T: Send + 'static>(
     }
 }
 
-fn leaked_clock() -> &'static std::sync::Arc<FakeClock> {
-    Box::leak(Box::new(FakeClock::new()))
-}
-
 #[test]
 fn within_cleanup_hands_its_closure_half_of_what_the_wait_has_left() {
-    let clock = leaked_clock();
+    let clock = Box::leak(Box::new(FakeClock::new()));
     let wait = Deadline::on(&**clock);
     let half = wait.left() / 2;
     let child_left = within_cleanup("a step", wait, |inner| inner.left()).unwrap();
     assert_eq!(child_left, half);
-    assert!(child_left < wait.left());
+}
+
+#[test]
+fn within_cleanup_exit_child_covers_the_listing_budget() {
+    // Mirrors the two `try_matching_exits` cleanup sites in `run_bounded`:
+    // each passes `Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN)` as the
+    // outer, so `within_cleanup` hands the closure half of what is left.
+    // The child (`MUST_SUCCEED_WITHIN`) strictly exceeds the fixed listing
+    // and `pgrep` bounds inside `fakes`, so the inner step expires first.
+    let clock = Box::leak(Box::new(FakeClock::new()));
+    for _ in 0..2 {
+        let outer = Deadline::on(&**clock).within(2 * fakes::MUST_SUCCEED_WITHIN);
+        let child_left = within_cleanup("an exit wait", outer, |inner| inner.left()).unwrap();
+        assert!(child_left >= fakes::MUST_SUCCEED_WITHIN);
+    }
 }
 
 /// The grammar a person completes, taken from the parser: every visible
@@ -279,7 +289,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         );
         let tag_gone = within_cleanup(
             &format!("processes matching {tag} to exit"),
-            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN),
             move |inner| try_matching_exits(&tag_for_wait, inner),
         );
         drop((group_dog, tag_dog));
@@ -297,7 +307,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     );
     let tag_gone = within_cleanup(
         &format!("processes matching {tag} to exit"),
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN),
         move |inner| try_matching_exits(&tag_for_wait, inner),
     );
     let stand_down = if group_gone.as_ref() == Ok(&true) && matches!(&tag_gone, Ok(Ok(()))) {
