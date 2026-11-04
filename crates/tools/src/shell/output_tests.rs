@@ -241,6 +241,25 @@ fn nothing_pending_emits_nothing() {
 }
 
 #[test]
+fn hosted_out_and_err_route_to_their_own_files_with_both_sinks_present() {
+    let dir = TempDir::new("fiber-hosted-sinks");
+    let _watchdog = fakes::Watchdog::matching(&dir.path().to_string_lossy());
+    let (shared, out) = attached(&dir, b"", 100);
+    let err = dir.path().join("err.log");
+    let mut errors = Errors::default();
+    errors.attach(Some(std::fs::File::create(&err).unwrap()), 100);
+    lock(&shared.inner).errors = Some(errors);
+
+    super::hosted_bytes(&shared, contract::keeper::Stream::Out, b"stdout\n");
+    assert_eq!(std::fs::read(&out).unwrap(), b"stdout\n");
+    assert!(std::fs::read(&err).unwrap().is_empty());
+
+    super::hosted_bytes(&shared, contract::keeper::Stream::Err, b"stderr\n");
+    assert_eq!(std::fs::read(&err).unwrap(), b"stderr\n");
+    assert_eq!(std::fs::read(&out).unwrap(), b"stdout\n");
+}
+
+#[test]
 fn standard_error_is_held_then_written_to_its_file_up_to_the_cap() {
     let dir = TempDir::new("fiber-shell-errors");
     let path = dir.path().join("err.log");

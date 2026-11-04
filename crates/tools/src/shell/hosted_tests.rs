@@ -302,6 +302,94 @@ fn a_detached_call_bypasses_the_host() {
 }
 
 #[test]
+fn hosted_terminal_execute_uses_pty_and_installs_terminal_input() {
+    hosted_move_policy(super::command::MovePolicy::Terminal);
+}
+
+#[test]
+fn hosted_monitor_execute_installs_the_monitor_sink() {
+    hosted_move_policy(super::command::MovePolicy::Monitor);
+}
+
+fn hosted_move_policy(policy: super::command::MovePolicy) {
+    use super::command::{MovePolicy, Ran};
+    use contract::keeper::HostStdin;
+
+    let dir = fakes::TempDir::new("fiber-hosted-policy");
+    let _watchdog = fakes::Watchdog::matching(&dir.path().to_string_lossy());
+    let (calls, started) = mpsc::channel();
+    let host = Arc::new(Host {
+        calls,
+        stops: Mutex::new(Vec::new()),
+        stopped: None,
+        adopted: None,
+    });
+    let workdir = dir.path().to_path_buf();
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        let settings = super::super::sandbox::Settings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: workdir.clone(),
+        };
+        let ran = super::execute(
+            host,
+            Path::new("/bin/sh"),
+            "held",
+            &workdir,
+            None,
+            &fakes::clock::SystemClock,
+            &CancelToken::default(),
+            &Recorder::default(),
+            policy,
+            None,
+            None,
+            None,
+            &settings,
+            &workdir,
+            None,
+        );
+        done.send(ran).expect("execute result");
+    });
+    let (spec, events) =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&started, "hosted policy start");
+    assert_eq!(
+        spec.stdin,
+        if policy == MovePolicy::Terminal {
+            HostStdin::Pty
+        } else {
+            HostStdin::Null
+        }
+    );
+    let ran = Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&result, "hosted policy move")
+        .expect("execute");
+    let Ran::Moved(moved) = ran else {
+        panic!("call must move while host holds its exit")
+    };
+    assert_eq!(moved.take_input().is_some(), policy == MovePolicy::Terminal);
+    {
+        let shared = moved.shared();
+        let inner = super::super::output::lock(&shared.inner);
+        assert_eq!(inner.errors.is_some(), policy == MovePolicy::Monitor);
+        assert_eq!(inner.lines.is_some(), policy == MovePolicy::Monitor);
+    }
+    events.send(HostEvent::Exit(end())).expect("exit");
+    drop(events);
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(moved.resume(
+            &fakes::clock::SystemClock,
+            &CancelToken::default(),
+            &Recorder::default(),
+        ))
+        .expect("resumed result");
+    });
+    let _ = Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "hosted policy reaped");
+}
+
+#[test]
 fn keeper_end_maps_every_process_failure_without_a_tail() {
     let cases = [
         (end(), Outcome::Completed, None),
