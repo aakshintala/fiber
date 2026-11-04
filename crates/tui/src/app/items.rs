@@ -634,23 +634,8 @@ impl App {
 
     /// Folds one attached-session line into the item fold: `job_started`
     /// takes the next serial, `delegate_started` keeps the run's start,
-    /// and `job_completed` keeps the outcome frozen at its `ts`. A
-    /// `job_stop` or `job_input` answer settles its tag: the generic
-    /// settlement closes the pending entry, and no fold reads these
-    /// answers.
-    pub(super) fn items_line(
-        &mut self,
-        envelope: &Envelope,
-        answer: Option<&super::answer::Answer<'_>>,
-    ) {
-        // A `job_stop` or `job_input` answer settles its own tag and no
-        // other: any other answer leaves its owner's tag alone.
-        let waiting = answer.and_then(|answer| answer.waiting.as_ref());
-        if (waiting == Some(&super::Waiting::JobStop) || waiting == Some(&super::Waiting::JobInput))
-            && let Some(answer) = answer
-        {
-            self.outbox.settled(answer.id);
-        }
+    /// and `job_completed` keeps the outcome frozen at its `ts`.
+    pub(super) fn items_line(&mut self, envelope: &Envelope) {
         match envelope.kind() {
             EventKind::JobStarted => {
                 if let Some(started) = super::read!(envelope, contract::events::JobStarted) {

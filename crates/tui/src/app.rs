@@ -2072,7 +2072,7 @@ impl App {
         send.extend(self.panel_line(envelope, answer));
         self.pwd_arrived(envelope);
         self.reviewer_block(envelope);
-        self.items_line(envelope, answer);
+        self.items_line(envelope);
         self.output_line(envelope);
         send.extend(self.session_views_line(envelope, answer));
         send.extend(self.config_views_line(envelope, answer));
