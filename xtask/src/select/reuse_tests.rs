@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use super::{CommitSha, Current, PullRequestNumber, RunId, decide};
+use super::{CommitSha, Current, PullRequestNumber, RunId, decide, matched_run_id};
 
 const PR: u64 = 3899;
 const HEAD: &str = "abc123";
@@ -66,6 +66,10 @@ fn successful_shards(total: usize) -> Value {
 
 fn decide_with(current: &Current, runs: &Value, jobs: &Value) -> bool {
     decide(current, &runs.to_string(), &jobs.to_string())
+}
+
+fn matched_with(current: &Current, runs: &Value, jobs: &Value) -> Option<u64> {
+    matched_run_id(current, &runs.to_string(), &jobs.to_string())
 }
 
 fn jobs_for(id: u64, jobs: Value) -> Value {
@@ -316,4 +320,54 @@ fn later_matching_candidate_reuses() {
     ]});
     let jobs = json!({ "5": successful_shards(SHARD_TOTAL), "7": successful_shards(SHARD_TOTAL) });
     assert!(decide_with(&current(), &runs, &jobs));
+}
+
+#[test]
+fn matched_run_id_names_the_match() {
+    let runs = json!({ "workflow_runs": [matching_candidate()] });
+    assert_eq!(
+        matched_with(
+            &current(),
+            &runs,
+            &jobs_for(7, successful_shards(SHARD_TOTAL))
+        ),
+        Some(7)
+    );
+}
+
+#[test]
+fn matched_run_id_names_the_first_match() {
+    let runs = json!({ "workflow_runs": [
+        candidate(9, HEAD, HEAD, PR, Some(BASE), "completed"),
+        matching_candidate(),
+    ]});
+    let jobs = json!({ "9": successful_shards(SHARD_TOTAL), "7": successful_shards(SHARD_TOTAL) });
+    assert_eq!(matched_with(&current(), &runs, &jobs), Some(9));
+}
+
+#[test]
+fn matched_run_id_is_absent_without_a_match() {
+    let runs =
+        json!({ "workflow_runs": [candidate(7, "other", "other", PR, Some(BASE), "completed")] });
+    assert_eq!(
+        matched_with(
+            &current(),
+            &runs,
+            &jobs_for(7, successful_shards(SHARD_TOTAL))
+        ),
+        None
+    );
+}
+
+#[test]
+fn matched_run_id_is_absent_for_a_draft_current_run() {
+    let draft = Current {
+        draft: true,
+        ..current()
+    };
+    let runs = json!({ "workflow_runs": [matching_candidate()] });
+    assert_eq!(
+        matched_with(&draft, &runs, &jobs_for(7, successful_shards(SHARD_TOTAL))),
+        None
+    );
 }

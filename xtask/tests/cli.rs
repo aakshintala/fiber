@@ -2612,3 +2612,53 @@ fn mutants_reuse_shard_count_mismatch_prints_false() {
         (0, "reuse=false\n".to_owned())
     );
 }
+
+/// Runs `mutants-reuse-id` in `dir` against two JSON fixture files.
+fn mutants_reuse_id(dir: &TempDir, runs: &str, jobs: &str) -> (i32, String) {
+    dir.write("runs.json", runs);
+    dir.write("jobs.json", jobs);
+    xtask(
+        dir,
+        &[
+            "mutants-reuse-id",
+            "--pr",
+            "3899",
+            "--head",
+            "abc123",
+            "--base",
+            "def456",
+            "--mutant-count",
+            "40",
+            "--run-id",
+            "100",
+            "--draft",
+            "false",
+            "--runs",
+            "runs.json",
+            "--jobs",
+            "jobs.json",
+        ],
+        &[],
+        "",
+    )
+}
+
+#[test]
+fn mutants_reuse_id_matching_fixture_prints_id() {
+    // The matching candidate is run 7, so the id lookup names it
+    // (docs/ci.md, "On every pull request that changes code").
+    let dir = workspace();
+    let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
+    let jobs = serde_json::json!({ "7": reuse_shards(3, "success") }).to_string();
+    assert_eq!(mutants_reuse_id(&dir, &runs, &jobs), (0, "7\n".to_owned()));
+}
+
+#[test]
+fn mutants_reuse_id_shard_count_mismatch_prints_nothing() {
+    // A mismatch decides false, so there is no matched id to print
+    // (docs/ci.md, "On every pull request that changes code").
+    let dir = workspace();
+    let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
+    let jobs = serde_json::json!({ "7": reuse_shards(4, "success") }).to_string();
+    assert_eq!(mutants_reuse_id(&dir, &runs, &jobs), (0, "".to_owned()));
+}

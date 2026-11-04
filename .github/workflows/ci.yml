@@ -219,7 +219,18 @@ jobs:
                 echo "mutants reuse: jobs lookup failed; starting shards"
               fi
             fi
+            matched_run_id=""
+          if [ "$reuse" = true ]; then
+            matched_run_id=$(cargo xtask mutants-reuse-id --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null || true)
+            if [ -z "$matched_run_id" ]; then
+              reuse=false
+            fi
+          fi
+          if [ "$reuse" = true ]; then
+            echo "mutants reuse: reuse=$reuse matched_run_id=$matched_run_id (head $head_sha, base $BASE)"
+          else
             echo "mutants reuse: reuse=$reuse (head $head_sha, base $BASE)"
+          fi
           fi
           mutants="$MUTANTS"
           if [ "$reuse" = true ]; then

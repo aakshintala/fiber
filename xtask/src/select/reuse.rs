@@ -53,11 +53,10 @@ fn is_mutants_shard(name: &str) -> bool {
 /// every mutants shard succeeded and whose successful-shard count equals
 /// the shard total the current mutant count derives.
 fn run_matches(current: &Current, total: u64, run: &Value, jobs_by_run: &Value) -> bool {
-    if run
-        .get("id")
-        .and_then(Value::as_u64)
-        .is_none_or(|id| id == current.run_id.0)
-    {
+    let Some(id) = run.get("id").and_then(Value::as_u64) else {
+        return false;
+    };
+    if id == current.run_id.0 {
         return false;
     }
     if run.get("status").and_then(Value::as_str) != Some("completed") {
@@ -82,9 +81,6 @@ fn run_matches(current: &Current, total: u64, run: &Value, jobs_by_run: &Value) 
     if !same_pr_and_base {
         return false;
     }
-    let Some(id) = run.get("id").and_then(Value::as_u64) else {
-        return false;
-    };
     let Some(jobs) = jobs_by_run.get(id.to_string()).and_then(Value::as_array) else {
         return false;
     };
@@ -102,26 +98,37 @@ fn run_matches(current: &Current, total: u64, run: &Value, jobs_by_run: &Value) 
             .all(|job| job.get("conclusion").and_then(Value::as_str) == Some("success"))
 }
 
-/// Whether the current run reuses a prior pass instead of starting shards.
-/// A draft never reuses, even at a matching head; a zero mutant count never
-/// reuses; any parse failure or missing field reruns the shards.
-pub(crate) fn decide(current: &Current, runs_json: &str, jobs_json: &str) -> bool {
+/// The id of the first candidate run the current run would reuse, if any:
+/// the same guard clauses as the reuse decision, so an absent id always
+/// means the decision is false and a logged id always names a real match.
+pub(crate) fn matched_run_id(current: &Current, runs_json: &str, jobs_json: &str) -> Option<u64> {
     if current.draft {
-        return false;
+        return None;
     }
     let total = mutant_shards(current.mutant_count);
     if total == 0 {
-        return false;
+        return None;
     }
     let runs: Value = serde_json::from_str(runs_json).unwrap_or(Value::Null);
     let jobs_by_run: Value = serde_json::from_str(jobs_json).unwrap_or(Value::Null);
     runs.get("workflow_runs")
         .and_then(Value::as_array)
-        .is_some_and(|candidates| {
-            candidates
-                .iter()
-                .any(|run| run_matches(current, total, run, &jobs_by_run))
+        .and_then(|candidates| {
+            candidates.iter().find_map(|run| {
+                if run_matches(current, total, run, &jobs_by_run) {
+                    run.get("id").and_then(Value::as_u64)
+                } else {
+                    None
+                }
+            })
         })
+}
+
+/// Whether the current run reuses a prior pass instead of starting shards.
+/// A draft never reuses, even at a matching head; a zero mutant count never
+/// reuses; any parse failure or missing field reruns the shards.
+pub(crate) fn decide(current: &Current, runs_json: &str, jobs_json: &str) -> bool {
+    matched_run_id(current, runs_json, jobs_json).is_some()
 }
 
 #[cfg(test)]

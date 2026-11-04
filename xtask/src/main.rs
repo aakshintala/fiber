@@ -20,6 +20,8 @@
 //! - `mutants-reuse --pr N --head H --base B --mutant-count C --run-id R --draft true|false --runs FILE --jobs FILE`:
 //!   prints `reuse=true` when an earlier completed run on the same pull
 //!   request, head and base passed every mutants shard, else `reuse=false`
+//! - `mutants-reuse-id` (same flags): prints the matched run id on a match,
+//!   nothing otherwise, so the select step can log which run it reuses
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
@@ -240,34 +242,19 @@ fn run(args: &[String]) -> Result<bool, String> {
             Ok(true)
         }
         "mutants-reuse" => {
-            let current = select::ReuseCurrent {
-                pr: select::ReusePullRequestNumber(
-                    flag(rest, "--pr")?
-                        .parse()
-                        .map_err(|e| format!("--pr: {e}"))?,
-                ),
-                head: select::ReuseCommitSha(flag(rest, "--head")?),
-                base: select::ReuseCommitSha(flag(rest, "--base")?),
-                mutant_count: flag(rest, "--mutant-count")?
-                    .parse()
-                    .map_err(|e| format!("--mutant-count: {e}"))?,
-                run_id: select::ReuseRunId(
-                    flag(rest, "--run-id")?
-                        .parse()
-                        .map_err(|e| format!("--run-id: {e}"))?,
-                ),
-                draft: flag(rest, "--draft")? == "true",
-            };
+            let current = reuse_current(rest)?;
             let runs = read(&flag(rest, "--runs")?)?;
             let jobs = read(&flag(rest, "--jobs")?)?;
-            println!(
-                "reuse={}",
-                if select::decide_reuse(&current, &runs, &jobs) {
-                    "true"
-                } else {
-                    "false"
-                }
-            );
+            println!("reuse={}", select::decide_reuse(&current, &runs, &jobs));
+            Ok(true)
+        }
+        "mutants-reuse-id" => {
+            let current = reuse_current(rest)?;
+            let runs = read(&flag(rest, "--runs")?)?;
+            let jobs = read(&flag(rest, "--jobs")?)?;
+            if let Some(id) = select::matched_run_id(&current, &runs, &jobs) {
+                println!("{id}");
+            }
             Ok(true)
         }
         "verdict" => {
@@ -763,6 +750,29 @@ fn env_object(name: &str) -> Result<serde_json::Map<String, Value>, String> {
 
 fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The reuse decision's scalar flags, shared by `mutants-reuse` and
+/// `mutants-reuse-id` so the two lookups can never disagree on inputs.
+fn reuse_current(args: &[String]) -> Result<select::ReuseCurrent, String> {
+    Ok(select::ReuseCurrent {
+        pr: select::ReusePullRequestNumber(
+            flag(args, "--pr")?
+                .parse()
+                .map_err(|e| format!("--pr: {e}"))?,
+        ),
+        head: select::ReuseCommitSha(flag(args, "--head")?),
+        base: select::ReuseCommitSha(flag(args, "--base")?),
+        mutant_count: flag(args, "--mutant-count")?
+            .parse()
+            .map_err(|e| format!("--mutant-count: {e}"))?,
+        run_id: select::ReuseRunId(
+            flag(args, "--run-id")?
+                .parse()
+                .map_err(|e| format!("--run-id: {e}"))?,
+        ),
+        draft: flag(args, "--draft")? == "true",
+    })
 }
 
 /// Whether `fix` is an ancestor of `tested`: `None` when the object is
