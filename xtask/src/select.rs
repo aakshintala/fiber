@@ -8,6 +8,7 @@ use std::path::Path;
 mod changed_tests;
 mod compiled_in;
 mod plan;
+mod reuse;
 mod runtime_read;
 mod test_filter;
 
@@ -21,6 +22,10 @@ use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
 use plan::BINARY_TESTS;
 pub(crate) use plan::{base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict};
+pub(crate) use reuse::{
+    CommitSha as ReuseCommitSha, Current as ReuseCurrent,
+    PullRequestNumber as ReusePullRequestNumber, RunId as ReuseRunId, matched_reuse,
+};
 pub(crate) use runtime_read::runtime_read_mismatches;
 pub(crate) use runtime_read::string_literal;
 pub(crate) use test_filter::{is_test_file, test_files, test_filter, unrun_test_files};
