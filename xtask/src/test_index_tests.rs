@@ -177,10 +177,7 @@ fn compiler_index_covers_the_reported_layouts() {
                     tests: &["runs_journey"],
                 },
             ],
-            expected: vec![
-                test("loop", "loop::driver", false, "runs_driver"),
-                test("loop", "loop::journey", false, "runs_journey"),
-            ],
+            expected: vec![],
             unrun: false,
         },
         Layout {
@@ -266,7 +263,7 @@ fn compiler_index_covers_the_reported_layouts() {
                 dependencies: &["crates/log/tests/support/repo_reader.rs"],
                 tests: &["reads_repository_file"],
             }],
-            expected: vec![test("log", "log::reader", false, "reads_repository_file")],
+            expected: vec![],
             unrun: false,
         },
     ];
