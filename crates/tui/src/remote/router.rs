@@ -1,5 +1,6 @@
 //! Routes connection answers before they enter the loop's bounded queue.
 
+use contract::HubEventKind;
 use std::collections::HashMap;
 use std::fmt;
 use std::os::unix::net::UnixStream;
@@ -249,7 +250,10 @@ impl Router {
         let Line::Hub(line) = line else {
             return false;
         };
-        if !matches!(line.kind.as_str(), "command_accepted" | "command_rejected") {
+        if !matches!(
+            line.kind(),
+            HubEventKind::CommandAccepted | HubEventKind::CommandRejected
+        ) {
             return false;
         }
         let Some(id) = line.payload.get("command_id").and_then(Value::as_str) else {

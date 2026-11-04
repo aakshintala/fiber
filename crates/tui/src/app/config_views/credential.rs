@@ -8,6 +8,7 @@ use crate::input::Draft;
 use crate::keys::Key;
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 use crate::theme::Role;
+use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, CredentialLabels};
 use contract::{Envelope, SessionId};
 use serde_json::json;
@@ -369,8 +370,8 @@ impl App {
     }
 
     pub(super) fn credential_line(&mut self, envelope: &Envelope) -> Vec<String> {
-        match envelope.kind.as_str() {
-            "command_accepted" => {
+        match envelope.kind() {
+            EventKind::CommandAccepted => {
                 let Some(accepted) = crate::app::read!(envelope, CommandAccepted) else {
                     return Vec::new();
                 };
@@ -390,7 +391,7 @@ impl App {
                     return self.credential_switch(&labels, ask.label, false);
                 }
             }
-            "command_rejected" => {
+            EventKind::CommandRejected => {
                 let Some(rejected) = crate::app::read!(envelope, CommandRejected) else {
                     return Vec::new();
                 };
@@ -405,7 +406,76 @@ impl App {
                     picker.rejected(&id.0, &rejected.message);
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::Unknown(_) => {}
         }
         Vec::new()
     }

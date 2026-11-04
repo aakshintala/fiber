@@ -8,6 +8,7 @@
 //! hub's `reviewer_notes` and `save_reviewer_notes` operations through the
 //! configuration seam.
 
+use contract::events::EventKind;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -295,8 +296,8 @@ impl App {
     /// request settles with no notice. True when the line was one of those.
     pub(super) fn reviewer_setup_settled(&mut self, envelope: &Envelope) -> bool {
         if !matches!(
-            envelope.kind.as_str(),
-            "command_accepted" | "command_rejected"
+            envelope.kind(),
+            EventKind::CommandAccepted | EventKind::CommandRejected
         ) {
             return false;
         }
@@ -314,7 +315,7 @@ impl App {
         if open.pending.as_ref() != Some(&id) || open.session != envelope.session_id {
             return false;
         }
-        if envelope.kind == "command_accepted" {
+        if envelope.kind() == EventKind::CommandAccepted {
             let Some(accepted) = read!(envelope, CommandAccepted) else {
                 return false;
             };
@@ -393,18 +394,87 @@ impl App {
 fn is_block(envelope: &Envelope) -> bool {
     let payload = &envelope.payload;
     let word = |key: &str| payload.get(key).and_then(Value::as_str);
-    match envelope.kind.as_str() {
-        "permission_resolved" => {
+    match envelope.kind() {
+        EventKind::PermissionResolved => {
             word("decided_by") == Some("reviewer") && word("decision") == Some("deny")
         }
-        "permission_requested" => matches!(
+        EventKind::PermissionRequested => matches!(
             payload
                 .get("escalation")
                 .and_then(|escalation| escalation.get("cause"))
                 .and_then(Value::as_str),
             Some("consecutive_blocks" | "session_blocks" | "reviewer_failed")
         ),
-        _ => false,
+        EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => false,
     }
 }
 

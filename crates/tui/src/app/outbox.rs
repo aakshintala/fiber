@@ -67,6 +67,28 @@ pub(crate) enum Waiting {
     ImageDisplay,
     Sessions,
     Abandoned,
+    /// A workspace picker `directories` listing.
+    Directories,
+    /// A home `subscribe` for a session's level.
+    Subscribe,
+    /// A `close` with `now` stopping a live row.
+    Stop,
+    /// A `delete` for an exited row.
+    Delete,
+    /// The first-run offer's `import`.
+    OfferImport,
+    /// `/delete`'s discovery dry run.
+    DeleteDiscovery,
+    /// `/delete`'s confirmed stops.
+    DeleteStop,
+    /// `/delete`'s exact-set delete.
+    DeleteFinal,
+    /// Home's `feed`.
+    Feed,
+    /// Home's `recent` pages, scoped or not.
+    Recent,
+    /// The quit question's closes.
+    Close,
 }
 
 /// The hub connection, as the terminal sees it.

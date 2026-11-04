@@ -464,6 +464,15 @@ impl Subs {
         Some(session)
     }
 
+    /// The session an in-flight subscribe `id` names, without consuming
+    /// it: the answer router checks the source session against it first.
+    pub(crate) fn session_for(&self, id: &str) -> Option<SessionId> {
+        self.inflight
+            .iter()
+            .find(|(sent, _, _)| sent == id)
+            .map(|(_, session, _)| session.clone())
+    }
+
     /// Whether the accepted level for `session` is `full`.
     pub(crate) fn full(&self, session: &SessionId) -> bool {
         self.accepted.get(session) == Some(&Level::Full)

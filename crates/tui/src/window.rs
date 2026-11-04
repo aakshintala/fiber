@@ -4,6 +4,7 @@
 //! outside the window keeps only its seq range and its counts. Each turn's
 //! totals, which its ▣ line draws, are kept for the whole session.
 
+use contract::events::EventKind;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
@@ -397,18 +398,21 @@ impl Pages {
     /// cutting a page where the index says.
     pub(crate) fn apply(&mut self, envelope: &Envelope) -> Applied {
         self.note_images(envelope);
-        let kind = envelope.kind.as_str();
+        let kind = envelope.kind();
         let action = envelope.action_id.as_ref();
         // A turn, step or session cut is decided before its line is
         // folded; the others once the fold says whether the line
         // showed. The session cut must come first, so a new segment's
         // first line never folds into the closed ancestor part.
-        let early = matches!(kind, "turn_started" | "step_started" | "session_started");
+        let early = matches!(
+            kind,
+            EventKind::TurnStarted | EventKind::StepStarted | EventKind::SessionStarted
+        );
         let mut cut = Cut::None;
         if early && let Some(seq) = envelope.seq {
             cut = self
                 .index
-                .push(&envelope.session_id, seq, kind, action, true);
+                .push(&envelope.session_id, seq, &kind, action, true);
             match cut {
                 Cut::Here => self.close(),
                 Cut::Candidate => self.pending = Some(self.candidate()),
@@ -420,7 +424,7 @@ impl Pages {
             pending_folded = Some(fold(&mut pending.next, envelope));
         }
         let folded = fold(&mut self.open, envelope);
-        if kind == "usage_recorded" {
+        if kind == EventKind::UsageRecorded {
             self.usage(envelope);
         }
         let folded = pending_folded
@@ -430,7 +434,7 @@ impl Pages {
         if !early && let Some(seq) = envelope.seq {
             cut = self
                 .index
-                .push(&envelope.session_id, seq, kind, action, changed);
+                .push(&envelope.session_id, seq, &kind, action, changed);
         }
         if cut == Cut::AtCandidate {
             self.confirm();
@@ -446,11 +450,11 @@ impl Pages {
         // follows: closing moves its cards, but the line stays on the
         // new open page. Counting may wait for the batch's end, but the
         // revision moves now, so a search never trusts a stale scan.
-        if changed && kind != "usage_recorded" {
+        if changed && kind != EventKind::UsageRecorded {
             self.index.invalidate(self.residency.len());
         }
         // A usage line counts the page holding its turn's ▣ line itself.
-        if (changed && kind != "usage_recorded") || cut != Cut::None {
+        if (changed && kind != EventKind::UsageRecorded) || cut != Cut::None {
             if self.held {
                 // A batch folds many lines before it counts: the page is
                 // marked, and the batch's end counts it once.
@@ -954,7 +958,7 @@ impl Pages {
 
     /// Records the event without interpreting eligibility in the terminal.
     pub(crate) fn record_extensions(&mut self, envelope: &Envelope) {
-        if envelope.kind == "extensions_loaded"
+        if envelope.kind() == EventKind::ExtensionsLoaded
             && let Some(loaded) = envelope
                 .payload
                 .get("extensions")
@@ -2088,25 +2092,171 @@ fn set(part: &mut Part, target: &Target, open: bool) -> bool {
 /// Folds one line into a page's cards and fold state using the turn's
 /// current rendering path.
 pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
-    let kind = envelope.kind.as_str();
+    let kind = envelope.kind();
     let was_open = part.turns.last().is_some_and(Turn::is_open);
     let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
     if let Some(turn) = part.turns.last_mut() {
         turn.note_seq(envelope.seq);
     }
     match kind {
-        "turn_started" if changed => Folded::Started,
+        EventKind::TurnStarted if changed => Folded::Started,
         // Only a resume that cuts an open turn changes the card.
-        "fiber_started" if changed => Folded::CutShort,
+        EventKind::FiberStarted if changed => Folded::CutShort,
         // `changed` is redundant here: a completed line that folded
         // nothing re-reads as nothing below, so openness alone decides.
-        "turn_completed" if was_open => {
+        EventKind::TurnCompleted if was_open => {
             read!(envelope, TurnCompleted).map_or(Folded::Nothing, |done| Folded::Ended(done, true))
         }
-        "step_started" if was_open => Folded::Stepped,
-        "tool_call_requested" if changed => Folded::Called,
-        _ if changed => Folded::Changed,
-        _ => Folded::Nothing,
+        EventKind::StepStarted if was_open => Folded::Stepped,
+        EventKind::ToolCallRequested if changed => Folded::Called,
+        EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_)
+            if changed =>
+        {
+            Folded::Changed
+        }
+        EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => Folded::Nothing,
     }
 }
 

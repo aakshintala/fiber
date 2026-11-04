@@ -196,7 +196,9 @@ impl List {
         }
         self.selected = at.min(rows - 1);
         self.top = self.top.min(self.selected);
-        if self.selected >= self.top + height {
+        // The distance form never overflows: the clamp above keeps
+        // `top <= selected`, so it agrees with the sum form exactly.
+        if self.selected - self.top >= height {
             self.top = self.selected + 1 - height;
         }
     }

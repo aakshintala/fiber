@@ -6,6 +6,7 @@
 
 mod quota;
 
+use contract::events::EventKind;
 use std::collections::{BTreeMap, BTreeSet};
 
 use contract::Envelope;
@@ -167,21 +168,21 @@ pub(crate) struct PanelState {
 impl PanelState {
     /// Folds one envelope of the attached session into the panel's data.
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
-        match envelope.kind.as_str() {
-            "extension_ui" => self.fold_widget(envelope),
-            "session_status" => {
+        match envelope.kind() {
+            EventKind::ExtensionUi => self.fold_widget(envelope),
+            EventKind::SessionStatus => {
                 if let Some(status) = super::read!(envelope, SessionStatus) {
                     self.status = Some(status);
                     self.status_session = Some(envelope.session_id.clone());
                 }
             }
-            "session_started" => {
+            EventKind::SessionStarted => {
                 if let Some(started) = super::read!(envelope, SessionStarted) {
                     self.worktree = started.worktree.is_some();
                     self.workspace = Some(started.workspace.clone());
                 }
             }
-            "preamble_built" => {
+            EventKind::PreambleBuilt => {
                 if let Some(built) = super::read!(envelope, PreambleBuilt) {
                     self.model = Some(built.model);
                     self.thinking = built.thinking;
@@ -193,21 +194,21 @@ impl PanelState {
                     self.budget = built.budget;
                 }
             }
-            "model_changed" => {
+            EventKind::ModelChanged => {
                 if let Some(changed) = super::read!(envelope, ModelChanged) {
                     self.model = Some(changed.after.model);
                     self.thinking = changed.after.thinking;
                     self.credential = Some(changed.after.credential);
                 }
             }
-            "turn_completed" => {
+            EventKind::TurnCompleted => {
                 self.turns = self.turns.saturating_add(1);
                 self.started_at = None;
                 // A settled turn ends any thinking it streamed: a
                 // thinking-only turn never draws a stale `∴`.
                 self.thinking_state = ThinkingState::Closed;
             }
-            "assistant_message_started" => {
+            EventKind::AssistantMessageStarted => {
                 self.started_at = Some(envelope.ts);
                 // Every model call opens here, so the new call starts
                 // with no thinking streamed yet.
@@ -217,7 +218,7 @@ impl PanelState {
             // also fires for replies with no streamed thought, and an
             // ephemeral delta can pass unseen, in which case no glyph is
             // promised (`docs/architecture.md`, "Streaming").
-            "reasoning_delta" => {
+            EventKind::ReasoningDelta => {
                 if self.thinking_state != ThinkingState::Closed {
                     self.thinking_state = ThinkingState::Thinking;
                 }
@@ -225,12 +226,12 @@ impl PanelState {
             // The first text, the first tool call the model starts
             // emitting, or the call's end stops the thinking, whichever
             // comes first; later deltas of this call stay ignored.
-            "assistant_message_delta"
-            | "tool_call_arguments_delta"
-            | "assistant_message_completed" => {
+            EventKind::AssistantMessageDelta
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::AssistantMessageCompleted => {
                 self.thinking_state = ThinkingState::Closed;
             }
-            "usage_recorded" => {
+            EventKind::UsageRecorded => {
                 if let Some(usage) = super::read!(envelope, UsageRecorded)
                     && usage.origin_session_id.is_none()
                     && usage.extension.is_none()
@@ -247,17 +248,17 @@ impl PanelState {
                         });
                 }
             }
-            "mcp_server_failed" => {
+            EventKind::McpServerFailed => {
                 if let Some(failed) = super::read!(envelope, McpServerFailed) {
                     self.down.insert(failed.server);
                 }
             }
-            "mcp_server_ready" => {
+            EventKind::McpServerReady => {
                 if let Some(ready) = super::read!(envelope, McpServerReady) {
                     self.down.remove(&ready.server);
                 }
             }
-            "tool_call_completed" => {
+            EventKind::ToolCallCompleted => {
                 if let Some(done) = super::read!(envelope, ToolCallCompleted) {
                     for change in done.changes.unwrap_or_default() {
                         let FileChange {
@@ -271,7 +272,7 @@ impl PanelState {
                     }
                 }
             }
-            "job_started" => {
+            EventKind::JobStarted => {
                 if let Some(started) = super::read!(envelope, JobStarted) {
                     // A resume is a new run of the same job: an id held
                     // from an earlier run goes last in start order, once
@@ -283,17 +284,17 @@ impl PanelState {
                     self.jobs.push((started.job_id, started.description));
                 }
             }
-            "delegate_started" => {
+            EventKind::DelegateStarted => {
                 if let Some(started) = super::read!(envelope, DelegateStarted) {
                     self.delegates.insert(started.job_id.clone(), started);
                 }
             }
-            "delegate_finished" => {
+            EventKind::DelegateFinished => {
                 if let Some(done) = super::read!(envelope, contract::events::DelegateFinished) {
                     self.ended.insert(done.job_id, envelope.ts);
                 }
             }
-            "job_completed" => {
+            EventKind::JobCompleted => {
                 if let Some(done) = super::read!(envelope, JobCompleted) {
                     // A finished delegate stays on its card as done; a
                     // plain job leaves the fold.
@@ -305,7 +306,59 @@ impl PanelState {
                     }
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::ContextAdded
+            | EventKind::TextCompleted
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
         }
     }
 
@@ -677,7 +730,7 @@ impl App {
     /// Delegates card's subscribes (`docs/tui.md`, "The panel").
     pub(super) fn panel_line(&mut self, envelope: &Envelope) -> Vec<String> {
         self.panel_state.fold(envelope);
-        let ended = if envelope.kind == "session_status" {
+        let ended = if envelope.kind() == EventKind::SessionStatus {
             super::read!(envelope, SessionStatus).is_some_and(|status| {
                 let busy = !matches!(status.state, SessionState::Idle | SessionState::Jobs);
                 self.panel_state.turn_end(busy)
@@ -696,8 +749,8 @@ impl App {
     /// after each turn. Nothing polls.
     fn panel_branch(&mut self, envelope: &Envelope, ended: bool) -> Vec<String> {
         let mut send = Vec::new();
-        match envelope.kind.as_str() {
-            "command_accepted" => {
+        match envelope.kind() {
+            EventKind::CommandAccepted => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted)
                     && self.panel_state.asked.as_deref() == Some(accepted.command_id.0.as_str())
                     && self.panel_state.answer_branch(accepted.result.as_ref())
@@ -705,7 +758,7 @@ impl App {
                     send.extend(self.branch_query());
                 }
             }
-            "command_rejected" => {
+            EventKind::CommandRejected => {
                 if let Some(rejected) = super::read!(envelope, CommandRejected)
                     && rejected
                         .command_id
@@ -716,14 +769,83 @@ impl App {
                     send.extend(self.branch_query());
                 }
             }
-            "session_status" if ended => {
+            EventKind::SessionStatus if ended => {
                 if self.panel_state.asked.is_some() {
                     self.panel_state.again = true;
                 } else {
                     send.extend(self.branch_query());
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::Unknown(_) => {}
         }
         if self.panel_state.due {
             send.extend(self.branch_query());

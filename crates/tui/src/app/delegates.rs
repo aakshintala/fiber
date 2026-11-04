@@ -6,6 +6,7 @@
 
 use contract::Envelope;
 use contract::SessionId;
+use contract::events::EventKind;
 use serde_json::Value;
 
 use super::App;
@@ -67,7 +68,7 @@ impl App {
     /// delegate's stored row goes, so a later run never shows a stale
     /// status (`docs/tui.md`, "The panel").
     pub(super) fn delegate_line(&mut self, envelope: &Envelope) -> Vec<String> {
-        if envelope.kind == "job_completed" {
+        if envelope.kind() == EventKind::JobCompleted {
             if let Some(done) = super::read!(envelope, contract::events::JobCompleted) {
                 let session = self
                     .panel_state
@@ -88,7 +89,7 @@ impl App {
             }
             return Vec::new();
         }
-        if envelope.kind != "session_status" {
+        if envelope.kind() != EventKind::SessionStatus {
             return Vec::new();
         }
         if !self.panel_cards().iter().any(|card| card == "delegates") {

@@ -171,7 +171,10 @@ impl App {
         let (lines, pairs) = self.close_lines(std::slice::from_ref(&id));
         if let Some(home) = self.home.as_mut() {
             for (session, close) in pairs {
-                home.questions.asks.insert(close, Ask::Stop(session));
+                home.questions
+                    .asks
+                    .insert(close.clone(), Ask::Stop(session));
+                self.outbox.wait(&close, super::super::super::Waiting::Stop);
             }
         }
         self.close_prompt();
@@ -312,7 +315,8 @@ impl App {
         let (lines, pairs) = self.close_lines(&working);
         if let Some(home) = self.home.as_mut() {
             for (session, id) in pairs {
-                home.questions.closing.push((session, id));
+                home.questions.closing.push((session, id.clone()));
+                self.outbox.wait(&id, super::super::super::Waiting::Close);
             }
         }
         Effect::Exit(lines)
@@ -340,7 +344,8 @@ impl App {
         let (lines, pairs) = self.close_lines(&close);
         if let Some(home) = self.home.as_mut() {
             for (session, id) in pairs {
-                home.questions.asks.insert(id, Ask::Stop(session));
+                home.questions.asks.insert(id.clone(), Ask::Stop(session));
+                self.outbox.wait(&id, super::super::super::Waiting::Stop);
             }
         }
         self.close_prompt();
@@ -393,9 +398,17 @@ impl App {
             })
             .collect();
         if let Some(home) = self.home.as_mut() {
-            home.questions
-                .closing
-                .retain(|(_, close)| !ids.contains(close));
+            let mut dropped = Vec::new();
+            home.questions.closing.retain(|(_, close)| {
+                let keep = !ids.contains(close);
+                if !keep {
+                    dropped.push(close.clone());
+                }
+                keep
+            });
+            for id in dropped {
+                self.outbox.settled(&id);
+            }
         }
         self.delete_command_unsent(&ids);
     }

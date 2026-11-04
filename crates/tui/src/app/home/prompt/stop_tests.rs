@@ -617,3 +617,98 @@ fn a_session_that_left_while_the_question_showed_gets_no_close() {
     assert!(!app.quit_open());
     assert!(stops(&app).is_empty());
 }
+
+#[test]
+fn stop_answers_register_a_tag_and_settle_it() {
+    use crate::app::Waiting;
+    let mut app = focused(json!({"state": "idle"}));
+    assert_eq!(delete(&mut app), Effect::None);
+    let lines = sent(press(&mut app, Key::Enter));
+    let close = lines
+        .iter()
+        .find(|line| line["command"] == "close")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(app.outbox.waiting(&close), Some(Waiting::Stop));
+    assert!(app.on_line(accepted(&close, json!({}))).is_empty());
+    assert_eq!(app.outbox.waiting(&close), None);
+    assert!(stops(&app).is_empty());
+}
+
+#[test]
+fn a_refused_stop_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = focused(json!({"state": "idle"}));
+    assert_eq!(delete(&mut app), Effect::None);
+    let lines = sent(press(&mut app, Key::Enter));
+    let close = lines
+        .iter()
+        .find(|line| line["command"] == "close")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(app.outbox.waiting(&close), Some(Waiting::Stop));
+    assert!(app.on_line(rejected(&close, "busy", "Busy.")).is_empty());
+    assert_eq!(app.outbox.waiting(&close), None);
+    assert!(stops(&app).is_empty());
+}
+
+#[test]
+fn delete_answers_register_a_tag_and_settle_it() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let mut row = crashed(A, "dead work");
+    row["how"] = json!("exited");
+    app.on_line(accepted(&recent, json!({"sessions": [row]})));
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| home.sessions.row(&SessionId(A.to_owned())))
+        .map(|row| row.key)
+        .unwrap_or_default();
+    app.focus = Some(TargetId::Home(Spot::Entry(key)));
+    assert_eq!(delete(&mut app), Effect::None);
+    assert!(delete_open(&app));
+    let lines = sent(press(&mut app, Key::Enter));
+    let delete = lines
+        .iter()
+        .find(|line| line["command"] == "delete")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(app.outbox.waiting(&delete), Some(Waiting::Delete));
+    let out = commands(app.on_line(accepted(&delete, json!({}))));
+    assert_eq!(app.outbox.waiting(&delete), None);
+    assert!(out.iter().any(|line| line["command"] == "recent"));
+}
+
+#[test]
+fn a_refused_delete_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    let mut row = crashed(A, "dead work");
+    row["how"] = json!("exited");
+    app.on_line(accepted(&recent, json!({"sessions": [row]})));
+    let key = app
+        .home
+        .as_ref()
+        .and_then(|home| home.sessions.row(&SessionId(A.to_owned())))
+        .map(|row| row.key)
+        .unwrap_or_default();
+    app.focus = Some(TargetId::Home(Spot::Entry(key)));
+    assert_eq!(delete(&mut app), Effect::None);
+    let lines = sent(press(&mut app, Key::Enter));
+    let delete = lines
+        .iter()
+        .find(|line| line["command"] == "delete")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(app.outbox.waiting(&delete), Some(Waiting::Delete));
+    assert!(app.on_line(rejected(&delete, "busy", "Busy.")).is_empty());
+    assert_eq!(app.outbox.waiting(&delete), None);
+    assert_eq!(app.notice(), Some("Busy."));
+}

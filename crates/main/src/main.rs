@@ -1171,6 +1171,12 @@ fn terminal(
         },
         Arc::clone(&clock),
     ));
+    // The startup guard stamps here, once the level is known, and is
+    // dropped at `run_with` entry; at info `timed` returns `None` before
+    // any clock read, so info starts pay only the level check
+    // (`docs/state.md`, "What each part holds",
+    // `docs/configuration.md`, "Keys").
+    let startup = log::diag::timed(&diag, contract::diag::Op::TuiStartup, None, None);
     let models = model_list::reader(
         home.clone(),
         workspace.clone(),
@@ -1264,6 +1270,7 @@ fn terminal(
         Box::new(log::crash::attach),
         Arc::clone(&clock),
         Arc::clone(&diag),
+        startup,
     ) {
         Ok(code) => code,
         Err(error) => {
