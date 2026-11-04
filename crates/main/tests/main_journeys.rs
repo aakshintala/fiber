@@ -2557,17 +2557,16 @@ fn install_replay_databricks_package(setup: &Setup, server: &ProviderServer) -> 
 }
 
 /// The discovery's two answers, in the order `models()` asks for them:
-/// the scripted half of `discovery` (`databricks.rs`), file-local.
+/// only the Claude entries this journey needs (`databricks.rs` serves
+/// three services with full metadata), file-local. The row keeps what
+/// `entry_for` reads: the chat mode and name match, the ANTHROPIC type
+/// for the bearer route, and the window a model needs to count.
 fn replay_discovery() -> [Response; 2] {
     [
         Response::status(
             200,
             json!({"model_services": [
                 {"name": "model-services/system.ai.claude-opus-5",
-                 "supported_api_types": ["mlflow/v1/chat/completions"]},
-                {"name": "model-services/system.ai.gpt-6-sol",
-                 "supported_api_types": ["openai/v1/responses", "mlflow/v1/chat/completions"]},
-                {"name": "model-services/system.ai.glm-5.3",
                  "supported_api_types": ["mlflow/v1/chat/completions"]},
             ]})
             .to_string(),
@@ -2576,23 +2575,7 @@ fn replay_discovery() -> [Response; 2] {
             200,
             json!({"models": [
                 {"model_name": "claude-opus-5", "mode": "chat", "provider_type": "ANTHROPIC",
-                 "context_window": {"max_input": 200000, "max_output": 64000},
-                 "capabilities": {"vision": true},
-                 "base_pricing": {"input_cost_per_million_tokens": 5,
-                                   "output_cost_per_million_tokens": 25,
-                                   "cache_read_input_cost_per_million_tokens": 0.5,
-                                   "cache_creation_input_cost_per_million_tokens": 6.25}},
-                {"model_name": "gpt-6-sol", "mode": "chat", "provider_type": "OPENAI",
-                 "context_window": {"max_input": 400000, "max_output": 160000},
-                 "capabilities": {"vision": false},
-                 "base_pricing": {"input_per_million_tokens": 2,
-                                   "output_per_million_tokens": 8}},
-                {"model_name": "glm-5.3", "mode": "chat", "provider_type": "MICROSOFT_FOUNDRY",
-                 "context_window": {"max_input": 200000, "max_tokens": 32000},
-                 "capabilities": {},
-                 "base_pricing": {"input_cost_per_million_tokens": 0.6,
-                                   "output_cost_per_million_tokens": 2.2,
-                                   "cache_read_input_cost_per_million_tokens": 0.06}},
+                 "context_window": {"max_input": 200000, "max_output": 64000}},
             ]})
             .to_string(),
         ),
@@ -2982,28 +2965,6 @@ fn replay_bedrock_converse_text_turn() {
     );
 }
 
-/// A scripted `anthropic-messages` reply calling `mcp__fx__hang` with no
-/// arguments: the wire the recorded `stream tool use` exchange cannot
-/// serve, since bare `get_weather` never invokes the hanging fixture.
-fn replay_hang_call() -> Response {
-    let mut all = vec![json!({"type": "message_start", "message": {"id": "msg_1"}})];
-    all.push(
-        json!({"type": "content_block_start", "index": 0, "content_block": {
-            "type": "tool_use", "id": "toolu_1", "name": "mcp__fx__hang", "input": {}}}),
-    );
-    all.push(json!({"type": "content_block_stop", "index": 0}));
-    all.push(
-        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
-        "usage": {"input_tokens": 10, "output_tokens": 3}}),
-    );
-    all.push(json!({"type": "message_stop"}));
-    Response::stream(
-        all.iter()
-            .map(|event| format!("data: {event}\n\n"))
-            .collect::<String>(),
-    )
-}
-
 /// The recorded #3841 exchange replayed: a hanging MCP call's timeout
 /// reaches the provider as the tool result's text. The fake answers the
 /// first request with the scripted hang call, an empty `is_error` result
@@ -3037,7 +2998,10 @@ fn replay_empty_failed_tool_result_carries_timeout_text() {
                     .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
                     .find(|block| block["type"] == "tool_result");
                 match result {
-                    None => replay_hang_call(),
+                    // The wire the recorded `stream tool use` exchange
+                    // cannot serve, since bare `get_weather` never invokes
+                    // the hanging fixture.
+                    None => replay_tool_call("toolu_1", "mcp__fx__hang", &json!({})),
                     Some(block)
                         if block["is_error"] == json!(true)
                             && (block["content"] == json!("") || block["content"] == json!([])) =>
