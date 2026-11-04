@@ -1171,8 +1171,8 @@ fn terminal(
     // The startup guard stamps here, once the level is known, and is
     // dropped at `run_with` entry; at info `timed` returns `None` before
     // any clock read, so info starts pay only the level check
-    // (`docs/state.md`, "Diagnostic logs", `docs/configuration.md`,
-    // `diagnostics.level`).
+    // (`docs/state.md`, "What each part holds",
+    // `docs/configuration.md`, "Keys").
     let startup = log::diag::timed(&diag, contract::diag::Op::TuiStartup, None, None);
     let models = model_list::reader(
         home.clone(),
