@@ -13,7 +13,7 @@ use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::JobCompleted;
 use contract::jobs::Jobs;
-use contract::keeper::{CommandHost, Exit, HostEvent, HostStdin, Sandbox, Spawn, Started};
+use contract::keeper::{CommandHost, Exit, HostEvent, Sandbox, Spawn, Started};
 use contract::tool::Cancel;
 
 use super::command::{self, Finished, Kept, MovePolicy, Ran, SpawnStreams};
@@ -174,11 +174,7 @@ pub(super) fn execute(
                 )]
             })
             .unwrap_or_default(),
-        stdin: if policy == MovePolicy::Terminal {
-            HostStdin::Pty
-        } else {
-            HostStdin::Null
-        },
+        stdin: command::spawn_stdin(policy),
         timeout_ms: timeout.map(|time| u64::try_from(time.as_millis()).unwrap_or(u64::MAX)),
         output_cap: OUTPUT_CAP,
         sandbox: Some(Sandbox {
@@ -217,6 +213,9 @@ pub(super) fn execute(
 }
 
 /// Builds a keeper-written completion without session-only notice or tail fields.
+// The sent_signal || to && mutant is equivalent: where the flags differ,
+// assemble_output returns through Timeout or Capped before reading sent_signal.
+#[cfg_attr(false, mutants::skip)]
 pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
     let finished = Finished {
         output: Kept::Whole(Vec::new()),

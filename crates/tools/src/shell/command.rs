@@ -81,6 +81,14 @@ pub(crate) enum MovePolicy {
     Monitor,
 }
 
+pub(super) fn spawn_stdin(policy: MovePolicy) -> contract::keeper::HostStdin {
+    if policy == MovePolicy::Terminal {
+        contract::keeper::HostStdin::Pty
+    } else {
+        contract::keeper::HostStdin::Null
+    }
+}
+
 /// Why the command moved.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MoveReason {
@@ -521,11 +529,7 @@ fn execute_inner(
                 )]
             })
             .unwrap_or_default(),
-        stdin: if policy == MovePolicy::Terminal {
-            contract::keeper::HostStdin::Pty
-        } else {
-            contract::keeper::HostStdin::Null
-        },
+        stdin: spawn_stdin(policy),
         timeout_ms: None,
         output_cap: OUTPUT_CAP,
         sandbox: None,

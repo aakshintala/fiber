@@ -176,7 +176,7 @@ fn kept_failed_completions_load_tails_but_nonfailed_and_unstarted_do_not() {
             looped.kept.push(job(id, status));
         }
         looped.kept.push(job("j_unstarted", Outcome::Failed));
-        // `docs/events.md`, "job_completed": only failed jobs carry a tail;
+        // `docs/events.md`, "`job_completed`": only failed jobs carry a tail;
         // "Resume": keeper completions are sent with the next turn.
         assert_eq!(
             looped.deliver_kept().unwrap(),
@@ -292,7 +292,7 @@ fn kept_completion_hooks_share_deduplicated_attribution() {
             job("j_one", Outcome::Completed),
             job("j_two", Outcome::Completed),
         ];
-        // `docs/events.md`, "changed_by": extensions are named once in
+        // `docs/events.md`, "`changed_by`": extensions are named once in
         // hook order, even when they changed both completion notices.
         assert_eq!(
             looped.deliver_kept().unwrap(),
