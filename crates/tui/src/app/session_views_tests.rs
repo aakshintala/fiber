@@ -3394,3 +3394,23 @@ fn hooks_refusal_settles_its_tag_and_keeps_no_rows() {
     let shown = screen(&app, 80, 24).0;
     assert!(shown.contains("No hooks"), "{shown}");
 }
+
+#[test]
+fn a_hub_rejection_for_hooks_drops_its_request_and_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Hooks));
+    app.on_line(hub_rejected(&id, "hub refused"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    // A late session answer finds no hooks request and folds nowhere:
+    // the view keeps showing that it holds no rows.
+    app.on_line(accepted_hooks(
+        &id,
+        json!([{"kind": "hook", "extension": "ext", "point": "before_tool", "on_failure": "blocking"}]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("No hooks"), "{shown}");
+    assert!(!shown.contains("ext"), "{shown}");
+}

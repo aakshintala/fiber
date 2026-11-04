@@ -2466,6 +2466,70 @@ fn credential_ask_refusal_settles_its_tag() {
 }
 
 #[test]
+fn a_hub_rejection_for_the_credential_ask_drops_it_so_a_late_answer_sends_no_switch() {
+    use crate::app::Waiting;
+    let mut app = connected(fake());
+    let id = credential_ask(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Credentials));
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."})
+            .as_object()
+            .unwrap()
+            .clone(),
+    }));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    // A late session answer finds no ask and sends no switch.
+    let send = app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": labels_answer()}),
+    ));
+    assert!(send.is_empty(), "{send:?}");
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn a_hub_rejection_for_the_credential_switch_drops_its_save() {
+    use crate::app::Waiting;
+    let mut app = connected(fake());
+    let id = credential_ask(&mut app);
+    let send = app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": labels_answer()}),
+    ));
+    assert_eq!(send.len(), 1);
+    let switch: serde_json::Value = serde_json::from_str(&send[0]).unwrap_or_default();
+    let switch_id = switch["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(
+        app.outbox.waiting(&switch_id),
+        Some(Waiting::CredentialSwitch)
+    );
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": switch_id, "code": "busy", "message": "Busy."})
+            .as_object()
+            .unwrap()
+            .clone(),
+    }));
+    assert_eq!(app.outbox.waiting(&switch_id), None);
+    assert!(app.outbox.pending.is_empty());
+    // A late session accept finds no save and pushes no notice: a stale
+    // save would take it and report the result's missing provider.
+    let before = app.notices().len();
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": switch_id}),
+    ));
+    assert_eq!(app.notices().len(), before);
+    assert_eq!(app.outbox.waiting(&switch_id), None);
+}
+
+#[test]
 fn a_credential_switch_answer_leaves_the_model_wait_alone() {
     use crate::app::Waiting;
     let mut app = connected(fake());

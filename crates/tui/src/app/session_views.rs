@@ -924,12 +924,7 @@ impl App {
                             | super::Waiting::Recent
                             | super::Waiting::Close,
                         ) => return Vec::new(),
-                        Some(super::Waiting::Figures) => {
-                            self.outbox.settled(accepted.command_id.0.as_str());
-                            self.session_views_answered(&accepted);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::Diff) => {
+                        Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
                             self.outbox.settled(accepted.command_id.0.as_str());
                             self.session_views_answered(&accepted);
                             return Vec::new();
@@ -1003,15 +998,7 @@ impl App {
                             | super::Waiting::Recent
                             | super::Waiting::Close,
                         ) => return Vec::new(),
-                        Some(super::Waiting::Figures) => {
-                            let Some(id) = rejected.command_id.as_ref() else {
-                                return Vec::new();
-                            };
-                            self.outbox.settled(id.0.as_str());
-                            self.session_views_rejected(&rejected);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::Diff) => {
+                        Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
                             let Some(id) = rejected.command_id.as_ref() else {
                                 return Vec::new();
                             };
@@ -1221,6 +1208,15 @@ impl App {
             return;
         }
         self.session_views.hooks_request = None;
+    }
+
+    /// A hub `command_rejected` for the pending `hooks` query drops the
+    /// wait before its tag settles: the view keeps showing what it holds,
+    /// if anything, and a late session answer finds no entry.
+    pub(in crate::app) fn hooks_hub_refused(&mut self, id: &str) {
+        if self.session_views.hooks_request.as_deref() == Some(id) {
+            self.session_views.hooks_request = None;
+        }
     }
 
     /// Moves the open rewind view's list to `at`: the fold's selection.

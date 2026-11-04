@@ -1682,15 +1682,22 @@ impl App {
                         Some(Waiting::RewindHistory) => {}
                         Some(Waiting::Sessions) => {}
                         Some(Waiting::Abandoned) => {}
-                        Some(
-                            Waiting::ConfigAsk | Waiting::Credentials | Waiting::CredentialSwitch,
-                        ) => {
+                        Some(Waiting::ConfigAsk) => {
                             self.outbox.settled(id);
                             self.config_views_refused(id, &message);
                         }
-                        Some(Waiting::Figures) | Some(Waiting::Diff) | Some(Waiting::Hooks) => {
+                        Some(Waiting::Credentials) | Some(Waiting::CredentialSwitch) => {
+                            self.credential_hub_refused(id);
+                            self.outbox.settled(id);
+                            self.config_views_refused(id, &message);
+                        }
+                        Some(Waiting::Figures) | Some(Waiting::Diff) => {
                             self.outbox.settled(id);
                             self.session_views_refused(id, &message);
+                        }
+                        Some(Waiting::Hooks) => {
+                            self.hooks_hub_refused(id);
+                            self.outbox.settled(id);
                         }
                         Some(Waiting::Branch) | Some(Waiting::Quota) => {}
                         Some(Waiting::ArtifactPage) | Some(Waiting::ProposeNotes) => {}
@@ -1944,6 +1951,15 @@ impl App {
         // reach no other path. The tag settles here so a second answer
         // for the id falls through to the generic path below.
         if answer.and_then(|answer| answer.waiting.as_ref()) == Some(&Waiting::ProposeNotes)
+            && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
+        {
+            self.outbox.settled(id);
+        }
+        // A `job_stop` or `job_input` answer settles its tag here so the
+        // item-session and other-session exits below, which clear the
+        // pending entry and return before `items_line`, do not leave it.
+        let waiting = answer.and_then(|answer| answer.waiting.as_ref());
+        if (waiting == Some(&Waiting::JobStop) || waiting == Some(&Waiting::JobInput))
             && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
         {
             self.outbox.settled(id);

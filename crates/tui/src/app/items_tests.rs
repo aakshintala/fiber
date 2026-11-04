@@ -2550,28 +2550,84 @@ fn an_answer_for_one_job_command_leaves_the_other_job_tag_alone() {
 
 #[test]
 fn a_resent_command_for_another_session_settles_its_entry() {
+    use crate::app::Waiting;
     let mut app = home();
     opened(&mut app);
     start_job(&mut app, "j_1");
     opened_item(&mut app, "j_1");
     let stop = stop_job(&mut app);
     let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobStop));
     // The answer arrives on another session: the other-session arm
-    // still settles the resent command's pending entry.
+    // still settles the resent command's pending entry, and the tag
+    // settles with it instead of waiting for `items_line`.
     app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", &id));
+    assert_eq!(app.outbox.waiting(&id), None);
     assert!(!app.outbox.pending.contains_key(&id));
 }
 
 #[test]
 fn an_answer_for_the_open_item_session_still_settles() {
+    use crate::app::Waiting;
     let mut app = home();
     opened(&mut app);
     start_delegate(&mut app, "j_1", DELEGATE_A);
     opened_item(&mut app, "j_1");
     let stop = stop_job(&mut app);
     let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobStop));
     // The answer arrives on the open delegate's session: the item arm
-    // still settles its pending entry.
+    // still settles its pending entry, and the tag settles with it
+    // instead of waiting for `items_line`.
     app.on_line(session_accepted(DELEGATE_A, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_job_stop_refusal_on_the_open_item_session_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobStop));
+    // The refusal arrives on the open delegate's session: the item arm
+    // clears the pending entry and returns before `items_line`, so the
+    // tag settles with the entry.
+    app.on_line(session_refused(DELEGATE_A, &id, "duplicate_command"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_job_input_refusal_on_another_session_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let Some(Effect::Send(lines)) = app.item_job_key(&Key::Char('x')) else {
+        panic!("a key sends job_input");
+    };
+    let inputs: Vec<Value> = commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_input")
+        .collect();
+    assert_eq!(inputs.len(), 1, "{inputs:?}");
+    let id = inputs[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobInput));
+    // The refusal arrives on another session: the other-session arm
+    // clears the pending entry and returns before `items_line`, so the
+    // tag settles with the entry.
+    app.on_line(session_refused(
+        "s_bbbbbbbbbbbbbbbb",
+        &id,
+        "duplicate_command",
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
     assert!(!app.outbox.pending.contains_key(&id));
 }
