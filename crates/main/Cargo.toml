@@ -39,7 +39,6 @@ tui = { path = "../tui" }
 worktree = { path = "../worktree" }
 
 [dev-dependencies]
-base64.workspace = true
 fakes = { path = "../fakes" }
 insta.workspace = true
 vt100 = "0.16.2"
