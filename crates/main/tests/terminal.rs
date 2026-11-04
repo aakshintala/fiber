@@ -2276,6 +2276,11 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
     });
     // Home draws notice rows directly above the bottom input box. The
     // box's all-▄ top edge gives the row the click must hit.
+    // ready: nothing can move the notice row after its wait. The refused
+    // resume sends no request and appends nothing to the log, raises no
+    // attention line, and leaves no session attached — so no bell, title
+    // emission, or session event follows the notice, and the row assert
+    // below pins it directly above the input box.
     run.click_where("the refusal notice", |grid| {
         let row = grid
             .rows
