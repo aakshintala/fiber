@@ -1907,3 +1907,70 @@ fn generic_refusal_settles_before_the_panels_for_a_shell_id() {
     );
     assert!(app.panel_state.asked.is_none());
 }
+
+// Part of #3696: the branch query routes by its tag.
+
+#[test]
+fn branch_query_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Branch));
+    assert!(answer(&mut app, &id, "main\n").is_empty());
+    assert_eq!(
+        app.panel_state().branch(),
+        Some(&Branch::Named("main".to_owned()))
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn branch_refusal_settles_its_tag_and_clears_the_query() {
+    use crate::app::Waiting;
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Branch));
+    assert!(app.on_line(session_refused(SESSION, &id)).is_empty());
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.panel_state.asked.is_none());
+    assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
+}
+
+#[test]
+fn hub_branch_refusal_settles_its_tag_after_the_generic_refusal() {
+    use crate::app::Waiting;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Branch));
+    app.on_line(crate::link::Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.panel_state.asked.is_none());
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn a_second_branch_answer_after_settle_changes_nothing() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert!(answer(&mut app, &id, "main\n").is_empty());
+    assert!(answer(&mut app, &id, "other\n").is_empty());
+    assert_eq!(
+        app.panel_state().branch(),
+        Some(&Branch::Named("main".to_owned()))
+    );
+}

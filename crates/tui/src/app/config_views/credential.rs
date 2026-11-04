@@ -249,6 +249,7 @@ impl App {
         self.outbox
             .pending
             .insert(id.clone(), (Kind::Command, std::mem::take(&mut self.draft)));
+        self.outbox.wait(&id, crate::app::Waiting::Credentials);
         self.config_views.credential.ask = Some(Ask {
             id,
             session,
@@ -322,6 +323,7 @@ impl App {
         self.outbox
             .pending
             .insert(id.clone(), (Kind::Command, Draft::default()));
+        self.outbox.wait(&id, crate::app::Waiting::CredentialSwitch);
         self.config_views.credential.save = None;
         if !session_only {
             self.config_views.credential.save = Some(Save { id, label });

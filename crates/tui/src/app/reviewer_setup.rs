@@ -205,6 +205,7 @@ impl App {
                 let args = serde_json::to_value(&args).ok();
                 let line = session_command(&id.0, "propose_notes", &open.session, args).to_string();
                 open.pending = Some(id.clone());
+                self.outbox.wait(&id.0, super::Waiting::ProposeNotes);
                 match self
                     .outbox
                     .send(id.0, Kind::Command, Draft::default(), line)

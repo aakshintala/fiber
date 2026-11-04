@@ -2311,6 +2311,190 @@ fn wheel_over_credential_leaves_the_conversation() {
     assert_eq!(app.top(), top, "the wheel left the conversation");
 }
 
+/// The asking views route by tag: the tools answer fills the open view
+/// and settles, on either link. (Part of #3696.)
+#[test]
+fn tools_ask_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let mut app = connected(fake());
+    let id = open_tools(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ConfigAsk));
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": tools_answer()}),
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let frame = app.config_view_screen().expect("the view is open");
+    assert!(
+        frame
+            .rows
+            .iter()
+            .any(|row| row.first().is_some_and(|cell| cell.0.contains("read"))),
+        "{frame:?}"
+    );
+}
+
+#[test]
+fn tools_rejection_on_either_link_settles_its_tag() {
+    use crate::app::Waiting;
+    for hub in [false, true] {
+        let mut app = connected(fake());
+        let id = open_tools(&mut app);
+        assert_eq!(app.outbox.waiting(&id), Some(Waiting::ConfigAsk));
+        let payload = serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."});
+        let line = if hub {
+            Line::Hub(contract::HubLine {
+                kind: "command_rejected".to_owned(),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                payload: payload.as_object().unwrap().clone(),
+            })
+        } else {
+            session_line("command_rejected", payload)
+        };
+        app.on_line(line);
+        assert_eq!(app.outbox.waiting(&id), None, "hub={hub}");
+        let frame = app.config_view_screen().expect("the view is open");
+        assert_eq!(frame.below, vec!["Busy.".to_owned()], "hub={hub}");
+    }
+}
+
+#[test]
+fn a_second_tools_answer_after_settle_changes_nothing() {
+    use crate::app::Waiting;
+    let mut app = connected(fake());
+    let id = open_tools(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ConfigAsk));
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": tools_answer()}),
+    ));
+    let rows = app
+        .config_view_screen()
+        .expect("the view is open")
+        .rows
+        .len();
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": six_tools_answer()}),
+    ));
+    let frame = app.config_view_screen().expect("the view is open");
+    assert_eq!(frame.rows.len(), rows);
+}
+
+/// The credential ask routes by tag: the labels answer fills the picker
+/// and sends the switch, and the switch answer settles silently.
+/// (Part of #3696.)
+#[test]
+fn credential_ask_registers_its_tag_and_the_answer_sends_the_switch() {
+    use crate::app::Waiting;
+    let mut app = connected(fake());
+    let lines = sent(app.open_config_view(ConfigView::Credential));
+    assert_eq!(lines.len(), 1);
+    let id = lines[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Credentials));
+    assert!(app.outbox.pending.contains_key(&id));
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": labels_answer()}),
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let frame = app.config_view_screen().expect("the picker is open");
+    assert!(
+        frame
+            .rows
+            .iter()
+            .any(|row| row.first().is_some_and(|cell| cell.0.contains("home"))),
+        "{frame:?}"
+    );
+}
+
+/// Sends `/credential home` as the slash table does and returns the ask id.
+fn credential_ask(app: &mut App) -> String {
+    let lines = sent(app.credential_command("home"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "credentials");
+    lines[0]["id"].as_str().unwrap_or_default().to_owned()
+}
+
+fn labels_answer() -> serde_json::Value {
+    serde_json::json!({"provider": "fake",
+        "credentials": ["default", "home", "work"], "credential": "home"})
+}
+
+#[test]
+fn credential_switch_answer_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = connected(fake());
+    let id = credential_ask(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Credentials));
+    let send = app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": labels_answer()}),
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert_eq!(send.len(), 1);
+    let switch: serde_json::Value = serde_json::from_str(&send[0]).unwrap_or_default();
+    assert_eq!(switch["command"], "credential");
+    let switch_id = switch["id"].as_str().unwrap_or_default().to_owned();
+    assert_ne!(switch_id, id);
+    assert_eq!(
+        app.outbox.waiting(&switch_id),
+        Some(Waiting::CredentialSwitch)
+    );
+    assert!(app.outbox.pending.contains_key(&switch_id));
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": switch_id, "result": {"provider": "fake"}}),
+    ));
+    assert_eq!(app.outbox.waiting(&switch_id), None);
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn credential_ask_refusal_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = connected(fake());
+    let id = credential_ask(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Credentials));
+    app.on_line(session_line(
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."}),
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn a_credential_switch_answer_leaves_the_model_wait_alone() {
+    use crate::app::Waiting;
+    let mut app = connected(fake());
+    app.model_picker.only_pending.insert(
+        "m1".to_owned(),
+        (
+            contract::SessionId(SESSION.to_owned()),
+            "acme/m1".to_owned(),
+        ),
+    );
+    let id = credential_ask(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Credentials));
+    let send = app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": labels_answer()}),
+    ));
+    let switch: serde_json::Value = serde_json::from_str(&send[0]).unwrap_or_default();
+    let switch_id = switch["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": switch_id, "result": {"provider": "fake"}}),
+    ));
+    // The switch folds without touching the model picker's wait: a
+    // `credential` answer names no model row.
+    assert!(app.model_picker.only_pending.contains_key("m1"));
+    assert_eq!(app.model_picker.session_only, None);
+    assert_eq!(app.outbox.waiting(&switch_id), None);
+}
+
 /// The wheel over the doctor view scrolls the view's list, never the
 /// conversation under it (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]

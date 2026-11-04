@@ -5067,3 +5067,22 @@ fn wheel_outside_with_swapped_open_home_session_vs_home() {
         "on home the swapped view owns the outside wheel"
     );
 }
+
+// Part of #3696: a `model` answer leaves other owners' tags alone.
+
+#[test]
+fn an_untagged_model_answer_leaves_a_credential_tag_alone() {
+    use crate::app::Waiting;
+    let (mut app, _) = choosing_app();
+    let id = session_only_id(&mut app);
+    app.outbox.wait("c_other", Waiting::CredentialSwitch);
+    app.on_line(accepted(SESSION, &id));
+    // The model folds for its choosing session, and the `credential`
+    // tag it never sent survives: the credential gate settles only
+    // the switch's own answer.
+    assert!(app.model_picker.session_only.is_some());
+    assert_eq!(
+        app.outbox.waiting("c_other"),
+        Some(Waiting::CredentialSwitch)
+    );
+}

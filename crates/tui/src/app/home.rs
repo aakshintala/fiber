@@ -798,6 +798,22 @@ impl App {
                             self.outbox.settled(id);
                             return Some(Vec::new());
                         }
+                        // The session views and panels own no home answer:
+                        // their answers fall through to the hub handling.
+                        Some(
+                            super::Waiting::Figures
+                            | super::Waiting::Diff
+                            | super::Waiting::Hooks
+                            | super::Waiting::Branch
+                            | super::Waiting::Quota
+                            | super::Waiting::ArtifactPage
+                            | super::Waiting::ConfigAsk
+                            | super::Waiting::Credentials
+                            | super::Waiting::CredentialSwitch
+                            | super::Waiting::ProposeNotes
+                            | super::Waiting::JobStop
+                            | super::Waiting::JobInput,
+                        ) => return None,
                         None => {}
                     }
                     // A rejected `start` is home's blocker text, above the
@@ -962,6 +978,22 @@ impl App {
                             | super::Waiting::Abandoned,
                         )
                         | None => {}
+                        // The session views and panels own no home answer:
+                        // their answers fall through to the checks below.
+                        Some(
+                            super::Waiting::Figures
+                            | super::Waiting::Diff
+                            | super::Waiting::Hooks
+                            | super::Waiting::Branch
+                            | super::Waiting::Quota
+                            | super::Waiting::ArtifactPage
+                            | super::Waiting::ConfigAsk
+                            | super::Waiting::Credentials
+                            | super::Waiting::CredentialSwitch
+                            | super::Waiting::ProposeNotes
+                            | super::Waiting::JobStop
+                            | super::Waiting::JobInput,
+                        ) => {}
                     }
                     // The `commands` an opening sends is answered while
                     // its replay is still gated: the answer is no history,

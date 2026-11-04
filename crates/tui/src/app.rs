@@ -538,6 +538,9 @@ impl App {
             busy: false,
         };
         self.panel_state.attached();
+        // A new attachment re-asks quota from `Due`: the old query's
+        // answer folds nowhere.
+        self.outbox.forget(&outbox::Waiting::Quota);
         // A new attachment folds no old rewind state: the next open
         // pages the new session's chain from its tip.
         self.outbox.forget(&outbox::Waiting::RewindHistory);
@@ -1606,6 +1609,20 @@ impl App {
                         | Waiting::Recent
                         | Waiting::Close,
                     ) => {}
+                    Some(
+                        Waiting::Figures
+                        | Waiting::Diff
+                        | Waiting::Hooks
+                        | Waiting::Branch
+                        | Waiting::Quota
+                        | Waiting::ArtifactPage
+                        | Waiting::ConfigAsk
+                        | Waiting::Credentials
+                        | Waiting::CredentialSwitch
+                        | Waiting::ProposeNotes
+                        | Waiting::JobStop
+                        | Waiting::JobInput,
+                    ) => {}
                     None => {}
                 }
                 let session = hub
@@ -1666,6 +1683,21 @@ impl App {
                         Some(Waiting::Sessions) => {}
                         Some(Waiting::Abandoned) => {}
                         Some(
+                            Waiting::ConfigAsk | Waiting::Credentials | Waiting::CredentialSwitch,
+                        ) => {
+                            self.outbox.settled(id);
+                            self.config_views_refused(id, &message);
+                        }
+                        Some(Waiting::Figures) | Some(Waiting::Diff) | Some(Waiting::Hooks) => {
+                            self.outbox.settled(id);
+                            self.session_views_refused(id, &message);
+                        }
+                        Some(Waiting::Branch) | Some(Waiting::Quota) => {}
+                        Some(Waiting::ArtifactPage) | Some(Waiting::ProposeNotes) => {}
+                        Some(Waiting::JobStop) | Some(Waiting::JobInput) => {
+                            self.outbox.settled(id);
+                        }
+                        Some(
                             Waiting::Directories
                             | Waiting::Subscribe
                             | Waiting::Stop
@@ -1686,10 +1718,18 @@ impl App {
                             .unwrap_or_else(|_| contract::ErrorCode::Other(code.clone())),
                         &message,
                     );
-                    self.config_views_refused(id, &message);
-                    self.session_views_refused(id, &message);
                     self.rejected(id, &code, message);
-                    self.panel_refused(id)
+                    // The panel's refusal clears its query next, so the
+                    // generic refusal still seeing it proves it settled
+                    // first (`docs/testing.md`, "Order").
+                    if answer.waiting == Some(Waiting::Branch)
+                        || answer.waiting == Some(Waiting::Quota)
+                    {
+                        self.outbox.settled(id);
+                        self.panel_refused(id)
+                    } else {
+                        Vec::new()
+                    }
                 } else {
                     Vec::new()
                 }
@@ -1884,10 +1924,30 @@ impl App {
                 | Waiting::Recent
                 | Waiting::Close,
             ) => None,
+            Some(
+                Waiting::Figures
+                | Waiting::Diff
+                | Waiting::Hooks
+                | Waiting::Branch
+                | Waiting::Quota
+                | Waiting::ArtifactPage
+                | Waiting::ConfigAsk
+                | Waiting::Credentials
+                | Waiting::CredentialSwitch
+                | Waiting::ProposeNotes
+                | Waiting::JobStop
+                | Waiting::JobInput,
+            ) => None,
             None => None,
         };
         // The reviewer setup's `propose_notes` answers settle first, and
-        // reach no other path.
+        // reach no other path. The tag settles here so a second answer
+        // for the id falls through to the generic path below.
+        if answer.and_then(|answer| answer.waiting.as_ref()) == Some(&Waiting::ProposeNotes)
+            && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
+        {
+            self.outbox.settled(id);
+        }
         if self.reviewer_setup_settled(envelope) {
             return Vec::new();
         }
@@ -1905,6 +1965,13 @@ impl App {
             && let Some(accepted) = read!(envelope, CommandAccepted)
         {
             let id = accepted.command_id.0.clone();
+            // The credential switch's answer settles its tag: the save
+            // folds only for its own id, and any other id leaves its
+            // owner's tag alone.
+            if answer.and_then(|answer| answer.waiting.as_ref()) == Some(&Waiting::CredentialSwitch)
+            {
+                self.outbox.settled(&id);
+            }
             self.model_picker_accepted(&id, &envelope.session_id);
             self.credential_accepted(&accepted);
         }
@@ -1986,13 +2053,13 @@ impl App {
             send.extend(lines);
             return send;
         }
-        send.extend(self.panel_line(envelope));
+        send.extend(self.panel_line(envelope, answer));
         self.pwd_arrived(envelope);
         self.reviewer_block(envelope);
-        self.items_line(envelope);
+        self.items_line(envelope, answer);
         self.output_line(envelope);
         send.extend(self.session_views_line(envelope, answer));
-        send.extend(self.config_views_line(envelope));
+        send.extend(self.config_views_line(envelope, answer));
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {

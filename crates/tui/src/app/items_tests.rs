@@ -2449,3 +2449,129 @@ fn wheel_inside_search_and_completion_slabs_over_an_item_moves_nothing() {
         );
     }
 }
+
+// Part of #3696: the `job_stop` and `job_input` answers route by tag.
+
+/// Stops the open job and returns the `job_stop` line it sends.
+fn stop_job(app: &mut App) -> Value {
+    let Effect::Send(lines) = app.item_click(super::Spot::Stop) else {
+        panic!("stop sends job_stop");
+    };
+    let stops: Vec<Value> = commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_stop")
+        .collect();
+    assert_eq!(stops.len(), 1, "{stops:?}");
+    stops.into_iter().next().unwrap_or_default()
+}
+
+#[test]
+fn job_stop_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobStop));
+    assert!(app.outbox.pending.contains_key(&id));
+    app.on_line(session_accepted(SESSION, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn job_input_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let Some(Effect::Send(lines)) = app.item_job_key(&Key::Char('x')) else {
+        panic!("a key sends job_input");
+    };
+    let inputs: Vec<Value> = commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_input")
+        .collect();
+    assert_eq!(inputs.len(), 1, "{inputs:?}");
+    let id = inputs[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobInput));
+    assert!(app.outbox.pending.contains_key(&id));
+    app.on_line(session_accepted(SESSION, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_second_job_stop_answer_after_settle_changes_nothing() {
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_accepted(SESSION, &id));
+    assert!(app.on_line(session_accepted(SESSION, &id)).is_empty());
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn an_answer_for_one_job_command_leaves_the_other_job_tag_alone() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let stop_id = stop["id"].as_str().unwrap_or_default().to_owned();
+    let Some(Effect::Send(lines)) = app.item_job_key(&Key::Char('x')) else {
+        panic!("a key sends job_input");
+    };
+    let inputs: Vec<Value> = commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_input")
+        .collect();
+    assert_eq!(inputs.len(), 1, "{inputs:?}");
+    let input_id = inputs[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&stop_id), Some(Waiting::JobStop));
+    assert_eq!(app.outbox.waiting(&input_id), Some(Waiting::JobInput));
+    // Each answer settles only its own tag: the `||` names both job
+    // commands, and any other tag reaches its own owner instead.
+    app.on_line(session_accepted(SESSION, &stop_id));
+    assert_eq!(app.outbox.waiting(&stop_id), None);
+    assert_eq!(app.outbox.waiting(&input_id), Some(Waiting::JobInput));
+    app.on_line(session_accepted(SESSION, &input_id));
+    assert_eq!(app.outbox.waiting(&input_id), None);
+}
+
+#[test]
+fn a_resent_command_for_another_session_settles_its_entry() {
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    // The answer arrives on another session: the other-session arm
+    // still settles the resent command's pending entry.
+    app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", &id));
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn an_answer_for_the_open_item_session_still_settles() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    // The answer arrives on the open delegate's session: the item arm
+    // still settles its pending entry.
+    app.on_line(session_accepted(DELEGATE_A, &id));
+    assert!(!app.outbox.pending.contains_key(&id));
+}

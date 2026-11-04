@@ -693,6 +693,7 @@ impl App {
             let path = view.artifact.clone()?;
             let id = mint();
             view.pager.request = Some((id.clone(), offset));
+            self.outbox.wait(&id, super::Waiting::ArtifactPage);
             session_command(
                 &id,
                 "artifact_page",
@@ -791,6 +792,9 @@ impl App {
         } else {
             return;
         };
+        // The request on the wire is gone, so a scroll asks again: its
+        // late answer matches nothing.
+        self.outbox.forget(&super::Waiting::ArtifactPage);
         if aborted {
             self.resume_call_window();
         }

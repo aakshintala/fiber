@@ -89,6 +89,31 @@ pub(crate) enum Waiting {
     Recent,
     /// The quit question's closes.
     Close,
+    /// A Changed files `figures` numstat query.
+    Figures,
+    /// A Changed files `diff` query.
+    Diff,
+    /// A hooks view `hooks` query.
+    Hooks,
+    /// The panel's branch query.
+    Branch,
+    /// The panel's `quota` query or the quota view's fetch.
+    Quota,
+    /// A call view's `artifact_page` fetch.
+    ArtifactPage,
+    /// A configuration view's `tools`, `skills` or `mcp_servers` ask,
+    /// or a per-server driver command for the open MCP view.
+    ConfigAsk,
+    /// A `credentials` labels query.
+    Credentials,
+    /// A `credential` switch saving its label.
+    CredentialSwitch,
+    /// A reviewer setup `propose_notes` ask.
+    ProposeNotes,
+    /// An item view's `job_stop`.
+    JobStop,
+    /// An item view's `job_input`.
+    JobInput,
 }
 
 /// The hub connection, as the terminal sees it.
