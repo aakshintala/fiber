@@ -145,7 +145,7 @@ impl Drop for Hold {
 /// by pid prefix). The pattern is a substring of the command text, not
 /// necessarily of the live process's command line: on Linux bash 5.3.9 execs
 /// the last command and drops the trailing comment, so the fragment matches
-/// nothing there; whether macOS bash 3.2 keeps it is open.
+/// nothing there; macOS /bin/bash 3.2.57 classifies the prelude shape as Exec too, so the route is ruled out on macOS (see #4030).
 #[allow(
     clippy::panic,
     clippy::unwrap_used,

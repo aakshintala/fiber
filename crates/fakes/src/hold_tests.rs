@@ -263,6 +263,7 @@ fn a_command_with_neither_panics() {
 /// whole `-c` string, and the fragment matches it; an exec of the last
 /// line drops the trailing comment, the fragment matches nothing, and the
 /// holder still ends when the release handle closes and `head` reads EOF.
+/// macOS /bin/bash 3.2.57 classifies this shape as Exec, so the route is ruled out on macOS (see #4030).
 #[test]
 #[allow(
     clippy::print_stderr,
