@@ -926,6 +926,7 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
         (TuiAttachTail, "tui.attach_tail"),
         (TuiAttachPrepare, "tui.attach_prepare"),
         (TuiAttachDraw, "tui.attach_draw"),
+        (TuiStartup, "tui.startup"),
         (LogAppend, "log.append"),
         (LogFsync, "log.fsync"),
         (ToolPermission, "tool.permission"),

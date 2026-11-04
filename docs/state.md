@@ -469,7 +469,8 @@ What is recorded:
   `tui.attached_frame`, `tui.log_read`, `tui.transcript`, `tui.frame`,
   `tui.attach_summary`, `tui.tail_wait`, `tui.preview_fold`,
   `tui.tail_install`, `tui.attach_setup`, `tui.attach_wait`,
-  `tui.attach_tail`, `tui.attach_prepare` and `tui.attach_draw`.
+  `tui.attach_tail`, `tui.attach_prepare`, `tui.attach_draw` and
+  `tui.startup`.
   `tui.extensions` covers extension loading before the first draw; when a
   loader exists it writes once per process, and without one it writes none
   (`docs/tui.md`, "How a TUI extension runs"). `tui.first_render` covers
@@ -504,6 +505,10 @@ What is recorded:
   write once, together with `tui.attached_frame`, only when the first
   attached-history draw succeeds; an attach whose parent timer is
   discarded writes none. Their `data` holds only `op` and `ms`.
+  `tui.startup` covers from after the diagnostic writer opens through
+  `run_with` entry, stamped once the level is known so info starts pay
+  only the level check; it writes once per process at debug and none at
+  info. Its `data` holds only `op` and `ms`.
   Each is written at most once per process on the first attach; an attach
   with no stream writes none. Their `data` holds only `op` and `ms`.
   Request, model, hook and network timings may overlap as nested

@@ -217,6 +217,7 @@ fn the_start_pick_lists_the_hubs_models() {
                 Box::new(|_| {}),
                 clock,
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());

@@ -3211,6 +3211,7 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
             },
             |builder, body| builder.spawn(body),
             crate::timing::info_diag(),
+            None,
         );
         done.send(result).unwrap();
     });
