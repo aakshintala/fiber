@@ -1721,7 +1721,7 @@ impl App {
                     self.rejected(id, &code, message);
                     // The panel's refusal clears its query next, so the
                     // generic refusal still seeing it proves it settled
-                    // first (`docs/testing.md`, "Order").
+                    // first.
                     if answer.waiting == Some(Waiting::Branch)
                         || answer.waiting == Some(Waiting::Quota)
                     {
