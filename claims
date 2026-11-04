@@ -11,3 +11,4 @@ git grep -n 'derive_pattern' 67e8dc43 -- crates	fiber-4030	plan	2026-11-04T06:59
 git grep -n 'Hold::park\|Hold::on' 67e8dc43 -- crates	fiber-4030	plan	2026-11-04T06:59:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fakes/4030-pid-prefix-macos-leg	
 git grep -rn 'hold #' 67e8dc43 -- crates docs scripts xtask	fiber-4030	plan	2026-11-04T06:59:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fakes/4030-pid-prefix-macos-leg	
 git grep -n 'process::id()' 67e8dc43 -- crates	fiber-4030	plan	2026-11-04T06:59:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fakes/4030-pid-prefix-macos-leg	
+git grep -n 'Hold::park\|Hold::on' 67e8dc43 -- crates	fiber-4030	plan	2026-11-04T07:00:12Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fakes/4030-pid-prefix-macos-leg	
