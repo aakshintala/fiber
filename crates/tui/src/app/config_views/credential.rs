@@ -249,6 +249,7 @@ impl App {
         self.outbox
             .pending
             .insert(id.clone(), (Kind::Command, std::mem::take(&mut self.draft)));
+        self.outbox.wait(&id, crate::app::Waiting::Credentials);
         self.config_views.credential.ask = Some(Ask {
             id,
             session,
@@ -322,6 +323,7 @@ impl App {
         self.outbox
             .pending
             .insert(id.clone(), (Kind::Command, Draft::default()));
+        self.outbox.wait(&id, crate::app::Waiting::CredentialSwitch);
         self.config_views.credential.save = None;
         if !session_only {
             self.config_views.credential.save = Some(Save { id, label });
@@ -339,6 +341,15 @@ impl App {
                 ),
             );
         }
+    }
+
+    /// A hub `command_rejected` for the credential query or switch drops
+    /// its wait before its tag settles: the picker shows the refusal
+    /// through `config_views_refused`, and a late session answer finds no
+    /// entry and sends nothing.
+    pub(in crate::app) fn credential_hub_refused(&mut self, id: &str) {
+        Waits::take(&mut self.config_views.credential.save, id, |save| &save.id);
+        Waits::take(&mut self.config_views.credential.ask, id, |ask| &ask.id);
     }
 
     /// Saves only the newest switch under the provider that admitted it.

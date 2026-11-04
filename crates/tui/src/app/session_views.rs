@@ -222,6 +222,7 @@ impl App {
             false,
         )
         .to_string();
+        self.outbox.wait(&id, super::Waiting::Figures);
         self.session_views.figures_request = Some(id);
         Effect::Send(vec![line])
     }
@@ -848,6 +849,7 @@ impl App {
             false,
         )
         .to_string();
+        self.outbox.wait(&id, super::Waiting::Diff);
         self.session_views.request = Some((id, path.to_owned()));
         self.session_views.diff = Some((path.to_owned(), Diff::Reading));
         self.session_views.diff_list = List::default();
@@ -922,6 +924,30 @@ impl App {
                             | super::Waiting::Recent
                             | super::Waiting::Close,
                         ) => return Vec::new(),
+                        Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
+                            self.outbox.settled(accepted.command_id.0.as_str());
+                            self.session_views_answered(&accepted);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::Hooks) => {
+                            self.outbox.settled(accepted.command_id.0.as_str());
+                            self.hooks_answered(&accepted);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::ArtifactPage) => {
+                            self.outbox.settled(accepted.command_id.0.as_str());
+                            return self.call_view_answered(&accepted);
+                        }
+                        Some(
+                            super::Waiting::Branch
+                            | super::Waiting::Quota
+                            | super::Waiting::ConfigAsk
+                            | super::Waiting::Credentials
+                            | super::Waiting::CredentialSwitch
+                            | super::Waiting::ProposeNotes
+                            | super::Waiting::JobStop
+                            | super::Waiting::JobInput,
+                        ) => return Vec::new(),
                         None => {}
                     }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
@@ -971,6 +997,40 @@ impl App {
                             | super::Waiting::Feed
                             | super::Waiting::Recent
                             | super::Waiting::Close,
+                        ) => return Vec::new(),
+                        Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
+                            let Some(id) = rejected.command_id.as_ref() else {
+                                return Vec::new();
+                            };
+                            self.outbox.settled(id.0.as_str());
+                            self.session_views_rejected(&rejected);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::Hooks) => {
+                            let Some(id) = rejected.command_id.as_ref() else {
+                                return Vec::new();
+                            };
+                            self.outbox.settled(id.0.as_str());
+                            self.hooks_refused(&rejected);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::ArtifactPage) => {
+                            let Some(id) = rejected.command_id.as_ref() else {
+                                return Vec::new();
+                            };
+                            self.outbox.settled(id.0.as_str());
+                            self.call_view_refused(&rejected);
+                            return Vec::new();
+                        }
+                        Some(
+                            super::Waiting::Branch
+                            | super::Waiting::Quota
+                            | super::Waiting::ConfigAsk
+                            | super::Waiting::Credentials
+                            | super::Waiting::CredentialSwitch
+                            | super::Waiting::ProposeNotes
+                            | super::Waiting::JobStop
+                            | super::Waiting::JobInput,
                         ) => return Vec::new(),
                         None => {}
                     }
@@ -1115,6 +1175,7 @@ impl App {
         }
         let id = super::mint();
         let line = super::session_command(&id, "hooks", &session, None).to_string();
+        self.outbox.wait(&id, super::Waiting::Hooks);
         self.session_views.hooks_request = Some(id);
         Effect::Send(vec![line])
     }
@@ -1147,6 +1208,15 @@ impl App {
             return;
         }
         self.session_views.hooks_request = None;
+    }
+
+    /// A hub `command_rejected` for the pending `hooks` query drops the
+    /// wait before its tag settles: the view keeps showing what it holds,
+    /// if anything, and a late session answer finds no entry.
+    pub(in crate::app) fn hooks_hub_refused(&mut self, id: &str) {
+        if self.session_views.hooks_request.as_deref() == Some(id) {
+            self.session_views.hooks_request = None;
+        }
     }
 
     /// Moves the open rewind view's list to `at`: the fold's selection.

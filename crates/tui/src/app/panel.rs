@@ -727,8 +727,14 @@ impl App {
     }
 
     /// Folds one attached-session envelope into the panel's data, with the
-    /// Delegates card's subscribes (`docs/tui.md`, "The panel").
-    pub(super) fn panel_line(&mut self, envelope: &Envelope) -> Vec<String> {
+    /// Delegates card's subscribes (`docs/tui.md`, "The panel"). The
+    /// branch and quota answers route by tag; every other line folds as
+    /// before.
+    pub(super) fn panel_line(
+        &mut self,
+        envelope: &Envelope,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> Vec<String> {
         self.panel_state.fold(envelope);
         let ended = if envelope.kind() == EventKind::SessionStatus {
             super::read!(envelope, SessionStatus).is_some_and(|status| {
@@ -738,6 +744,63 @@ impl App {
         } else {
             false
         };
+        match answer.and_then(|answer| answer.waiting.as_ref()) {
+            Some(super::Waiting::Branch) => {
+                if let Some(answer) = answer {
+                    self.outbox.settled(answer.id);
+                }
+                let mut send = self.panel_branch(envelope, ended);
+                send.extend(self.delegate_line(envelope));
+                return send;
+            }
+            Some(super::Waiting::Quota) => {
+                if let Some(answer) = answer {
+                    self.outbox.settled(answer.id);
+                }
+                let mut send = Vec::new();
+                send.extend(self.panel_quota(envelope, ended));
+                send.extend(self.delegate_line(envelope));
+                return send;
+            }
+            Some(
+                super::Waiting::Dismiss(_)
+                | super::Waiting::Fork
+                | super::Waiting::RewindHistory
+                | super::Waiting::RewindSend
+                | super::Waiting::ChangeWorkspace(_)
+                | super::Waiting::ClearStart
+                | super::Waiting::ClearClose
+                | super::Waiting::History
+                | super::Waiting::ImageFetch
+                | super::Waiting::ImageDisplay
+                | super::Waiting::Sessions
+                | super::Waiting::Abandoned
+                | super::Waiting::Directories
+                | super::Waiting::Subscribe
+                | super::Waiting::Stop
+                | super::Waiting::Delete
+                | super::Waiting::OfferImport
+                | super::Waiting::DeleteDiscovery
+                | super::Waiting::DeleteStop
+                | super::Waiting::DeleteFinal
+                | super::Waiting::Feed
+                | super::Waiting::Recent
+                | super::Waiting::Close,
+            )
+            | Some(
+                super::Waiting::Figures
+                | super::Waiting::Diff
+                | super::Waiting::Hooks
+                | super::Waiting::ArtifactPage
+                | super::Waiting::ConfigAsk
+                | super::Waiting::Credentials
+                | super::Waiting::CredentialSwitch
+                | super::Waiting::ProposeNotes
+                | super::Waiting::JobStop
+                | super::Waiting::JobInput,
+            )
+            | None => {}
+        }
         let mut send = self.panel_branch(envelope, ended);
         send.extend(self.panel_quota(envelope, ended));
         send.extend(self.delegate_line(envelope));
@@ -877,6 +940,7 @@ impl App {
         let line =
             shell::command(&id, &session, "git rev-parse --abbrev-ref HEAD", false).to_string();
         self.panel_state.due = false;
+        self.outbox.wait(&id, super::Waiting::Branch);
         self.panel_state.asked = Some(id);
         Some(line)
     }

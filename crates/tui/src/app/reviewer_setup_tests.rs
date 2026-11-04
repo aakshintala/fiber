@@ -1890,3 +1890,75 @@ fn read_only_config_invalid_save_refusal_names_the_entry_on_the_diff() {
     let rows = app.reviewer_setup().expect("open").line_rows();
     assert_eq!(rows.len(), 1);
 }
+
+// Part of #3696: the `propose_notes` answers route by tag.
+
+#[test]
+fn propose_notes_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = id_of(&propose(&mut app));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ProposeNotes));
+    assert!(app.outbox.pending.contains_key(&id));
+    app.on_line(accepted(&id, one_line()));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(screen(&app), Screen::Lines);
+}
+
+#[test]
+fn propose_notes_refusal_settles_its_tag() {
+    use crate::app::Waiting;
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = id_of(&propose(&mut app));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ProposeNotes));
+    app.on_line(rejected(&id, "busy", "An approval is waiting."));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(screen(&app), Screen::Question);
+}
+
+#[test]
+fn an_answer_for_another_session_settles_its_tag_and_entry_but_changes_nothing() {
+    use crate::app::Waiting;
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = id_of(&propose(&mut app));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ProposeNotes));
+    app.on_line(with_session(OTHER, accepted(&id, one_line())));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(screen(&app), Screen::Waiting);
+}
+
+#[test]
+fn a_second_propose_notes_answer_for_one_id_falls_through() {
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = ask(&mut app, one_line());
+    assert_eq!(screen(&app), Screen::Lines);
+    // The tag is gone, so the duplicate takes the untagged path: the
+    // setup already holds the lines, and nothing reopens.
+    app.on_line(accepted(&id, one_line()));
+    assert_eq!(screen(&app), Screen::Lines);
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn a_dropped_request_answer_still_settles_its_tag() {
+    use crate::app::Waiting;
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = id_of(&propose(&mut app));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ProposeNotes));
+    // Closing the setup drops the pending request: its late answer
+    // settles silently with no notice.
+    app.reviewer_setup_close();
+    let before = notices(&app);
+    app.on_line(accepted(&id, one_line()));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(notices(&app), before);
+}

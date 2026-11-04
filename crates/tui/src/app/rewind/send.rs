@@ -259,6 +259,19 @@ impl App {
             | Waiting::Feed
             | Waiting::Recent
             | Waiting::Close => false,
+            // The session views and panels own no rewind refusal.
+            Waiting::Figures
+            | Waiting::Diff
+            | Waiting::Hooks
+            | Waiting::Branch
+            | Waiting::Quota
+            | Waiting::ArtifactPage
+            | Waiting::ConfigAsk
+            | Waiting::Credentials
+            | Waiting::CredentialSwitch
+            | Waiting::ProposeNotes
+            | Waiting::JobStop
+            | Waiting::JobInput => false,
         }
     }
 
@@ -302,6 +315,19 @@ impl App {
             | Waiting::Feed
             | Waiting::Recent
             | Waiting::Close => return None,
+            // The session views and panels own no rewind answer.
+            Waiting::Figures
+            | Waiting::Diff
+            | Waiting::Hooks
+            | Waiting::Branch
+            | Waiting::Quota
+            | Waiting::ArtifactPage
+            | Waiting::ConfigAsk
+            | Waiting::Credentials
+            | Waiting::CredentialSwitch
+            | Waiting::ProposeNotes
+            | Waiting::JobStop
+            | Waiting::JobInput => return None,
         }
         let Some(CommandResult::Rewind { new_session_id }) = accepted.result.as_ref() else {
             return None;

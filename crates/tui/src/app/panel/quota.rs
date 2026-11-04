@@ -198,6 +198,7 @@ impl App {
         let session = self.session()?.clone();
         let id = CommandId(mint());
         let line = session_command(&id.0, "quota", &session, None).to_string();
+        self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Asked(id);
         Some(line)
     }
@@ -236,6 +237,7 @@ impl App {
         let id = CommandId(mint());
         let line =
             session_command(&id.0, "quota", &session, Some(json!({"fetch": true}))).to_string();
+        self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Fetching(id);
         Some(line)
     }

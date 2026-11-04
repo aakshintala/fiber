@@ -524,6 +524,7 @@ impl App {
             Some(serde_json::json!({"job_id": job_id.0})),
         )
         .to_string();
+        self.outbox.wait(&id, super::Waiting::JobStop);
         self.outbox
             .pending
             .insert(id, (Kind::Command, crate::input::Draft::default()));
@@ -580,6 +581,7 @@ impl App {
             Some(serde_json::json!({"job_id": job_id.0, "text": text})),
         )
         .to_string();
+        self.outbox.wait(&id, super::Waiting::JobInput);
         self.outbox
             .pending
             .insert(id, (Kind::Command, crate::input::Draft::default()));
