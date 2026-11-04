@@ -3760,27 +3760,33 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
 fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     let dir = fakes::TempDir::new("wait-refresh-exit");
     let fifo = dir.path().join("hold");
-    fakes::fifo(&fifo);
     let pattern = format!("wait-refresh-exit-{}", dir.path().display());
     // The marker rides the child's command line, so the match is this
     // test's own; the FIFO keeps the child parked between the old wait's
     // signal and the exit: opening it for read blocks until the test
-    // opens the write end to release it.
+    // writes the release line through the hold's release end.
+    let command = format!(
+        "read line < '{fifo}'; exit 0 # {pattern}",
+        fifo = fifo.display()
+    );
+    // The hold owns the FIFO, the release end, and the watchdog: if this
+    // test dies while the child is parked, the kernel closes the hold's
+    // ends, the watchdog sees end of file, and its group kill reaps the
+    // child. The command embeds the FIFO path, so the watchdog pattern
+    // is the path itself.
+    let mut hold = fakes::Hold::park(&fifo, &command);
     let child = Command::new("sh")
-        .args([
-            "-c",
-            &format!(
-                "read line < '{fifo}'; exit 0 # {pattern}",
-                fifo = fifo.display()
-            ),
-        ])
+        .args(["-c", &command])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
         .unwrap();
+    let pid = child.id();
     // A reaper, so the exit leaves no zombie for the match to keep seeing.
+    // It waits only: the watchdog owns the kill, and the hold owns the
+    // teardown below.
     let (reaped_tx, reaped) = mpsc::channel::<()>();
     thread::spawn(move || {
         let mut child = child;
@@ -3789,6 +3795,14 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
         }
         reaped_tx.send(()).unwrap_or(());
     });
+    // The parked child is listed before the release goes out, so a vacuous
+    // pass cannot hide a holder that never parked.
+    let listed = pattern.clone();
+    fakes::wait_until(
+        "the parked refresh child to list",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || fakes::matching(&listed).unwrap_or_default().contains(&pid),
+    );
     // The old wait checks the match at once: the parked child is still
     // listed, so the bare assertion fails.
     let old = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -3799,23 +3813,25 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     }));
     assert!(old.is_err(), "the old wait must fail while held");
     let waited = pattern.clone();
-    // The release is opening the write end and closing it at once: the
-    // parked read sees end of file, the child exits, and the reaper
-    // clears it. The close happens before the wait below, never after.
+    // The release is one line written through the hold's open release end:
+    // the parked read consumes it, the child exits, and the reaper clears
+    // it. The write happens before the wait below, never after.
     held_wait_passes_after_release(
         &pattern,
         fakes::MUST_SUCCEED_WITHIN,
         move |deadline| wait_for_refresh_exit(deadline, &waited),
-        move || {
-            fs::OpenOptions::new()
-                .write(true)
-                .open(&fifo)
-                .expect("the held child opened its FIFO for read");
+        || {
+            hold.release()
+                .write_all(b"\n")
+                .expect("the release line reaches the parked refresh child");
         },
     );
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reaped)
         .expect("the reaper cleared the exited child");
+    // The holder already exited on the success path: the stand-down drops
+    // the release handle and disarms the watchdog without signalling.
+    hold.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN).cleanup_phase());
 }
 
 #[cfg(target_os = "macos")]
