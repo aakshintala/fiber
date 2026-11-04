@@ -2695,6 +2695,7 @@ fn replay_ask(run: &mut Run, text: &str, wait_for: &str) {
         let grid = run.wait_screen("approval or the reply", |grid| {
             grid.contents.contains("Allow once") || grid.contents.contains(wait_for)
         });
+        // settled: the approval-or-reply wait returned this grid, with no input since.
         if grid.contents.contains(wait_for) {
             break;
         }
@@ -3085,6 +3086,7 @@ fn replay_empty_failed_tool_result_carries_timeout_text() {
                         || grid.contents.contains("▣ completed")
                         || grid.contents.contains("▣ failed")
                 });
+                // settled: the approval-or-end wait returned this grid, with no input since.
                 if grid.contents.contains("▣ completed") || grid.contents.contains("▣ failed") {
                     break;
                 }
