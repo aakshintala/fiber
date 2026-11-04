@@ -3853,16 +3853,25 @@ fn holder_dies_child_parks_a_holder() {
     }
     let dir = fakes::TempDir::new("holder-dies-child");
     let fifo = dir.path().join("hold");
+    // A second FIFO for the pre-read rendezvous: the holder opens it for
+    // write immediately before its blocking read, and the outer test opens
+    // it for read. The outer open succeeds only after the holder reaches
+    // that point, proving the holder is one shell step from its read.
+    let rendezvous = dir.path().join("rendezvous");
+    fakes::fifo(&rendezvous);
     let ready = fakes::children::Ready::new(dir.path());
     let pattern = format!("holder-dies-{}", dir.path().display());
     // The command embeds the FIFO path, so the watchdog pattern is the
     // path itself: unique to this run through the fresh directory above.
     // The pid line follows the FIFO open in program order, so its arrival
-    // proves the reader opened; the read then parks until a kill.
+    // proves the reader opened; the rendezvous open below proves the holder
+    // reached the step before its blocking read, which then parks until a
+    // kill.
     let command = format!(
-        "exec 3<'{fifo}'; echo $$ > '{ready}'; read line <&3; exit 0 # {pattern}",
+        "exec 3<'{fifo}'; echo $$ > '{ready}'; exec 4>'{rendezvous}'; read line <&3; exit 0 # {pattern}",
         fifo = fifo.display(),
         ready = ready.path().display(),
+        rendezvous = rendezvous.display(),
     );
     let _hold = fakes::Hold::park(&fifo, &command);
     let holder = Command::new("sh")
@@ -3942,7 +3951,12 @@ fn holder_dies_with_the_test_process_that_parked_it() {
         .spawn()
         .expect("the child test process to spawn");
     let pid = child.id();
+    // Guard the group before anything that can panic (the watchdog start,
+    // the stdout take): like `spawn_watched`, a `KillGroup` owns the kill
+    // until the watchdog takes it, so a panic cannot leak the child.
+    let guard = KillGroup(pid);
     let group = Watchdog::group(pid);
+    std::mem::forget(guard);
     out_tx
         .send(child.stdout.take().expect("the child to pipe its stdout"))
         .unwrap_or(());
@@ -3979,6 +3993,26 @@ fn holder_dies_with_the_test_process_that_parked_it() {
     });
     let _outer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&writing, "the outer writer to open the holder's FIFO");
+    // The pre-read rendezvous: the holder blocks opening it for write
+    // immediately before its blocking read (see the child helper), so this
+    // open succeeding proves the holder reached that step. The read follows
+    // at once with no other command between, so the SIGKILL below lands
+    // while the holder is parked (the model_switch precedent treats this
+    // open rendezvous as proof the read is in flight).
+    let rendezvous = fifo
+        .parent()
+        .expect("the holder's FIFO has a directory")
+        .join("rendezvous");
+    let (rendezvous_tx, rendezvous_opened) = mpsc::channel();
+    thread::spawn(move || {
+        if let Ok(file) = fs::OpenOptions::new().read(true).open(&rendezvous) {
+            rendezvous_tx.send(file).unwrap_or(());
+        }
+    });
+    let _rendezvous = Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(
+        &rendezvous_opened,
+        "the holder to reach its pre-read rendezvous",
+    );
     // The listing names the acked pid, tying the listed process to the
     // acknowledged reader and closing the spawn-vs-list race.
     let listed = pattern.clone();

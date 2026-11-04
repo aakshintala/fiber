@@ -634,16 +634,9 @@ fn the_matching_watchdog_script_bounds_its_lookup() {
         MATCHING_WATCHDOG_SCRIPT.contains(&bound),
         "the watchdog script bounds its lookup with {bound:?}: {MATCHING_WATCHDOG_SCRIPT:?}"
     );
-    let refusal = MATCHING_WATCHDOG_SCRIPT
-        .find("exit 2")
-        .expect("the watchdog script refuses an empty pattern");
-    let lookup = MATCHING_WATCHDOG_SCRIPT
-        .find(&bound)
-        .expect("the watchdog script bounds its lookup");
-    assert!(
-        refusal < lookup,
-        "the empty-pattern refusal runs before the lookup: {MATCHING_WATCHDOG_SCRIPT:?}"
-    );
+    // No text-order pin: `the_matching_watchdog_script_refuses_an_empty_pattern`
+    // proves the refusal behaviorally (exit 2, sentinel survives), so a move of
+    // `pgrep` before the refusal still fails there.
     // A hung lookup still ends: the script kills the lookup, kills what it
     // listed, and exits, all within the bound plus kill time.
     let dir = crate::TempDir::new("watchdog-hung-lookup");
@@ -661,7 +654,7 @@ fn the_matching_watchdog_script_bounds_its_lookup() {
     // shadowing the real one on the script's path only: the test's own
     // environment keeps the real `pgrep`.
     let fake = dir.path().join("pgrep");
-    std::fs::write(&fake, format!("#!/bin/sh\necho {group}\nsleep 30\n")).unwrap();
+    std::fs::write(&fake, format!("#!/bin/sh\necho {group}\nexec sleep 30\n")).unwrap();
     let mut permissions = std::fs::metadata(&fake).unwrap().permissions();
     std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
     std::fs::set_permissions(&fake, permissions).unwrap();
