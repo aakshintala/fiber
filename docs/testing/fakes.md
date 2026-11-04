@@ -75,7 +75,11 @@ is a real child session process, because it is Fiber. The fakes are:
   and `fakes::text_of` reads a tool result's text, `fakes::wait_output`
   returns a spawned system tool's output under a deadline, killing its
   group on expiry, and `fakes::wait_until` waits for a predicate to hold
-  under a deadline, polling it on a thread
+  under a deadline, polling it on a thread, and `fakes::Hold` owns a
+  parked FIFO holder: the release end opened with `Hold::on` and written
+  through `release`, and the watchdog that reaps the holder when the test
+  dies, stood down with `stand_down` once
+  `a_run_ending_after_the_extension_is_dropped_is_not_logged` sees the run end
 - a fake clock, whose time moves only when the test advances it to a named
   park through `advance_when_parked`, naming the expected park and the advance
   separately; `advance_marked` marks each thread's latest park, so
