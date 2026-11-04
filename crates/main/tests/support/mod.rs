@@ -3836,10 +3836,9 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
 
 /// The child half of `holder_dies_with_the_test_process_that_parked_it`:
 /// parks a holder on a FIFO, acks its pid on stdout, then blocks forever.
-/// The outer test SIGKILLs this process: the kernel closes the hold's
-/// ends, the watchdog sees end of file, and its group kill reaps the
-/// holder. Ignored in the normal suite; the outer test re-runs this
-/// helper with `--exact ... --ignored`.
+/// The outer test SIGKILLs this process: the watchdog sees end of file,
+/// and its group kill reaps the holder. Ignored in the normal suite; the
+/// outer test re-runs this helper with `--exact ... --ignored`.
 #[test]
 #[ignore = "re-run by holder_dies_with_the_test_process_that_parked_it with --exact --ignored"]
 #[allow(clippy::print_stdout, reason = "the parent test reads this line")]
@@ -3853,27 +3852,28 @@ fn holder_dies_child_parks_a_holder() {
     }
     let dir = fakes::TempDir::new("holder-dies-child");
     let fifo = dir.path().join("hold");
-    // A second FIFO for the pre-read rendezvous: the holder opens it for
-    // write immediately before its blocking read, and the outer test opens
-    // it for read. The outer open succeeds only after the holder reaches
-    // that point, proving the holder is one shell step from its read.
-    let rendezvous = dir.path().join("rendezvous");
-    fakes::fifo(&rendezvous);
+    // No `Hold` release end here: the FIFO starts with no pre-opened ends,
+    // so the holder's `read` blocks opening until the outer writer opens
+    // for write. That open succeeding is the acknowledgement at the
+    // blocking point itself, not a step before it.
+    fakes::fifo(&fifo);
     let ready = fakes::children::Ready::new(dir.path());
     let pattern = format!("holder-dies-{}", dir.path().display());
     // The command embeds the FIFO path, so the watchdog pattern is the
     // path itself: unique to this run through the fresh directory above.
-    // The pid line follows the FIFO open in program order, so its arrival
-    // proves the reader opened; the rendezvous open below proves the holder
-    // reached the step before its blocking read, which then parks until a
-    // kill.
+    // The pid line follows in program order, so its arrival proves the
+    // holder started; the outer writer open below proves the holder's
+    // `read` opened the FIFO, and the held writer keeps it parked there.
     let command = format!(
-        "exec 3<'{fifo}'; echo $$ > '{ready}'; exec 4>'{rendezvous}'; read line <&3; exit 0 # {pattern}",
+        "echo $$ > '{ready}'; read line < '{fifo}'; exit 0 # {pattern}",
         fifo = fifo.display(),
         ready = ready.path().display(),
-        rendezvous = rendezvous.display(),
     );
-    let _hold = fakes::Hold::park(&fifo, &command);
+    let fifo_text = fifo
+        .to_str()
+        .expect("the holder's FIFO path is UTF-8")
+        .to_owned();
+    let _watchdog = Watchdog::matching(&fifo_text);
     let holder = Command::new("sh")
         .args(["-c", &command])
         .stdin(Stdio::null())
@@ -3978,10 +3978,12 @@ fn holder_dies_with_the_test_process_that_parked_it() {
         .to_str()
         .expect("the holder's FIFO path is UTF-8")
         .to_owned();
-    // The outer writer holds a write end across the kill: after the
-    // child's death closes the hold's release end, a writer still remains,
-    // so the holder's read cannot see end of file and only the watchdog's
-    // group kill can end it.
+    // The outer writer is the controlled hold at the blocking point: the
+    // FIFO has no pre-opened ends (no `Hold` release), so this write-end
+    // open blocks until the holder's `read` opens the FIFO. The open
+    // succeeding proves the holder is in its `read`, and the held end stays
+    // open across the kill without writing, so the holder's read cannot
+    // see end of file and only the watchdog's group kill can end it.
     let (writing_tx, writing) = mpsc::channel();
     thread::spawn({
         let fifo = fifo.clone();
@@ -3992,27 +3994,7 @@ fn holder_dies_with_the_test_process_that_parked_it() {
         }
     });
     let _outer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&writing, "the outer writer to open the holder's FIFO");
-    // The pre-read rendezvous: the holder blocks opening it for write
-    // immediately before its blocking read (see the child helper), so this
-    // open succeeding proves the holder reached that step. The read follows
-    // at once with no other command between, so the SIGKILL below lands
-    // while the holder is parked (the model_switch precedent treats this
-    // open rendezvous as proof the read is in flight).
-    let rendezvous = fifo
-        .parent()
-        .expect("the holder's FIFO has a directory")
-        .join("rendezvous");
-    let (rendezvous_tx, rendezvous_opened) = mpsc::channel();
-    thread::spawn(move || {
-        if let Ok(file) = fs::OpenOptions::new().read(true).open(&rendezvous) {
-            rendezvous_tx.send(file).unwrap_or(());
-        }
-    });
-    let _rendezvous = Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(
-        &rendezvous_opened,
-        "the holder to reach its pre-read rendezvous",
-    );
+        .recv_or_fail(&writing, "the holder's read to open the FIFO");
     // The listing names the acked pid, tying the listed process to the
     // acknowledged reader and closing the spawn-vs-list race.
     let listed = pattern.clone();
