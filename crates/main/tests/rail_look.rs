@@ -331,7 +331,7 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     }
 
     // A click on the line shows the rail again.
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", at + 1, y + 1, at + 1, y + 1).as_bytes());
+    run.click_where("the waiting line", |grid| grid.text_at("! 2 waiting"));
     run.wait_screen("the rail shown again", |grid| {
         grid.rows.iter().any(|row| row.contains("NEEDS INPUT"))
     });
@@ -350,12 +350,6 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     quit(run);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.wait();
-}
-
-/// Clicks the cell at `(x, y)`: an SGR press then its release on the
-/// same cell.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
 }
 
 /// The first session id the hub's feed reports: the test's only live
@@ -436,16 +430,22 @@ fn session_card_rows_hold_still_while_usage_lands() {
         }
     }
     // The frame after the fold: the finished turn proves the terminal
-    // rendered past the usage.
+    // rendered past the usage, and the figures the hello reply streams
+    // prove the fold landed.
     let after = run.wait_screen("the finished turn", |grid| {
         grid.contents.contains("completed")
+            && grid.contents.contains("10 / 3")
+            && grid.contents.contains("40%")
     });
     let tools_y_after = find_row(&after.rows, "relay down");
     assert_eq!(tools_y_before, tools_y_after, "the Tools row keeps its y");
     // The held frame's coordinates still name the Tools row after usage
     // lands; clicking them opens the Tools view.
-    let x = locate(&before.rows[tools_y_before as usize], "tools");
-    click(&mut run, x, tools_y_before);
+    run.click_where("the Tools row", |grid| {
+        let row = grid.rows.get(usize::from(tools_y_before))?;
+        (row.contains("relay down") || row.contains("tools"))
+            .then(|| (locate(row, "tools"), tools_y_before))
+    });
     run.wait_screen("the Tools view", |grid| grid.contents.contains("Tools"));
     drop((watch, control));
     quit(run);

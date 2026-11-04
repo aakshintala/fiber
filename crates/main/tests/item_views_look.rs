@@ -262,23 +262,19 @@ fn assert_dim(grid: &Grid, y: u16, needle: &str) {
     }
 }
 
-/// Clicks the cell at `(x, y)`: an SGR press then its release on the
-/// same cell.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
-}
-
 /// Opens the panel row holding `needle`: clicks its text, then waits
 /// for the item view's top row. The caller waits for the turn's
 /// completion first, so the row's position is final: the parent's turn
 /// is done and the one held item parks on the test-held FIFO, so later
 /// folds only tick in place.
 fn open_row(run: &mut Run, needle: &str, top: &str) -> Grid {
-    let grid = run.wait_screen("the panel lists the row", |grid| {
+    run.wait_screen("the panel lists the row", |grid| {
         grid.contents.contains(needle)
     });
-    let y = row_with(&grid, needle);
-    click(run, col_at(&grid, y, needle), y);
+    run.click_where("the panel row", |grid| {
+        let y = row_with(grid, needle);
+        Some((col_at(grid, y, needle), y))
+    });
     run.wait_screen("the item view opens", |grid| grid.contents.contains(top))
 }
 
@@ -540,7 +536,7 @@ fn the_job_pty_view_matches_the_doc() {
     // `job_completed` carries `process.exit_code`, `process.signal` and
     // `error.code` in the raw lines.
     let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
-    let grid = run.wait_screen_reporting(
+    run.wait_screen_reporting(
         "the tty job starts",
         |grid| {
             grid.contents.contains("Jobs")
@@ -549,17 +545,23 @@ fn the_job_pty_view_matches_the_doc() {
         },
         || support::session_logs_tail(&sessions_dir),
     );
-    let title = row_with(&grid, "Jobs");
-    click(&mut run, col_at(&grid, title, "Jobs"), title);
-    let grid = run.wait_screen("the job row draws", |grid| {
+    run.click_where("the Jobs title", |grid| {
+        let title = row_with(grid, "Jobs");
+        Some((col_at(grid, title, "Jobs"), title))
+    });
+    run.wait_screen("the job row draws", |grid| {
         job_row_index(&grid.rows, &command).is_some()
     });
-    let job = job_row_index(&grid.rows, &command).unwrap() as u16;
-    let (width, _) = grid.size();
-    let job_x = (0..width)
-        .find(|x| grid.cell(*x, job).symbol != " ")
-        .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
-    click(&mut run, job_x, job);
+    let clicked = std::cell::Cell::new(0u16);
+    run.click_where("the job row", |grid| {
+        let job = job_row_index(&grid.rows, &command).unwrap() as u16;
+        let (width, _) = grid.size();
+        let job_x = (0..width)
+            .find(|x| grid.cell(*x, job).symbol != " ")
+            .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
+        clicked.set(job);
+        Some((job_x, job))
+    });
     // The lead reads the last grid the wait saw and names which read it
     // implies; it runs only on expiry.
     let last: std::cell::RefCell<Option<Vec<String>>> = std::cell::RefCell::new(None);
@@ -569,7 +571,13 @@ fn the_job_pty_view_matches_the_doc() {
             *last.borrow_mut() = Some(grid.rows.clone());
             grid.contents.contains("Job  ◆ ")
         },
-        || item_view_open_lead(last.borrow().as_deref().unwrap_or(&[]), &command, job),
+        || {
+            item_view_open_lead(
+                last.borrow().as_deref().unwrap_or(&[]),
+                &command,
+                clicked.get(),
+            )
+        },
     );
     // The status row names the job twice: once in the row, once in the
     // stop target. The row is short enough to draw whole: no `…` cuts
