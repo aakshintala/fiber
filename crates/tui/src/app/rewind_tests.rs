@@ -2999,7 +2999,7 @@ fn enter_on_a_scrolled_turn_opens_it_without_an_overflow() {
     assert!(done.is_empty());
     // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
     assert_eq!(rows(&app).len(), 27);
-    // Down past the first screenful, so the list scrolled.
+    // Up from the latest turn past the first screenful, so the list has scrolled.
     goto(&mut app, &clock, 20);
     let frame = app.session_view_screen(80).expect("the view is open");
     assert!(frame.list.top() > 0, "setup scrolled the list");
