@@ -36,3 +36,14 @@ xtask/src/screen_ratchet_tests.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhous
 xtask/src/main.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 docs/testing/screens.md	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 .config/nextest.toml	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/outbox.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/answer.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/answer_tests.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/home.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/clear.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/home/workspace.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/home/open_at.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/rewind/send.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/session_views.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/tui/src/app/find.rs	fiber-3696	plan	2026-11-04T00:30:26Z	roundhouse-7010-plus-1:/home/aakshintala/work	
