@@ -2058,12 +2058,14 @@ mod tests {
             run.screen().rows[4].contains("decoy"),
             "frame B inserted a row above the target"
         );
-        run.write(&click_bytes(stale));
-        let control = drain_terminal(&terminal_side);
-        assert_eq!(
-            control,
+        let target = run
+            .screen()
+            .text_at("target")
+            .expect("frame B holds the target");
+        assert_ne!(
             click_bytes(stale),
-            "the control sends the stale coordinates"
+            click_bytes(target),
+            "the stale coordinates would click the wrong row"
         );
         run.shared.lock().unwrap().publish(&frame_a);
         assert_eq!(
@@ -2135,18 +2137,16 @@ mod tests {
         outcome.expect("the helper dispatches at the fresh row");
         assert_eq!(
             clicked,
-            click_bytes((0, 5)),
+            click_bytes(target),
             "the helper clicks the target's row in frame B"
         );
-        assert_ne!(
-            control, clicked,
-            "the stale row is the decoy's row in frame B"
-        );
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(
             *finds.lock().unwrap(),
             2,
             "the changed attempt and the settled retry each find"
         );
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(
             *founds.lock().unwrap(),
             2,
@@ -2198,8 +2198,11 @@ mod tests {
                 }
             },
         );
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(finds, 2, "the changed attempt and the retry each find");
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(founds, 2, "the changed attempt and the retry each pause");
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(dispatched, 1, "the retry dispatches once");
         assert_eq!(
             drain_terminal(&terminal_side),
@@ -2245,8 +2248,11 @@ mod tests {
                 }
             },
         );
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(finds, 1, "the settled frame finds once");
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(founds, 1, "the settled frame pauses once");
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(dispatched, 1, "the settled frame dispatches once");
         assert_eq!(
             drain_terminal(&terminal_side),
@@ -2608,11 +2614,13 @@ mod tests {
             click_bytes((0, 5)),
             "the helper clicks the target's row in frame B"
         );
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(
             *finds.lock().unwrap(),
             2,
             "the open-block attempt and the fresh attempt each find"
         );
+        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
         assert_eq!(
             *founds.lock().unwrap(),
             2,
