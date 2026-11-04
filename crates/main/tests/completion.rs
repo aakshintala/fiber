@@ -67,10 +67,24 @@ fn within_cleanup_hands_its_closure_half_of_what_the_wait_has_left() {
 }
 
 #[test]
-fn a_matching_exits_step_hands_its_closure_the_full_listing_budget() {
-    let child =
+fn a_matching_exits_step_gets_twice_the_child_budget_of_a_plain_wait() {
+    let doubled =
         within_cleanup("an exit wait", matching_exits_wait(), |inner| inner.left()).unwrap();
-    assert!(child >= fakes::MUST_SUCCEED_WITHIN);
+    let plain = within_cleanup(
+        "an exit wait",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        |inner| inner.left(),
+    )
+    .unwrap();
+    // `matching_exits_wait` doubles the outer wait, so `within_cleanup`'s
+    // halving leaves the closure a full `MUST_SUCCEED_WITHIN` rather than
+    // half of one. Compared as a ratio, not against the constant: both
+    // measurements lose the same few milliseconds to the real clock
+    // (`docs/testing.md`, "Waits and timeouts").
+    assert!(
+        doubled > plain * 3 / 2,
+        "doubled={doubled:?} plain={plain:?}: the cleanup step did not get a doubled wait"
+    );
 }
 
 /// The grammar a person completes, taken from the parser: every visible
