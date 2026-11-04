@@ -84,6 +84,12 @@
 //!   it (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
+//! - `nightly-pair (--is-nightly|--prev-excluding|--parse-version|--check-extensions) <bare-version>|--count-nightly`:
+//!   the shared nightly-tag predicate, the previous-nightly lookup over the
+//!   tag list on stdin, and the `fiber --version`, extension-list and
+//!   nightly-ref parses over supplied lines (`docs/ci.md`, "Releases")
+//! - `nightly-fixture --repo <dir> --keep <bare-version>...`: prunes the
+//!   clone to the bare keeps only (`docs/ci.md`, "Releases")
 //! - `threads <cpus> <load>`: the nextest `--test-threads` count for the
 //!   host's load, printed as one integer
 //! - `budget-bounds --base REV`: whether any line changed against the merge
@@ -128,6 +134,8 @@ mod logo;
 mod models_dev;
 mod models_dev_table;
 mod must_succeed;
+mod nightly_fixture;
+mod nightly_pair;
 mod rules;
 mod screen_ratchet;
 mod select;
@@ -398,6 +406,8 @@ fn run(args: &[String]) -> Result<bool, String> {
             ),
             "ok",
         ),
+        "nightly-pair" => nightly_pair::run(rest),
+        "nightly-fixture" => nightly_fixture::run(rest),
         "threads" => {
             let (cpus, load) = match rest {
                 [cpus, load] => (cpus, load),
