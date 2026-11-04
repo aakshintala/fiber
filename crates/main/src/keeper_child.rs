@@ -481,12 +481,24 @@ impl Runtime {
     }
 
     fn control(self: &Arc<Self>, control: UnixStream) -> io::Result<()> {
-        for line in BufReader::new(control).lines() {
-            let line = match line {
-                Ok(line) => line,
+        let mut reader = BufReader::new(control);
+        let mut chunk = Vec::new();
+        loop {
+            chunk.clear();
+            match reader.read_until(b'\n', &mut chunk) {
+                Ok(0) => break,
+                Ok(_) => {}
                 Err(error) if disconnected(&error) => break,
                 Err(error) => return Err(error),
-            };
+            }
+            // A chunk without the framing newline is a torn tail: the session
+            // died mid-write. Break and proceed to takeover, never parse it.
+            if chunk.last() != Some(&b'\n') {
+                break;
+            }
+            chunk.pop();
+            let line = String::from_utf8(std::mem::take(&mut chunk))
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
             let request: ToKeeper = serde_json::from_str(&line)?;
             match request {
                 ToKeeper::Start(spec) => self.start(spec)?,

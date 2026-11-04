@@ -147,3 +147,52 @@ fn keeper_start_output_and_exit_are_ordered_and_shutdown_does_not_take_a_log() {
     );
     assert!(!home.path().join("run").exists());
 }
+
+#[test]
+fn keeper_control_ignores_torn_tail_and_proceeds_to_takeover() {
+    // The session can die mid-`send` (body and framing `\n` are separate
+    // syscalls), leaving a final chunk with no newline. That torn tail proves
+    // the peer died mid-write, exactly when the keeper must take over: it is
+    // ignored, never parsed. Observed tails: a 1-byte `{` and a ~715-byte
+    // prefix of a `Start` line.
+    let spec = Spawn {
+        id: "call_one".into(),
+        program: "/bin/sh".into(),
+        args: vec!["-c".into(), "x".repeat(600)],
+        cwd: std::env::temp_dir(),
+        env: Vec::new(),
+        stdin: HostStdin::Null,
+        timeout_ms: None,
+        output_cap: 1024,
+        sandbox: None,
+    };
+    let full = serde_json::to_vec(&ToKeeper::Start(spec)).expect("start line");
+    assert!(full.len() > 715, "prefix fixture must exceed 715 bytes");
+    let tails: Vec<Vec<u8>> = vec![b"{".to_vec(), full[..715].to_vec()];
+    for tail in tails {
+        let (mut writer, reader) = UnixStream::pair().expect("control");
+        writer.write_all(&tail).expect("torn tail");
+        writer
+            .shutdown(std::net::Shutdown::Write)
+            .expect("control eof");
+        let home = fakes::TempDir::new("keeper-torn-tail");
+        let (_out_client, out) = UnixStream::pair().expect("out");
+        let (done, _) = mpsc::channel();
+        let runtime = Arc::new(super::Runtime {
+            home: home.path().to_path_buf(),
+            id: SessionId("s_0123456789abcdef".into()),
+            clock: fakes::clock::FakeClock::new(),
+            out: std::sync::Mutex::new(out),
+            log: std::sync::Mutex::new(None),
+            supervisor: std::sync::Mutex::new(jobs::keeper::Supervisor::new()),
+            processes: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            logged: std::sync::Mutex::new(std::collections::HashSet::new()),
+            done,
+        });
+        assert!(
+            runtime.control(reader).is_ok(),
+            "torn tail of {} bytes must not fail control",
+            tail.len()
+        );
+    }
+}
