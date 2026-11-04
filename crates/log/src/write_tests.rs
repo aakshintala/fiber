@@ -65,6 +65,21 @@ fn an_unlocked_keeper_label_is_not_a_live_holder() {
 }
 
 #[test]
+fn an_empty_or_partial_lock_label_is_read_without_retry_or_locking() {
+    let dir = fakes::TempDir::new("log-relabel-reader");
+    let path = dir.path().join(LOCK);
+    fs::write(&path, "").unwrap();
+    assert_eq!(lock_label(dir.path()), None);
+    fs::write(&path, " \n").unwrap();
+    assert_eq!(lock_label(dir.path()), None);
+    // RULING-3890-30 (surveyor, 6621245142): this is text, not liveness.
+    // An unlocked partial write must be returned without acquiring a flock.
+    fs::write(&path, "keeper ").unwrap();
+    assert_eq!(lock_label(dir.path()).as_deref(), Some("keeper"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "keeper ");
+}
+
+#[test]
 fn a_holder_probe_leaves_a_missing_lock_missing() {
     check_holder(|| {
         let dir = fakes::TempDir::new("log-missing-holder");

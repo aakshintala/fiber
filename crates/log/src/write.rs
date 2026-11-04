@@ -1055,16 +1055,13 @@ fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock, label: &str) -> Result<Lo
     }
 }
 
-/// Returns the current holder's label, only while its flock is busy.
-/// Missing files and probe or read failures return no label. An acquired
-/// probe guard drops without modifying stale holder text.
+/// Reads the holder's label without taking the lock. Stale text remains a
+/// label; a new writer relabels before binding the session socket. Missing,
+/// empty and unreadable files return no label, including during a relabel.
 pub fn lock_label(dir: &Path) -> Option<String> {
-    match crate::scan::try_hold_existing(dir).ok()? {
-        Some(crate::scan::Hold::Busy) => fs::read_to_string(dir.join(LOCK))
-            .ok()
-            .map(|text| text.trim().to_owned()),
-        Some(crate::scan::Hold::Held(_)) | None => None,
-    }
+    let text = fs::read_to_string(dir.join(LOCK)).ok()?;
+    let label = text.trim();
+    (!label.is_empty()).then(|| label.to_owned())
 }
 
 // debt: a holder that crashed leaves its pid, and a new holder that has

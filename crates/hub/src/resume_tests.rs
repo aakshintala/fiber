@@ -294,10 +294,16 @@ fn await_bind_skips_a_live_keeper_but_not_unlocked_keeper_text() {
         let guard = log::try_hold(&dir).unwrap();
         fs::write(dir.join("session.lock"), "keeper 4242\n").unwrap();
         let _held = if busy {
-            Some(guard)
+            guard
         } else {
             drop(guard);
-            None
+            let session = log::try_hold(&dir).unwrap();
+            fs::write(
+                dir.join("session.lock"),
+                format!("{}\n", std::process::id()),
+            )
+            .unwrap();
+            session
         };
         fs::create_dir_all(temp.dir.join("run")).unwrap();
         let socket = temp.dir.join("run").join(SID);

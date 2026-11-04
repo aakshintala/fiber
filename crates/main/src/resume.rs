@@ -140,9 +140,6 @@ fn open_or_attach(
     attach: impl FnOnce(log::Error) -> i32,
 ) -> Result<Log, i32> {
     let dir = log::SessionDir::new(sessions, &id);
-    if let Some(error) = keeper_held(dir.path(), &id) {
-        return Err(ask_failed(failed(error.code(), error)));
-    }
     #[cfg(test)]
     BEFORE_RESUME_OPEN.with(|cell| {
         if let Some(hook) = cell.borrow_mut().take() {
