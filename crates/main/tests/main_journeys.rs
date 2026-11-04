@@ -2757,7 +2757,6 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
                     "reviewer": {"model": "scripted/r.json"}}),
             );
             let bin = journey_bin();
-            let token = "dapi-test";
             let mut run = Run::spawn_journey(
                 &setup,
                 120,
@@ -2765,7 +2764,7 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
                 &bin,
                 &[],
                 &[
-                    ("DATABRICKS_TOKEN", token),
+                    ("DATABRICKS_TOKEN", "dapi-test"),
                     ("DATABRICKS_HOST", host.as_str()),
                 ],
             );
@@ -2884,6 +2883,98 @@ fn replay_databricks_handoff_keeps_labelled_pairs() {
             assert!(
                 positions.windows(2).all(|pair| pair[0] < pair[1]),
                 "block positions were {positions:?}"
+            );
+            quit_journey(run);
+        }),
+    );
+}
+
+/// Installs the copied `bedrock` package with its endpoint rewritten to
+/// the fake server: the replay half of `bedrock_answering` (`bedrock.rs`),
+/// file-local because each test binary owns its helpers. Serves the
+/// recorded Converse text-turn bytes with the eventstream content type,
+/// never `Response::stream`. Returns the fake region host the `AWS_REGION`
+/// environment carries.
+fn install_replay_bedrock_package(setup: &Setup) -> (ProviderServer, String) {
+    let server = ProviderServer::start([Response {
+        status: 200,
+        headers: vec![(
+            "content-type".to_owned(),
+            "application/vnd.amazon.eventstream".to_owned(),
+        )],
+        body: include_bytes!("fixtures/provider_replay/bedrock_converse_text.eventstream").to_vec(),
+        drop_connection: false,
+        stall: false,
+    }])
+    .unwrap();
+    let to = setup.root.path().join("pkg-bedrock");
+    support::package::copy_package(
+        "bedrock",
+        &to,
+        "https://bedrock-runtime.{region}.amazonaws.com",
+        "http://{region}",
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(to),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    // The region setting is the per-account host, read from `AWS_REGION`.
+    let host = server.url().strip_prefix("http://").unwrap().to_owned();
+    (server, host)
+}
+
+/// The recorded Bedrock Converse shape replayed: one text turn on the
+/// copied `bedrock` package against the fake server answers from the
+/// recorded eventstream bytes, and the screen shows the reply. It claims
+/// no pre-fix failure: no Bedrock bug stands behind it.
+#[test]
+fn replay_bedrock_converse_text_turn() {
+    run_journey(
+        "replay_bedrock_converse_text_turn",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let (server, host) = install_replay_bedrock_package(&setup);
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "bedrock/mistral.ministral-3-8b-instruct",
+                    "hub": {"idle_exit_ms": 200}}),
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[
+                    ("AWS_BEARER_TOKEN_BEDROCK", "bedrock-test-key"),
+                    ("AWS_REGION", host.as_str()),
+                ],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            let from = run.output().len();
+            run.write(b"hi\r");
+            run.wait_screen("the answered turn", |grid| shows(grid, "goin"));
+            run.turn_finished(from);
+            let requests = server.requests();
+            assert_eq!(requests.len(), 1, "{requests:?}");
+            let sent = &requests[0];
+            assert_eq!(
+                sent.path,
+                "/model/mistral.ministral-3-8b-instruct/converse-stream"
+            );
+            assert_eq!(
+                sent.header("authorization"),
+                Some(fingerprint("Bearer bedrock-test-key").as_str())
             );
             quit_journey(run);
         }),
