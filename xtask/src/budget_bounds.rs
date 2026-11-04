@@ -3,8 +3,9 @@
 //! test, fails unless the line carries `// ruling: #N`. A bound the check
 //! cannot read — a shared name like `fakes::deadline::BUDGET`, or a computed
 //! `Duration` — fails the same way: only the known short bounds (`WAIT`,
-//! `MUST_SUCCEED_WITHIN`, `Duration::ZERO`) and direct literals below 60 s
-//! pass unruled. Only lines changed against the merge base are scanned, as
+//! `DEADLINE`, `MUST_SUCCEED_WITHIN`, `Duration::ZERO`) and direct literals
+//! below 60 s pass unruled. Only lines changed against the merge base are
+//! scanned, as
 //! Rust tokens like `must-succeed` does (comments never count); unchanged
 //! lines never fail.
 
@@ -315,7 +316,7 @@ fn const_site(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
 fn known_ms(name: &str) -> Option<bool> {
     match name {
         "WAITS" | "BUDGET" | "CLEANUP" | "MAX" => Some(true),
-        "WAIT" | "MUST_SUCCEED_WITHIN" | "ZERO" => Some(false),
+        "WAIT" | "DEADLINE" | "MUST_SUCCEED_WITHIN" | "ZERO" => Some(false),
         _ => None,
     }
 }
