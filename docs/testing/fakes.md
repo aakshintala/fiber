@@ -19,6 +19,8 @@ tests come from two sources:
   name and its data (`codex-responses-probe`); or a non-streamed response
   object (`openai-responses-probe`). A test serves the bytes where a probe
   kept them, and otherwise rebuilds the stream from what the probe kept.
+  Journey transcripts live under `crates/main/tests/fixtures/provider_replay/`,
+  with a `PROVENANCE.md` naming the issue or probe source each came from.
 - **Scripted streams.** Hand-written in the real wire format, for scenarios a
   recording cannot produce on demand, such as a tool call, then a 429, then
   text. A local fake server serves them to the binary and to cross-crate tests.
