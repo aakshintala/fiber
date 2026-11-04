@@ -1451,6 +1451,8 @@ fn keeper_published_during_connect_closes_before_any_protocol_bytes() {
     drop(log::Log::create(&sessions, SessionId(ID.into()), clock.clone()).unwrap());
     let dir = sessions.join(ID);
     let (stream, mut peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
     let (done, result) = mpsc::channel();
     thread::spawn(move || {
         let mut keeper = None;
@@ -1467,8 +1469,6 @@ fn keeper_published_during_connect_closes_before_any_protocol_bytes() {
     let (refused, _keeper) =
         Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "post-connect keeper check");
     assert_eq!(refused, Some(io::ErrorKind::ConnectionRefused));
-    peer.set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
     let mut bytes = Vec::new();
     peer.read_to_end(&mut bytes).unwrap();
     assert!(bytes.is_empty());
