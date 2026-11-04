@@ -4,8 +4,6 @@
 //! release tags only, and every mode normalizes once through
 //! [`tag_for_version`], following `crates/extensions/src/update.rs`.
 
-use std::io::Read;
-
 /// The nightly tag for a bare version: the single conversion from version
 /// to tag form, so no caller adds `v` in wiring.
 pub(crate) fn tag_for_version(version: &str) -> String {
@@ -67,32 +65,114 @@ pub(crate) fn prev_excluding_command(exclude_bare: &str, input: &str) -> Result<
     })
 }
 
-/// Runs the subcommand: `--is-nightly <bare-version>` exits 0 exactly when
-/// the tag form matches, and `--prev-excluding <bare-version>` prints the
-/// previous nightly over the tag list on stdin, erroring naming the
-/// exclusion when nothing else is listed.
-pub(crate) fn run(args: &[String]) -> Result<bool, String> {
-    let [mode, value] = args else {
-        return Err(usage());
+/// Parses a `fiber --version` line to the bare version: strips the `fiber `
+/// prefix and the trailing ` (commit)` suffix. Anything without the prefix,
+/// or with nothing left after the strip, errors naming the line.
+pub(crate) fn parse_fiber_version(line: &str) -> Result<String, String> {
+    let trimmed = line.trim();
+    let Some(rest) = trimmed.strip_prefix("fiber ") else {
+        return Err(format!(
+            "nightly-pair: cannot parse fiber version from {line:?}; expected `fiber <version> [(commit)]`"
+        ));
     };
-    if mode == "--is-nightly" {
-        return Ok(is_nightly_tag(&tag_for_version(value)));
+    let mut bare = rest;
+    if bare.ends_with(')')
+        && let Some((head, _)) = bare.rfind(" (").map(|at| bare.split_at(at))
+    {
+        bare = head;
     }
-    if mode == "--prev-excluding" {
-        let mut input = String::new();
-        std::io::stdin()
-            .read_to_string(&mut input)
-            .map_err(|error| format!("stdin: {error}"))?;
-        let tag = prev_excluding_command(value, &input)?;
-        println!("{tag}");
-        return Ok(true);
+    if bare.is_empty() {
+        return Err(format!(
+            "nightly-pair: cannot parse fiber version from {line:?}; expected `fiber <version> [(commit)]`"
+        ));
     }
-    Err(usage())
+    Ok(bare.to_owned())
+}
+
+/// Checks a `fiber extension list` listing: every non-blank line's second
+/// field must equal `want`. A mismatch errors naming the first bad line.
+pub(crate) fn check_extension_list(list: &str, want: &str) -> Result<(), String> {
+    for line in list.lines() {
+        let mut fields = line.split_whitespace();
+        if fields.next().is_none() {
+            continue;
+        }
+        if fields.next() != Some(want) {
+            return Err(format!("nightly-pair: unexpected extension line: {line}"));
+        }
+    }
+    Ok(())
+}
+
+/// Counts the nightly-shaped refs among supplied ref lines (such as the
+/// second field of `git ls-remote --tags`): a `refs/tags/` prefix is
+/// stripped once, then the shared strict predicate decides. Blank lines
+/// never count.
+pub(crate) fn count_nightly_refs(input: &str) -> usize {
+    input
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| {
+            let tag = line.strip_prefix("refs/tags/").unwrap_or(line);
+            is_nightly_tag(tag)
+        })
+        .count()
+}
+
+/// Runs the subcommand: `--is-nightly <bare-version>` exits 0 exactly when
+/// the tag form matches, `--prev-excluding <bare-version>` prints the
+/// previous nightly over the tag list on stdin, `--parse-version <line>`
+/// prints the bare version from a `fiber --version` line,
+/// `--check-extensions <bare-version>` checks an extension listing on
+/// stdin, and `--count-nightly` prints the nightly ref count over the ref
+/// lines on stdin.
+pub(crate) fn run(args: &[String]) -> Result<bool, String> {
+    run_with(args, &mut std::io::stdin())
+}
+
+/// The subcommand over an explicit stdin handle, so tests feed supplied
+/// lines through a cursor instead of the process stdin.
+fn run_with(args: &[String], stdin: &mut dyn std::io::Read) -> Result<bool, String> {
+    match args {
+        [mode, value] if mode == "--is-nightly" => Ok(is_nightly_tag(&tag_for_version(value))),
+        [mode, value] if mode == "--prev-excluding" => {
+            let mut input = String::new();
+            stdin
+                .read_to_string(&mut input)
+                .map_err(|error| format!("stdin: {error}"))?;
+            let tag = prev_excluding_command(value, &input)?;
+            println!("{tag}");
+            Ok(true)
+        }
+        [mode, value] if mode == "--parse-version" => {
+            let bare = parse_fiber_version(value)?;
+            println!("{bare}");
+            Ok(true)
+        }
+        [mode, value] if mode == "--check-extensions" => {
+            let mut input = String::new();
+            stdin
+                .read_to_string(&mut input)
+                .map_err(|error| format!("stdin: {error}"))?;
+            check_extension_list(&input, value)?;
+            Ok(true)
+        }
+        [mode] if mode == "--count-nightly" => {
+            let mut input = String::new();
+            stdin
+                .read_to_string(&mut input)
+                .map_err(|error| format!("stdin: {error}"))?;
+            println!("{}", count_nightly_refs(&input));
+            Ok(true)
+        }
+        _ => Err(usage()),
+    }
 }
 
 /// The subcommand's usage line, shared by every arity and flag fault.
 fn usage() -> String {
-    "usage: cargo xtask nightly-pair (--is-nightly|--prev-excluding) <bare-version>".to_owned()
+    "usage: cargo xtask nightly-pair (--is-nightly|--prev-excluding|--parse-version|--check-extensions) <bare-version>|--count-nightly".to_owned()
 }
 
 #[cfg(test)]

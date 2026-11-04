@@ -58,6 +58,7 @@ fn keeps_survive_and_other_tags_are_pruned() {
         "0.0.1-nightly.20261103",
         "v0.0.1-nightly.20261103",
         "v0.0.1-nightly.20261104",
+        "v0.0.1-nightly.20261105",
         "v0.0.1-nightly.2026110",
     ]);
     let remaining = prune(
@@ -95,14 +96,8 @@ fn prune_mirrors_the_bare_clone_shape() {
         ],
     );
     let remaining = prune(&bare, &keeps(&["0.0.1-nightly.20261104"])).unwrap();
-    assert_eq!(remaining, 2);
-    assert_eq!(
-        tags(&bare),
-        [
-            "v0.0.1-nightly.20261103".to_owned(),
-            "v0.0.1-nightly.20261104".to_owned(),
-        ]
-    );
+    assert_eq!(remaining, 1);
+    assert_eq!(tags(&bare), ["v0.0.1-nightly.20261104".to_owned()]);
 }
 
 #[test]

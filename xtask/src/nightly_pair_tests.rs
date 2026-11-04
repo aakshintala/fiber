@@ -34,6 +34,13 @@ fn rejects_malformed_tags() {
 }
 
 #[test]
+fn rejects_a_signed_base_part() {
+    // `"+0".parse::<u64>()` succeeds, so the digit check (not the parse)
+    // is what refuses the plus sign.
+    assert!(!is_nightly_tag("v+0.0.1-nightly.20261104"));
+}
+
+#[test]
 fn tag_for_version_adds_one_v() {
     assert_eq!(
         tag_for_version("0.0.1-nightly.20261104"),
@@ -162,4 +169,168 @@ fn prev_excluding_command_errors_naming_the_exclusion() {
     let error =
         prev_excluding_command("0.0.1-nightly.20261104", "v0.0.1-nightly.20261104\n").unwrap_err();
     assert!(error.contains("v0.0.1-nightly.20261104"), "{error}");
+}
+
+#[test]
+fn parse_fiber_version_strips_prefix_and_commit() {
+    assert_eq!(
+        parse_fiber_version("fiber 0.0.1-nightly.20261104 (abc1234)"),
+        Ok("0.0.1-nightly.20261104".to_owned())
+    );
+    assert_eq!(
+        parse_fiber_version("fiber 0.0.1-nightly.20261104 (abc1234)\n"),
+        Ok("0.0.1-nightly.20261104".to_owned())
+    );
+}
+
+#[test]
+fn parse_fiber_version_keeps_a_bare_line_without_commit() {
+    assert_eq!(
+        parse_fiber_version("fiber 0.0.1-nightly.20261104"),
+        Ok("0.0.1-nightly.20261104".to_owned())
+    );
+}
+
+#[test]
+fn parse_fiber_version_rejects_anything_without_the_prefix() {
+    let error = parse_fiber_version("0.0.1-nightly.20261104").unwrap_err();
+    assert!(error.contains("0.0.1-nightly.20261104"), "{error}");
+    let error = parse_fiber_version("").unwrap_err();
+    assert!(error.contains("expected"), "{error}");
+    let error = parse_fiber_version("fiber ").unwrap_err();
+    assert!(error.contains("expected"), "{error}");
+}
+
+#[test]
+fn parse_version_mode_wires_the_line_through() {
+    assert_eq!(
+        run(&[
+            "--parse-version".to_owned(),
+            "fiber 0.0.1-nightly.20261104 (abc1234)".to_owned()
+        ]),
+        Ok(true)
+    );
+    assert!(
+        run(&[
+            "--parse-version".to_owned(),
+            "0.0.1-nightly.20261104".to_owned()
+        ])
+        .is_err()
+    );
+}
+
+#[test]
+fn prev_excluding_mode_reads_supplied_lines() {
+    use std::io::Cursor;
+    assert_eq!(
+        run_with(
+            &[
+                "--prev-excluding".to_owned(),
+                "0.0.1-nightly.20261104".to_owned()
+            ],
+            &mut Cursor::new(
+                "v0.0.1-nightly.20261102\nv0.0.1-nightly.20261104\nv0.0.1-nightly.20261103\n"
+            ),
+        ),
+        Ok(true)
+    );
+    assert!(
+        run_with(
+            &[
+                "--prev-excluding".to_owned(),
+                "0.0.1-nightly.20261104".to_owned()
+            ],
+            &mut Cursor::new(""),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn check_extensions_mode_reads_supplied_lines() {
+    use std::io::Cursor;
+    assert_eq!(
+        run_with(
+            &[
+                "--check-extensions".to_owned(),
+                "0.0.1-nightly.20261104".to_owned()
+            ],
+            &mut Cursor::new("fx 0.0.1-nightly.20261104 abc1234\n"),
+        ),
+        Ok(true)
+    );
+    assert!(
+        run_with(
+            &[
+                "--check-extensions".to_owned(),
+                "0.0.1-nightly.20261104".to_owned()
+            ],
+            &mut Cursor::new("fx 0.0.1-nightly.20261103 abc1234\n"),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn count_nightly_mode_reads_supplied_lines() {
+    use std::io::Cursor;
+    assert_eq!(
+        run_with(
+            &["--count-nightly".to_owned()],
+            &mut Cursor::new("refs/tags/v0.0.1-nightly.20261104\nrefs/tags/v0.0.1\n"),
+        ),
+        Ok(true)
+    );
+    assert!(
+        run_with(
+            &["--count-nightly".to_owned(), "extra".to_owned()],
+            &mut Cursor::new(""),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn run_rejects_usage_with_the_usage_line() {
+    let error = run(&[]).unwrap_err();
+    assert!(error.contains("cargo xtask nightly-pair"), "{error}");
+}
+
+#[test]
+fn check_extension_list_accepts_matching_second_fields() {
+    let list = "fx 0.0.1-nightly.20261104 abc1234\n\
+        other 0.0.1-nightly.20261104 repository proj path hash\n\
+        \n\
+        \n";
+    assert_eq!(check_extension_list(list, "0.0.1-nightly.20261104"), Ok(()));
+}
+
+#[test]
+fn check_extension_list_rejects_a_mismatched_version_naming_the_line() {
+    let list = "fx 0.0.1-nightly.20261104 abc1234\nother 0.0.1-nightly.20261103 abc1234\n";
+    let error = check_extension_list(list, "0.0.1-nightly.20261104").unwrap_err();
+    assert!(error.contains("other 0.0.1-nightly.20261103"), "{error}");
+}
+
+#[test]
+fn check_extension_list_rejects_a_short_line() {
+    let error = check_extension_list("fx\n", "0.0.1-nightly.20261104").unwrap_err();
+    assert!(error.contains("fx"), "{error}");
+}
+
+#[test]
+fn count_nightly_refs_counts_only_strict_nightly_refs() {
+    let input = "refs/tags/v0.0.1-nightly.20261104\n\
+        refs/tags/v0.0.1\n\
+        refs/tags/v0.0.1-nightly.2026110\n\
+        refs/tags/v0.0.1-nightly.20261104^{}\n\
+        \n";
+    assert_eq!(count_nightly_refs(input), 1);
+    assert_eq!(count_nightly_refs(""), 0);
+    assert_eq!(
+        count_nightly_refs(
+            "refs/tags/v0.0.1-nightly.20261103\nrefs/tags/v0.0.1-nightly.20261104\n"
+        ),
+        2
+    );
 }

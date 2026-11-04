@@ -65,12 +65,13 @@ fn delete_tag(repo: &Path, tag: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Prunes `repo` to nightly release tags: deletes every tag failing the
-/// shared strict predicate and returns the remaining count. Every bare
-/// keep must resolve to an existing nightly tag; a missing or non-nightly
-/// keep errors naming it before anything is deleted.
+/// Prunes `repo` to the keeps only: deletes every tag that is not one of
+/// the bare keeps (nightly or not) and returns the remaining count. Every
+/// bare keep must resolve to an existing nightly tag; a missing or
+/// non-nightly keep errors naming it before anything is deleted.
 pub(crate) fn prune(repo: &Path, keeps_bare: &[String]) -> Result<usize, String> {
     let tags = list_tags(repo)?;
+    let mut keep_tags = Vec::with_capacity(keeps_bare.len());
     for keep in keeps_bare {
         let tag = tag_for_version(keep);
         if !is_nightly_tag(&tag) {
@@ -84,10 +85,11 @@ pub(crate) fn prune(repo: &Path, keeps_bare: &[String]) -> Result<usize, String>
                 repo.display()
             ));
         }
+        keep_tags.push(tag);
     }
     let mut remaining = 0;
     for tag in &tags {
-        if is_nightly_tag(tag) {
+        if keep_tags.iter().any(|kept| kept == tag) {
             remaining += 1;
             continue;
         }

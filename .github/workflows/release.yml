@@ -822,7 +822,7 @@ jobs:
             # of the origin tags are nightly-shaped. The count is a report;
             # the canonical predicate lives in xtask.
             refs=$(printf '%s\n' "$tags" | awk '{ print $2 }' | grep -v '\^{}$' || true)
-            nightly=$(printf '%s\n' "$refs" | grep -cE 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}$' || true)
+            nightly=$(printf '%s\n' "$refs" | cargo xtask nightly-pair --count-nightly) || exit 1
             total=$(printf '%s\n' "$refs" | awk 'END { print NR }')
             {
               echo "previous nightly: \`$prev_tag\` (published this run: \`$just\`)."
@@ -846,11 +846,13 @@ jobs:
             base="https://github.com/aakshintala/fiber/releases/download/$prev_tag"
             dl="$RUNNER_TEMP/nightly-dl"
             mkdir -p "$dl" "$RUNNER_TEMP/nightly-prev"
-            for archive in fiber-x86_64-unknown-linux-musl.tar.gz fiber-docs.tar.gz fiber-extensions.tar.gz; do
-              curl -fsSL -o "$dl/$archive" "$base/$archive"
-              curl -fsSL -o "$dl/$archive.sha256" "$base/$archive.sha256"
-              (cd "$dl" && sha256sum -c "$archive.sha256")
-            done
+            # Only the binary archive is downloaded here: release-install
+            # fetches and verifies the docs and extensions archives itself
+            # (crates/extensions/src/release.rs::install_release_with).
+            archive=fiber-x86_64-unknown-linux-musl.tar.gz
+            curl -fsSL -o "$dl/$archive" "$base/$archive"
+            curl -fsSL -o "$dl/$archive.sha256" "$base/$archive.sha256"
+            (cd "$dl" && sha256sum -c "$archive.sha256")
             tar -xzf "$dl/fiber-x86_64-unknown-linux-musl.tar.gz" -C "$RUNNER_TEMP/nightly-prev" fiber
           ) 2>&1 | tee "$logs/download.log"; then
             rc=${PIPESTATUS[0]}
@@ -893,10 +895,10 @@ jobs:
           fi
           if ! (
             # The target is the installation state the update produced, never
-            # a fresh list or API read.
+            # a fresh list or API read. The bare version parse lives in
+            # xtask and is tested there on supplied lines.
             line=$("$RUNNER_TEMP/nightly-prev/fiber" --version) || exit 1
-            actual=${line#fiber }
-            actual=${actual% \(*\)}
+            actual=$(cargo xtask nightly-pair --parse-version "$line") || exit 1
             if [ -z "$actual" ]; then
               printf 'release: %s\n' "fiber --version printed nothing to parse: $line." >&2
               exit 1
@@ -936,11 +938,9 @@ jobs:
               printf 'release: %s\n' "fiber extension list printed nothing." >&2
               exit 1
             fi
-            printf '%s\n' "$list" | awk -v want="$actual" '
-              NF == 0 { next }
-              $2 != want { bad = 1; print "unexpected extension line: " $0 }
-              END { exit bad }
-            ' || { printf 'release: %s\n' "an extension is not at the update target $actual." >&2; exit 1; }
+            # The extension-version decision lives in xtask, tested there on
+            # supplied lines.
+            printf '%s\n' "$list" | cargo xtask nightly-pair --check-extensions "$actual" || { printf 'release: %s\n' "an extension is not at the update target $actual." >&2; exit 1; }
             if [ ! -d "$FIBER_HOME/docs" ]; then
               printf 'release: %s\n' "docs/ is missing from the updated home." >&2
               exit 1
@@ -1041,19 +1041,19 @@ jobs:
               printf 'release: %s\n' "verify-redirect is missing the published pair." >&2
               exit 1
             fi
+            # --tags --refs already excludes peeled entries, so no second
+            # filter pipeline follows.
             refs=$(git ls-remote --tags --refs https://github.com/aakshintala/fiber | awk '{ print $2 }') || exit 1
-            refs=$(printf '%s\n' "$refs" | grep -v '\^{}$' || true)
             if [ -z "$refs" ]; then
               printf 'release: %s\n' "the redirect origin lists no tags; the insteadOf prefix missed." >&2
               exit 1
             fi
             # Both keeps are strict-nightly by the earlier asserts, so
             # listing exactly them is the nightly-only check with no second
-            # predicate in the workflow.
+            # predicate in the workflow. The earlier target assertion
+            # already rejects actual == prev_bare, so the same-version
+            # case cannot reach this step and expected is always 2.
             expected=2
-            if [ "$prev_tag" = "v$actual" ]; then
-              expected=1
-            fi
             count=$(printf '%s\n' "$refs" | awk 'END { print NR }')
             if [ "$count" -ne "$expected" ]; then
               printf 'release: %s\n' "the redirect origin lists $count tags, not the fixture's $expected; the insteadOf prefix missed." >&2
@@ -1098,8 +1098,9 @@ jobs:
               exit 1
             fi
             line=$("$RUNNER_TEMP/nightly-prev/fiber" --version) || exit 1
-            still=${line#fiber }
-            still=${still% \(*\)}
+            # The bare version parse lives in xtask and is tested there on
+            # supplied lines.
+            still=$(cargo xtask nightly-pair --parse-version "$line") || exit 1
             if [ "$still" != "$actual" ]; then
               printf 'release: %s\n' "the probe left $still, not the update target $actual." >&2
               exit 1
