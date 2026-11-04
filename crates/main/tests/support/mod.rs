@@ -3843,6 +3843,13 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
 #[test]
 #[ignore = "re-run by holder_dies_with_the_test_process_that_parked_it with --exact --ignored"]
 fn holder_dies_child_parks_a_holder() {
+    // Standalone guard: `--run-ignored` runs every ignored test in this
+    // binary (look-diff's comparator, leak-probe's run), and this helper
+    // blocks forever unless the outer test drives it. Without the marker
+    // only the outer test sets on the child, pass quietly.
+    if std::env::var_os("HOLDER_DIES_CHILD").is_none() {
+        return;
+    }
     let dir = fakes::TempDir::new("holder-dies-child");
     let fifo = dir.path().join("hold");
     let ready = fakes::children::Ready::new(dir.path());
@@ -3914,6 +3921,7 @@ fn holder_dies_with_the_test_process_that_parked_it() {
     });
     let exe = std::env::current_exe().expect("the test binary knows its path");
     let mut child = Command::new(exe)
+        .env("HOLDER_DIES_CHILD", "1")
         .args([
             "--exact",
             "support::holder_dies_child_parks_a_holder",
