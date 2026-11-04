@@ -417,8 +417,9 @@ fn session_card_rows_hold_still_while_usage_lands() {
     let before = run.wait_screen("the relay down row", |grid| {
         grid.rows.iter().any(|row| row.contains("relay down"))
     });
-    let tools_y_before = find_row(&before.rows, "relay down");
-    let tools_x_before = locate(&before.rows[usize::from(tools_y_before)], "tools");
+    let rows_before = &before.rows;
+    let tools_y_before = find_row(rows_before, "relay down");
+    let tools_x_before = locate(&rows_before[usize::from(tools_y_before)], "tools");
     server.release();
     // The release's `usage_recorded` envelope, however many folds come
     // first: each line takes what remains of the test's deadline. The
