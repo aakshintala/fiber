@@ -53,8 +53,6 @@ PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=3746
 PREFLIGHT_TARGET_MIN_MIB_LINUX=54726
 # CI floor for Linux runners when GITHUB_ACTIONS=true: measured target peak
 # 27363 MiB plus a 10% margin, rounded up per floor: ceil(27363 * 1.1) = 30100.
-# Same 10% minimum and per-floor ceil rule as the TMPDIR CI floor above, so
-# the summed CI floor is 2061 + 30100 = 32161 MiB.
 # debt: CI target floor stays at measured peak plus 10% with per-floor ceil. Upgrade trigger: a `cow-root` runner refuses at the CI floor. When that fires, re-measure the peak; the floor is never raised without a new measurement.
 PREFLIGHT_TARGET_MIN_MIB_LINUX_CI=30100
 # Darwin: not measured; equal to Linux until the macOS figures are harvested
