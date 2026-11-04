@@ -69,7 +69,7 @@ fn within_cleanup_hands_its_closure_half_of_what_the_wait_has_left() {
 #[test]
 fn within_cleanup_exit_child_covers_the_listing_budget() {
     // Mirrors the two `try_matching_exits` cleanup sites in `run_bounded`:
-    // each passes `Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN)` as the
+    // each passes `Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2)` as the
     // outer, so `within_cleanup` hands the closure half of what is left.
     // The child (`MUST_SUCCEED_WITHIN`) strictly exceeds the fixed listing
     // and `pgrep` bounds inside `fakes`, so the inner step expires first.
@@ -289,7 +289,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         );
         let tag_gone = within_cleanup(
             &format!("processes matching {tag} to exit"),
-            Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2), // ruling: #4078
             move |inner| try_matching_exits(&tag_for_wait, inner),
         );
         drop((group_dog, tag_dog));
@@ -307,7 +307,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     );
     let tag_gone = within_cleanup(
         &format!("processes matching {tag} to exit"),
-        Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2), // ruling: #4078
         move |inner| try_matching_exits(&tag_for_wait, inner),
     );
     let stand_down = if group_gone.as_ref() == Ok(&true) && matches!(&tag_gone, Ok(Ok(()))) {
