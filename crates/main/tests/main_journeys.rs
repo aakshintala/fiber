@@ -27,7 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use fakes::ProviderServer;
+use fakes::{ProviderServer, Response};
 use serde_json::{Value, json};
 use support::Deadline;
 use support::Setup;
@@ -2494,5 +2494,180 @@ fn terminal_bytes_linux_delete_word() {
     run_journey(
         "terminal_bytes_linux_delete_word",
         std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&LINUX_BYTES)),
+    );
+}
+
+/// Installs a provider `fake` with model `m` on `anthropic-messages` at
+/// the fake server, and makes `fake/m` the configured model: the replay
+/// half of `Setup::provider_on` (`failed_tool_result_text.rs`),
+/// file-local because each test binary owns its helpers.
+fn install_replay_anthropic_provider(setup: &Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("src");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+    );
+    support::write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [{"id": "m", "protocol": "anthropic-messages", "base_url": format!("{}/v1", server.url()), "context_window": 100000, "input": ["text", "image"]}]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m"}),
+    );
+}
+
+/// A scripted `anthropic-messages` reply calling `mcp__fx__hang` with no
+/// arguments: the wire the recorded `stream tool use` exchange cannot
+/// serve, since bare `get_weather` never invokes the hanging fixture.
+fn replay_hang_call() -> Response {
+    let mut all = vec![json!({"type": "message_start", "message": {"id": "msg_1"}})];
+    all.push(
+        json!({"type": "content_block_start", "index": 0, "content_block": {
+            "type": "tool_use", "id": "toolu_1", "name": "mcp__fx__hang", "input": {}}}),
+    );
+    all.push(json!({"type": "content_block_stop", "index": 0}));
+    all.push(
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+        "usage": {"input_tokens": 10, "output_tokens": 3}}),
+    );
+    all.push(json!({"type": "message_stop"}));
+    Response::stream(
+        all.iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// The recorded #3841 exchange replayed: a hanging MCP call's timeout
+/// reaches the provider as the tool result's text. The fake answers the
+/// first request with the scripted hang call, an empty `is_error` result
+/// with the recorded gateway 400, and any other result with the recorded
+/// text reply; the journey asserts the recorded result carries the
+/// timeout message. Evidence for #3841, whose parent sent the timed-out
+/// result empty, which the gateway rejects with that 400.
+#[test]
+fn replay_empty_failed_tool_result_carries_timeout_text() {
+    run_journey(
+        "replay_empty_failed_tool_result_carries_timeout_text",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new_with_mcp_fixture();
+            let dir = setup.root.path().join("fx");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("tools.json"),
+                json!([{"name": "hang", "annotations": {"readOnlyHint": true, "openWorldHint": false}}])
+                    .to_string(),
+            )
+            .unwrap();
+            std::fs::write(dir.join("call-hang.json"), "hang").unwrap();
+            let server = ProviderServer::start_responding(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+                let result = body["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flat_map(|messages| messages.iter())
+                    .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+                    .find(|block| block["type"] == "tool_result");
+                match result {
+                    None => replay_hang_call(),
+                    Some(block)
+                        if block["is_error"] == json!(true)
+                            && (block["content"] == json!("") || block["content"] == json!([])) =>
+                    {
+                        Response::status(
+                            400,
+                            include_bytes!("fixtures/provider_replay/3841_gateway_400.json")
+                                .as_slice(),
+                        )
+                    }
+                    Some(_) => Response::stream(
+                        include_bytes!("fixtures/provider_replay/3841_text.sse").as_slice(),
+                    ),
+                }
+            })
+            .unwrap();
+            install_replay_anthropic_provider(&setup, &server);
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}, "mcp": {"servers": {"fx": {
+                    "command": "/bin/bash",
+                    "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+                    "startup_timeout_ms": 600000,
+                    "timeout_ms": 200,
+                }}}}),
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            let from = run.output().len();
+            run.write(b"hang\r");
+            loop {
+                let grid = run.wait_screen("approval or done", |grid| {
+                    grid.contents.contains("Allow once") || grid.contents.contains("▣ completed")
+                });
+                if grid.contents.contains("▣ completed") {
+                    break;
+                }
+                let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
+                run.wait_bytes(approval, FRAME_END, "the approval frame");
+                run.write(b"\r");
+            }
+            run.wait_screen("the answered turn", |grid| shows(grid, "lovely human"));
+            run.turn_finished(from);
+            let results: Vec<Value> = server
+                .requests()
+                .iter()
+                .filter_map(|request| {
+                    let body: Value = serde_json::from_slice(&request.body).ok()?;
+                    body["messages"]
+                        .as_array()?
+                        .iter()
+                        .flat_map(|message| {
+                            message["content"].as_array().cloned().unwrap_or_default()
+                        })
+                        .find(|block| block["type"] == "tool_result")
+                })
+                .collect();
+            let result = results
+                .into_iter()
+                .find(|block| block["is_error"] == json!(true))
+                .expect("the timed-out result reached the provider");
+            assert_eq!(result["is_error"], json!(true));
+            let content = result["content"].as_str().unwrap();
+            assert!(
+                !content.is_empty(),
+                "the timed-out result reached the provider empty: 400 messages.164.content.0.tool_result: content cannot be empty if is_error is true"
+            );
+            assert!(
+                content.contains("did not answer"),
+                "the timed-out result carries the timeout message, got: {content}"
+            );
+            quit_journey(run);
+        }),
     );
 }
