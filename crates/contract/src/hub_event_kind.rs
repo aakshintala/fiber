@@ -31,6 +31,29 @@ pub enum HubEventKind {
     Unknown(String),
 }
 
+// debt: eight name pairs in two matches, unify name() and From<String>
+// into one row-per-kind table when a ninth hub kind lands.
+impl HubEventKind {
+    /// Returns the original hub line name for this kind
+    /// (`docs/events.md`, "The envelope").
+    ///
+    /// Known members name their wire text; [`HubEventKind::Unknown`]
+    /// returns its exact text, never a placeholder.
+    pub fn name(&self) -> &str {
+        match self {
+            HubEventKind::HubHello => "hub_hello",
+            HubEventKind::Attention => "attention",
+            HubEventKind::DeviceChanged => "device_changed",
+            HubEventKind::SessionLeft => "session_left",
+            HubEventKind::StreamClosed => "stream_closed",
+            HubEventKind::StreamReopened => "stream_reopened",
+            HubEventKind::CommandAccepted => "command_accepted",
+            HubEventKind::CommandRejected => "command_rejected",
+            HubEventKind::Unknown(name) => name,
+        }
+    }
+}
+
 impl From<String> for HubEventKind {
     /// The wire name into its member; any other text stays exact in
     /// [`HubEventKind::Unknown`].
