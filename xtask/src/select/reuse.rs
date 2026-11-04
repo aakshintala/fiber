@@ -37,15 +37,17 @@ pub(crate) struct Current {
     pub draft: bool,
 }
 
-/// Whether a job name is one of a run's `Mutants (shard N)` jobs: false
-/// for anything else, including the unexpanded matrix name of a run that
-/// never selected mutants, so such a run contributes no shard. The index
-/// itself is never compared, so this is a boolean rather than the parsed
-/// index.
-fn is_mutants_shard(name: &str) -> bool {
-    name.strip_prefix("Mutants (shard ")
-        .and_then(|rest| rest.strip_suffix(')'))
-        .is_some_and(|index| index.parse::<u64>().is_ok())
+/// The merge parent a `Mutants (shard N, base <sha>)` job name records, if
+/// any: `None` for anything else, including the old base-less form and the
+/// unexpanded matrix name of a run that never selected mutants, so such runs
+/// contribute no shard. The index itself is never compared; equality with the
+/// current base is checked by the caller, so only an exact match reuses.
+fn is_mutants_shard(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix("Mutants (shard ")?;
+    let (index, rest) = rest.split_once(", base ")?;
+    let sha = rest.strip_suffix(')')?;
+    index.parse::<u64>().ok()?;
+    (!sha.is_empty()).then_some(sha)
 }
 
 /// The run the current run would reuse: the matched run's id plus the
@@ -59,10 +61,12 @@ pub(crate) struct MatchedReuse {
 }
 
 /// Whether one candidate run supplies the pass the current run reuses: a
-/// different completed run on the same pull request, head and base, whose
-/// every mutants shard succeeded and whose successful-shard count equals
-/// the shard total the current mutant count derives. Returns the matched
-/// run id with the matched entry's head sha.
+/// different completed run on the same pull request and head whose every
+/// mutants shard names the current merge parent and succeeded, and whose
+/// successful-shard count equals the shard total the current mutant count
+/// derives. The pull request entry's stored base is never compared: it can
+/// equal the current base while the candidate merged onto older main.
+/// Returns the matched run id with the matched entry's head sha.
 fn match_in_run(
     current: &Current,
     total: u64,
@@ -84,13 +88,7 @@ fn match_in_run(
         .and_then(Value::as_array)
         .and_then(|refs| {
             refs.iter().find_map(|pull| {
-                if pull.get("number").and_then(Value::as_u64) == Some(current.pr.0)
-                    && pull
-                        .get("base")
-                        .and_then(|base| base.get("sha"))
-                        .and_then(Value::as_str)
-                        == Some(current.base.0.as_str())
-                {
+                if pull.get("number").and_then(Value::as_u64) == Some(current.pr.0) {
                     pull.get("head")
                         .and_then(|head| head.get("sha"))
                         .and_then(Value::as_str)
@@ -100,18 +98,19 @@ fn match_in_run(
             })
         })?;
     let jobs = jobs_by_run.get(id.to_string()).and_then(Value::as_array)?;
-    let shards: Vec<&Value> = jobs
+    let shard_bases: Vec<&str> = jobs
         .iter()
-        .filter(|job| {
+        .filter(|job| job.get("conclusion").and_then(Value::as_str) == Some("success"))
+        .filter_map(|job| {
             job.get("name")
                 .and_then(Value::as_str)
-                .is_some_and(is_mutants_shard)
+                .and_then(is_mutants_shard)
         })
         .collect();
-    if shards.len() as u64 == total
-        && shards
+    if shard_bases.len() as u64 == total
+        && shard_bases
             .iter()
-            .all(|job| job.get("conclusion").and_then(Value::as_str) == Some("success"))
+            .all(|base| *base == current.base.0.as_str())
     {
         Some(MatchedReuse {
             run_id: id,

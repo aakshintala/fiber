@@ -56,12 +56,26 @@ fn matching_candidate() -> Value {
 // debt: shard duplicates the shard-job object built inside xtask/tests/cli.rs reuse_shards
 // (same "Mutants (shard {index})" JSON), ceiling: two builders, upgrade trigger: a third
 // shard-job fixture or a fence that allows a shared xtask fixture module merges both into one builder.
-fn shard(index: usize, conclusion: &str) -> Value {
+fn shard(index: usize, base: &str, conclusion: &str) -> Value {
+    json!({ "name": format!("Mutants (shard {index}, base {base})"), "conclusion": conclusion })
+}
+
+fn old_shard(index: usize, conclusion: &str) -> Value {
     json!({ "name": format!("Mutants (shard {index})"), "conclusion": conclusion })
 }
 
+const OTHER_BASE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 fn successful_shards(total: usize) -> Value {
-    Value::Array((0..total).map(|index| shard(index, "success")).collect())
+    successful_shards_on(BASE, total)
+}
+
+fn successful_shards_on(base: &str, total: usize) -> Value {
+    Value::Array(
+        (0..total)
+            .map(|index| shard(index, base, "success"))
+            .collect(),
+    )
 }
 
 fn decide_with(current: &Current, runs: &Value, jobs: &Value) -> bool {
@@ -124,13 +138,39 @@ fn head_mismatch_reruns() {
 
 #[test]
 fn base_mismatch_reruns() {
+    // The shards record the merge parent they ran against: a different
+    // parent declines, whatever the entry's stored base says.
     let runs =
         json!({ "workflow_runs": [candidate(7, HEAD, HEAD, PR, Some("older"), "completed")] });
-    assert!(!decide_with(
-        &current(),
-        &runs,
-        &jobs_for(7, successful_shards(SHARD_TOTAL))
-    ));
+    let jobs = jobs_for(7, successful_shards_on(OTHER_BASE, SHARD_TOTAL));
+    assert_eq!(matched_with(&current(), &runs, &jobs), None);
+    assert!(!decide_with(&current(), &runs, &jobs));
+}
+
+#[test]
+fn stale_entry_base_with_different_shard_base_declines() {
+    // The surveyor case: the entry's stored base equals the current base
+    // while the shards ran against an older merge parent, so the pass tested
+    // different code and must not reuse.
+    let runs = json!({ "workflow_runs": [candidate(7, HEAD, HEAD, PR, Some(BASE), "completed")] });
+    let jobs = jobs_for(7, successful_shards_on(OTHER_BASE, SHARD_TOTAL));
+    assert_eq!(matched_with(&current(), &runs, &jobs), None);
+    assert!(!decide_with(&current(), &runs, &jobs));
+}
+
+#[test]
+fn old_form_shard_name_declines() {
+    // Shard jobs without a recorded base carry no merge parent to compare,
+    // so the candidate declines.
+    let jobs = Value::Array(
+        (0..SHARD_TOTAL)
+            .map(|index| old_shard(index, "success"))
+            .collect(),
+    );
+    let runs = json!({ "workflow_runs": [matching_candidate()] });
+    let jobs = jobs_for(7, jobs);
+    assert_eq!(matched_with(&current(), &runs, &jobs), None);
+    assert!(!decide_with(&current(), &runs, &jobs));
 }
 
 #[test]
@@ -172,7 +212,7 @@ fn top_level_match_with_divergent_pr_entry_head_reuses() {
 #[test]
 fn failed_shard_reruns() {
     let mut shards = successful_shards(SHARD_TOTAL);
-    shards[1] = shard(1, "failure");
+    shards[1] = shard(1, BASE, "failure");
     let runs = json!({ "workflow_runs": [matching_candidate()] });
     assert!(!decide_with(&current(), &runs, &jobs_for(7, shards)));
 }
@@ -180,7 +220,7 @@ fn failed_shard_reruns() {
 #[test]
 fn cancelled_shard_reruns() {
     let mut shards = successful_shards(SHARD_TOTAL);
-    shards[2] = shard(2, "cancelled");
+    shards[2] = shard(2, BASE, "cancelled");
     let runs = json!({ "workflow_runs": [matching_candidate()] });
     assert!(!decide_with(&current(), &runs, &jobs_for(7, shards)));
 }
@@ -249,16 +289,6 @@ fn self_run_id_never_matches() {
 fn unfinished_candidate_reruns() {
     let runs =
         json!({ "workflow_runs": [candidate(7, HEAD, HEAD, PR, Some(BASE), "in_progress")] });
-    assert!(!decide_with(
-        &current(),
-        &runs,
-        &jobs_for(7, successful_shards(SHARD_TOTAL))
-    ));
-}
-
-#[test]
-fn missing_base_field_reruns() {
-    let runs = json!({ "workflow_runs": [candidate(7, HEAD, HEAD, PR, None, "completed")] });
     assert!(!decide_with(
         &current(),
         &runs,

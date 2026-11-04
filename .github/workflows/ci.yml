@@ -13,7 +13,7 @@ on:
 # request event at the same head (a label, a change from draft to ready, a
 # reopen) waits behind the running run instead of cancelling it, then runs
 # the whole selection again at that head, except mutants reused under
-# "Mutation testing"; at most one run waits, and a newer
+# "On every pull request that changes code"; at most one run waits, and a newer
 # event replaces it before it starts. Pushes to main share
 # one group that cancels nothing: the running backstop finishes and the newest
 # push waits behind it.
@@ -73,7 +73,7 @@ jobs:
             base=$(git rev-parse HEAD^1)
           else
             # The backstop compares against the last main commit whose
-            # backstop passed. The release job's stored-results lookup (scripts/stored-results) is the only other Actions API call CI makes to find a run.
+            # backstop passed. The release job's stored-results lookup (scripts/stored-results) is another Actions API call CI makes to find a run.
             # The select job's same-head reuse lookup is the third (docs/ci.md, "On every pull request that changes code").
             base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
               -q '.workflow_runs[0].head_sha // empty')
@@ -994,7 +994,7 @@ jobs:
           if-no-files-found: error
 
   mutants:
-    name: Mutants (shard ${{ matrix.shard }})
+    name: Mutants (shard ${{ matrix.shard }}, base ${{ needs.select.outputs.base }})
     needs: [select, test_linux]
     if: fromJSON(needs.select.outputs.jobs).mutants
     strategy:

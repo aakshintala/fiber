@@ -2539,7 +2539,7 @@ fn reuse_shards(total: usize, conclusion: &str) -> serde_json::Value {
     serde_json::Value::Array(
         (0..total)
             .map(|index| {
-                serde_json::json!({ "name": format!("Mutants (shard {index})"), "conclusion": conclusion })
+                serde_json::json!({ "name": format!("Mutants (shard {index}, base def456)"), "conclusion": conclusion })
             })
             .collect(),
     )

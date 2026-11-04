@@ -74,7 +74,7 @@ runs the whole selection again at the same head. At most one run waits, and
 a newer event replaces it before it starts. Rerunning everything keeps the
 `CI` check, which is the latest run's, from hiding a failure in the earlier
 run. A ready run still reuses a same-head mutants pass instead of rerunning
-those shards ("Mutation testing"). Pushes
+those shards ("On every pull request that changes code"). Pushes
 to `main` share one group that cancels nothing: the running backstop finishes
 and a newer push waits, replacing any older one that waits ("The backstop on
 `main`").
@@ -141,7 +141,7 @@ On a ready pull request, one job on each of Linux x86_64, Linux arm64 and
 macOS arm64 runs `scripts/check`, the gate CI applies (`docs/workflow.md`,
 "The gate"). A draft pull request skips the jobs "Runners" names; marking it
 ready runs every job it skipped. Marking it ready still reuses a same-head
-mutants pass instead of rerunning those shards ("Mutation testing"). Each job:
+mutants pass instead of rerunning those shards ("On every pull request that changes code"). Each job:
 
 - first checks free space in the scratch directory and on the `target`
   filesystem (`scripts/check-resources preflight`), and exits 75 without
@@ -318,14 +318,15 @@ On Linux x86_64 alone:
 - mutation testing: `cargo-mutants --in-diff`, split across runners. It runs
   on a ready pull request and on a draft pull request
   that carries the label `mutants`, never on a push to `main`; an unlabelled draft skips it, and adding
-  the label starts a run. A ready run whose pull request number, head sha,
-  and base sha all match an earlier completed run on the same head, and whose
-  every mutants shard in that run succeeded with the same shard count, reuses
-  the pass instead of starting shards; `cargo xtask mutants-reuse` decides
-  from the current run's pull request number, head, base, and mutant count.
-  Any lookup failure, base, head, or pull request mismatch, partial,
-  cancelled, or failed shards, count mismatch, or self-match starts the
-  shards. A reused run still lists the diff's mutants in the selection
+  the label starts a run. A ready run whose pull request number and head sha
+  match an earlier completed run on the same head, and whose every mutants
+  shard in that run names the current merge parent in its job name and
+  succeeded with the same shard count, reuses the pass instead of starting
+  shards; `cargo xtask mutants-reuse` decides from the current run's pull
+  request number, head, base, and mutant count. Any lookup failure, head or
+  pull request mismatch, a shard naming a different base, partial, cancelled,
+  or failed shards, count mismatch, or self-match starts the shards. A reused
+  run still lists the diff's mutants in the selection
   summary, and the label rule above is unchanged. Shards start once the Linux x86_64 test job, its own
   job `test_linux` (a job can wait for another job, not one platform's leg of
   it), passes on the head; the arm64 and macOS legs, the `test` job, run in
@@ -702,7 +703,6 @@ last passing `main` commit, the release job's stored-results lookup (one
 artifact listing per commit, at most 10, and one download), and the select
 job's same-head reuse lookup are the Actions API calls a workflow makes to
 find a run; the backstop's cache pruning also lists and deletes cache entries.
-The select job's same-head reuse lookup is a third such call ("On every pull request that changes code").
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's
