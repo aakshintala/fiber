@@ -3076,19 +3076,25 @@ fn replay_empty_failed_tool_result_carries_timeout_text() {
             dismiss_first_run_offer(&mut run);
             let from = run.output().len();
             run.write(b"hang\r");
+            // The turn's end paint, whatever its outcome: the failed turn
+            // paints its failed card, so waiting for the completed paint
+            // alone would stall past the failure the replay exists to show.
             loop {
-                let grid = run.wait_screen("approval or done", |grid| {
-                    grid.contents.contains("Allow once") || grid.contents.contains("▣ completed")
+                let grid = run.wait_screen("approval or the turn's end", |grid| {
+                    grid.contents.contains("Allow once")
+                        || grid.contents.contains("▣ completed")
+                        || grid.contents.contains("▣ failed")
                 });
-                if grid.contents.contains("▣ completed") {
+                if grid.contents.contains("▣ completed") || grid.contents.contains("▣ failed") {
                     break;
                 }
                 let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
                 run.wait_bytes(approval, FRAME_END, "the approval frame");
                 run.write(b"\r");
             }
-            run.wait_screen("the answered turn", |grid| shows(grid, "lovely human"));
-            run.turn_finished(from);
+            // The hub announces the turn's end by its title on every
+            // outcome; the grid paint above already told which one.
+            run.wait_bytes(from, support::pty::FINISHED_TITLE, "the finished title");
             let results: Vec<Value> = server
                 .requests()
                 .iter()
@@ -3117,6 +3123,7 @@ fn replay_empty_failed_tool_result_carries_timeout_text() {
                 content.contains("did not answer"),
                 "the timed-out result carries the timeout message, got: {content}"
             );
+            run.wait_screen("the answered turn", |grid| shows(grid, "lovely human"));
             quit_journey(run);
         }),
     );
