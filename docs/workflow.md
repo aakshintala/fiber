@@ -330,8 +330,9 @@ Before asking the owner, the orchestrator confirms on the exact head:
 - the pull request body starts with `Break-glass:`, then names the blocked
   pull requests and the defect that stops its own `CI`.
 
-The `main` ruleset keeps no bypass actors. To break glass, the owner, in the
-browser:
+The `main` ruleset keeps no bypass actors outside a break-glass merge; check
+`bypass_actors` on the ruleset after each one. To break glass, the owner, in
+the browser:
 
 1. adds the repository-admin role to the `main` ruleset's bypass list, in
    pull-request mode, so a direct push to `main` is still refused;
@@ -348,6 +349,4 @@ While the bypass list is empty, an `--admin` merge fails on GitHub's side,
 whoever runs it. Agents run `gh` with the owner's admin login, so nothing on
 GitHub stops one from editing the ruleset, or from using the bypass while
 the owner has it on: agents never merge with `--admin`, never change a
-ruleset, branch protection or repository setting, and never ask a peer to. The
-nightly report lists every merge whose head had no green `CI`, and flags the
-`main` ruleset whenever its bypass list is not empty.
+ruleset, branch protection or repository setting, and never ask a peer to.
