@@ -1299,7 +1299,7 @@ fn tests_in_files_only_keeps_compiler_tests_with_a_source_function_match() {
 }
 
 #[test]
-fn tests_in_files_keeps_every_compiler_test_for_a_helper_under_tests() {
+fn tests_in_files_selects_nothing_for_a_helper_under_tests() {
     let path = "crates/log/tests/support/mod.rs";
     let sources = vec![file("log", path, "pub fn shared_setup() {}\n")];
     let index = TestIndex::from_fixtures(vec![
@@ -1317,13 +1317,23 @@ fn tests_in_files_keeps_every_compiler_test_for_a_helper_under_tests() {
         ),
     ]);
 
+    // A changed file under `tests/` with no test function selects nothing
+    // (`docs/ci.md`, "On every pull request that changes code"). Two
+    // binaries that both list tests prove the empty selection is a skip,
+    // not a fan-out that happened to find no tests.
+    let binaries = index.binaries_for(path);
+    assert!(
+        binaries.len() >= 2,
+        "helper compiles into {}",
+        binaries.len()
+    );
+    for binary in binaries {
+        assert!(!binary.tests.is_empty(), "each binary lists a test");
+    }
     assert_eq!(
         super::tests_in_files(&[path.to_owned()], &members(), &sources, &index)
             .expect("tests in helper file"),
-        vec![
-            refer("log", Some("log::driver"), false, "runs_driver"),
-            refer("log", Some("log::journey"), false, "runs_journey"),
-        ]
+        Vec::<TestRef>::new()
     );
 }
 
