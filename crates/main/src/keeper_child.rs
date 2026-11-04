@@ -60,12 +60,25 @@ impl Wake for Process {
         self.cv.notify_all();
     }
 }
+// The socket belongs to this writer. Unlink before Log's field drop clears
+// the label and releases the session lock (docs/state.md, "Sockets").
+struct HeldLog {
+    socket: PathBuf,
+    log: Log,
+}
+
+impl Drop for HeldLog {
+    fn drop(&mut self) {
+        std::fs::remove_file(&self.socket).unwrap_or(());
+    }
+}
+
 struct Runtime {
     home: PathBuf,
     id: SessionId,
     clock: Arc<dyn Clock>,
     out: Mutex<UnixStream>,
-    log: Mutex<Option<Log>>,
+    log: Mutex<Option<HeldLog>>,
     supervisor: Mutex<Supervisor>,
     processes: Mutex<BTreeMap<String, Arc<Process>>>,
     logged: Mutex<HashSet<String>>,
@@ -100,7 +113,7 @@ impl Runtime {
         self.apply(&mut log, steps)
     }
 
-    fn apply(&self, log: &mut Option<Log>, steps: Vec<Step>) -> io::Result<()> {
+    fn apply(&self, log: &mut Option<HeldLog>, steps: Vec<Step>) -> io::Result<()> {
         for step in steps {
             match step {
                 Step::Stop { id } => {
@@ -137,8 +150,9 @@ impl Runtime {
                                         .map(str::to_owned)
                                 })
                                 .collect();
-                            let (_, listener) = doors::bind(&self.home, &dir)
+                            let (socket, listener) = doors::bind(&self.home, &dir)
                                 .map_err(|error| io::Error::other(error.to_string()))?;
+                            *log = Some(HeldLog { socket, log: held });
                             thread::spawn(move || {
                                 for accepted in listener.incoming() {
                                     match accepted {
@@ -147,7 +161,6 @@ impl Runtime {
                                     }
                                 }
                             });
-                            *log = Some(held);
                             self.files()?;
                         }
                         Err(log::Error::Held { .. }) => {
@@ -168,12 +181,15 @@ impl Runtime {
                         continue;
                     }
                     if let Some(log) = log.as_ref() {
-                        log.append(
-                            &contract::events::Event::JobCompleted(tools::kept_end(job_id, &exit)),
-                            None,
-                            None,
-                        )
-                        .map_err(|error| io::Error::other(error.to_string()))?;
+                        log.log
+                            .append(
+                                &contract::events::Event::JobCompleted(tools::kept_end(
+                                    job_id, &exit,
+                                )),
+                                None,
+                                None,
+                            )
+                            .map_err(|error| io::Error::other(error.to_string()))?;
                     }
                 }
                 Step::Exit => {

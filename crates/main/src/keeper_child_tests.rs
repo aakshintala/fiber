@@ -8,6 +8,30 @@ use contract::keeper::{FromKeeper, HostStdin, Spawn, ToKeeper};
 use fakes::Deadline;
 
 #[test]
+fn dropping_a_keeper_log_unlinks_its_socket_and_releases_its_lock() {
+    let home = fakes::TempDir::new("keeper-socket-release");
+    let sessions = home.path().join("projects/p/sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let clock = fakes::clock::FakeClock::new();
+    drop(log::Log::create(&sessions, id.clone(), clock.clone()).unwrap());
+    let log = log::Log::open_as(&sessions, id.clone(), clock.clone(), "keeper 4242").unwrap();
+    let dir = log.dir().to_path_buf();
+    let (socket, _listener) = doors::bind(home.path(), &dir).unwrap();
+    let held = super::HeldLog {
+        socket: socket.clone(),
+        log,
+    };
+    assert!(socket.exists());
+    assert_eq!(log::lock_label(&dir).as_deref(), Some("keeper 4242"));
+    // docs/state.md, "Sockets": the writer unlinks its own socket at exit.
+    // Keep the listener alive: dropping it alone would not unlink the path.
+    drop(held);
+    assert!(!socket.exists());
+    assert_eq!(log::lock_label(&dir), None);
+    let _resumed = log::Log::open(&sessions, id, clock).unwrap();
+}
+
+#[test]
 fn keeper_disconnected_started_reply_does_not_abort_control_drain() {
     // A session can die with a Start already queued. BrokenPipe while
     // answering that Start must not bypass lifeline_eof and abandon its jobs.
