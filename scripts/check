@@ -237,24 +237,18 @@ mouse crates/main/tests/approval_look.rs 1
 mouse crates/main/tests/call_view.rs 1
 mouse crates/main/tests/delegates.rs 1
 mouse crates/main/tests/doctor_command.rs 1
-mouse crates/main/tests/group_look.rs 1
 mouse crates/main/tests/hover_look.rs 2
 mouse crates/main/tests/inline_images.rs 1
-mouse crates/main/tests/item_views_look.rs 1
-mouse crates/main/tests/journeys.rs 3
 mouse crates/main/tests/link_look.rs 1
 mouse crates/main/tests/look.rs 2
-mouse crates/main/tests/main_journeys.rs 1
 mouse crates/main/tests/model_picker_keys.rs 2
 mouse crates/main/tests/opened_call_look.rs 1
 mouse crates/main/tests/panel_look.rs 1
 mouse crates/main/tests/pinned_call_row.rs 1
-mouse crates/main/tests/rail_look.rs 2
 mouse crates/main/tests/release_notes.rs 2
-mouse crates/main/tests/search_look.rs 5
+mouse crates/main/tests/search_look.rs 2
 mouse crates/main/tests/stream_closed_notice.rs 1
 mouse crates/main/tests/swapped_panels_look.rs 1
-mouse crates/main/tests/terminal.rs 1
 mouse crates/main/tests/wheel_scroll.rs 1
 EOF
     echo "== kinds ratchet"
