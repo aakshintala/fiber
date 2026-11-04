@@ -104,8 +104,13 @@ impl Loop {
         // Armed with `turn_started` and its contexts: a shutdown lands
         // before all of them or after (`docs/extensions.md`, "Hooks").
         let cancel = Arc::clone(&self.cancel);
-        let event = Event::TurnStarted(TurnStarted { input });
+        let mut event = Event::TurnStarted(TurnStarted { input });
         let Some(written) = cancel.commit(cancel::Commit::Arm, || -> Result<(), Error> {
+            if let Some(kept) = self.deliver_kept()?
+                && let Event::TurnStarted(started) = &mut event
+            {
+                started.input.push(kept);
+            }
             // The hook's contexts go first, with no turn id, so the log
             // reads `opening_message`, `context_added`, `turn_started`;
             // the `before_message` contexts still follow it. A shutdown

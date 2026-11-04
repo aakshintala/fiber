@@ -464,6 +464,7 @@ fn the_drain_polls_while_the_group_may_be_occupied() {
             move_at: None,
             members: None,
             pgid,
+            hosted: None,
             listing: None,
             shared: drive_shared,
             ask: None,
@@ -537,7 +538,11 @@ fn send_term_signals_only_a_group_neither_signalled_nor_empty() {
         assert!(alive(pgid), "the running group probes live");
 
         assert_eq!(
-            send_term(pgid, sent, seen_empty),
+            send_term(
+                super::super::process_group::Stop::Group(pgid),
+                sent,
+                seen_empty
+            ),
             want,
             "sent={sent} seen_empty={seen_empty}"
         );
@@ -1057,6 +1062,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
             move_at: None,
             members: None,
             pgid: 2,
+            hosted: None,
             listing: None,
             shared,
             ask: None,
@@ -1716,6 +1722,7 @@ fn drive_shell_exit(ps: &std::path::Path) -> (LoopEnd, Run) {
         move_at: None,
         members: None,
         pgid: 99,
+        hosted: None,
         listing: None,
         shared,
         ask: None,
@@ -1799,6 +1806,7 @@ fn only_a_shell_exit_lists_the_group_before_moving() {
         move_at: Some(clock.origin()),
         members: None,
         pgid: 99,
+        hosted: None,
         listing: None,
         shared,
         ask: None,

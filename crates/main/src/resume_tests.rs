@@ -29,6 +29,120 @@ use super::{
 use crate::failed;
 use crate::session_command::ResumeStart;
 
+#[test]
+fn keeper_acquiring_the_lock_after_precheck_is_refused_without_attach() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    let home = fakes::TempDir::new("main-keeper-resume-race");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_0123456789abcdef");
+    drop(session_with(&dir, None));
+    let clock = fakes::clock::FakeClock::new();
+    let (observed, early) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let (send, result) = mpsc::channel();
+    let worker_sessions = sessions.clone();
+    let worker_clock = clock.clone();
+    std::thread::spawn(move || {
+        super::before_resume_open(move || {
+            observed.send(()).unwrap();
+            fakes::Deadline::after(Duration::from_secs(10))
+                .recv(&released)
+                .unwrap();
+        });
+        let mut attached = 0;
+        let result = super::open_or_attach(
+            &worker_sessions,
+            SessionId("s_0123456789abcdef".into()),
+            worker_clock,
+            |_| {
+                attached += 1;
+                7
+            },
+        );
+        send.send((result.err(), attached)).unwrap();
+    });
+    fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&early)
+        .unwrap();
+    let (published, held) = mpsc::channel();
+    std::thread::spawn(move || {
+        published
+            .send(
+                Log::open_as(
+                    &sessions,
+                    SessionId("s_0123456789abcdef".into()),
+                    clock,
+                    "keeper 4242",
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    });
+    let _keeper = fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&held)
+        .unwrap();
+    release.send(()).unwrap();
+    let (code, attached) = fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&result)
+        .unwrap();
+    assert_eq!(code, Some(1));
+    assert_eq!(
+        attached, 0,
+        "the Held branch must recheck the live keeper label"
+    );
+}
+
+#[test]
+fn keeper_precheck_allows_pid_attach_and_stale_unlocked_recovery() {
+    use std::time::Duration;
+    let home = fakes::TempDir::new("main-keeper-resume-controls");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_0123456789abcdef");
+    let held = session_with(&dir, None);
+    let (send, result) = std::sync::mpsc::channel();
+    let worker_sessions = sessions.clone();
+    std::thread::spawn(move || {
+        let mut attached = 0;
+        let result = super::open_or_attach(
+            &worker_sessions,
+            SessionId("s_0123456789abcdef".into()),
+            fakes::clock::FakeClock::new(),
+            |_| {
+                attached += 1;
+                7
+            },
+        );
+        send.send((result.err(), attached)).unwrap();
+    });
+    let (code, attached) = fakes::Deadline::after(Duration::from_secs(10))
+        .recv(&result)
+        .unwrap();
+    assert_eq!((code, attached), (Some(7), 1));
+    drop(held);
+    std::fs::write(dir.join("session.lock"), "keeper 4242\n").unwrap();
+    let (send, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut attached = 0;
+        let result = super::open_or_attach(
+            &sessions,
+            SessionId("s_0123456789abcdef".into()),
+            fakes::clock::FakeClock::new(),
+            |_| {
+                attached += 1;
+                7
+            },
+        );
+        send.send((result.is_ok(), attached)).unwrap();
+    });
+    assert_eq!(
+        fakes::Deadline::after(Duration::from_secs(10))
+            .recv(&result)
+            .unwrap(),
+        (true, 0)
+    );
+}
+
 /// A session directory whose first line is `session_started` with
 /// `worktree`, holding its lock as a live session would.
 fn session_with(dir: &Path, worktree: Option<Worktree>) -> Log {

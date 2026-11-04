@@ -42,7 +42,7 @@ use contract::provider::Provider;
 use contract::shapes::Tokens;
 use contract::tool::Tool;
 use contract::{ErrorCode, GenerationId};
-use fakes::{Deadline, Scripted, ScriptedProvider};
+use fakes::{Deadline, MUST_SUCCEED_WITHIN, Scripted, ScriptedProvider};
 use r#loop::{Loop, Model};
 
 /// `PromptInputs` over temp `home` with a fixed shell: the opening message
@@ -2954,6 +2954,67 @@ fn assert_orphaned(line: &Envelope, id: &str) {
             "status": "failed",
             "error": {"code": "orphaned", "message": ORPHANED},
         })
+    );
+}
+
+#[test]
+fn keeper_completions_join_one_turn_as_a_single_fiber_message() {
+    let mut history = History::new(vec![Scripted::text("First."), Scripted::text("Second.")]);
+    history.write(user_turn("before crash"), None);
+    history.write(job_started("j_kept_a"), Some("a_1"));
+    history.write(job_started("j_kept_b"), Some("a_2"));
+    history
+        .log
+        .append(&job_completed("j_kept_a"), None, None)
+        .unwrap();
+    history
+        .log
+        .append(&job_completed("j_kept_b"), None, None)
+        .unwrap();
+    history.freeze();
+    let mut looped = history.resume(Vec::new());
+    for prompt in ["first after crash", "next"] {
+        history
+            .inbox_tx
+            .send(Delivery::Prompt(
+                support::message(prompt),
+                support::ignore(),
+            ))
+            .unwrap();
+        let (done, finished) = mpsc::channel();
+        std::thread::spawn(move || {
+            assert!(looped.turn().unwrap().is_some());
+            done.send(looped).unwrap();
+        });
+        looped =
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "keeper delivery turn");
+    }
+    let turns: Vec<_> = history
+        .new_lines()
+        .into_iter()
+        .filter(|line| line.kind == "turn_started")
+        .collect();
+    let fiber_messages = |line: &Envelope| {
+        line.payload["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["type"] == "message" && item["source"] == "fiber")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    // docs/tools.md, "The keeper": all kept notices join the next turn in one message, once.
+    let messages = fiber_messages(&turns[0]);
+    assert_eq!(messages.len(), 1);
+    let text = messages[0]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("j_kept_a") && text.contains("j_kept_b"));
+    assert!(text.find("j_kept_a") < text.find("j_kept_b"));
+    assert!(fiber_messages(&turns[1]).is_empty());
+    assert!(
+        !history
+            .new_lines()
+            .iter()
+            .any(|line| line.kind == "job_completed")
     );
 }
 

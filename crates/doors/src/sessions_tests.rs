@@ -1444,6 +1444,74 @@ fn answers_for_another_command_are_skipped() {
 }
 
 #[test]
+fn keeper_published_during_connect_closes_before_any_protocol_bytes() {
+    let home = Home::new();
+    let sessions = home.temp.path().join("projects/p/sessions");
+    let clock = home.clock.clone();
+    drop(log::Log::create(&sessions, SessionId(ID.into()), clock.clone()).unwrap());
+    let dir = sessions.join(ID);
+    let (stream, mut peer) = UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let mut keeper = None;
+        let connection = guarded_connect(Some(&dir), || {
+            keeper = Some(
+                log::Log::open_as(&sessions, SessionId(ID.into()), clock, "keeper 4242").unwrap(),
+            );
+            Ok(stream)
+        });
+        let refused = connection.as_ref().err().map(io::Error::kind);
+        drop(connection);
+        done.send((refused, keeper)).unwrap();
+    });
+    let (refused, _keeper) =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "post-connect keeper check");
+    assert_eq!(refused, Some(io::ErrorKind::ConnectionRefused));
+    let mut bytes = Vec::new();
+    peer.read_to_end(&mut bytes).unwrap();
+    assert!(bytes.is_empty());
+}
+
+#[test]
+fn a_keeper_held_socket_is_not_a_running_session() {
+    let home = Home::new();
+    let sessions = home.temp.path().join("projects/p/sessions");
+    let clock = home.clock.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let id = SessionId(ID.into());
+        let log = log::Log::create(&sessions, id.clone(), clock.clone()).unwrap();
+        drop(log);
+        let keeper = log::Log::open_as(&sessions, id, clock.clone(), "keeper 4242").unwrap();
+        let session = log::Log::create(&sessions, SessionId(OTHER.into()), clock).unwrap();
+        tx.send((keeper, session)).unwrap();
+    });
+    let (_keeper, _session) = Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&rx, "published keeper and session locks");
+    let listener = home.listener(ID);
+    listener.set_nonblocking(true).unwrap();
+    let peer = Peer::answer(&home, OTHER, status("session"));
+    let result = home.start(Arc::new(CancelToken::new()));
+    let listed = Deadline::after(Duration::from_secs(10))
+        .recv_or_fail(&result, "list without connecting to keeper")
+        .unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|row| row.id.0.as_str())
+            .collect::<Vec<_>>(),
+        [OTHER]
+    );
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    peer.ended(&Deadline::after(Duration::from_secs(10)));
+}
+
+#[test]
 fn session_entries_lists_only_session_id_names_sorted() {
     let dir = TempDir::new("doors-session-entries");
     let run = dir.path().join("run");

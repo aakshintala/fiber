@@ -20,6 +20,8 @@ mod continue_session;
 mod delegates;
 mod handoff;
 mod hub_command;
+mod keeper;
+mod keeper_child;
 mod late_emit;
 mod launch;
 mod mcp_servers;
@@ -415,6 +417,7 @@ fn run() -> i32 {
         }
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
+        cli::Invocation::Run(Some(cli::Commands::Keeper { id }), _) => keeper_child::run(id, clock),
         cli::Invocation::Run(Some(cli::Commands::Grep { args }), _) => tools::grep_main(args),
         cli::Invocation::Run(Some(cli::Commands::Find { args }), _) => tools::find_main(args),
         // The image child holds no feature logic either: `picture` is the

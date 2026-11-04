@@ -302,8 +302,8 @@ Every command that talks to the hub takes `--hub <name>` to use a hub from
 the client's list instead of the default.
 
 **Internal commands.** Fiber starts child processes for the session command,
-the hub, the case runner that `fiber extension test` starts, and the image
-child ("Processes"). The release install step runs from `install.sh`
+the hub, the case runner that `fiber extension test` starts, the image child
+("Processes"), and the keeper (`docs/tools.md`, "The keeper"). The release install step runs from `install.sh`
 (`docs/releasing.md`, "Installing"). The file tools start `grep` and `find`
 (`docs/tools.md`). These commands are not in the menu. No person or client runs
 them.
@@ -1044,11 +1044,13 @@ Every client reaches sessions through the hub, the local terminal included.
 
 - **The hub holds no session.** It lists sessions, starts and resumes them
   (never a delegate, which resumes only through its parent:
-  `docs/delegates.md`), and relays every client connection to a session's socket. A session is
-  running when its socket accepts a connection; anything else is a log to
-  resume. Its crash or its restart drops client connections and ends no
-  session. Clients reconnect.
-- **It finds every running session by its socket.** Each running session has
+  `docs/delegates.md`), and relays every client connection to a session's socket.
+  A session is running when its socket accepts a connection and its lock is
+  held. A held lock whose holder label starts with `keeper ` is the keeper
+  holding a crashed session. A lock nobody holds is a log to resume, whatever
+  its text says. Its crash or its restart drops client connections and ends
+  no session. Clients reconnect.
+- **It finds every running session by a socket that accepts a connection.** Each running session has
   a socket at `run/<session_id>`, whoever started it, a `fiber ask` run
   included. The hub reads `run/` when it starts and watches it for new
   sockets, so it also finds sessions that were running before it restarted.

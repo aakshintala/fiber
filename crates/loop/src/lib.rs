@@ -57,6 +57,7 @@ mod inbox;
 mod inner_calls;
 mod interactions;
 mod jobs;
+mod kept;
 mod known_hosts;
 mod late_cost;
 mod lifecycle;
@@ -201,6 +202,7 @@ pub struct CommandsRefresh {
 /// One session's loop.
 pub struct Loop {
     log: Arc<Log>,
+    kept: Vec<contract::events::JobCompleted>,
     status_tap: Option<status::Tap>,
     diag: diag::SessionDiag,
     provider: Arc<dyn Provider>,
@@ -741,6 +743,7 @@ impl Loop {
             &ledger, None,
         )));
         Ok(Self {
+            kept: Vec::new(),
             status_tap: None,
             log,
             diag,

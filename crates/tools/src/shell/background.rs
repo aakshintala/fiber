@@ -300,6 +300,19 @@ fn hand_off(
         });
         Feed::new(job_id.clone(), lines, stop_of(&job_cancel), clock.now())
     });
+    if let Some(hosted) = &moved.progress.hosted {
+        let errors_path = sink
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .map(|()| errors.as_path());
+        if hosted
+            .host
+            .adopt(&hosted.id, &job_id, &path, errors_path)
+            .is_err()
+        {
+            hosted.host.stop(&hosted.id);
+        }
+    }
     let job_clock = Arc::clone(&clock);
     // The job's thread starts before the receipt is built, so its timeout
     // and stop hold while the receipt names the saved members.

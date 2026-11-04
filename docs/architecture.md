@@ -125,8 +125,9 @@ discovery in `loop` that `tools` uses for `skill`, `PersonalSourceCheck`,
 the already-read skill check in `loop` that `config` uses for `import`,
 and `TokenFiles`, credential
 files in `config` that `mcp` uses for remote servers' OAuth tokens, and `HostModel`,
-the session's model call in `main` that `extensions` uses for `host.model`, and `HostDelegate`,
-the session's delegate start in `main` that `extensions` uses for `host.delegate`.
+the session's model call in `main` that `extensions` uses for `host.model`, `HostDelegate`,
+the session's delegate start in `main` that `extensions` uses for `host.delegate`, and `CommandHost`,
+the shell host in `main` that `tools` uses for keeper runs.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.
@@ -263,10 +264,12 @@ A client is a reader and a writer on the session's socket, and every client
 is the same code. `fiber ask`'s stdout is not a client: it only receives, so
 it is a watcher, and `ask` spends its stdin on the prompt.
 
-A session process runs one session. A Fiber delegate is a child process of
-its parent, and its parent is an ordinary client over its socket. The
-delegate's stdin is a lifeline its parent never writes to; end of file on it
-starts a shutdown (`docs/delegates.md`).
+A session process runs one session. Its keeper, when it has one, runs in a
+session of its own and is the parent of that session's shell jobs' process
+groups. The session holds the keeper's stdin as its lifeline. Delegates stay
+children of the session. A Fiber delegate's stdin is a lifeline the session
+holds and never writes to; end of file on it starts a shutdown
+(`docs/delegates.md`).
 
 An image child is a short-lived process, one per image: `fiber` run again
 with an internal command, not a door (`docs/invocation.md`, "Processes").
@@ -341,11 +344,14 @@ re-reads what it missed from the log by `seq`, which `docs/events.md` already
 guarantees is possible. The loop never blocks on a watcher, so a slow screen
 cannot stall a turn.
 
-**Only the loop thread emits durable events.** Any thread may emit ephemeral
+**Within a session process, only the loop thread emits durable events.** Any thread may emit ephemeral
 ones through an emitter handle defined in `contract`. This keeps `seq` minted
 in one place and keeps the fsync ordering rule in `docs/events.md` — two
 fsyncs bracketing each side effect — a property of one thread's sequence of
-calls rather than of a race.
+calls rather than of a race. While the session is gone, its keeper appends
+`job_completed` as the holder of `session.lock` (`docs/events.md`;
+`docs/tools.md`, "The keeper"). One process holds the lock at a time, so `seq`
+still has one minter.
 
 ### Tool calls in a step
 

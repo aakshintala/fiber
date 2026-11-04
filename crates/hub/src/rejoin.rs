@@ -394,7 +394,8 @@ fn rejoin_pass(hub: &Arc<Hub>, candidates: Vec<Candidate>) {
         if kept_for_candidate(&lock(&relays), &session, candidate_epoch).is_none() {
             continue;
         }
-        let Ok(stream) = UnixStream::connect(hub.home.join("run").join(&session)) else {
+        let Ok(stream) = crate::resume::connect_live(hub, &contract::SessionId(session.to_owned()))
+        else {
             continue;
         };
         crate::relay::attach_rejoin(&session, stream, hub, &writer, &relays, candidate_epoch);

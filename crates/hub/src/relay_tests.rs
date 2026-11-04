@@ -19,6 +19,68 @@ use super::ack::Verdict;
 use super::*;
 use fakes::Deadline;
 
+#[test]
+fn opening_a_keeper_socket_starts_one_resume_and_writes_nothing_to_it() {
+    use std::os::unix::net::UnixListener;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
+    let (held, dir) = crate::testkit::with_run("keeper-relay");
+    let sid = crate::testkit::id(1);
+    let workspace = dir.join("w");
+    std::fs::create_dir_all(&workspace).unwrap();
+    crate::testkit::write_log(&dir, &sid, &workspace.to_string_lossy(), None, &[]);
+    let session_dir = log::session_dir(&dir, "-w", &contract::SessionId(sid.clone()));
+    let _lock = log::try_hold(&session_dir).unwrap();
+    std::fs::write(session_dir.join("session.lock"), "keeper 4242\n").unwrap();
+    let listener = UnixListener::bind(dir.join("run").join(&sid)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let starter = crate::fake::FakeStarter::exit_with(
+        &dir,
+        crate::fake::failure(contract::ErrorCode::SessionHeld, "held by keeper"),
+    );
+    let hub = Arc::new(crate::testkit::hub(
+        &dir,
+        Arc::new(starter.clone()),
+        fakes::clock::FakeClock::new(),
+    ));
+    let (writer, reader) = UnixStream::pair().unwrap();
+    reader
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    let writer = Arc::new(Mutex::new(writer));
+    let relays = Arc::new(Mutex::new(Relays::default()));
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        route(
+            &contract::CommandId("c_keeper".into()),
+            &sid,
+            json!({"id":"c_keeper", "command":"subscribe", "args":{"level":"summary"}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            &hub,
+            &writer,
+            &relays,
+            None,
+            false,
+            None,
+        );
+        tx.send(()).unwrap_or(());
+    });
+    Deadline::after(Duration::from_secs(10)).recv_or_fail(&rx, "keeper open refused");
+    let mut text = String::new();
+    BufReader::new(reader).read_line(&mut text).unwrap();
+    let reply: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(reply["kind"], "command_rejected");
+    assert_eq!(reply["payload"]["code"], "session_held");
+    assert_eq!(starter.resumed().len(), 1);
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    drop(held);
+}
+
 struct TargetRead;
 
 impl support::peer::ProcessRead for TargetRead {
