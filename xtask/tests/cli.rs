@@ -2516,6 +2516,9 @@ fn mutants_reuse(dir: &TempDir, runs: &str, jobs: &str) -> (i32, String) {
 }
 
 /// One completed candidate run on the same pull request, head and base.
+// debt: reuse_candidate duplicates xtask/src/select/reuse_tests.rs candidate (same candidate-run
+// JSON shape), ceiling: two builders, upgrade trigger: a third candidate-run fixture or a fence
+// that allows a shared xtask fixture module merges both into one builder.
 fn reuse_candidate(id: u64) -> serde_json::Value {
     serde_json::json!({
         "id": id,
@@ -2529,6 +2532,9 @@ fn reuse_candidate(id: u64) -> serde_json::Value {
     })
 }
 
+// debt: reuse_shards duplicates xtask/src/select/reuse_tests.rs shard (same "Mutants (shard {index})"
+// JSON), ceiling: two builders, upgrade trigger: a third shard-job fixture or a fence that allows
+// a shared xtask fixture module merges both into one builder.
 fn reuse_shards(total: usize, conclusion: &str) -> serde_json::Value {
     serde_json::Value::Array(
         (0..total)

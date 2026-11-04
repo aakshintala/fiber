@@ -26,6 +26,9 @@ fn current() -> Current {
 
 /// One candidate run: the top-level `head_sha` pins the tested code, while
 /// the pull request entry's head tracks live state and is never compared.
+// debt: candidate duplicates xtask/tests/cli.rs reuse_candidate (same candidate-run JSON shape),
+// ceiling: two builders, upgrade trigger: a third candidate-run fixture or a fence that allows
+// a shared xtask fixture module merges both into one builder.
 fn candidate(
     id: u64,
     head_sha: &str,
@@ -50,6 +53,9 @@ fn matching_candidate() -> Value {
     candidate(7, HEAD, HEAD, PR, Some(BASE), "completed")
 }
 
+// debt: shard duplicates the shard-job object built inside xtask/tests/cli.rs reuse_shards
+// (same "Mutants (shard {index})" JSON), ceiling: two builders, upgrade trigger: a third
+// shard-job fixture or a fence that allows a shared xtask fixture module merges both into one builder.
 fn shard(index: usize, conclusion: &str) -> Value {
     json!({ "name": format!("Mutants (shard {index})"), "conclusion": conclusion })
 }
