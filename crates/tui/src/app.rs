@@ -1593,6 +1593,19 @@ impl App {
                     Some(Waiting::ChangeWorkspace(_)) => {}
                     Some(Waiting::Sessions) => {}
                     Some(Waiting::Abandoned) => {}
+                    Some(
+                        Waiting::Directories
+                        | Waiting::Subscribe
+                        | Waiting::Stop
+                        | Waiting::Delete
+                        | Waiting::OfferImport
+                        | Waiting::DeleteDiscovery
+                        | Waiting::DeleteStop
+                        | Waiting::DeleteFinal
+                        | Waiting::Feed
+                        | Waiting::Recent
+                        | Waiting::Close,
+                    ) => {}
                     None => {}
                 }
                 let session = hub
@@ -1652,6 +1665,19 @@ impl App {
                         Some(Waiting::RewindHistory) => {}
                         Some(Waiting::Sessions) => {}
                         Some(Waiting::Abandoned) => {}
+                        Some(
+                            Waiting::Directories
+                            | Waiting::Subscribe
+                            | Waiting::Stop
+                            | Waiting::Delete
+                            | Waiting::OfferImport
+                            | Waiting::DeleteDiscovery
+                            | Waiting::DeleteStop
+                            | Waiting::DeleteFinal
+                            | Waiting::Feed
+                            | Waiting::Recent
+                            | Waiting::Close,
+                        ) => {}
                         None => {}
                     }
                     self.offer.file_refused(
@@ -1845,6 +1871,19 @@ impl App {
             Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => None,
             Some(Waiting::Sessions) => None,
             Some(Waiting::Abandoned) => None,
+            Some(
+                Waiting::Directories
+                | Waiting::Subscribe
+                | Waiting::Stop
+                | Waiting::Delete
+                | Waiting::OfferImport
+                | Waiting::DeleteDiscovery
+                | Waiting::DeleteStop
+                | Waiting::DeleteFinal
+                | Waiting::Feed
+                | Waiting::Recent
+                | Waiting::Close,
+            ) => None,
             None => None,
         };
         // The reviewer setup's `propose_notes` answers settle first, and

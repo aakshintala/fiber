@@ -247,7 +247,18 @@ impl App {
             | Waiting::ImageFetch
             | Waiting::ImageDisplay
             | Waiting::Sessions
-            | Waiting::Abandoned => false,
+            | Waiting::Abandoned
+            | Waiting::Directories
+            | Waiting::Subscribe
+            | Waiting::Stop
+            | Waiting::Delete
+            | Waiting::OfferImport
+            | Waiting::DeleteDiscovery
+            | Waiting::DeleteStop
+            | Waiting::DeleteFinal
+            | Waiting::Feed
+            | Waiting::Recent
+            | Waiting::Close => false,
         }
     }
 
@@ -279,7 +290,18 @@ impl App {
             | Waiting::ImageFetch
             | Waiting::ImageDisplay
             | Waiting::Sessions
-            | Waiting::Abandoned => return None,
+            | Waiting::Abandoned
+            | Waiting::Directories
+            | Waiting::Subscribe
+            | Waiting::Stop
+            | Waiting::Delete
+            | Waiting::OfferImport
+            | Waiting::DeleteDiscovery
+            | Waiting::DeleteStop
+            | Waiting::DeleteFinal
+            | Waiting::Feed
+            | Waiting::Recent
+            | Waiting::Close => return None,
         }
         let Some(CommandResult::Rewind { new_session_id }) = accepted.result.as_ref() else {
             return None;

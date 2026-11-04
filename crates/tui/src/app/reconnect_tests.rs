@@ -1112,3 +1112,45 @@ fn a_reconnect_before_the_open_is_answered_carries_no_credential() {
         "the ordinary kept prompt goes out unchanged"
     );
 }
+
+#[test]
+fn a_reset_after_reconnect_leaves_no_untagged_feature_id() {
+    let mut app = home();
+    let before = linked(&mut app);
+    let old_feed = id_of(&before[0]);
+    let old_recent = id_of(&before[1]);
+    // A scoped ask goes out for the live row's project and waits.
+    let live_out = parsed(&fold(&mut app, live(S_B, "tidy docs")));
+    let old_scoped = live_out
+        .iter()
+        .find(|line| line["command"] == "recent")
+        .map(id_of)
+        .unwrap_or_else(|| panic!("a scoped ask: {live_out:?}"));
+    assert_eq!(
+        app.outbox.waiting(&old_scoped),
+        Some(crate::app::Waiting::Recent)
+    );
+    let after = parsed(&reconnect(&mut app));
+    // The replaced entries' tags are gone, so their late answers match
+    // nothing.
+    for old in [&old_feed, &old_recent, &old_scoped] {
+        assert_eq!(app.outbox.waiting(old), None);
+    }
+    // Every feed, recent and subscribe the reset sent carries its tag.
+    for line in &after {
+        let id = id_of(line);
+        match line["command"].as_str().unwrap_or_default() {
+            "feed" => assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Feed)),
+            "recent" => assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Recent)),
+            "subscribe" => {
+                assert_eq!(
+                    app.outbox.waiting(&id),
+                    Some(crate::app::Waiting::Subscribe)
+                )
+            }
+            _ => {}
+        }
+    }
+    assert!(after.iter().any(|line| line["command"] == "feed"));
+    assert!(after.iter().any(|line| line["command"] == "recent"));
+}

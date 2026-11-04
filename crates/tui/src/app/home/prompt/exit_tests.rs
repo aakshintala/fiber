@@ -1393,3 +1393,26 @@ fn the_close_all_elsewhere_boundary_holds_both_sides() {
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 2, 1)));
 }
+
+#[test]
+fn quit_closes_register_a_close_tag_each() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    let lines = commands(lines);
+    let closes: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["command"] == "close")
+        .collect();
+    assert_eq!(closes.len(), 1);
+    for close in closes {
+        let id = close["id"].as_str().unwrap_or_default();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::Close));
+    }
+}

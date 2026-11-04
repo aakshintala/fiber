@@ -16,6 +16,7 @@ use contract::SessionId;
 pub(super) struct Subscriptions {
     /// This connection's level per session: the accepted one, and every
     /// subscribe waiting for its answer.
+    // debt: the in-flight subscribe ids kept here beside the outbox `Subscribe` tags by hand, the outbox tag becomes the sole record once the subscribe lookup runs off the tag alone once #4127 lands.
     levels: Subs,
     /// The session being opened: lines for it fold into its row and are
     /// dropped until the last subscribe's acknowledgement, which is the
@@ -29,6 +30,11 @@ impl Subscriptions {
     /// Records a subscribe sent with `id` for `session` at `level`.
     pub(super) fn sent(&mut self, id: String, session: SessionId, level: Level) {
         self.levels.sent(id, session, level);
+    }
+
+    /// The session an in-flight subscribe `id` names, without consuming it.
+    pub(super) fn session_for(&self, id: &str) -> Option<SessionId> {
+        self.levels.session_for(id)
     }
 
     /// The level a new subscribe for `session` must differ from: the
@@ -193,7 +199,9 @@ impl App {
     pub(in crate::app) fn subscribe(&mut self, session: &SessionId, level: Level) -> String {
         let (id, line) = subscribe_line(session, level, None);
         if let Some(home) = self.home.as_mut() {
-            home.subs.sent(id, session.clone(), level);
+            home.subs.sent(id.clone(), session.clone(), level);
+            self.outbox
+                .wait(&id, super::super::outbox::Waiting::Subscribe);
         }
         line
     }
@@ -462,14 +470,29 @@ impl App {
     /// Folds one hub subscribe acknowledgement into the levels: a
     /// refusal becomes the row's note, and a refusal of the open's last
     /// subscribe fails the open. Some with the lines to send when `id`
-    /// was an in-flight subscribe, else `None`.
+    /// was an in-flight subscribe, else `None`. A session answer names
+    /// its source session, which must be the session the subscribe went
+    /// out for: an answer for another session changes nothing, as an
+    /// unknown id does. The hub names no source session and matches by
+    /// id, as before.
     pub(super) fn subscribe_answer(
         &mut self,
         id: &str,
         accepted: bool,
         payload: &serde_json::Map<String, Value>,
+        source: Option<&SessionId>,
     ) -> Option<Vec<String>> {
+        if let Some(source) = source
+            && self
+                .home
+                .as_ref()
+                .and_then(|home| home.subs.session_for(id))
+                .is_some_and(|minting| &minting != source)
+        {
+            return None;
+        }
         if let Some(session) = self.answered(id, accepted) {
+            self.outbox.settled(id);
             if !accepted {
                 let code = payload
                     .get("code")
@@ -573,7 +596,9 @@ impl App {
         let (id, line) = subscribe_line(&session, Level::Full, None);
         if let Some(home) = self.home.as_mut() {
             home.subs.sent(id.clone(), session.clone(), Level::Full);
-            home.subs.raise(id);
+            home.subs.raise(id.clone());
+            self.outbox
+                .wait(&id, super::super::outbox::Waiting::Subscribe);
         }
         if due.is_some() {
             let busy = matches!(&self.phase, Phase::Attached { busy: true, .. });

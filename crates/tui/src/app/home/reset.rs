@@ -19,14 +19,16 @@ impl App {
             return;
         };
         home.subs.reset();
+        self.outbox.forget(&crate::app::outbox::Waiting::Subscribe);
         // Every held total goes with the old connection, with the scoped
         // ids waiting and their dirty flags: a stale scoped answer
         // matches nothing afterwards.
         home.sessions.drop_all_totals();
         let launch_project = home.launch_project().map(str::to_owned);
-        let recent = home
-            .recent
-            .reset_for_connection(&home.sessions, launch_project.as_deref());
+        let outbox = &mut self.outbox;
+        let recent =
+            home.recent
+                .reset_for_connection(&home.sessions, launch_project.as_deref(), outbox);
         for line in recent {
             home.subs.queue(line);
         }

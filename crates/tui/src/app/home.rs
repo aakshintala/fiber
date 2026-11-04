@@ -607,7 +607,8 @@ impl App {
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
-        let Some(mut out) = home.recent.first_asks() else {
+        let outbox = &mut self.outbox;
+        let Some(mut out) = home.recent.first_asks(outbox) else {
             let mut out = home.subs.take_outbox();
             out.append(&mut asks);
             return out;
@@ -737,31 +738,67 @@ impl App {
                             return None;
                         }
                         Some(super::Waiting::Abandoned) => return None,
+                        Some(super::Waiting::Directories) => {
+                            // The picker's `directories` answers fold in
+                            // first, while the picker that sent them is
+                            // still open; a stale tag falls through to
+                            // the generic path below.
+                            if let Some(lines) = self.picker_answer(id, accepted, &hub.payload) {
+                                return Some(lines);
+                            }
+                        }
+                        Some(super::Waiting::Subscribe) => {
+                            // The hub names no source session, so a hub
+                            // subscribe answer matches by id, as before.
+                            if let Some(lines) =
+                                self.subscribe_answer(id, accepted, &hub.payload, None)
+                            {
+                                return Some(lines);
+                            }
+                        }
+                        Some(super::Waiting::OfferImport) => {
+                            // The offer's `import` folds as the `/import`
+                            // row's: acceptance closes the offer, a
+                            // refusal keeps it open with one notice.
+                            if let Some(lines) = self.import_answer(id, accepted, &hub.payload) {
+                                return Some(lines);
+                            }
+                        }
+                        Some(
+                            super::Waiting::DeleteDiscovery
+                            | super::Waiting::DeleteStop
+                            | super::Waiting::DeleteFinal,
+                        ) => {
+                            // The command's discovery and confirmed stops
+                            // fold before unrelated ask handling.
+                            if let Some(lines) =
+                                self.delete_command_answer(id, accepted, &hub.payload)
+                            {
+                                return Some(lines);
+                            }
+                        }
+                        Some(super::Waiting::Stop) | Some(super::Waiting::Delete) => {
+                            if let Some(ask) = self.take_ask(id) {
+                                return Some(self.answer_ask(ask, accepted, &hub.payload));
+                            }
+                        }
+                        Some(super::Waiting::Feed) | Some(super::Waiting::Recent) => {
+                            // Feed and recent answers correlate here, after
+                            // the other command owners; a tag names which
+                            // entry folds the payload.
+                            if let Some(lines) = self.recent_answer(id, accepted, &hub.payload) {
+                                return Some(lines);
+                            }
+                        }
+                        Some(super::Waiting::Close) => {
+                            // The quit question's closes own no answer
+                            // fold: the terminal exits with them sent.
+                            // The tag settles so a late answer falls
+                            // through as an unknown id does.
+                            self.outbox.settled(id);
+                            return Some(Vec::new());
+                        }
                         None => {}
-                    }
-                    // The picker's `directories` answers fold in first,
-                    // while home exists: an id the open picker sent is
-                    // consumed here, any other id falls through untouched.
-                    if let Some(lines) = self.picker_answer(id, accepted, &hub.payload) {
-                        return Some(lines);
-                    }
-                    if let Some(lines) = self.subscribe_answer(id, accepted, &hub.payload) {
-                        return Some(lines);
-                    }
-                    // The offer's `import` folds as the `/import` row's:
-                    // Task 3's notices closing the offer on acceptance,
-                    // the existing refused path with the offer open on
-                    // rejection.
-                    if let Some(lines) = self.import_answer(id, accepted, &hub.payload) {
-                        return Some(lines);
-                    }
-                    // The command's discovery and confirmed stops fold
-                    // before unrelated ask handling.
-                    if let Some(lines) = self.delete_command_answer(id, accepted, &hub.payload) {
-                        return Some(lines);
-                    }
-                    if let Some(ask) = self.take_ask(id) {
-                        return Some(self.answer_ask(ask, accepted, &hub.payload));
                     }
                     // A rejected `start` is home's blocker text, above the
                     // box until the next `start` goes out. Reading
@@ -775,11 +812,6 @@ impl App {
                             home.blockers = message.lines().map(str::to_owned).collect();
                         }
                         return None;
-                    }
-                    // Feed and recent answers correlate here, after the
-                    // other command owners and before generic session asks.
-                    if let Some(lines) = self.recent_answer(id, accepted, &hub.payload) {
-                        return Some(lines);
                     }
                     None
                 }
@@ -864,21 +896,65 @@ impl App {
                     let answer = answer?;
                     let accepted = answer.accepted;
                     let id = answer.id;
-                    if let Some(lines) = self.subscribe_answer(id, accepted, &envelope.payload) {
-                        return if accepted {
-                            self.subscribe_accepted(&envelope.session_id, id)
-                        } else {
-                            Some(lines)
-                        };
-                    }
-                    // The command's discovery and confirmed stops fold
-                    // before unrelated ask handling.
-                    if let Some(lines) = self.delete_command_answer(id, accepted, &envelope.payload)
-                    {
-                        return Some(lines);
-                    }
-                    if let Some(ask) = self.take_ask(id) {
-                        return Some(self.answer_ask(ask, accepted, &envelope.payload));
+                    match &answer.waiting {
+                        Some(super::Waiting::Subscribe) => {
+                            // A session answer names its source session:
+                            // only the session the subscribe went out
+                            // for folds it here.
+                            if let Some(lines) = self.subscribe_answer(
+                                id,
+                                accepted,
+                                &envelope.payload,
+                                Some(&envelope.session_id),
+                            ) {
+                                return if accepted {
+                                    self.subscribe_accepted(&envelope.session_id, id)
+                                } else {
+                                    Some(lines)
+                                };
+                            }
+                        }
+                        Some(
+                            super::Waiting::DeleteDiscovery
+                            | super::Waiting::DeleteStop
+                            | super::Waiting::DeleteFinal,
+                        ) => {
+                            // The command's discovery and confirmed stops
+                            // fold before unrelated ask handling.
+                            if let Some(lines) =
+                                self.delete_command_answer(id, accepted, &envelope.payload)
+                            {
+                                return Some(lines);
+                            }
+                        }
+                        Some(
+                            super::Waiting::Stop
+                            | super::Waiting::Delete
+                            | super::Waiting::OfferImport,
+                        ) => {
+                            if let Some(ask) = self.take_ask(id) {
+                                return Some(self.answer_ask(ask, accepted, &envelope.payload));
+                            }
+                        }
+                        Some(
+                            super::Waiting::Directories
+                            | super::Waiting::Feed
+                            | super::Waiting::Recent
+                            | super::Waiting::Close
+                            | super::Waiting::Dismiss(_)
+                            | super::Waiting::Fork
+                            | super::Waiting::RewindHistory
+                            | super::Waiting::RewindSend
+                            | super::Waiting::ChangeWorkspace(_)
+                            | super::Waiting::ClearStart
+                            | super::Waiting::ClearClose
+                            | super::Waiting::History
+                            | super::Waiting::ImageFetch
+                            | super::Waiting::ImageDisplay
+                            | super::Waiting::Sessions
+                            | super::Waiting::Abandoned,
+                        )
+                        | None => {}
                     }
                     // The `commands` an opening sends is answered while
                     // its replay is still gated: the answer is no history,
