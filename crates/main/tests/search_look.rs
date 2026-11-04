@@ -22,7 +22,7 @@ use std::fs;
 
 use serde_json::json;
 use support::hold::Hold;
-use support::pty::{Colour, Grid, MOTION, Run, hover_bytes};
+use support::pty::{Colour, Grid, MOTION, Run, drag_bytes, hover_bytes};
 use support::{Setup, TRUECOLOUR, write_json};
 
 /// `surface` in the dark theme.
@@ -413,19 +413,7 @@ fn a_drag_selects_and_copies() {
     run.mouse_where(
         "the drag across the reply row",
         |grid| grid.text_at("across"),
-        |point| {
-            let to = point.0 + 5;
-            format!(
-                "\x1b[<0;{};{}M\x1b[<32;{};{}M\x1b[<3;{};{}m",
-                point.0 + 1,
-                point.1 + 1,
-                to + 1,
-                point.1 + 1,
-                to + 1,
-                point.1 + 1,
-            )
-            .into_bytes()
-        },
+        |point| drag_bytes(point, (point.0 + 5, point.1)),
     );
     // The selection once the release copies: every dragged cell on the
     // `selection` tint, and "Copied" at the top-right.
@@ -474,19 +462,7 @@ fn copied_sits_below_the_search_box() {
             assert!(point.1 > bar + 2, "the drag stays below the slab");
             Some(point)
         },
-        |point| {
-            let to = point.0 + 5;
-            format!(
-                "\x1b[<0;{};{}M\x1b[<32;{};{}M\x1b[<3;{};{}m",
-                point.0 + 1,
-                point.1 + 1,
-                to + 1,
-                point.1 + 1,
-                to + 1,
-                point.1 + 1,
-            )
-            .into_bytes()
-        },
+        |point| drag_bytes(point, (point.0 + 5, point.1)),
     );
     let grid = run.wait_screen("Copied under the bar", copied_below);
     let copied = row_with(&grid, "Copied");
@@ -762,9 +738,11 @@ fn narrow_running(setup: &Setup) -> Run {
     run.wait_bytes(0, MOTION, "mouse motion enabled");
     run.write(b"go\r");
     let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
-    fakes::wait_until("the delegate and job started", setup.deadline, move || {
-        children_started(&sessions)
-    });
+    fakes::wait_until(
+        "the delegate and job started with usage copied",
+        setup.deadline,
+        move || children_started(&sessions) && delegate_usage_copied(&sessions),
+    );
     run.wait_screen("the parent reply", |grid| grid.contents.contains(REPLY));
     run.wait_screen("the narrow running counts", |grid| {
         grid.contents.contains("1 delegate running") && grid.contents.contains("1 job running")

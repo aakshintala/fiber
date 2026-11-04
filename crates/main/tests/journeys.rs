@@ -1076,34 +1076,12 @@ fn journey_drag_panel_card_copies_its_text() {
     run.turn_finished(from);
     // Coordinates come from a grid settled after the turn: the turn's
     // end moves rows, so an earlier grid points at the wrong cells.
-    let card = run.wait_screen("the session card name", |screen| {
+    run.wait_screen("the session card name", |screen| {
         screen
             .rows
             .iter()
             .any(|row| row.get(100..).is_some_and(|side| side.contains("say hi")))
     });
-    // The card sits on the screen's right side: only its own cells
-    // match, never the conversation's.
-    let (cols, rows) = card.size();
-    let mut done = false;
-    for y in 0..rows {
-        for x in 100..cols {
-            if card.cell(x, y).symbol == "s"
-                && (0..6).all(|dx| {
-                    x + dx < cols
-                        && card.cell(x + dx, y).symbol
-                            == ["s", "a", "y", " ", "h", "i"][dx as usize]
-                })
-            {
-                done = true;
-                break;
-            }
-        }
-        if done {
-            break;
-        }
-    }
-    assert!(done, "the card name shows");
     let from = run.output().len();
     run.mouse_where(
         "the session card name",

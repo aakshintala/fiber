@@ -189,6 +189,45 @@ fn start_run(setup: &Setup) -> Run {
     run
 }
 
+/// Whether the session log holds the parent turn's completion after its
+/// "Done." text: the turn is durably done, so the panel rows it drew are
+/// final until the test's own click expands them. The finished title
+/// never emits while an item is held, so no byte wait can read it; the
+/// log's `turn_completed` is the readiness signal instead.
+fn turn_completed_after_done(sessions: &std::path::Path) -> bool {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        };
+        let events = support::complete_lines(&text);
+        let Some(done) = events.iter().position(|event| {
+            event["kind"] == "text_completed" && event["payload"]["text"] == "Done."
+        }) else {
+            continue;
+        };
+        let Some(turn_id) = events[done]["turn_id"].as_str() else {
+            continue;
+        };
+        if events
+            .iter()
+            .skip(done + 1)
+            .any(|event| event["kind"] == "turn_completed" && event["turn_id"] == turn_id)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// The job row, wherever the panel lays it out, or none before it draws.
 fn job_row_index(rows: &[String], command: &str) -> Option<usize> {
     rows.iter().position(|row| row.contains(command))
@@ -264,9 +303,9 @@ fn assert_dim(grid: &Grid, y: u16, needle: &str) {
 
 /// Opens the panel row holding `needle`: clicks its text, then waits
 /// for the item view's top row. The caller waits for the turn's
-/// completion first, so the row's position is final: the parent's turn
-/// is done and the one held item parks on the test-held FIFO, so later
-/// folds only tick in place.
+/// `turn_completed` session-log event first, so the row's position is
+/// final: the parent's turn is done and the one held item parks on the
+/// test-held FIFO, so later folds only tick in place.
 fn open_row(run: &mut Run, needle: &str, top: &str) -> Grid {
     run.wait_screen("the panel lists the row", |grid| {
         grid.contents.contains(needle)
@@ -294,6 +333,10 @@ fn assert_span_tint(grid: &Grid, y: u16, needle: &str, tint: Colour) {
 fn the_delegate_view_matches_the_doc() {
     let (setup, hold) = delegate_setup();
     let mut run = start_run(&setup);
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until("the parent turn's completion", setup.deadline, move || {
+        turn_completed_after_done(&sessions)
+    });
     // The parent's turn completes before the click, so the panel row's
     // position is final: the completed footer proves the turn is done,
     // and the delegate parks on the test-held FIFO, so no further
@@ -536,6 +579,10 @@ fn the_job_pty_view_matches_the_doc() {
     // `job_completed` carries `process.exit_code`, `process.signal` and
     // `error.code` in the raw lines.
     let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until("the parent turn's completion", setup.deadline, {
+        let sessions = sessions_dir.clone();
+        move || turn_completed_after_done(&sessions)
+    });
     run.wait_screen_reporting(
         "the tty job starts",
         |grid| {
@@ -554,7 +601,7 @@ fn the_job_pty_view_matches_the_doc() {
     });
     let clicked = std::cell::Cell::new(0u16);
     run.click_where("the job row", |grid| {
-        let job = job_row_index(&grid.rows, &command).unwrap() as u16;
+        let job = job_row_index(&grid.rows, &command)? as u16;
         let (width, _) = grid.size();
         let job_x = (0..width)
             .find(|x| grid.cell(*x, job).symbol != " ")

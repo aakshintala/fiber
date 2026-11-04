@@ -276,7 +276,12 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     let c = start_session(&control, &elsewhere, "third");
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
+    let from = run.output().len();
     run.write(b"go\r");
+    // The terminal's session ends at once with no held item, so its
+    // turn completes: the finished title plus the completed paint prove
+    // the Session card's rows are final before Alt+R hides the rail.
+    run.turn_finished(from);
     // The terminal's session is done while the other two wait: the rail
     // shows both waiting cards.
     run.wait_screen("two sessions waiting", |grid| {
