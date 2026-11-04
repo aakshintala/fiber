@@ -79,3 +79,5 @@ crates/tui/src/view/item_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhous
 crates/tui/src/app/call_view_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/config_views/credential_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/mcp_view_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/tests/lua_hooks.rs	fiber-4133	plan	2026-11-04T13:31:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/testing/fakes.md	fiber-4133	plan	2026-11-04T13:31:35Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
