@@ -416,10 +416,22 @@ pub struct SessionStatus {
     pub closing: bool,
     /// When this state began, as `ts`.
     pub since: u64,
+    /// With `streaming` or `retrying`: when the model last sent output for
+    /// the current request, as `ts`; absent before its first output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_at: Option<u64>,
+    /// With `tool`: when the running tool last wrote output, as `ts`;
+    /// absent before its first output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_output_at: Option<u64>,
     /// When the session started, as `ts`.
     pub started: u64,
     /// Tool calls the session has made so far.
     pub calls: u64,
+    /// How many tool calls in a row, ending with the latest, had the same
+    /// name and the same arguments; absent when it is 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeats: Option<u64>,
     /// Turns the session has run so far, counted as the usage view counts them.
     /// The writer always sets this; clients draw no turn count when it is absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]

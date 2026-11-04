@@ -89,6 +89,8 @@ Driving the binary is not part of the gate. A behaviour the tests do not
 reach gets a test: a binary-level test for the JSON lines, a screen test for
 what the terminal shows (`docs/testing.md`).
 
+`scripts/check` exits 75 (`EX_TEMPFAIL`) when the machine cannot run the gate, because scratch or `target` space is below what a build needs or a compile or link step was killed for lack of resources, so the code is unproven and not broken, a reviewer treats a 75 head as having no gate result, and CI treats it as any other failed job (the machine could not run the gate: rerun on a machine with room; not a code failure).
+
 ## Rules by path
 
 A ticket's brief carries the rules for the paths its diff touches, and only
@@ -178,7 +180,10 @@ touches, before any other.
 ## The pull request
 
 The body says `Resolves #<ticket>` for an unsplit ticket or the last part
-of a split ticket. Earlier parts say `Part of #<ticket>`. Every pull request
+of a split ticket. Earlier parts say `Part of #<ticket>`. A pull request that
+advances a ticket without resolving it, such as a diagnostic, says
+`Refs #<ticket>`; the ticket stays open, and the red-commit rule below does
+not apply. Every pull request
 also says `Doc friction: none` or links each `needs-owner` issue it raised
 ("When a doc should change").
 

@@ -105,6 +105,19 @@ pub(crate) struct Fold {
     last: SessionStatus,
     since: Option<u64>,
     started: u64,
+    /// The `output_at` value last written: reset on
+    /// `assistant_message_started`, `turn_started` and `turn_completed`,
+    /// and emitted only with `streaming` or `retrying`.
+    output_at: Option<u64>,
+    /// The `tool_output_at` value last written: reset when no call is
+    /// running, and emitted only with `tool`.
+    tool_output_at: Option<u64>,
+    /// The latest `tool_call_requested`'s name and as-sent arguments, for
+    /// counting the repeat run.
+    last_call: Option<(String, serde_json::Value)>,
+    /// How many calls in a row, ending with the latest, had the same name
+    /// and the same arguments.
+    repeat_run: u64,
     calls: u64,
     turns: u64,
     step: Option<String>,
@@ -165,8 +178,11 @@ impl Fold {
                 thinking: None,
                 state: SessionState::Idle,
                 since: 0,
+                output_at: None,
+                tool_output_at: None,
                 started: 0,
                 calls: 0,
+                repeats: None,
                 turns: Some(0),
                 step: None,
                 git: None,
@@ -189,6 +205,10 @@ impl Fold {
             },
             since: None,
             started: 0,
+            output_at: None,
+            tool_output_at: None,
+            last_call: None,
+            repeat_run: 0,
             calls: 0,
             cache_ts: None,
             lifetime: None,
@@ -229,9 +249,14 @@ impl Fold {
 
     /// Folds `line`. True when a field of the status changed.
     pub(crate) fn observe(&mut self, line: &Envelope) -> bool {
-        // An ephemeral line is a delta, apart from the retry notice and the
-        // connection count.
-        if !line.is_durable() && line.kind != "retry_scheduled" && line.kind != "clients" {
+        // An ephemeral line is a delta, apart from the retry notice, the
+        // connection count, and the output deltas the `output_at` and
+        // `tool_output_at` facts fold.
+        if !line.is_durable()
+            && line.kind != "retry_scheduled"
+            && line.kind != "clients"
+            && !is_output_delta(&line.kind)
+        {
             return false;
         }
         // A line that does not read is skipped: the fold never panics.
@@ -240,7 +265,9 @@ impl Fold {
         };
         let key = self.key();
         self.apply(&event, line);
-        if self.live {
+        // The connection count moves only on a `clients` line: a
+        // streaming reply does not re-read it per delta.
+        if self.live && !is_output_delta(&line.kind) {
             self.clients = (self.read_clients)();
         }
         if self.since.is_none() || self.key() != key {
@@ -333,6 +360,8 @@ impl Fold {
                 self.turn_seen = true;
                 self.turn_running = true;
                 self.retrying = false;
+                // A new turn is a new request: no output yet.
+                self.output_at = None;
                 self.refresh_running();
                 if self.live {
                     self.git = (self.read_git)();
@@ -341,6 +370,10 @@ impl Fold {
             Event::TurnCompleted(_) => {
                 self.turn_running = false;
                 self.retrying = false;
+                // No live request and no running call: neither output
+                // fact applies.
+                self.output_at = None;
+                self.tool_output_at = None;
                 // A completed turn's calls are named nowhere further:
                 // pending summaries were stored at request time, and no
                 // running call or turn is left to name.
@@ -350,9 +383,33 @@ impl Fold {
                 self.refresh_running();
             }
             Event::RetryScheduled(_) => self.retrying = true,
-            Event::AssistantMessageStarted(_) | Event::StepStarted(_) => self.retrying = false,
+            // A new model call is a new request: the retry is a new action.
+            Event::AssistantMessageStarted(_) => {
+                self.retrying = false;
+                self.output_at = None;
+            }
+            Event::StepStarted(_) => self.retrying = false,
+            // Every output delta of the current request moves the
+            // `output_at` candidate through the 10-second gate.
+            Event::AssistantMessageDelta(_)
+            | Event::ReasoningDelta(_)
+            | Event::ToolCallArgumentsDelta(_) => gate_output(&mut self.output_at, line.ts),
+            // Every delta of a running call moves the `tool_output_at`
+            // candidate through the same gate.
+            Event::ToolCallDelta(_) => gate_output(&mut self.tool_output_at, line.ts),
             Event::ToolCallRequested(call) => {
                 self.calls += 1;
+                let arguments = normalize_arguments(&call.arguments);
+                if self
+                    .last_call
+                    .as_ref()
+                    .is_some_and(|(name, args)| *name == call.name && *args == arguments)
+                {
+                    self.repeat_run += 1;
+                } else {
+                    self.repeat_run = 1;
+                }
+                self.last_call = Some((call.name.clone(), arguments));
                 self.step = Some(one_line(&call.name));
                 self.latest = Some((call.name.clone(), line.payload.clone()));
                 if let Some((payload, subject)) = &self.pending_subject
@@ -376,6 +433,9 @@ impl Fold {
                     // no longer running, and its approval was requested
                     // before it started.
                     self.tools.remove(id);
+                    if self.running_calls.is_empty() {
+                        self.tool_output_at = None;
+                    }
                 }
             }
             Event::PermissionRequested(asked) => {
@@ -488,6 +548,7 @@ impl Fold {
             // finishes it.
             Event::FiberStarted(_) => {
                 self.running_calls.clear();
+                self.tool_output_at = None;
                 self.retrying = false;
             }
             Event::FiberExited(_)
@@ -499,14 +560,10 @@ impl Fold {
             | Event::Clients(_)
             | Event::SessionStatus(_)
             | Event::ContextAdded(_)
-            | Event::AssistantMessageDelta(_)
             | Event::AssistantMessageCompleted(_)
             | Event::TextCompleted(_)
-            | Event::ToolCallArgumentsDelta(_)
             | Event::ReasoningStarted(_)
-            | Event::ReasoningDelta(_)
             | Event::ReasoningCompleted(_)
-            | Event::ToolCallDelta(_)
             | Event::QuotaNoticed(_)
             | Event::QuotaRearmed(_)
             | Event::Notice(_)
@@ -597,6 +654,26 @@ impl Fold {
             .iter()
             .filter(|id| !self.delegates.contains(id))
             .count();
+        let state = self.state();
+        // The output facts apply only where the ticket says they do: the
+        // model's output while its request is live, the tool's while the
+        // call runs. The repeat run rides every state until a differing
+        // call resets it.
+        let output_at = match state {
+            SessionState::Streaming | SessionState::Retrying => self.output_at,
+            SessionState::Tool { .. }
+            | SessionState::Waiting { .. }
+            | SessionState::Jobs
+            | SessionState::Idle => None,
+        };
+        let tool_output_at = match state {
+            SessionState::Tool { .. } => self.tool_output_at,
+            SessionState::Streaming
+            | SessionState::Retrying
+            | SessionState::Waiting { .. }
+            | SessionState::Jobs
+            | SessionState::Idle => None,
+        };
         SessionStatus {
             named: self.name.is_some(),
             name: self
@@ -610,11 +687,18 @@ impl Fold {
             supervised: self.supervised,
             model: self.model.clone(),
             thinking: self.thinking.clone(),
-            state: self.state(),
+            state,
             closing: self.closing,
             since: self.since.unwrap_or_default(),
+            output_at,
+            tool_output_at,
             started: self.started,
             calls: self.calls,
+            repeats: if self.repeat_run >= 2 {
+                Some(self.repeat_run)
+            } else {
+                None
+            },
             turns: Some(self.turns),
             step: self.step.clone(),
             git: self.git.clone(),
@@ -635,6 +719,19 @@ impl Fold {
             clients: self.clients,
         }
     }
+}
+
+/// Whether `kind` is one of the four output deltas the fold admits: the
+/// model's text, reasoning and tool-argument fragments (`output_at`
+/// candidates) and a running tool's output (`tool_call_delta`).
+fn is_output_delta(kind: &str) -> bool {
+    matches!(
+        kind,
+        "assistant_message_delta"
+            | "reasoning_delta"
+            | "tool_call_arguments_delta"
+            | "tool_call_delta"
+    )
 }
 
 /// The text of a turn's first driver message, its text parts in order;
@@ -696,6 +793,28 @@ fn call_step(name: &str, subject: Option<&str>) -> String {
     match subject.filter(|subject| !subject.is_empty()) {
         Some(subject) => one_line(&format!("{name} {subject}")),
         None => one_line(name),
+    }
+}
+
+/// The 10-second gate (`docs/events.md`, `session_status`): the first
+/// output writes immediately, and a later one writes only once it has moved
+/// at least 10 seconds from the value last written. `ts` is milliseconds,
+/// so the step is 10_000.
+fn gate_output(last: &mut Option<u64>, candidate: u64) {
+    if last.is_none_or(|written| candidate >= written + 10_000) {
+        *last = Some(candidate);
+    }
+}
+
+/// The arguments a repeat run compares by: the as-sent value, with a string
+/// holding JSON parsed first, so a whitespace-only JSON difference counts
+/// as the same call while a non-JSON string compares by bytes. The repaired
+/// form is never consulted.
+fn normalize_arguments(arguments: &serde_json::Value) -> serde_json::Value {
+    if let serde_json::Value::String(text) = arguments {
+        serde_json::from_str(text).unwrap_or_else(|_| arguments.clone())
+    } else {
+        arguments.clone()
     }
 }
 

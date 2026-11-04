@@ -108,6 +108,21 @@ fn a_call_with_no_details_and_a_content_argument_shows_it_numbered_from_one() {
 }
 
 #[test]
+fn a_write_whose_details_hold_only_file_seen_shows_its_content_argument() {
+    let call = Call {
+        name: "write".to_owned(),
+        arguments: json!({"content": "w1\nw2"}),
+        ..made_call(
+            Some(json!({"file_seen": {"path": "/w/out.txt", "hash": 7}})),
+            "",
+            "Created /w/out.txt",
+        )
+    };
+    let parts = drawn(&call, 76);
+    assert_eq!(lines(&parts), vec!["        1 w1", "        2 w2"]);
+}
+
+#[test]
 fn a_call_named_write_with_unrecognised_details_shows_content() {
     let call = Call {
         name: "write".to_owned(),

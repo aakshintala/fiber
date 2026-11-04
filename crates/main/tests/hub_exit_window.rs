@@ -22,7 +22,10 @@ use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{HubProc, SessionGuard, Setup, Socket, bounded, connect_hub, run_to_exit, until};
+use support::{
+    HubProc, SessionGuard, Setup, Socket, bounded, connect_hub, run_to_exit, subscribe_as, until,
+    until_after, until_replayed,
+};
 
 /// A session that has run one turn and exited, and a hub that resumes it.
 struct World {
@@ -227,18 +230,46 @@ impl World {
             return;
         }
         assert_eq!(ack["kind"], "command_accepted", "{ack}");
+        // The acknowledgement bounds the exit wait below: the fold's
+        // replayed exits stay behind the close's answer, and only a live
+        // exit ends it (`docs/invocation.md`, "What each command does").
+        let last_seq = ack["payload"]["result"]["last_seq"].as_u64();
+        let since = support::Subscribed {
+            ack,
+            last_seq,
+            session: Some(self.id.clone()),
+        };
         last.send(&close_as("c_finish", &self.id));
-        // Consumed in order, so nothing before the close's answer is kept:
-        // the fold's replayed exits stay behind, and the exit waited for
-        // follows the close.
-        let mut closed = until(&last, "the close acknowledgement", |line| {
-            is_answer(line, "c_finish")
-        });
-        let ack = closed.pop().expect("the acknowledgement ends the wait");
+        // Both signals are collected as a set: no doc orders the close
+        // acknowledgement against `fiber_exited` (`docs/testing.md`,
+        // "Event streams"), so the wait ends when both have arrived,
+        // whichever comes first. One `until_after` bounds the whole wait
+        // (`docs/testing.md`, "Waits and timeouts"), and the replay bound
+        // in `since` keeps the fold's replayed exits from ending it.
+        let mut saw_ack = false;
+        let mut saw_exited = false;
+        let both = until_after(
+            &last,
+            &since,
+            "the close acknowledgement and the close-caused exit",
+            |line| {
+                if is_answer(line, "c_finish") {
+                    saw_ack = true;
+                }
+                if line["kind"] == "fiber_exited" {
+                    saw_exited = true;
+                }
+                saw_ack && saw_exited
+            },
+        );
+        let ack = answers(&both, "c_finish")
+            .pop()
+            .expect("the close acknowledgement arrives");
         assert_eq!(ack["kind"], "command_accepted", "{ack}");
-        until(&last, "the session's exit after the close", |line| {
-            line["kind"] == "fiber_exited"
-        });
+        assert!(
+            both.iter().any(|line| line["kind"] == "fiber_exited"),
+            "the close-caused exit arrives: {both:?}"
+        );
     }
 
     fn finish(self) {
@@ -311,17 +342,6 @@ impl Drop for World {
 
 fn command(id: &str, session: &str, command: &str, args: &Value) -> String {
     json!({"id": id, "session_id": session, "command": command, "args": args}).to_string()
-}
-
-fn subscribe(client: &Socket, id: &str, session: &str) {
-    client.send(&command(
-        id,
-        session,
-        "subscribe",
-        &json!({"level": "full"}),
-    ));
-    let ack = support::recv_answer(client, id, "the subscribe acknowledgement");
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
 }
 
 fn import(id: &str, session: &str) -> String {
@@ -527,14 +547,14 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    let first_sub = subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
     let held = world.session_pids();
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    let second_sub = subscribe_as(&second, "c_sub2", &id);
     // The prompt runs its turn on the free connection before the close, so
     // no command straddles the quiesce reader stop: a line the reader reads
     // after the close is answered `closing` at once, on a path with no
@@ -554,7 +574,7 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     // order": every line a session reads gets exactly one answer on its
     // connection before the session shuts it).
     let mut second_lines = vec![prompted, closing];
-    second_lines.extend(until(&second, "fiber_exited", |line| {
+    second_lines.extend(until_after(&second, &second_sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     }));
     // One answer for each command the session read (`docs/invocation.md`,
@@ -572,7 +592,7 @@ fn a_command_released_inside_the_close_grace_is_accepted_before_fiber_exited() {
     // The released answer streams before the exit line: both reach the
     // command's own connection in the order the session wrote them.
     let mut lines = until(&first, "c_q's answer", |line| is_answer(line, "c_q"));
-    lines.extend(until(&first, "fiber_exited", |line| {
+    lines.extend(until_after(&first, &first_sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     }));
     first.send(&command("c_after", &id, "tools", &json!({})));
@@ -623,7 +643,7 @@ fn a_crash_with_a_sent_unanswered_command_rejects_it_indeterminate_and_never_run
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
@@ -687,7 +707,7 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
     let world = World::new(3);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
@@ -697,9 +717,9 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
     first.send(&prompt("c_p", &id, "two"));
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    let second_sub = subscribe_as(&second, "c_sub2", &id);
     second.send(&close(&id));
-    until(&second, "fiber_exited", |line| {
+    until_after(&second, &second_sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     world.await_socket_absent();
@@ -711,7 +731,7 @@ fn a_command_rerouted_once_is_rejected_closing_when_the_resumed_run_also_ends() 
     let resumed = world.session_pids();
     assert_eq!(resumed.len(), 1, "one resumed run: {resumed:?}");
     let third = world.client();
-    subscribe(&third, "c_sub3", &id);
+    subscribe_as(&third, "c_sub3", &id);
     third.send(&close(&id));
     // The loop accepts the close before it quiesces: releasing now lets
     // the held import finish inside the quiesce grace, so the resumed run
@@ -768,7 +788,7 @@ fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
@@ -777,9 +797,9 @@ fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
     drop(first);
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    let second_sub = subscribe_as(&second, "c_sub2", &id);
     second.send(&close(&id));
-    until(&second, "fiber_exited", |line| {
+    until_after(&second, &second_sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     world.await_socket_absent();
@@ -788,13 +808,13 @@ fn a_client_that_disconnects_in_the_window_has_nothing_rerouted() {
 
     // A later subscribe resumes the session: it finds no turn waiting.
     let third = world.client();
-    subscribe(&third, "c_sub3", &id);
+    let third_sub = subscribe_as(&third, "c_sub3", &id);
     third.send(&close(&id));
     // Read the close's answer: it proves the session heard this close
     // before `finish` sends its own, so the two never race.
     let closing = support::recv_answer(&third, "c_close", "the closing command");
     assert_eq!(closing["kind"], "command_accepted", "{closing}");
-    until(&third, "fiber_exited", |line| {
+    until_after(&third, &third_sub, "fiber_exited", |line| {
         line["kind"] == "fiber_exited"
     });
     let log = world.log();
@@ -813,14 +833,14 @@ fn a_command_held_past_the_close_grace_is_rejected_indeterminate_once_and_not_re
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
     let held = world.session_pids();
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    subscribe_as(&second, "c_sub2", &id);
     second.send(&close(&id));
     // Never released: the grace passes with the command still running.
     let lines = until(&first, "the cut answer for c_q", |line| {
@@ -867,7 +887,7 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();
@@ -875,7 +895,7 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
     assert!(!held.is_empty(), "the held run is a session process");
 
     let second = world.client();
-    subscribe(&second, "c_sub2", &id);
+    let second_sub = subscribe_as(&second, "c_sub2", &id);
     second.send(&close(&id));
     // Both signals are collected as a set: no doc orders the close
     // acknowledgement against `fiber_exited` (`docs/testing.md`,
@@ -885,8 +905,9 @@ fn a_full_subscribe_in_the_post_close_exit_window_resumes_while_the_log_exists()
     // log checks below prove the close-caused teardown happened.
     let mut saw_ack = false;
     let mut saw_exited = false;
-    let both = until(
+    let both = until_after(
         &second,
+        &second_sub,
         "the close acknowledgement and the close-caused exit",
         |line| {
             if is_answer(line, "c_close") {
@@ -973,7 +994,7 @@ fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     // Resume past the ask run's exit so the session idles: the probe's
     // close then causes a fresh exit of its own.
     first.send(&command("c_after", &id, "tools", &json!({})));
@@ -983,7 +1004,7 @@ fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
     let running = world.session_pids();
     assert!(!running.is_empty(), "the resumed run is a session process");
     let probe = world.client();
-    subscribe(&probe, "c_probe_sub", &id);
+    let probe_sub = subscribe_as(&probe, "c_probe_sub", &id);
     probe.send(&close(&id));
     // Both signals are collected as a set: no doc orders the close
     // acknowledgement against `fiber_exited` (`docs/testing.md`,
@@ -993,8 +1014,9 @@ fn a_finish_after_the_exited_session_is_removed_sends_no_second_close() {
     // prove the close-caused teardown happened.
     let mut saw_ack = false;
     let mut saw_exited = false;
-    let both = until(
+    let both = until_after(
         &probe,
+        &probe_sub,
         "the close acknowledgement and the close-caused exit",
         |line| {
             if is_answer(line, "c_close") {
@@ -1033,7 +1055,7 @@ fn a_finish_without_a_close_leaves_no_session_running() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     // Resume the session so it runs idle past the ask run's exit.
     first.send(&command("c_after", &id, "tools", &json!({})));
     until(&first, "c_after's acknowledgement", |line| {
@@ -1042,9 +1064,10 @@ fn a_finish_without_a_close_leaves_no_session_running() {
     let running = world.session_pids();
     assert!(!running.is_empty(), "the resumed session is still running");
     let probe = world.client();
-    subscribe(&probe, "c_probe_sub", &id);
-    until(
+    let probe_sub = subscribe_as(&probe, "c_probe_sub", &id);
+    until_replayed(
         &probe,
+        &probe_sub,
         "the replayed exit while the session is live",
         |line| line["kind"] == "fiber_exited" && world.session_pids() == running,
     );
@@ -1063,7 +1086,7 @@ fn a_test_that_ends_early_leaves_no_session_running() {
     let world = World::new(2);
     let id = world.id.clone();
     let first = world.client();
-    subscribe(&first, "c_sub", &id);
+    subscribe_as(&first, "c_sub", &id);
     world.hold_imports();
     first.send(&import("c_q", &id));
     let writer = world.await_import();

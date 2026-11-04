@@ -14,6 +14,24 @@ use super::{
 };
 
 #[test]
+fn keeper_is_hidden_and_requires_a_minted_session_id() {
+    assert!(
+        matches!(parse_from(["fiber", "keeper", "--id", "s_0123456789abcdef"]),
+        Invocation::Run(Some(Commands::Keeper { id }), _) if id == "s_0123456789abcdef")
+    );
+    assert!(matches!(
+        parse_from(["fiber", "keeper", "--id", "../bad"]),
+        Invocation::Usage { .. }
+    ));
+    assert!(
+        command()
+            .find_subcommand("keeper")
+            .expect("keeper")
+            .is_hide_set()
+    );
+}
+
+#[test]
 fn hub_list_commands_and_client_flags_parse() {
     for args in [
         vec!["fiber", "hub", "add", "box", "ws://box"],
@@ -3811,7 +3829,7 @@ fn synopses_come_from_command_tables_only() {
 #[test]
 fn doc_synopses_are_the_commands_section() {
     let synopses = doc_synopses();
-    assert_eq!(synopses.len(), 46);
+    assert_eq!(synopses.len(), 47);
     assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
     assert_eq!(
         synopses[1],
@@ -4356,6 +4374,10 @@ fn session_argv_round_trips_repeated_added_roots() {
     assert_same_session(&round_tripped(&args), &args);
 }
 
+/// Synopses of built commands whose doc row names a flag the parser does
+/// not build yet; the build ticket (#3782) removes the entry.
+const UNBUILT_SYNOPSES: [&str; 1] = ["sessions [--all] [--archived] [--json]"];
+
 /// The Command column of `docs/invocation.md` is the synopsis, so the
 /// help menu holds each built command's row word for word. Rows the
 /// parser does not build name future commands, not drift.
@@ -4370,6 +4392,10 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
             unbuilt.push(command_path(&synopsis).join(" "));
             continue;
         }
+        if UNBUILT_SYNOPSES.contains(&synopsis.as_str()) {
+            unbuilt.push(synopsis);
+            continue;
+        }
         if !fields.iter().any(|field| *field == synopsis) {
             missing.push(synopsis);
         }
@@ -4379,7 +4405,14 @@ fn every_built_command_synopsis_in_the_doc_matches_the_menu() {
         "these doc synopses are not in the menu: {missing:?}"
     );
     unbuilt.sort();
-    assert_eq!(unbuilt, ["mcp serve"]);
+    assert_eq!(
+        unbuilt,
+        [
+            "mcp serve",
+            "sessions [--all] [--archived] [--json]",
+            "sessions archive"
+        ]
+    );
 }
 
 /// The session-host list beside the enum names exactly the variants that

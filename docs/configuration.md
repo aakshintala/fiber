@@ -535,6 +535,7 @@ holds what `docs/extensions.md` ("What a package holds") lists:
   "replaces": ["web_search"],
   "providers": { "acme": ["https://api.acme.dev/v1"] },
   "commands": { "acme-status": { "description": "Show the Acme sync state", "argument_hint": "[project]" } },
+  "tui": { "session_versions": { "min": "v1.2.0", "before": "v2.0.0" } },
   "prompt": "prompt.md",
   "secrets": ["acme.api_key"],
   "opening": {
@@ -551,9 +552,7 @@ major version it was written for; Fiber loads it only when that is Fiber's own
 a process extension, and `exit_timeout_ms` has no default. Its `program` follows the same rule as a Lua `host.exec` program: a path containing `/` that is not absolute resolves against the package directory and must stay inside it, a bare name resolves on `PATH`, and an absolute path is used as written. A Lua extension's
 entry script is `init.lua` at the top of its directory; its provider's Lua is
 `providers/<name>.lua`. Each `providers` key must be one filename, not a path.
-A TUI extension's entry script is `tui/init.lua`. Its manifest declares
-`tui.session_versions`, the session-half version range the TUI extension
-works with (`docs/extensions.md`, "Client halves"); an install reads the range without running Lua, and refuses a range with a missing `min`, a value that is not a version tag, or `before` at or below `min`.
+A TUI extension's entry script is `tui/init.lua`. Its manifest declares `tui.session_versions`, the session-half version range the TUI extension works with (`docs/extensions.md`, "Client halves"). The range is an object: `min` is required and inclusive, `before` is optional and exclusive, and both are version tags in the form `docs/extensions.md`, "Versions", uses (`v1.4.0`) that compare as SemVer. With no `before`, the range has no upper bound. A session half's version `v` is in the range when `min <= v`, and also `v < before` when `before` is given. Any other version follows "Client halves": the client half is inert for that session, the built-in draws, and one notice names the extension and both versions. An install reads the range without running Lua, and refuses a range with a missing `min`, a value that is not a version tag, or `before` at or below `min`.
 `memory_mib` raises a
 Lua extension's memory cap, in MiB, above the default of 1
 (`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `replaces`

@@ -88,7 +88,7 @@ fn conflicting_rows_stay_builtin_and_configured_winner_draws() {
                     && grid.contents.contains("alpha, beta")
                     && !grid.contents.contains("ALPHA-ROW")
                     && !grid.contents.contains("BETA-ROW")
-                    // docs/tui.md:2757: one command_conflict per slot and set of contenders.
+                    // `docs/tui.md`, "When two extensions want one slot": one command_conflict per slot and set of contenders.
                     && grid.contents.matches("command_conflict").count() == 1
             }
         });
@@ -112,7 +112,7 @@ fn session_gate_event_keeps_builtin_and_names_both_versions_once() {
             && grid.contents.contains("TUI v3.0.0")
             && grid.contents.contains("session half v3.0.0")
             && !grid.contents.contains("INELIGIBLE-ROW")
-            // docs/tui.md:2678: one extension_incompatible per extension and version.
+            // `docs/tui.md`, "How a TUI extension runs": one extension_incompatible per extension and version.
             && grid.contents.matches("extension_incompatible").count() == 1
     });
     quit(run);
@@ -168,7 +168,7 @@ fn timeout_handoff_never_reuses_the_disabled_winners_cached_row() {
     install(&setup, "beta", &source("BETA-REPLACEMENT"), None);
     let mut run = turn(&setup);
     run.wait_screen("timeout hands cached X to surviving B", |grid| {
-        // docs/tui.md:2740: the timeout switches the extension off, so both rows leave it for the surviving contender.
+        // `docs/tui.md`, "When an extension fails": the timeout switches the extension off, so both rows leave it for the surviving contender.
         grid.contents.matches("BETA-REPLACEMENT").count() == 2
             && !grid.contents.contains("ALPHA-CACHED")
             && grid.contents.contains("extension_failed")
@@ -190,7 +190,7 @@ fn load_failure_is_already_visible_in_the_first_frame() {
     let first = parser.screen().contents();
     assert!(first.contains("extension_failed"), "{first}");
     assert!(first.contains("first-frame-fixture"), "{first}");
-    // docs/tui.md:1233: an event notice reports its failure once.
+    // `docs/tui.md`, "Notices": an event notice reports its failure once.
     assert_eq!(first.matches("extension_failed").count(), 1);
     quit(run);
 }
@@ -210,7 +210,7 @@ fn renderer_timeout_switches_off_with_one_extension_notice() {
             && grid.contents.contains("extension_failed")
             && grid.contents.contains("slow")
             && !grid.contents.contains("hook_failed")
-            // docs/tui.md:2740: a timeout switches the extension off with one notice.
+            // `docs/tui.md`, "When an extension fails": a timeout switches the extension off with one notice.
             && grid.contents.matches("extension_failed").count() == 1
     });
     quit(run);
@@ -235,7 +235,7 @@ fn configured_malformed_contender_is_named_in_the_hook_notice() {
                 .contains("extension alpha could not draw ledger_row")
             && !grid.contents.contains("TUI extensions")
             && !grid.contents.contains("BETA-ROW")
-            // docs/tui.md:2734: one hook_failed per extension and slot.
+            // `docs/tui.md`, "When an extension fails": one hook_failed per extension and slot.
             && grid.contents.matches("hook_failed").count() == 1
     });
     quit(run);
@@ -352,12 +352,11 @@ fn reduced_motion_draws_the_animated_still_frame() {
         None,
     );
     let mut run = turn(&setup);
-    // docs/tui.md:3007: under reduced motion the terminal draws frame 0
+    // `docs/tui.md`, "Animation": under reduced motion the terminal draws frame 0
     // once and makes no animation calls.
-    run.wait_screen("animated still frame", |grid| {
+    let grid = run.wait_screen("animated still frame", |grid| {
         grid.contents.contains("ANIM-FRAME-0")
     });
-    let grid = run.screen();
     assert!(grid.contents.contains("ANIM-FRAME-0"), "{}", grid.contents);
     assert_eq!(
         grid.contents.matches("ANIM-FRAME-").count(),
@@ -382,7 +381,7 @@ fn renderer_error_draws_builtin_and_one_hook_notice() {
         grid.contents.contains("builtin-marker")
             && grid.contents.contains("hook_failed")
             && grid.contents.contains("broken")
-            // docs/tui.md:2734: one hook_failed per extension and slot.
+            // `docs/tui.md`, "When an extension fails": one hook_failed per extension and slot.
             && grid.contents.matches("hook_failed").count() == 1
     });
     quit(run);

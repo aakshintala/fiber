@@ -95,7 +95,7 @@ fn row_text(buf: &Buffer, y: u16, width: u16) -> String {
         .collect()
 }
 
-/// Enter is the single focused choice (`docs/tui.md:1957–1959`).
+/// Enter is the single focused choice (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_names_the_approval_wait_with_enter_barred() {
     let mut app = home(80, 24, "s_aaaaaaaaaaaaaaaa");

@@ -90,6 +90,9 @@ pub(in crate::app) struct SessionViews {
     figures: Option<changed_files_view::NumstatAnswer>,
     hooks_request: Option<String>,
     hooks_rows: Option<Vec<contract::events::HookInfo>>,
+    /// The remote Changed files copy the editor holds: fetched from the
+    /// hub file on Ctrl+G, written back when the editor returns.
+    copy: Option<crate::remote::RemoteCopy>,
 }
 
 impl App {
@@ -219,6 +222,7 @@ impl App {
             false,
         )
         .to_string();
+        self.outbox.wait(&id, super::Waiting::Figures);
         self.session_views.figures_request = Some(id);
         Effect::Send(vec![line])
     }
@@ -228,18 +232,23 @@ impl App {
     /// list and the Enter rank share this, so rows and fetching
     /// always agree.
     fn displayed_figures(&self) -> changed_files_view::ResolvedFigures {
+        // The viewed workspace names the hub workspace on a remote
+        // terminal, whose card holds hub workspace paths.
+        let viewed = self.workspace();
         match self.session_views.figures.as_ref() {
             Some(answer) => changed_files_view::resolve_figures(
                 self.panel_state.changes(),
                 Some(answer.raw.as_str()),
                 &answer.lines,
                 self.workspace_root(),
+                viewed.as_deref(),
             ),
             None => changed_files_view::resolve_figures(
                 self.panel_state.changes(),
                 None,
                 &std::collections::BTreeMap::new(),
                 self.workspace_root(),
+                viewed.as_deref(),
             ),
         }
     }
@@ -566,15 +575,11 @@ impl App {
                 } else {
                     *list
                 };
-                let remote = self.home.as_ref().is_some_and(|home| {
-                    matches!(&home.launch.location, crate::LaunchLocation::Remote { .. })
-                });
                 Some(changed_files_view::frame(
                     self.panel_state.changes(),
                     Some(&self.displayed_figures()),
                     chosen,
                     list,
-                    remote,
                 ))
             }
             Open::ReleaseNotes(list) => {
@@ -650,27 +655,76 @@ impl App {
         matches!(self.session_views.open, Some(Open::Files(_)))
     }
 
-    /// The Changed files file Ctrl+G opens, with its first line: the
-    /// selected row at line 1 from the list, the shown file at its first
-    /// hunk's new-side start from the diff, or line 1 with no hunk. None
-    /// with no Files view open, no selected row, or no local workspace: a
-    /// remote terminal's files live on the hub, past no hub operation.
-    pub(in crate::app) fn changed_file_for_editor(&self) -> Option<(PathBuf, u64)> {
+    /// The Changed files selection for the editor: the workspace-relative
+    /// path with its first line. The selected row reads line 1 from the
+    /// list, the shown file its first hunk's new-side start from the
+    /// diff, or line 1 with no hunk. None with no Files view open or no
+    /// selected row.
+    pub(in crate::app) fn changed_file_selection(&self) -> Option<(String, u64)> {
         let Some(Open::Files(list)) = self.session_views.open.as_ref() else {
             return None;
         };
-        let root = self.workspace_root()?;
         match self.session_views.diff.as_ref() {
             Some((path, Diff::Lines { lines, .. })) => {
-                Some((root.join(path), changed_files_view::first_hunk_line(lines)))
+                Some((path.clone(), changed_files_view::first_hunk_line(lines)))
             }
-            Some((path, _)) => Some((root.join(path), 1)),
+            Some((path, _)) => Some((path.clone(), 1)),
             None => {
                 let displayed = self.displayed_figures();
                 let (path, _, _) = changed_files_view::ranked(&displayed.figures)
                     .get(list.selected())
                     .copied()?;
-                Some((root.join(path), 1))
+                Some((path.to_owned(), 1))
+            }
+        }
+    }
+
+    /// The Changed files file Ctrl+G opens on a local terminal, with its
+    /// first line: the selection below the local launch workspace. None
+    /// with no Files view open, no selected row, or no local workspace.
+    pub(in crate::app) fn changed_file_for_editor(&self) -> Option<(PathBuf, u64)> {
+        let root = self.workspace_root()?;
+        let (path, line) = self.changed_file_selection()?;
+        Some((root.join(path), line))
+    }
+
+    /// Ctrl+G on Changed files on a remote terminal: fetches the hub file
+    /// at the session's workspace and opens a temporary copy in the
+    /// editor, at the selection's first line. The copy waits in the
+    /// holder for the editor's return. A fetch or copy failure is the
+    /// notice and nothing opens, as is no selection or no workspace.
+    pub(in crate::app) fn open_remote_changed_file(&mut self) -> Effect {
+        let Some(remote) = self.remote() else {
+            return Effect::None;
+        };
+        let Some((relative, line)) = self.changed_file_selection() else {
+            return Effect::None;
+        };
+        let Some(workspace) = self.workspace() else {
+            self.push_notice("io_failed", super::config_views::UNAVAILABLE.to_owned());
+            return Effect::None;
+        };
+        let hub = workspace.join(&relative);
+        let (text, version) =
+            match remote.fetch_workspace_file(&workspace, std::path::Path::new(&relative)) {
+                Ok(fetched) => fetched,
+                Err(error) => {
+                    self.push_notice("io_failed", error.message);
+                    return Effect::None;
+                }
+            };
+        match crate::remote::RemoteCopy::create(&std::env::temp_dir(), &hub, &text, version) {
+            Ok(copy) => {
+                let temp = copy.temp.clone();
+                self.session_views.copy = Some(copy);
+                Effect::OpenFile(crate::editor::OpenFile {
+                    path: temp,
+                    line: Some(line),
+                })
+            }
+            Err(error) => {
+                self.push_notice("io_failed", error.to_string());
+                Effect::None
             }
         }
     }
@@ -681,34 +735,83 @@ impl App {
     /// to send, the diff line then the figures line. An error is the
     /// notice, and the re-read still runs while the view is open; with
     /// the view closed, or a path outside the workspace, nothing is sent.
+    /// A returned remote copy writes back to its hub file first, so the
+    /// edit lands on the hub: only while the file still has the fetched
+    /// version, else the file stays unwritten with the changed-file
+    /// notice, and the re-read still runs.
     pub(crate) fn changed_file_closed(
         &mut self,
         path: &std::path::Path,
         result: Result<(), String>,
     ) -> Vec<String> {
-        if let Err(message) = result {
-            self.push_notice("io_failed", message);
+        if let Err(message) = &result {
+            self.push_notice("io_failed", message.clone());
         }
+        let remote_relative = self.close_remote_copy(path, result.is_ok());
         if !self.changed_files_open() {
             return Vec::new();
         }
-        let Some(root) = self.workspace_root().map(|root| root.to_path_buf()) else {
-            return Vec::new();
-        };
-        let Ok(relative) = path.strip_prefix(&root) else {
-            return Vec::new();
-        };
-        let Some(path) = relative.to_str() else {
-            return Vec::new();
+        let relative = match remote_relative {
+            Some(relative) => relative,
+            None => match self.workspace_root().map(|root| root.to_path_buf()) {
+                Some(root) => match path.strip_prefix(&root).ok().and_then(|path| path.to_str()) {
+                    Some(path) => path.to_owned(),
+                    None => return Vec::new(),
+                },
+                None => return Vec::new(),
+            },
         };
         let mut lines = Vec::new();
-        if let Effect::Send(mut diff) = self.send_diff_request(path) {
+        if let Effect::Send(mut diff) = self.send_diff_request(&relative) {
             lines.append(&mut diff);
         }
         if let Effect::Send(mut figures) = self.send_figures_request() {
             lines.append(&mut figures);
         }
         lines
+    }
+
+    /// Takes a returned remote Changed files copy off the holder: with a
+    /// clean editor return its text writes back to the hub file, but only
+    /// while the file still has the fetched version. A hub-side edit in
+    /// between leaves the file unwritten with the hub's message as the
+    /// notice. Returns the hub-relative path for the reread, or None when
+    /// `path` is not the open copy or nothing addresses it.
+    fn close_remote_copy(&mut self, path: &std::path::Path, write: bool) -> Option<String> {
+        let held = self.session_views.copy.as_ref()?;
+        if held.temp != path {
+            return None;
+        }
+        let copy = self.session_views.copy.take()?;
+        let workspace = self.workspace();
+        let relative = workspace.as_ref().and_then(|workspace| {
+            copy.hub
+                .strip_prefix(workspace)
+                .ok()
+                .and_then(|relative| relative.to_str())
+                .map(str::to_owned)
+        });
+        if write
+            && let (Some(workspace), Some(relative)) = (workspace, relative.clone())
+            && let Some(remote) = self.remote()
+        {
+            let written = std::fs::read_to_string(&copy.temp)
+                .map_err(|error| error.to_string())
+                .and_then(|text| {
+                    remote
+                        .store_workspace_file(
+                            &workspace,
+                            std::path::Path::new(&relative),
+                            &text,
+                            &copy.version,
+                        )
+                        .map_err(|error| error.message)
+                });
+            if let Err(message) = written {
+                self.push_notice("io_failed", message);
+            }
+        }
+        relative
     }
 
     /// Starts the selected file's diff request, or leaves an empty list when
@@ -746,6 +849,7 @@ impl App {
             false,
         )
         .to_string();
+        self.outbox.wait(&id, super::Waiting::Diff);
         self.session_views.request = Some((id, path.to_owned()));
         self.session_views.diff = Some((path.to_owned(), Diff::Reading));
         self.session_views.diff_list = List::default();
@@ -754,7 +858,11 @@ impl App {
 
     /// Folds one line from the attached session into the session views,
     /// returning the call view's follow-up fetch lines.
-    pub(in crate::app) fn session_views_line(&mut self, envelope: &Envelope) -> Vec<String> {
+    pub(in crate::app) fn session_views_line(
+        &mut self,
+        envelope: &Envelope,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> Vec<String> {
         self.session_views.rate.fold(envelope);
         self.session_views.context.fold(envelope);
         match envelope.kind.as_str() {
@@ -784,22 +892,66 @@ impl App {
             }
             "command_accepted" => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
-                    // A pending fork attaches before any open view
-                    // handles the answer: opening another view resets
-                    // the rewind view, not the fork.
-                    if self.fork_pending.as_ref() == Some(&accepted.command_id)
-                        && let Some(lines) = self.rewind_send_accepted(&accepted)
-                    {
-                        return lines;
+                    match answer.and_then(|answer| answer.waiting.as_ref()) {
+                        Some(waiting @ (super::Waiting::Fork | super::Waiting::RewindSend)) => {
+                            return self
+                                .rewind_send_accepted(&accepted, waiting)
+                                .unwrap_or_default();
+                        }
+                        Some(super::Waiting::RewindHistory) => {
+                            return self.rewind_answered(envelope, &accepted);
+                        }
+                        Some(super::Waiting::Dismiss(_)) => return Vec::new(),
+                        Some(super::Waiting::ChangeWorkspace(_)) => return Vec::new(),
+                        Some(super::Waiting::ClearStart) => return Vec::new(),
+                        Some(super::Waiting::ClearClose) => return Vec::new(),
+                        Some(super::Waiting::History) => return Vec::new(),
+                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::Sessions) => return Vec::new(),
+                        Some(super::Waiting::Abandoned) => return Vec::new(),
+                        Some(
+                            super::Waiting::Directories
+                            | super::Waiting::Subscribe
+                            | super::Waiting::Stop
+                            | super::Waiting::Delete
+                            | super::Waiting::OfferImport
+                            | super::Waiting::DeleteDiscovery
+                            | super::Waiting::DeleteStop
+                            | super::Waiting::DeleteFinal
+                            | super::Waiting::Feed
+                            | super::Waiting::Recent
+                            | super::Waiting::Close,
+                        ) => return Vec::new(),
+                        Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
+                            self.outbox.settled(accepted.command_id.0.as_str());
+                            self.session_views_answered(&accepted);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::Hooks) => {
+                            self.outbox.settled(accepted.command_id.0.as_str());
+                            self.hooks_answered(&accepted);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::ArtifactPage) => {
+                            self.outbox.settled(accepted.command_id.0.as_str());
+                            return self.call_view_answered(&accepted);
+                        }
+                        Some(
+                            super::Waiting::Branch
+                            | super::Waiting::Quota
+                            | super::Waiting::ConfigAsk
+                            | super::Waiting::Credentials
+                            | super::Waiting::CredentialSwitch
+                            | super::Waiting::ProposeNotes
+                            | super::Waiting::JobStop
+                            | super::Waiting::JobInput,
+                        ) => return Vec::new(),
+                        None => {}
                     }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
                         return self.call_view_answered(&accepted);
-                    }
-                    if matches!(self.session_views.open, Some(Open::Rewind(_))) {
-                        if let Some(lines) = self.rewind_send_accepted(&accepted) {
-                            return lines;
-                        }
-                        return self.rewind_answered(envelope, &accepted);
                     }
                     if matches!(self.session_views.open, Some(Open::Hooks(_))) {
                         self.hooks_answered(&accepted);
@@ -810,16 +962,80 @@ impl App {
             }
             "command_rejected" => {
                 if let Some(rejected) = super::read!(envelope, CommandRejected) {
-                    // A pending fork's refusal shows as a notice before
-                    // any open view folds it: opening another view resets
-                    // the rewind view, not the fork.
-                    if self.rewind_fork_refused(&rejected) {
-                        return Vec::new();
+                    match answer.and_then(|answer| answer.waiting.as_ref()) {
+                        Some(super::Waiting::Fork) => {
+                            self.rewind_fork_refused(&rejected);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::RewindSend) => {
+                            self.rewind_refused(&rejected);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::RewindHistory) => {
+                            self.rewind_refused(&rejected);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::Dismiss(_)) => return Vec::new(),
+                        Some(super::Waiting::ChangeWorkspace(_)) => return Vec::new(),
+                        Some(super::Waiting::ClearStart) => return Vec::new(),
+                        Some(super::Waiting::ClearClose) => return Vec::new(),
+                        Some(super::Waiting::History) => return Vec::new(),
+                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::Sessions) => return Vec::new(),
+                        Some(super::Waiting::Abandoned) => return Vec::new(),
+                        Some(
+                            super::Waiting::Directories
+                            | super::Waiting::Subscribe
+                            | super::Waiting::Stop
+                            | super::Waiting::Delete
+                            | super::Waiting::OfferImport
+                            | super::Waiting::DeleteDiscovery
+                            | super::Waiting::DeleteStop
+                            | super::Waiting::DeleteFinal
+                            | super::Waiting::Feed
+                            | super::Waiting::Recent
+                            | super::Waiting::Close,
+                        ) => return Vec::new(),
+                        Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
+                            let Some(id) = rejected.command_id.as_ref() else {
+                                return Vec::new();
+                            };
+                            self.outbox.settled(id.0.as_str());
+                            self.session_views_rejected(&rejected);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::Hooks) => {
+                            let Some(id) = rejected.command_id.as_ref() else {
+                                return Vec::new();
+                            };
+                            self.outbox.settled(id.0.as_str());
+                            self.hooks_refused(&rejected);
+                            return Vec::new();
+                        }
+                        Some(super::Waiting::ArtifactPage) => {
+                            let Some(id) = rejected.command_id.as_ref() else {
+                                return Vec::new();
+                            };
+                            self.outbox.settled(id.0.as_str());
+                            self.call_view_refused(&rejected);
+                            return Vec::new();
+                        }
+                        Some(
+                            super::Waiting::Branch
+                            | super::Waiting::Quota
+                            | super::Waiting::ConfigAsk
+                            | super::Waiting::Credentials
+                            | super::Waiting::CredentialSwitch
+                            | super::Waiting::ProposeNotes
+                            | super::Waiting::JobStop
+                            | super::Waiting::JobInput,
+                        ) => return Vec::new(),
+                        None => {}
                     }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
                         self.call_view_refused(&rejected);
-                    } else if matches!(self.session_views.open, Some(Open::Rewind(_))) {
-                        self.rewind_refused(&rejected);
                     } else if matches!(self.session_views.open, Some(Open::Hooks(_))) {
                         self.hooks_refused(&rejected);
                     } else {
@@ -886,12 +1102,14 @@ impl App {
         }
         let raw = body.to_owned();
         let parsed = changed_files_view::parse_numstat(&raw);
+        let viewed = self.workspace();
         let omitted: Vec<&str> = self
             .panel_state
             .changes()
             .keys()
             .filter(|path| {
-                changed_files_view::lookup(&parsed, path, self.workspace_root()).is_none()
+                changed_files_view::lookup(&parsed, path, self.workspace_root(), viewed.as_deref())
+                    .is_none()
             })
             .map(String::as_str)
             .collect();
@@ -957,6 +1175,7 @@ impl App {
         }
         let id = super::mint();
         let line = super::session_command(&id, "hooks", &session, None).to_string();
+        self.outbox.wait(&id, super::Waiting::Hooks);
         self.session_views.hooks_request = Some(id);
         Effect::Send(vec![line])
     }
@@ -989,6 +1208,15 @@ impl App {
             return;
         }
         self.session_views.hooks_request = None;
+    }
+
+    /// A hub `command_rejected` for the pending `hooks` query drops the
+    /// wait before its tag settles: the view keeps showing what it holds,
+    /// if anything, and a late session answer finds no entry.
+    pub(in crate::app) fn hooks_hub_refused(&mut self, id: &str) {
+        if self.session_views.hooks_request.as_deref() == Some(id) {
+            self.session_views.hooks_request = None;
+        }
     }
 
     /// Moves the open rewind view's list to `at`: the fold's selection.

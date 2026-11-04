@@ -17,6 +17,7 @@ mod fifo;
 mod finished;
 mod gated_http;
 mod handoff;
+mod hold;
 pub(crate) mod http_server;
 mod jig_start;
 pub mod jobs;
@@ -65,6 +66,7 @@ pub mod git;
 /// for integration tests, which reach only the public wrappers.
 #[doc(hidden)]
 pub use handoff::no_note;
+pub use hold::Hold;
 pub use http_server::server::DropProbe;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_extension::ProcessFixture;

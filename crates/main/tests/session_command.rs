@@ -27,7 +27,7 @@ use serde_json::{Value, json};
 use support::{
     Deadline, KillGroup, PIXEL, PIXEL_BASE64, Setup, assert_kinds_multiset,
     assert_session_process_boundaries, complete_lines, function_call, git, hello, kinds, stream,
-    text_reply, write_json,
+    text_reply, wait_for_effect_after_accept, write_json,
 };
 
 impl Setup {
@@ -1626,9 +1626,20 @@ fn skills_answer(client: &Socket) -> (Vec<Value>, Value) {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(client, r#"{"id":"c_skills","command":"skills"}"#);
-    let lines = until_session(client, "the skills answer", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_skills"
-    });
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the skills answer",
+        "c_skills",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
     let result = lines.last().unwrap()["payload"]["result"].clone();
     (lines, result)
 }
@@ -1641,9 +1652,20 @@ fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until_session(client, "the commands answer", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
-    });
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the commands answer",
+        "c_cmds",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
     let result = lines.last().unwrap()["payload"]["result"].clone();
     (lines, result)
 }

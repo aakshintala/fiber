@@ -1018,6 +1018,36 @@ fn a_limit_stop_says_what_its_line_says() {
 }
 
 #[test]
+fn detached_argument_errors_name_the_argument() {
+    for (error, message) in [
+        (
+            ShellError::DetachAlone,
+            "`detach` cannot be combined with `run_in_background`, `tty` or `monitor`.",
+        ),
+        (
+            ShellError::DetachTimeout,
+            "`detach` takes no `timeout_ms`: Fiber never stops a detached command.",
+        ),
+        (
+            ShellError::DetachConfined,
+            "`detach` runs unconfined: leave `unconfined` out or give true.",
+        ),
+        (
+            ShellError::NoDetach,
+            "Detached commands are not available in this session.",
+        ),
+    ] {
+        assert_eq!(error.code(), ErrorCode::InvalidArguments);
+        assert_eq!(error.to_string(), message);
+        // The named error maps to `InvalidArguments` like any other
+        // argument failure.
+        let root = ToolError::from(error);
+        assert_eq!(root.code(), ErrorCode::InvalidArguments);
+        assert_eq!(root.to_string(), message);
+    }
+}
+
+#[test]
 fn a_capped_or_flooded_job_keeps_its_text() {
     let error = ShellError::Capped;
     assert_eq!(error.code(), ErrorCode::OutputCap);

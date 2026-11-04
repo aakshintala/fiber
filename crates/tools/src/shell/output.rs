@@ -68,6 +68,8 @@ impl Pending {
 
 pub(super) struct Inner {
     pub(super) reaped: bool,
+    pub(super) hosted_exit: Option<contract::keeper::Exit>,
+    pub(super) host_lost: bool,
     pub(super) status: Option<ExitStatus>,
     pub(super) eof: bool,
     /// Foreground bytes. Cleared when a move hands the command to its file,
@@ -159,6 +161,8 @@ impl Default for Inner {
     fn default() -> Self {
         Self {
             reaped: false,
+            hosted_exit: None,
+            host_lost: false,
             status: None,
             eof: false,
             output: Vec::new(),
@@ -332,6 +336,29 @@ fn read_into(mut read: impl Read, shared: &Shared, sink: fn(&mut Inner, &[u8])) 
             Err(_) => return,
         }
     }
+}
+
+pub(super) fn hosted_bytes(shared: &Shared, stream: contract::keeper::Stream, bytes: &[u8]) {
+    let mut inner = lock(&shared.inner);
+    if !inner.discard {
+        if stream == contract::keeper::Stream::Err && inner.errors.is_some() {
+            if let Some(errors) = inner.errors.as_mut() {
+                errors.sink(bytes);
+            }
+        } else if inner.file.is_some() {
+            inner.sink(bytes);
+        } else {
+            check_start(&mut inner, bytes.len());
+            if let Some(spill) = inner.spill.as_mut() {
+                spill.push(bytes);
+            } else {
+                inner.output.extend_from_slice(bytes);
+            }
+            inner.stream.push(bytes);
+        }
+    }
+    bump(&mut inner);
+    shared.cv.notify_all();
 }
 
 pub(super) fn note_eof(shared: &Shared) {

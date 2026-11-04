@@ -12,7 +12,8 @@ on:
 # A newer push to a pull request cancels its older run. Any other pull
 # request event at the same head (a label, a change from draft to ready, a
 # reopen) waits behind the running run instead of cancelling it, then runs
-# the whole selection again at that head; at most one run waits, and a newer
+# the whole selection again at that head, except mutants reused under
+# "On every pull request that changes code"; at most one run waits, and a newer
 # event replaces it before it starts. Pushes to main share
 # one group that cancels nothing: the running backstop finishes and the newest
 # push waits behind it.
@@ -72,7 +73,8 @@ jobs:
             base=$(git rev-parse HEAD^1)
           else
             # The backstop compares against the last main commit whose
-            # backstop passed. The release job's stored-results lookup (scripts/stored-results) is the only other Actions API call CI makes to find a run.
+            # backstop passed. The release job's stored-results lookup (scripts/stored-results) is another Actions API call CI makes to find a run.
+            # The select job's same-head reuse lookup is the third (docs/ci.md, "On every pull request that changes code").
             base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
               -q '.workflow_runs[0].head_sha // empty')
             if [ -z "$base" ] || ! git merge-base --is-ancestor "$base" HEAD; then
@@ -136,7 +138,7 @@ jobs:
       - name: Install cargo-mutants
         uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          tool: cargo-mutants
+          tool: cargo-mutants@27.1.0
 
       - name: Plan
         id: plan
@@ -149,8 +151,13 @@ jobs:
           # Mutants run on a ready pull request and on a draft labelled `mutants`,
           # never on the backstop.
           MUTANTS: ${{ github.event_name == 'pull_request' && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'mutants')) }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
-          # The shard count follows the diff's mutant count (docs/ci.md, "Mutation testing").
+          # The shard count follows the diff's mutant count (docs/ci.md, "On every pull request that changes code").
           # Every code pull request lists the diff's mutants, draft or not, so a
           # lane reads them before CI runs its shards; only `MUTANTS` starts shards.
           count=0
@@ -175,8 +182,70 @@ jobs:
           else
             echo "mutants in the diff: $count"
           fi
+          # Same-head reuse (docs/ci.md, "On every pull request that changes code"): a ready run on
+          # a head whose mutants already passed reuses the pass. Every error
+          # below keeps reuse off and starts the shards.
+          reuse=false
+          if [ "$count" -gt 0 ]; then
+            head_sha="$HEAD_SHA"
+            head_ref="$HEAD_REF"
+            pr_number="$PR_NUMBER"
+            # Any lookup failure starts the shards (docs/ci.md, "On every
+            # pull request that changes code"): a failed jobs lookup must
+            # not let a later matching candidate reuse the pass.
+            lookup_failed=false
+            if runs_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$head_ref&per_page=20" 2>/dev/null); then
+              echo "$runs_json" >"$RUNNER_TEMP/runs.json"
+              echo '{}' >"$RUNNER_TEMP/jobs.json"
+              ids=$(echo "$runs_json" | jq -r '.workflow_runs[]?.id' 2>/dev/null || true)
+              for id in $ids; do
+                # `gh api --paginate` prints one JSON object per page, so
+                # slurp every page into one jobs array before `--argjson`
+                # (docs/ci.md, "On every pull request that changes code"):
+                # a same-head pass with more than 30 jobs still reuses.
+                if jobs_pages=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --paginate 2>/dev/null) \
+                  && [ -n "$jobs_pages" ] \
+                  && jobs_json=$(printf '%s' "$jobs_pages" | jq -c -s 'map(.jobs // []) | add // []' 2>/dev/null); then
+                  tmp="$RUNNER_TEMP/jobs-$id.json"
+                  if jq --arg id "$id" --argjson jobs "$jobs_json" '. + {($id): $jobs}' "$RUNNER_TEMP/jobs.json" >"$tmp" 2>/dev/null; then
+                    mv "$tmp" "$RUNNER_TEMP/jobs.json"
+                  else
+                    rm -f "$tmp"
+                    lookup_failed=true
+                  fi
+                else
+                  lookup_failed=true
+                fi
+              done
+              if [ "$lookup_failed" != true ]; then
+                if reuse_out=$(cargo xtask mutants-reuse --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null); then
+                  reuse=false
+                  matched_run_id=""
+                  matched_pr_head=""
+                  if [ "$(printf '%s' "$reuse_out" | sed -n '1p')" = "reuse=true" ]; then
+                    matched_run_id=$(printf '%s' "$reuse_out" | sed -n 's/^matched_run_id=//p')
+                    matched_pr_head=$(printf '%s' "$reuse_out" | sed -n 's/^matched_pr_head=//p')
+                    if [ -n "$matched_run_id" ] && [ -n "$matched_pr_head" ]; then
+                      reuse=true
+                    fi
+                  fi
+                fi
+              else
+                echo "mutants reuse: jobs lookup failed; starting shards"
+              fi
+            fi
+          if [ "$reuse" = true ]; then
+            echo "mutants reuse: reuse=$reuse matched_run_id=$matched_run_id matched_pr_head=$matched_pr_head (head $head_sha, base $BASE)"
+          else
+            echo "mutants reuse: reuse=$reuse (head $head_sha, base $BASE)"
+          fi
+          fi
+          mutants="$MUTANTS"
+          if [ "$reuse" = true ]; then
+            mutants=false
+          fi
           cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --draft "$DRAFT" --bug "$BUG" --mutants "$MUTANTS" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
+            --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks
@@ -261,9 +330,10 @@ jobs:
         name: Reclaim runner disk
         if: runner.os == 'Linux'
         run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/share/swift /opt/az /usr/share/miniconda
+          df -Pk
+          df -h
       - *toolchain
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -514,8 +584,9 @@ jobs:
     steps: *test-steps
 
   # The tests the pull request touches, each run 30 times (100 when the
-  # pull request fixes a flaky test), beside the test jobs; non-blocking
-  # during the pilot (docs/ci.md, "On every pull request that changes code").
+  # pull request fixes a flaky test), beside the test jobs: one failure stops
+  # the merge, so a test this pull request touches must not be flaky
+  # (docs/ci.md, "On every pull request that changes code").
   stress:
     name: Stress the tests the pull request touches
     needs: select
@@ -554,55 +625,131 @@ jobs:
         run: |
           number=$(cargo xtask ticket <<<"$PR_BODY")
           labels=""
+          issue_text="$RUNNER_TEMP/stress-issue.txt"
+          : > "$issue_text"
           if [ -n "$number" ]; then
             # A failed lookup fails the step rather than skipping the run.
             labels=$(gh issue view "$number" --json labels -q '.labels[].name')
+            gh issue view "$number" -R aakshintala/fiber --json body,comments --jq '.body, (.comments[].body)' > "$issue_text"
           fi
-          plan=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --summary "$GITHUB_STEP_SUMMARY")
-          echo "$plan"
-          {
-            echo "run=$(sed -n 's/^run\t//p' <<<"$plan")"
-            echo "count=$(sed -n 's/^count\t//p' <<<"$plan")"
-            echo "filter<<FILTER_EOF"
-            sed -n 's/^filter\t//p' <<<"$plan"
-            echo "FILTER_EOF"
-            echo "packages<<PACKAGES_EOF"
-            sed -n 's/^package\t//p' <<<"$plan"
-            echo "PACKAGES_EOF"
-            tests=$(sed -n 's/^test\t//p' <<<"$plan" | wc -l)
-            echo "tests=${tests//[[:space:]]/}"
-          } >>"$GITHUB_OUTPUT"
+          test_only=false
+          if printf '%s\n' "$labels" | grep -sqxF 'test-only'; then
+            test_only=true
+          fi
+          if [ -s "$issue_text" ] && [ "$test_only" = true ]; then
+            named=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --issue-text "$issue_text" --only named --summary "$GITHUB_STEP_SUMMARY" --filter-file "$RUNNER_TEMP/stress-named.toml")
+            rest=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --issue-text "$issue_text" --only rest --summary "$GITHUB_STEP_SUMMARY" --filter-file "$RUNNER_TEMP/stress-rest.toml")
+            echo "$named"
+            echo "$rest"
+            {
+              named_run=$(sed -n 's/^run\t//p' <<<"$named")
+              rest_run=$(sed -n 's/^run\t//p' <<<"$rest")
+              if [ "$named_run" = true ] || [ "$rest_run" = true ]; then
+                echo "run=true"
+              else
+                echo "run=false"
+              fi
+              # The cost envelope: the named call's count, 100 here because
+              # the split only happens for a flaky-test fix.
+              echo "count=$(sed -n 's/^count\t//p' <<<"$named")"
+              echo "run_named=$named_run"
+              echo "run_rest=$rest_run"
+              echo "count_named=$(sed -n 's/^count\t//p' <<<"$named")"
+              echo "count_rest=$(sed -n 's/^count\t//p' <<<"$rest")"
+              # Packages are bounded by the workspace crate count.
+              echo "packages_named<<PACKAGES_EOF"
+              sed -n 's/^package\t//p' <<<"$named"
+              echo "PACKAGES_EOF"
+              echo "packages_rest<<PACKAGES_EOF"
+              sed -n 's/^package\t//p' <<<"$rest"
+              echo "PACKAGES_EOF"
+              named_tests=$(sed -n 's/^test\t//p' <<<"$named" | wc -l)
+              rest_tests=$(sed -n 's/^test\t//p' <<<"$rest" | wc -l)
+              named_tests=${named_tests//[[:space:]]/}
+              rest_tests=${rest_tests//[[:space:]]/}
+              echo "tests_named=$named_tests"
+              echo "tests_rest=$rest_tests"
+              echo "tests=$((named_tests + rest_tests))"
+            } >>"$GITHUB_OUTPUT"
+          else
+            plan=$(cargo xtask stress-plan --base "$BASE" --labels "$labels" --issue-text "$issue_text" --summary "$GITHUB_STEP_SUMMARY" --filter-file "$RUNNER_TEMP/stress.toml")
+            echo "$plan"
+            {
+              echo "run=$(sed -n 's/^run\t//p' <<<"$plan")"
+              echo "count=$(sed -n 's/^count\t//p' <<<"$plan")"
+              # Packages are bounded by the workspace crate count.
+              echo "packages<<PACKAGES_EOF"
+              sed -n 's/^package\t//p' <<<"$plan"
+              echo "PACKAGES_EOF"
+              tests=$(sed -n 's/^test\t//p' <<<"$plan" | wc -l)
+              echo "tests=${tests//[[:space:]]/}"
+            } >>"$GITHUB_OUTPUT"
+          fi
       - name: Run each touched test
         id: run
         if: steps.plan.outputs.run == 'true'
         env:
-          FILTER: ${{ steps.plan.outputs.filter }}
           COUNT: ${{ steps.plan.outputs.count }}
           TESTS: ${{ steps.plan.outputs.tests }}
           PACKAGES: ${{ steps.plan.outputs.packages }}
+          RUN_NAMED: ${{ steps.plan.outputs.run_named }}
+          COUNT_NAMED: ${{ steps.plan.outputs.count_named }}
+          TESTS_NAMED: ${{ steps.plan.outputs.tests_named }}
+          PACKAGES_NAMED: ${{ steps.plan.outputs.packages_named }}
+          RUN_REST: ${{ steps.plan.outputs.run_rest }}
+          COUNT_REST: ${{ steps.plan.outputs.count_rest }}
+          TESTS_REST: ${{ steps.plan.outputs.tests_rest }}
+          PACKAGES_REST: ${{ steps.plan.outputs.packages_rest }}
         run: |
-          package_args=()
-          while IFS= read -r package; do
-            if [ -n "$package" ]; then
-              package_args+=(-p "$package")
+          : > "$RUNNER_TEMP/stress-started"
+          failed=false
+          run_group() {
+            filter_file=$1
+            count=$2
+            tests=$3
+            packages=$4
+            run_log=$5
+            package_args=()
+            while IFS= read -r package; do
+              if [ -n "$package" ]; then
+                package_args+=(-p "$package")
+              fi
+            done <<<"$packages"
+            # Fail a missing filter config or stress output whose iteration/test counts differ from the plan.
+            if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" --tool-config-file "fiber-stress:$filter_file" --stress-count "$count" --no-tests=fail; } 2>&1 | tee "$run_log"; then
+              :
+            else
+              status=$?
+              echo
+              if grep -sFq 'Argument list too long' "$run_log"; then
+                echo "::error title=Stress run could not start::an argument or environment string over 128 KiB (MAX_ARG_STRLEN) reached the run"
+              fi
+              if grep -sFq 'No space left on device' "$run_log"; then
+                echo "::error title=Runner out of disk::Stress run did not complete: the runner ran out of disk; no test result"
+              fi
+              return "$status"
             fi
-          done <<<"$PACKAGES"
-          run_log=/dev/shm/stress-run.log
-          # Fail an empty filter or stress output whose iteration/test counts differ from the plan.
-          if { cargo build -q -p fakes --example process-extension && cargo nextest run --profile stress "${package_args[@]}" -E "$FILTER" --stress-count "$COUNT" --no-tests=fail; } 2>&1 | tee "$run_log"; then
-            :
+            if cargo xtask stress-check --log "$run_log" --count "$count" --tests "$tests"; then
+              :
+            else
+              echo "::error title=Stress output mismatch::Nextest output did not match the planned iteration and test counts"
+              return 1
+            fi
+          }
+          if [ -n "$RUN_REST" ]; then
+            # Split plan: one nextest invocation per non-empty group, each
+            # with its own count, tests and check. Any executed group may
+            # fail the job.
+            if [ "$RUN_NAMED" = true ]; then
+              run_group "$RUNNER_TEMP/stress-named.toml" "$COUNT_NAMED" "$TESTS_NAMED" "$PACKAGES_NAMED" /dev/shm/stress-run-named.log || failed=true
+            fi
+            if [ "$RUN_REST" = true ]; then
+              run_group "$RUNNER_TEMP/stress-rest.toml" "$COUNT_REST" "$TESTS_REST" "$PACKAGES_REST" /dev/shm/stress-run-rest.log || failed=true
+            fi
           else
-            status=$?
-            echo
-            if grep -sFq 'No space left on device' "$run_log"; then
-              echo "::error title=Runner out of disk::Stress run did not complete: the runner ran out of disk; no test result"
-            fi
-            exit "$status"
+            run_group "$RUNNER_TEMP/stress.toml" "$COUNT" "$TESTS" "$PACKAGES" /dev/shm/stress-run.log || failed=true
           fi
-          if cargo xtask stress-check --log "$run_log" --count "$COUNT" --tests "$TESTS"; then
-            :
-          else
-            echo "::error title=Stress output mismatch::Nextest output did not match the planned iteration and test counts"
+          if [ "$failed" = true ]; then
             exit 1
           fi
       - name: Record the stress cost
@@ -612,7 +759,11 @@ jobs:
           COUNT: ${{ steps.plan.outputs.count }}
           TESTS: ${{ steps.plan.outputs.tests }}
           OUTCOME: ${{ steps.run.outcome }}
-        run: cargo xtask stress-cost --start "$START" --end "$(date +%s)" --count "$COUNT" --tests "$TESTS" --outcome "$OUTCOME" >>"$GITHUB_STEP_SUMMARY"
+        run: |
+          if [ "$OUTCOME" = failure ] && [ ! -e "$RUNNER_TEMP/stress-started" ]; then
+            echo "::error title=Stress step did not start::the runner failed before the run step's first line, most likely an environment or argument string over 128 KiB (MAX_ARG_STRLEN) at step start; no test ran"
+          fi
+          cargo xtask stress-cost --start "$START" --end "$(date +%s)" --count "$COUNT" --tests "$TESTS" --outcome "$OUTCOME" >>"$GITHUB_STEP_SUMMARY"
 
   # Decides what the flake report writes (docs/testing.md, "Flaky tests").
   # It holds `contents: read` and `issues: read`, checks out the tested
@@ -844,7 +995,7 @@ jobs:
           if-no-files-found: error
 
   mutants:
-    name: Mutants (shard ${{ matrix.shard }})
+    name: Mutants (shard ${{ matrix.shard }}, base ${{ needs.select.outputs.base }})
     needs: [select, test_linux]
     if: fromJSON(needs.select.outputs.jobs).mutants
     strategy:
@@ -869,7 +1020,7 @@ jobs:
       - *cache-restore
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
-          tool: cargo-mutants,cargo-nextest
+          tool: cargo-mutants@27.1.0,cargo-nextest
       # The completion tests load `fiber completion`'s scripts in bash, zsh
       # and fish (crates/main/tests/completion.rs).
       - *shell-debs-key
@@ -947,8 +1098,10 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
-    # The slowest passing run of the last 25 took 3.5 min; 10 minutes covers twice it.
-    timeout-minutes: 10
+    # Linux leg of run 41604713733 (2026-11-03) took 8m19s; 17 minutes is
+    # twice that, matching bug_red_macos. Interim until the cold-run
+    # measurement (#4082 follow-up).
+    timeout-minutes: 17
     outputs:
       status: ${{ steps.red.outputs.status }}
     env:
@@ -996,6 +1149,8 @@ jobs:
     env:
       LINUX_STATUS: ${{ needs.bug_red_linux.outputs.status }}
       MACOS_STATUS: ${{ needs.bug_red_macos.outputs.status }}
+      LINUX_RESULT: ${{ needs.bug_red_linux.result }}
+      MACOS_RESULT: ${{ needs.bug_red_macos.result }}
     steps:
       - *checkout-full
       - run: scripts/bug-red --collect "$LINUX_STATUS" "$MACOS_STATUS"

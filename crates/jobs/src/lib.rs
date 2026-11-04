@@ -4,6 +4,8 @@
 
 mod delegate;
 mod error;
+/// Keeper lifecycle decisions (`docs/tools.md`, "The keeper").
+pub mod keeper;
 mod registry;
 #[cfg(test)]
 mod support;

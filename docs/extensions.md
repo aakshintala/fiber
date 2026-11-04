@@ -1196,7 +1196,7 @@ keys below; values use the shapes of `docs/events.md` ("Content parts",
 | `turn_start` | `input`, the turn's input as the turn_started event logs it | `context`, a non-empty string to add |
 | `before_tool` | `tool`; `arguments`; `effects`, a list of effect names; `paths`, absent when the call declares none; `reversible` | `arguments`, a table that replaces the arguments, or `refuse`, a non-empty string, alone |
 | `before_model_call` | `model`, the model reference; `usage`, the session's usage so far, its delegates included, with cost absent when unknown | `refuse`, a non-empty string, alone |
-| `after_tool` | `tool`; `arguments`; `status`; `content`, the output's text parts joined; `details` and `process`, each absent when the call has none; what a job delivery is given is in the after_tool paragraph above | `content`, a string; `details`, any value; `artifact`, a string |
+| `after_tool` | `tool`; `arguments`; `status`; `content`, the output's text parts joined; `details` and `process`, each absent when the call has none; details never hold the reserved file_seen record (docs/tools.md, "Stale files"); what a job delivery is given is in the after_tool paragraph above | `content`, a string; `details`, any value; `artifact`, a string |
 | `turn_end` | `reply`, the model's final reply | `message`, a non-empty string to continue the turn with |
 | `before_handoff` | `trigger`, what started the handoff: auto, person or overflow; `instructions`, absent when there were none; `messages`, the conversation as host.model takes it, without the note request; `note`, absent until a hook before this one returned one | `note`, a string with the handoff note |
 

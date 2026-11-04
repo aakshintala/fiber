@@ -66,7 +66,9 @@ impl Error {
 /// never sent and nothing is tinted under the pointer. `Ok(0)` on quit
 /// and `Ok(1)` when the terminal cannot be set up or drawn. The terminal
 /// is restored on every return. Timed scopes write through `diag`, the
-/// process's diagnostic writer.
+/// process's diagnostic writer. `startup` is the startup guard, stamped
+/// once the level is known and dropped at `run_with` entry so its line
+/// covers guard construction through that entry and nothing else.
 pub fn run(
     tty: File,
     launch: Launch,
@@ -74,6 +76,7 @@ pub fn run(
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
     diag: Arc<log::diag::Diag>,
+    startup: Option<log::diag::Timer>,
 ) -> Result<i32, Error> {
     run_with(
         tty,
@@ -84,6 +87,7 @@ pub fn run(
         Reader::spawn,
         |builder, body| builder.spawn(body),
         diag,
+        startup,
     )
 }
 
@@ -107,7 +111,12 @@ pub(crate) fn run_with(
         Box<dyn FnOnce() + Send + 'static>,
     ) -> std::io::Result<std::thread::JoinHandle<()>>,
     diag: Arc<log::diag::Diag>,
+    startup: Option<log::diag::Timer>,
 ) -> Result<i32, Error> {
+    // The startup guard drops first: its line covers guard construction
+    // through this entry, before any first-render or attach span opens.
+    // A `None` guard drops silently.
+    drop(startup);
     // The first render's span opens at entry: at `info` this is one level
     // check with no clock read. Every pre-draw return below discards it,
     // so a line there never times setup work as a frame that never drew.
@@ -182,8 +191,8 @@ pub(crate) fn run_with(
     let models = seams.models;
     if let Some(remote) = seams.remote {
         app.set_remote(remote);
-    } else {
-        app.set_configure(seams.seam);
+    } else if let Some(seam) = seams.seam {
+        app.set_configure(seam);
     }
     app.set_models(models.clone());
     // The feedback writer `main` injected: taken out before home keeps
@@ -218,9 +227,7 @@ pub(crate) fn run_with(
     app.set_home(launch);
     // The first-run import offer resolves once, through the same seam
     // the views read: no receipts means the home foot asks.
-    let pending = app
-        .configure_seam()
-        .is_some_and(|seam| seam.import_pending());
+    let pending = app.configure_seam().import_pending();
     app.set_import_offer(pending);
     app.set_launch_overrides(launch_overrides);
     if pick_at_start {
@@ -1787,9 +1794,10 @@ impl<B: Backend> Loop<B> {
             // resume lines.
             if let editor::Outcome::Done(done) = result {
                 if line.is_some() {
-                    // A Changed files row or diff: the view reads the
-                    // file's diff and figures again, and the loop sends
-                    // both request lines.
+                    // A Changed files row or diff: a returned remote
+                    // copy writes back to its hub file first, then the
+                    // view reads the file's diff and figures again,
+                    // and the loop sends both request lines.
                     let lines = self.app.changed_file_closed(&path, done);
                     self.send_inner(&lines);
                 } else {

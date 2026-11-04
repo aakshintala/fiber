@@ -1963,3 +1963,151 @@ fn save_reviewer_notes_names_the_entry_it_refuses() {
         );
     }
 }
+
+#[test]
+fn workspace_files_stay_inside_the_workspace() {
+    use std::os::unix::fs::symlink;
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    write(&workspace.join("inside.txt"), "inside");
+    let outside = dirs.home().parent().unwrap().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("secret.txt"), "secret").unwrap();
+    symlink(&outside, workspace.join("link")).unwrap();
+    symlink(outside.join("secret.txt"), workspace.join("file-link")).unwrap();
+    for rel in [
+        "..",
+        "../inside.txt",
+        "link/secret.txt",
+        "link/nope.txt",
+        "file-link",
+    ] {
+        let path = Path::new(rel);
+        assert_eq!(
+            seam.read_workspace_file(&workspace, path).unwrap_err().code,
+            ErrorCode::InvalidArguments,
+            "{rel}"
+        );
+        assert_eq!(
+            seam.write_workspace_file(&workspace, path, "x", "missing")
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidArguments,
+            "{rel}"
+        );
+    }
+    let elsewhere = Path::new("/etc/hostname");
+    assert_eq!(
+        seam.read_workspace_file(&workspace, elsewhere)
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidArguments
+    );
+    // A `..` that resolves back inside is allowed.
+    fs::create_dir_all(workspace.join("sub")).unwrap();
+    assert_eq!(
+        seam.read_workspace_file(&workspace, Path::new("sub/../inside.txt"))
+            .unwrap()
+            .0,
+        "inside"
+    );
+    // A relative workspace is a bad shape.
+    assert_eq!(
+        seam.read_workspace_file(Path::new("relative"), &workspace.join("inside.txt"))
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidArguments
+    );
+}
+
+#[test]
+fn workspace_files_round_trip_missing_and_stale() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let path = workspace.join("note.txt");
+    assert_eq!(
+        seam.read_workspace_file(&workspace, &path).unwrap(),
+        (String::new(), "missing".into())
+    );
+    let stale = seam
+        .write_workspace_file(&workspace, &path, "x", "0123456789abcdef")
+        .unwrap_err();
+    assert_eq!(stale.code, ErrorCode::StaleRequest);
+    assert!(!path.exists());
+    seam.write_workspace_file(&workspace, &path, "first", "missing")
+        .unwrap();
+    let (text, version) = seam.read_workspace_file(&workspace, &path).unwrap();
+    assert_eq!(text, "first");
+    assert_eq!(version.len(), 16);
+    fs::write(&path, b"second").unwrap();
+    let before = fs::read(&path).unwrap();
+    let mtime = fs::metadata(&path).unwrap().modified().unwrap();
+    let stale = seam
+        .write_workspace_file(&workspace, &path, "lost", &version)
+        .unwrap_err();
+    assert_eq!(stale.code, ErrorCode::StaleRequest);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), mtime);
+    let (_, version) = seam.read_workspace_file(&workspace, &path).unwrap();
+    seam.write_workspace_file(&workspace, &path, "third", &version)
+        .unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "third");
+}
+
+#[test]
+fn workspace_files_cap_at_10_mib() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let limit = 10 * 1024 * 1024;
+    let path = workspace.join("exact.txt");
+    fs::write(&path, vec![b'x'; limit]).unwrap();
+    assert_eq!(
+        seam.read_workspace_file(&workspace, &path).unwrap().0.len(),
+        limit
+    );
+    let over = workspace.join("over.txt");
+    fs::write(&over, vec![b'x'; limit + 1]).unwrap();
+    assert_eq!(
+        seam.read_workspace_file(&workspace, &over)
+            .unwrap_err()
+            .code,
+        ErrorCode::TooLarge
+    );
+    let fresh = workspace.join("fresh.txt");
+    assert_eq!(
+        seam.write_workspace_file(&workspace, &fresh, &"y".repeat(limit + 1), "missing")
+            .unwrap_err()
+            .code,
+        ErrorCode::TooLarge
+    );
+    assert!(!fresh.exists());
+    seam.write_workspace_file(&workspace, &fresh, &"y".repeat(limit), "missing")
+        .unwrap();
+    assert_eq!(fs::read(&fresh).unwrap().len(), limit);
+}
+
+#[test]
+fn workspace_files_refuse_non_utf8_and_directories() {
+    let dirs = Dirs::new();
+    let workspace = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    let binary = workspace.join("binary");
+    fs::write(&binary, [0xff]).unwrap();
+    let error = seam.read_workspace_file(&workspace, &binary).unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    let dir = workspace.join("sub");
+    fs::create_dir_all(&dir).unwrap();
+    assert_eq!(
+        seam.read_workspace_file(&workspace, &dir).unwrap_err().code,
+        ErrorCode::InvalidArguments
+    );
+    assert_eq!(
+        seam.write_workspace_file(&workspace, &dir, "x", "missing")
+            .unwrap_err()
+            .code,
+        ErrorCode::InvalidArguments
+    );
+}

@@ -15,6 +15,9 @@ set -euo pipefail
 # The last line says pass or fail, so a caller reading only the tail of the
 # output (`| tail`) cannot mistake a failure for a pass.
 log=
+# The resource-exhaustion cause for the FAIL line: set by the preflight and
+# by step_failed when classify matches, empty otherwise.
+resource_cause=
 rc=0
 # Set inside the EXIT trap below; initialised here so shellcheck sees the
 # assignment (the trap string is the only other place it is set).
@@ -26,7 +29,7 @@ scan_leaks=0
 # processes owned by the user with ppid 1 that started after this time.
 check_start=$(date +%s)
 export FIBER_CHECK_START=$check_start
-trap 'rc=$?; if [ $rc -eq 0 ]; then rm -f "$log"; fi; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else [ -n "$log" ] && [ -s "$log" ] && echo "scripts/check: full output in $log"; echo "scripts/check: FAIL (exit $rc)"; fi; exit $rc' EXIT
+trap 'rc=$?; if [ $rc -eq 0 ]; then rm -f "$log"; fi; if [ "$scan_leaks" = 1 ]; then echo "== leak scan"; if scripts/leak-scan "$FIBER_CHECK_RUN" "$check_start"; then :; else leak_rc=$?; echo "scripts/check: leaked processes (exit $leak_rc)" >&2; if [ "$rc" -eq 0 ]; then rc=$leak_rc; fi; fi; fi; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else [ -n "$log" ] && [ -s "$log" ] && echo "scripts/check: full output in $log"; if [ -n "$resource_cause" ]; then echo "scripts/check: FAIL (exit $rc): $resource_cause"; else echo "scripts/check: FAIL (exit $rc)"; fi; fi; exit $rc' EXIT
 cd "$(git rev-parse --show-toplevel)"
 
 base=origin/main
@@ -40,7 +43,49 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-selection=$(cargo xtask select --base "$base")
+# A compile or link step, wrapped: the pipeline status is the step's (tee
+# exits 0, and pipefail keeps cargo's), so a pass truncates the shared log
+# and a failure classifies the output. Runs in the main shell, so a failure
+# exits the script. Defined beside count would run too late: the select step
+# below already calls step_failed.
+build_step() {
+  if "$@" 2>&1 | tee "$log"; then : >"$log"; else step_rc=$?; step_failed "$step_rc"; fi
+}
+
+# The failure branch of a wrapped step: classify turns a killed compile or
+# link step into exit 75 and keeps the cause for the FAIL line, and every
+# other failure keeps the step's code. The substitution is an if condition,
+# so set -e cannot pre-empt it.
+step_failed() {
+  if resource_cause=$(scripts/check-resources classify "$log"); then
+    resource_cause=
+    exit "$1"
+  else
+    classify_rc=$?
+  fi
+  if [ "$classify_rc" -eq 75 ]; then
+    exit 75
+  else
+    resource_cause=
+    exit "$1"
+  fi
+}
+
+# The preflight runs before any build step and before the log exists: a
+# refusal exits here, so no build step ran. On exit 75 the refusal sentence
+# becomes the FAIL line's cause; any other preflight failure keeps its code.
+if pre=$(scripts/check-resources preflight); then echo "== preflight: $pre"; else pre_rc=$?; [ "$pre_rc" -ne 75 ] || resource_cause=$pre; exit "$pre_rc"; fi
+
+log=$(mktemp)
+
+# The select step's stderr goes to the log and is replayed after the step
+# ends; a cold xtask build shows no progress until it finishes. A pass
+# truncates the log, so a later failure cannot mislabel this output as its
+# own. step_failed turns a killed compile or link step into exit 75.
+if selection=$(cargo xtask select --base "$base" 2>"$log"); then step_rc=0; else step_rc=$?; fi
+cat "$log" >&2
+if [ "$step_rc" -ne 0 ]; then step_failed "$step_rc"; fi
+: >"$log"
 value() { sed -n "s/^$1=//p" <<<"$selection"; }
 mode=$(value mode)
 packages=$(value packages)
@@ -59,7 +104,6 @@ for p in $packages; do package_args+=(-p "$p"); done
 package_spec_args=()
 for p in $package_specs; do package_spec_args+=(-p "$p"); done
 
-log=$(mktemp)
 # Sums the numbers in every match of $1 in the last command's output, with
 # colour codes removed (CI sets CARGO_TERM_COLOR=always). No match is an error.
 count() {
@@ -87,7 +131,7 @@ if [ "$scope" != platform ]; then
   if { git diff --name-only "$(git merge-base "$base" HEAD)"; git ls-files --others --exclude-standard; } | grep -q "^$prototype/"; then
     echo "== tui-prototype: cargo fmt --check, cargo clippy"
     cargo fmt --check --manifest-path "$prototype/Cargo.toml"
-    cargo clippy --all-targets --manifest-path "$prototype/Cargo.toml" -- -D warnings
+    build_step cargo clippy --all-targets --manifest-path "$prototype/Cargo.toml" -- -D warnings
   fi
   if [ "$mode" != docs ]; then
     if [ ${#package_args[@]} -gt 0 ]; then
@@ -109,44 +153,231 @@ if [ "$scope" != platform ]; then
     cargo xtask must-succeed
     echo "== budget bounds"
     cargo xtask budget-bounds --base "$base"
-    echo "== bare screen-call ratchet"
-    # A `.screen()` call outside a wait reads a grid no wait settled, so
-    # the frame it observes can differ from the waited one
+    echo "== grid-read ratchet"
+    # A grid read outside a wait observes a frame no wait settled, so the
+    # frame it compares can differ from the waited one
     # (docs/testing/screens.md, "Screens"). Each file under
     # crates/main/tests/ holds at most its inline maximum of unmarked
-    # call lines, and a file missing from the list holds none: the literal
-    # text `// settled:` on the call line or the line before it exempts a
-    # call, even inside a string literal, since the count is a conservative
+    # grid-read lines (`.screen()`, `.cell(`, `.contents`, `.rows`), and a
+    # file missing from the list holds none: a line inside a `wait_screen`
+    # call's span is the wait's own check, while the literal text
+    # `// settled:` on the read line or the line before it exempts a read,
+    # even inside a string literal, since the count is a conservative
     # upper bound. `crates/main/tests/support/` is outside the rule,
-    # and a `.screen` field access (as in `login.rs`) is not a call. Call
-    # detection, comment recognition and the per-file comparison live in
+    # and a `.screen` field access (as in `login.rs`) is not a call. A
+    # `mouse <path> <maximum>` line caps that file's mouse-event lines
+    # (`[<0;`, `[<3;`, `[<32;`, `[<35;` press, release, drag and motion
+    # reports) outside the frame-locked click helper the same way, and a
+    # file missing from the mouse entries holds none; wheel reports stay
+    # outside the count. Read detection, wait-span tracking, comment
+    # recognition and the per-file comparison live in
     # `cargo xtask screen-ratchet` (docs/testing.md, "Levels").
     cargo xtask screen-ratchet <<'EOF'
-crates/main/tests/ask_user_form_look.rs 3
-crates/main/tests/attach_first_frame.rs 1
-crates/main/tests/call_view.rs 1
+crates/main/tests/approval_look.rs 53
+crates/main/tests/ask_user_form_look.rs 66
+crates/main/tests/at_path_search.rs 1
+crates/main/tests/attach_first_frame.rs 4
+crates/main/tests/cache_countdown.rs 2
+crates/main/tests/call_view.rs 34
 crates/main/tests/change_workspace.rs 1
-crates/main/tests/delegates.rs 2
-crates/main/tests/delete.rs 1
-crates/main/tests/inline_images.rs 2
-crates/main/tests/link_look.rs 4
-crates/main/tests/look.rs 5
-crates/main/tests/look_diff.rs 2
-crates/main/tests/model_picker_keys.rs 0
-crates/main/tests/model_picker_name.rs 0
-crates/main/tests/pinned_call_row.rs 1
-crates/main/tests/placeholders_picker.rs 0
-crates/main/tests/quota_fetch_session.rs 1
-crates/main/tests/release_notes.rs 4
-crates/main/tests/steer_drawn.rs 2
-crates/main/tests/stream_closed_notice.rs 2
-crates/main/tests/terminal.rs 2
-crates/main/tests/tui_context_after_cd.rs 1
-crates/main/tests/tui_extensions.rs 2
-crates/main/tests/wheel_scroll.rs 1
+crates/main/tests/changed_files_editor.rs 4
+crates/main/tests/clear.rs 2
+crates/main/tests/credential_signals.rs 3
+crates/main/tests/delegates.rs 31
+crates/main/tests/delete.rs 13
+crates/main/tests/doctor_command.rs 3
+crates/main/tests/exit_alias.rs 1
+crates/main/tests/group_look.rs 38
+crates/main/tests/handoff_look.rs 24
+crates/main/tests/history_page_failed.rs 4
+crates/main/tests/home_rail.rs 17
+crates/main/tests/hover_look.rs 9
+crates/main/tests/hub_pairing.rs 1
+crates/main/tests/hub_remote_terminal.rs 5
+crates/main/tests/hub_version.rs 11
+crates/main/tests/inline_images.rs 10
+crates/main/tests/item_views_look.rs 31
+crates/main/tests/journeys.rs 19
+crates/main/tests/light_no_color_look.rs 61
+crates/main/tests/line_start_end.rs 6
+crates/main/tests/link_look.rs 21
+crates/main/tests/look.rs 163
+crates/main/tests/look_diff.rs 6
+crates/main/tests/look_markdown.rs 29
+crates/main/tests/main_journeys.rs 63
+crates/main/tests/model_picker_keys.rs 14
+crates/main/tests/model_picker_name.rs 3
+crates/main/tests/opened_call_look.rs 52
+crates/main/tests/panel_look.rs 38
+crates/main/tests/pinned_call_row.rs 19
+crates/main/tests/placeholders_picker.rs 2
+crates/main/tests/pty_sync_output.rs 13
+crates/main/tests/quit_after_completed.rs 4
+crates/main/tests/quota_fetch_session.rs 9
+crates/main/tests/rail_focus.rs 17
+crates/main/tests/rail_look.rs 18
+crates/main/tests/rail_shown.rs 2
+crates/main/tests/rail_state_tints.rs 3
+crates/main/tests/release_notes.rs 5
+crates/main/tests/reviewer_setup.rs 15
+crates/main/tests/search_look.rs 91
+crates/main/tests/slash_aliases.rs 8
+crates/main/tests/steer_drawn.rs 11
+crates/main/tests/stream_closed_notice.rs 13
+crates/main/tests/swapped_panels_look.rs 50
+crates/main/tests/terminal.rs 24
+crates/main/tests/tui_context_after_cd.rs 0
+crates/main/tests/tui_extensions.rs 7
+crates/main/tests/tui_key_whole_screen.rs 8
+crates/main/tests/tui_timing_tests.rs 2
+crates/main/tests/wheel_scroll.rs 10
+crates/main/tests/working_line_look.rs 69
+crates/main/tests/workspace_picker.rs 1
+mouse crates/main/tests/approval_look.rs 1
+mouse crates/main/tests/call_view.rs 1
+mouse crates/main/tests/delegates.rs 1
+mouse crates/main/tests/doctor_command.rs 1
+mouse crates/main/tests/hover_look.rs 2
+mouse crates/main/tests/inline_images.rs 1
+mouse crates/main/tests/link_look.rs 1
+mouse crates/main/tests/look.rs 2
+mouse crates/main/tests/model_picker_keys.rs 2
+mouse crates/main/tests/opened_call_look.rs 1
+mouse crates/main/tests/panel_look.rs 1
+mouse crates/main/tests/pinned_call_row.rs 1
+mouse crates/main/tests/release_notes.rs 2
+mouse crates/main/tests/search_look.rs 2
+mouse crates/main/tests/stream_closed_notice.rs 1
+mouse crates/main/tests/swapped_panels_look.rs 1
+mouse crates/main/tests/wheel_scroll.rs 1
 EOF
     echo "== kinds ratchet"
     cargo xtask kinds-ratchet --max 238 --support-max 36
+    echo "== census ratchet"
+    # String-typed closed-set sites (ticket #3982): each production file
+    # under crates/ holds at most its inline count of the census pattern
+    # (`kind: String`, `code: String` / `code: &str`, `.kind.as_str(`-style
+    # calls, `.kind == "`-style compares, `["kind"]`-style indexes and
+    # `.get("kind")`-style lookups, for kind, code, view and format). A file
+    # whose count rises fails; lowering a count is always free, and a file
+    # missing from the list holds none. Detection and the per-file
+    # comparison live in `cargo xtask census-ratchet`
+    # (docs/code-quality.md, "Types").
+    cargo xtask census-ratchet <<'EOF'
+crates/bench/examples/bench/attach.rs 3
+crates/bench/examples/bench/busy.rs 1
+crates/bench/examples/bench/debug.rs 1
+crates/bench/examples/bench/idle.rs 2
+crates/bench/examples/bench/resume.rs 1
+crates/bench/examples/bench/run.rs 1
+crates/bench/examples/bench/session_list.rs 2
+crates/bench/examples/bench/wheel.rs 2
+crates/cli/src/doctor/files.rs 2
+crates/cli/src/feedback.rs 1
+crates/cli/src/hub_pair.rs 2
+crates/cli/src/login/browser.rs 1
+crates/cli/src/login/reviewer.rs 1
+crates/cli/src/sessions.rs 1
+crates/contract/src/envelope.rs 2
+crates/contract/src/events.rs 1
+crates/doors/src/attach.rs 2
+crates/doors/src/client/writer.rs 3
+crates/doors/src/hub.rs 1
+crates/doors/src/isolation.rs 2
+crates/doors/src/session.rs 4
+crates/extensions/src/attend.rs 2
+crates/extensions/src/case/format.rs 1
+crates/extensions/src/case/run.rs 5
+crates/extensions/src/host.rs 2
+crates/extensions/src/host/failure.rs 1
+crates/extensions/src/host/script.rs 1
+crates/extensions/src/oauth/mod.rs 2
+crates/extensions/src/process/context.rs 1
+crates/extensions/src/process/context/native/oauth.rs 1
+crates/extensions/src/repository/store.rs 1
+crates/fakes/src/oauth_server.rs 1
+crates/hub/src/attention.rs 1
+crates/hub/src/device_login.rs 1
+crates/hub/src/fake.rs 1
+crates/hub/src/feed.rs 1
+crates/hub/src/pairing.rs 1
+crates/hub/src/resume.rs 2
+crates/hub/src/rewind.rs 2
+crates/hub/src/sessions_stop/transport.rs 1
+crates/hub/src/spawn.rs 2
+crates/hub/src/start.rs 2
+crates/jobs/src/error.rs 1
+crates/log/src/diag.rs 4
+crates/log/src/escalations.rs 2
+crates/log/src/escalations/reviewer_shell_calls.rs 2
+crates/log/src/name.rs 1
+crates/log/src/rate.rs 1
+crates/log/src/read.rs 1
+crates/log/src/scan.rs 3
+crates/log/src/search/session.rs 1
+crates/log/src/write.rs 4
+crates/loop/src/conversation.rs 2
+crates/loop/src/history.rs 7
+crates/loop/src/resume.rs 10
+crates/loop/src/rewind.rs 5
+crates/loop/src/rewind/command.rs 9
+crates/loop/src/rewind/stop.rs 1
+crates/loop/src/rewind/workspace.rs 1
+crates/loop/src/status.rs 3
+crates/loop/src/suspend.rs 2
+crates/main/src/configure/login.rs 1
+crates/main/src/configure/remote.rs 1
+crates/main/src/delegates.rs 5
+crates/main/src/main.rs 2
+crates/main/src/model_host.rs 1
+crates/main/src/rewind.rs 1
+crates/mcp/src/login.rs 3
+crates/mcp/src/rpc.rs 1
+crates/provider/src/error.rs 3
+crates/provider/src/hosted.rs 1
+crates/provider/src/openai_responses.rs 1
+crates/provider/src/scripted.rs 1
+crates/tools/src/error.rs 1
+crates/tools/src/files.rs 1
+crates/tools/src/web_search.rs 2
+crates/tui/src/app.rs 11
+crates/tui/src/app/call_view.rs 2
+crates/tui/src/app/change_workspace.rs 1
+crates/tui/src/app/clear.rs 1
+crates/tui/src/app/commands_testkit.rs 1
+crates/tui/src/app/home.rs 8
+crates/tui/src/app/home/open.rs 3
+crates/tui/src/app/home/prompt.rs 1
+crates/tui/src/app/home/prompt/hooks_offer.rs 2
+crates/tui/src/app/home/recent.rs 1
+crates/tui/src/app/items/retry.rs 1
+crates/tui/src/app/rewind/send.rs 1
+crates/tui/src/app/session_views.rs 1
+crates/tui/src/configure.rs 1
+crates/tui/src/ext.rs 1
+crates/tui/src/highlight.rs 1
+crates/tui/src/history.rs 1
+crates/tui/src/login_view.rs 1
+crates/tui/src/login_worker.rs 2
+crates/tui/src/markdown.rs 3
+crates/tui/src/notices.rs 8
+crates/tui/src/remote/decode.rs 2
+crates/tui/src/remote/login.rs 1
+crates/tui/src/view/notice_rows.rs 5
+EOF
+    echo "== stale-wait ratchet"
+    # A stale wait answers from the fold's replay instead of the live
+    # stream. Each file under crates/main/tests/ holds at most its inline
+    # maximum of stale-wait occurrences — a `recv_reply` use, a
+    # `fn subscribe(` or a `fn subscribe_full(` definition — and the table
+    # pins the existing sites until Part 2 converts them and empties it:
+    # a new occurrence fails, and so does a file the table does not name.
+    # Each occurrence counts even inside a string literal or a block
+    # comment, while a line whose trimmed start is a `//` comment never
+    # counts. Occurrence detection and the per-file comparison live in
+    # `cargo xtask stale-wait-ratchet`.
+    cargo xtask stale-wait-ratchet <<'EOF'
+EOF
     # CI runs this on Linux x86_64 alone (docs/ci.md), where the runner
     # ships shellcheck, so a missing one fails rather than skips.
     if [ "$(uname -s)" = Linux ]; then
@@ -156,7 +387,7 @@ EOF
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl \
         crates/main/tests/release_pack_fixture/bin/gh
-      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/test-flake-report scripts/leak-scan scripts/test-leak-scan scripts/look-diff scripts/test-look-diff scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/cache-prune scripts/check-docs scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/mutants-shard-finish scripts/test-mutants-shard-finish scripts/paging-jig scripts/release-size scripts/release-pack scripts/stored-results scripts/lib/release.sh
+      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/test-flake-report scripts/test-stress-plan scripts/leak-scan scripts/test-leak-scan scripts/look-diff scripts/test-look-diff scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/cache-prune scripts/check-docs scripts/check-resources scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/mutants-shard-finish scripts/test-mutants-shard-finish scripts/paging-jig scripts/release-size scripts/release-pack scripts/stored-results scripts/lib/release.sh
       shellcheck --shell=bash scripts/test-journey-report
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
@@ -188,6 +419,8 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   scripts/test-flaky-tests
   echo "== flake-report self-test"
   scripts/test-flake-report
+  echo "== stress-plan self-test"
+  scripts/test-stress-plan
   echo "== journey-report self-test"
   scripts/test-journey-report
   echo "== mutants-rotation self-test"
@@ -199,7 +432,7 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   echo "== class-data self-test"
   scripts/test-class-data
   echo "== cargo clippy -q --all-targets -- -D warnings"
-  cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
+  build_step cargo clippy -q --all-targets "${package_spec_args[@]}" -- -D warnings
   # A per-run nonce in the environment: every descendant inherits it, so
   # the EXIT trap's scan names only this run's leaked processes. uuidgen
   # ships on Linux CI and macOS; the fallback needs only bash and date.
@@ -214,7 +447,7 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   # example; ProcessFixture::example_path starts that example, so build
   # it for every selection, since any crate's tests may use ProcessFixture.
   echo "== build the process-extension example"
-  cargo build -q -p fakes --example process-extension
+  build_step cargo build -q -p fakes --example process-extension
   # One thread per CPU the host has free, from the load when the run
   # starts: a loaded host runs fewer tests at once rather than starving
   # each of them. CI runners keep their own counts.
@@ -236,11 +469,12 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   # One timing flake must not hide the other tests' results: a failed run
   # reports every failure, so a rerun is not needed to see them.
   if [ -n "$threads" ]; then
-    cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet --test-threads "$threads" "${package_spec_args[@]}" 2>&1 | tee "$log"
+    if cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet --test-threads "$threads" "${package_spec_args[@]}" 2>&1 | tee "$log"; then :; else step_rc=$?; step_failed "$step_rc"; fi
   else
-    cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet "${package_spec_args[@]}" 2>&1 | tee "$log"
+    if cargo nextest run --no-fail-fast --status-level fail --final-status-level flaky --cargo-quiet "${package_spec_args[@]}" 2>&1 | tee "$log"; then :; else step_rc=$?; step_failed "$step_rc"; fi
   fi
   nextest=$(count '[0-9]+ tests? run')
+  : > "$log"
   case " $packages " in
     *" main "*)
       echo "== leak probe"
@@ -248,6 +482,10 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
       ;;
   esac
   if [ -n "$extension_packages" ]; then
+    # The binary builds once here, wrapped so a killed link fails 75; the
+    # loop below only runs it.
+    echo "== fiber extension build"
+    build_step cargo build -q -p main --bin fiber
     echo "== fiber extension test"
     # cargo run builds the binary and runs it from Cargo's own target
     # directory, so no path is read back from cargo metadata.
@@ -265,7 +503,7 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
     # The full output goes to the log; the console keeps only the summary,
     # so a passing run stays short. A failure prints everything, since the
     # failing test's name and output are what the failure needs.
-    cargo test --doc "${library_spec_args[@]}" >"$log" 2>&1 || { doctest_rc=$?; cat "$log"; exit $doctest_rc; }
+    if cargo test --doc "${library_spec_args[@]}" >"$log" 2>&1; then :; else step_rc=$?; cat "$log"; step_failed "$step_rc"; fi
     grep "test result" "$log" || true
     doctests=$(count '[0-9]+ passed')
   fi

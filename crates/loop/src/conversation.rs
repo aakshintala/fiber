@@ -9,11 +9,10 @@ use std::path::Path;
 
 use contract::events::{
     CallStatus, Class, Control, Event, InputItem, InstructionFile, InstructionReason,
-    InstructionSent, KeptMessage, Outcome, ShellCommand, SkillLoad, ToolCallCompleted,
-    ToolCallRequested,
+    InstructionSent, Outcome, ShellCommand, SkillLoad, ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{ImageRef, Input, PdfRef};
-use contract::shapes::{ContentPart, Origin};
+use contract::shapes::ContentPart;
 use contract::{ActionId, Envelope, Seq};
 
 use crate::Error;
@@ -206,6 +205,9 @@ impl Rendered {
         open: &HashSet<ActionId>,
     ) {
         let seq_key = seq.map(Seq);
+        let was_summary = self.carry.in_summary();
+        self.carry
+            .observe_reviewed(event, action, seq_key, was_summary);
         if inner_action(event, action, &mut self.carry) {
             self.carry.fold_jobs(event);
             crate::changes::apply(&mut self.had, event);
@@ -471,7 +473,7 @@ pub(crate) fn render(
     model: &str,
     had: &mut BTreeMap<String, String>,
     carry: &mut Carry,
-    seq: Option<Seq>,
+    _seq: Option<Seq>,
 ) {
     // The opening slot lives only between an opening message and its
     // `session_start` contexts: every rendered durable event clears it,
@@ -496,8 +498,6 @@ pub(crate) fn render(
                 return;
             }
             carry.input.clear();
-            carry.turn_from = carry.person.len();
-            record_persons(carry, event, seq);
             for item in &started.input {
                 match item {
                     InputItem::Message { content, .. } => {
@@ -532,9 +532,6 @@ pub(crate) fn render(
         Event::SteeringApplied(steering) => {
             conversation.push(user(&steering.content));
             carry.input.push(user(&steering.content));
-            if !carry.in_summary() {
-                record_persons(carry, event, seq);
-            }
         }
         // The person's kept messages join the context a completed handoff
         // started, between the opening and the carried input.
@@ -635,7 +632,14 @@ pub(crate) fn render(
             carry.resend.clear();
             for sent in &resent.skills {
                 conversation.push(Input::User {
-                    text: format!("{}\n\n{}", sent.path, sent.content),
+                    text: fill(
+                        message("handoff-skill"),
+                        &[
+                            ("name", sent.name.as_str()),
+                            ("path", sent.path.as_str()),
+                            ("content", sent.content.as_str()),
+                        ],
+                    ),
                  images: Vec::new(),});
                 carry.loaded(SkillLoad {
                     name: sent.name.clone(),
@@ -793,35 +797,6 @@ pub(crate) fn render(
         | Event::JobCompleted(_)
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => {}
-    }
-}
-
-/// Records the person's messages `event` holds, under the line's `seq`:
-/// each driver `message` item of a `turn_started`, keyed by its index among
-/// every item, and a driver `steering_applied`. The same predicate as the
-/// reviewer's transcript (`reviewer::render_reviewed`), so the two hold the
-/// same messages. A line with no `seq` holds none. The caller skips a
-/// rewind summary turn.
-pub(crate) fn record_persons(carry: &mut Carry, event: &Event, seq: Option<Seq>) {
-    let Some(seq) = seq else { return };
-    if let Event::TurnStarted(started) = event {
-        for (item, entry) in started.input.iter().enumerate() {
-            if let InputItem::Message {
-                content, sender, ..
-            } = entry
-                && sender.origin == Origin::Driver
-            {
-                let key = KeptMessage {
-                    seq,
-                    item: item as u64,
-                };
-                carry.record_person(key, user(content));
-            }
-        }
-    } else if let Event::SteeringApplied(steering) = event
-        && steering.sender.origin == Origin::Driver
-    {
-        carry.record_person(KeptMessage { seq, item: 0 }, user(&steering.content));
     }
 }
 

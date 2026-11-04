@@ -229,7 +229,7 @@ fn parent_page_pruning_cannot_erase_delegate_failure_before_app_drain() {
         });
     assert!(app.drawn(&[]));
     let notices = app.notices();
-    // docs/tui.md:2734: the failure keeps one hook_failed per extension and slot.
+    // `docs/tui.md`, "When an extension fails": the failure keeps one hook_failed per extension and slot.
     assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
     assert!(!app.drawn(&[]));
 }
@@ -2047,7 +2047,7 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
 }
 
 /// The wheel over a live tty item is swallowed: neither the tty's rows
-/// nor the parent move (`docs/tui.md:576`, "Swapped views"; see #3578).
+/// nor the parent move (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_a_live_tty_item_moves_nothing() {
     let mut app = home();
@@ -2069,7 +2069,7 @@ fn wheel_over_a_live_tty_item_moves_nothing() {
 }
 
 /// The wheel over a finished tty item is swallowed: neither the tty's
-/// rows nor the parent move (`docs/tui.md:576`, "Swapped views"; see #3578).
+/// rows nor the parent move (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_a_finished_tty_item_moves_nothing() {
     let mut app = home();
@@ -2092,7 +2092,7 @@ fn wheel_over_a_finished_tty_item_moves_nothing() {
 }
 
 /// The wheel over a finished non-tty job item is swallowed: neither the
-/// job's rows nor the parent move (`docs/tui.md:576`, "Swapped views";
+/// job's rows nor the parent move (`docs/tui.md`, "Swapped views";
 /// see #3578).
 #[test]
 fn wheel_over_a_finished_job_item_moves_nothing() {
@@ -2115,7 +2115,7 @@ fn wheel_over_a_finished_job_item_moves_nothing() {
 }
 
 /// The wheel over another harness's delegate item is swallowed: neither
-/// the item's rows nor the parent move (`docs/tui.md:576`, "Swapped views";
+/// the item's rows nor the parent move (`docs/tui.md`, "Swapped views";
 /// see #3578).
 #[test]
 fn wheel_over_a_foreign_delegate_item_moves_nothing() {
@@ -2167,7 +2167,7 @@ fn tall_transcript(app: &mut App) {
 }
 
 /// The wheel over the fiber delegate's transcript scrolls it three rows,
-/// leaving the stashed parent (`docs/tui.md:576`, "Swapped views"; see
+/// leaving the stashed parent (`docs/tui.md`, "Swapped views"; see
 /// #3578).
 #[test]
 fn wheel_over_the_fiber_transcript_scrolls_it_not_the_parent() {
@@ -2198,8 +2198,7 @@ fn wheel_over_the_fiber_transcript_scrolls_it_not_the_parent() {
 }
 
 /// The item's non-scrolling header swallows the wheel; it reaches neither
-/// the transcript body nor the stashed parent (`docs/tui.md:576`, "Swapped
-/// views"; see #3578).
+/// the transcript body nor the stashed parent (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_the_transcript_header_moves_nothing() {
     let mut app = home();
@@ -2231,7 +2230,7 @@ fn wheel_over_the_transcript_header_moves_nothing() {
 /// The item owns its final drawn row, but the row immediately below the
 /// content rectangle is not part of the item and cannot reach the hidden
 /// parent.
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_at_the_item_content_edge_stops_at_its_last_row() {
     let mut app = home();
@@ -2277,7 +2276,7 @@ fn wheel_at_the_item_content_edge_stops_at_its_last_row() {
 /// The wheel over a fiber transcript overlapping Offer and Results goes
 /// to the top-drawn item view only: the transcript scrolls three rows
 /// while the stashed parent, the offer and the results stay put
-/// (`docs/tui.md:576`, "Swapped views"; see #3578).
+/// (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_over_the_fiber_transcript_wins_over_offer_and_results() {
     let mut app = home();
@@ -2360,7 +2359,7 @@ fn wheel_over_the_fiber_transcript_wins_over_offer_and_results() {
 
 /// A swapped picker is drawn above the attached item and owns its wheel:
 /// the picker moves three displayed rows while the item stays put.
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_over_the_model_picker_above_an_item_moves_the_picker() {
     let mut app = home();
@@ -2414,7 +2413,7 @@ fn wheel_over_the_model_picker_above_an_item_moves_the_picker() {
 
 /// A drawn Search or Completion slab above an item swallows wheel input
 /// before it can reach the item transcript.
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_inside_search_and_completion_slabs_over_an_item_moves_nothing() {
     for surface in [crate::app::Surface::Search, crate::app::Surface::Completion] {
@@ -2448,4 +2447,186 @@ fn wheel_inside_search_and_completion_slabs_over_an_item_moves_nothing() {
             "{surface:?} owns the wheel above the item"
         );
     }
+}
+
+// Part of #3696: the `job_stop` and `job_input` answers route by tag.
+
+/// Stops the open job and returns the `job_stop` line it sends.
+fn stop_job(app: &mut App) -> Value {
+    let Effect::Send(lines) = app.item_click(super::Spot::Stop) else {
+        panic!("stop sends job_stop");
+    };
+    let stops: Vec<Value> = commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_stop")
+        .collect();
+    assert_eq!(stops.len(), 1, "{stops:?}");
+    stops.into_iter().next().unwrap_or_default()
+}
+
+#[test]
+fn job_stop_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobStop));
+    assert!(app.outbox.pending.contains_key(&id));
+    app.on_line(session_accepted(SESSION, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn job_input_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let Some(Effect::Send(lines)) = app.item_job_key(&Key::Char('x')) else {
+        panic!("a key sends job_input");
+    };
+    let inputs: Vec<Value> = commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_input")
+        .collect();
+    assert_eq!(inputs.len(), 1, "{inputs:?}");
+    let id = inputs[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobInput));
+    assert!(app.outbox.pending.contains_key(&id));
+    app.on_line(session_accepted(SESSION, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_second_job_stop_answer_after_settle_changes_nothing() {
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    app.on_line(session_accepted(SESSION, &id));
+    assert!(app.on_line(session_accepted(SESSION, &id)).is_empty());
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn an_answer_for_one_job_command_leaves_the_other_job_tag_alone() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let stop_id = stop["id"].as_str().unwrap_or_default().to_owned();
+    let Some(Effect::Send(lines)) = app.item_job_key(&Key::Char('x')) else {
+        panic!("a key sends job_input");
+    };
+    let inputs: Vec<Value> = commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_input")
+        .collect();
+    assert_eq!(inputs.len(), 1, "{inputs:?}");
+    let input_id = inputs[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&stop_id), Some(Waiting::JobStop));
+    assert_eq!(app.outbox.waiting(&input_id), Some(Waiting::JobInput));
+    // Each answer settles only its own tag: the `||` names both job
+    // commands, and any other tag reaches its own owner instead.
+    app.on_line(session_accepted(SESSION, &stop_id));
+    assert_eq!(app.outbox.waiting(&stop_id), None);
+    assert_eq!(app.outbox.waiting(&input_id), Some(Waiting::JobInput));
+    app.on_line(session_accepted(SESSION, &input_id));
+    assert_eq!(app.outbox.waiting(&input_id), None);
+}
+
+#[test]
+fn a_resent_command_for_another_session_settles_its_entry() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobStop));
+    // The answer arrives on another session: the other-session arm
+    // still settles the resent command's pending entry, and the tag
+    // settles with it instead of waiting for `items_line`.
+    app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn an_answer_for_the_open_item_session_still_settles() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobStop));
+    // The answer arrives on the open delegate's session: the item arm
+    // still settles its pending entry, and the tag settles with it
+    // instead of waiting for `items_line`.
+    app.on_line(session_accepted(DELEGATE_A, &id));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_job_stop_refusal_on_the_open_item_session_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    opened_item(&mut app, "j_1");
+    let stop = stop_job(&mut app);
+    let id = stop["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobStop));
+    // The refusal arrives on the open delegate's session: the item arm
+    // clears the pending entry and returns before `items_line`, so the
+    // tag settles with the entry.
+    app.on_line(session_refused(DELEGATE_A, &id, "duplicate_command"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
+}
+
+#[test]
+fn a_job_input_refusal_on_another_session_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home();
+    opened(&mut app);
+    mark_tty(&mut app);
+    start_job(&mut app, "j_1");
+    opened_item(&mut app, "j_1");
+    let Some(Effect::Send(lines)) = app.item_job_key(&Key::Char('x')) else {
+        panic!("a key sends job_input");
+    };
+    let inputs: Vec<Value> = commands(lines)
+        .into_iter()
+        .filter(|line| line["command"] == "job_input")
+        .collect();
+    assert_eq!(inputs.len(), 1, "{inputs:?}");
+    let id = inputs[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::JobInput));
+    // The refusal arrives on another session: the other-session arm
+    // clears the pending entry and returns before `items_line`, so the
+    // tag settles with the entry.
+    app.on_line(session_refused(
+        "s_bbbbbbbbbbbbbbbb",
+        &id,
+        "duplicate_command",
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.outbox.pending.contains_key(&id));
 }

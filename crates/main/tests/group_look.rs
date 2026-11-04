@@ -356,25 +356,17 @@ fn the_group_line_and_the_ledger_match_the_doc() {
     // columns with the line-number gutter: 20 lines, then
     // "… 5 more lines (Enter to view)" dim. The grid is fresh
     // from after the completion, and the card edges move with it.
-    let grid = run.wait_screen("the open ledger", |grid| {
+    run.wait_screen("the open ledger", |grid| {
         grid.rows
             .iter()
             .any(|row| row.contains("+ Thought: Reading"))
     });
-    let y = find_row(&grid.rows, "thought 4 times").expect("the group row");
-    let (left, _right) = card_edges(&grid, y, 2);
-    let gutter = left + 1;
-    let read = ledger_row(&grid, gutter, "read", "a.txt");
-    run.write(
-        format!(
-            "\x1b[<0;{};{}M\x1b[<0;{};{}m",
-            gutter + 10 + 1,
-            read + 1,
-            gutter + 10 + 1,
-            read + 1
-        )
-        .as_bytes(),
-    );
+    run.click_where("the ledger row", |grid| {
+        let y = find_row(&grid.rows, "thought 4 times")?;
+        let (left, _right) = card_edges(grid, y, 2);
+        let gutter = left + 1;
+        Some((gutter + 10, ledger_row(grid, gutter, "read", "a.txt")))
+    });
     let grid = run.wait_screen("the opened read", |grid| {
         grid.rows
             .iter()

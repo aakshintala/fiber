@@ -274,10 +274,15 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
     // (`crates/doors/src/client.rs`), which the terminal pushes as the
     // notice, and the draft comes back to the box with it.
     run.write(b"quetzal followup\r");
-    run.wait_screen("the not_subscribed rejection", |screen| {
+    let rejected = run.wait_screen("the not_subscribed rejection", |screen| {
         shows(screen, "Send `subscribe` first.")
+            && shows(screen, FOLLOWUP)
+            && shows(screen, "stream_closed")
+            && screen
+                .rows
+                .iter()
+                .any(|row| row.contains("Send `subscribe` first.") && row.contains('✕'))
     });
-    let rejected = run.screen();
     assert!(
         shows(&rejected, FOLLOWUP),
         "the draft returns to the composer: {}",
@@ -344,7 +349,9 @@ fn stream_closed_notice_draft_returns_and_reopen_resubscribes() {
             && !shows(screen, "Enter opens the focused session")
             && !shows(screen, "stream_closed")
     };
-    let held = run.screen();
+    let held = run.wait_screen("home before the reopen", |screen| {
+        shows(screen, "Enter opens the focused session") && !reopened_shown(screen)
+    });
     assert!(
         shows(&held, "Enter opens the focused session") && !reopened_shown(&held),
         "home does not meet the reopen wait: {}",

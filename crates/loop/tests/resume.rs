@@ -42,7 +42,7 @@ use contract::provider::Provider;
 use contract::shapes::Tokens;
 use contract::tool::Tool;
 use contract::{ErrorCode, GenerationId};
-use fakes::{Deadline, Scripted, ScriptedProvider};
+use fakes::{Deadline, MUST_SUCCEED_WITHIN, Scripted, ScriptedProvider};
 use r#loop::{Loop, Model};
 
 /// `PromptInputs` over temp `home` with a fixed shell: the opening message
@@ -2958,6 +2958,67 @@ fn assert_orphaned(line: &Envelope, id: &str) {
 }
 
 #[test]
+fn keeper_completions_join_one_turn_as_a_single_fiber_message() {
+    let mut history = History::new(vec![Scripted::text("First."), Scripted::text("Second.")]);
+    history.write(user_turn("before crash"), None);
+    history.write(job_started("j_kept_a"), Some("a_1"));
+    history.write(job_started("j_kept_b"), Some("a_2"));
+    history
+        .log
+        .append(&job_completed("j_kept_a"), None, None)
+        .unwrap();
+    history
+        .log
+        .append(&job_completed("j_kept_b"), None, None)
+        .unwrap();
+    history.freeze();
+    let mut looped = history.resume(Vec::new());
+    for prompt in ["first after crash", "next"] {
+        history
+            .inbox_tx
+            .send(Delivery::Prompt(
+                support::message(prompt),
+                support::ignore(),
+            ))
+            .unwrap();
+        let (done, finished) = mpsc::channel();
+        std::thread::spawn(move || {
+            assert!(looped.turn().unwrap().is_some());
+            done.send(looped).unwrap();
+        });
+        looped =
+            Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "keeper delivery turn");
+    }
+    let turns: Vec<_> = history
+        .new_lines()
+        .into_iter()
+        .filter(|line| line.kind == "turn_started")
+        .collect();
+    let fiber_messages = |line: &Envelope| {
+        line.payload["input"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|item| item["type"] == "message" && item["source"] == "fiber")
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    // docs/tools.md, "The keeper": all kept notices join the next turn in one message, once.
+    let messages = fiber_messages(&turns[0]);
+    assert_eq!(messages.len(), 1);
+    let text = messages[0]["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("j_kept_a") && text.contains("j_kept_b"));
+    assert!(text.find("j_kept_a") < text.find("j_kept_b"));
+    assert!(fiber_messages(&turns[1]).is_empty());
+    assert!(
+        !history
+            .new_lines()
+            .iter()
+            .any(|line| line.kind == "job_completed")
+    );
+}
+
+#[test]
 fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
@@ -3199,7 +3260,11 @@ fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
 
     let seen = texts(&conversation);
     assert!(seen[0].contains("new-os"), "{seen:?}");
-    assert_eq!(seen[1..], ["one", "the note", "two"]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    assert_eq!(
+        seen[1..],
+        ["The person's new message:\none", "the note", "two"]
+    );
     // The new context has had no request, and its opening is written once.
     assert_eq!(history.provider.requests()[0].previous_end, None);
     assert_eq!(
@@ -3262,7 +3327,11 @@ fn a_crash_between_the_completion_and_the_new_opening_writes_it_at_the_next_turn
     );
     assert!(seen[0].contains("Session log:"), "{seen:?}");
     assert!(!seen[0].contains("old-os"));
-    assert_eq!(seen[1..], ["one", "the note", "two"]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    assert_eq!(
+        seen[1..],
+        ["The person's new message:\none", "the note", "two"]
+    );
     assert_eq!(
         history.new_kinds(),
         [
@@ -3655,7 +3724,16 @@ fn a_resume_after_a_completed_handoff_sends_the_note_and_what_came_after_only() 
         })
         .collect();
     assert!(seen[0].contains("new-os"), "{seen:?}");
-    assert_eq!(seen[1..], ["two", "the note", "after", "three"]);
+    // docs/handoff.md, "What the model sees after a handoff": "In order:" — new-message input (item 5), the note (item 6); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    assert_eq!(
+        seen[1..],
+        [
+            "The person's new message:\ntwo",
+            "the note",
+            "after",
+            "three"
+        ]
+    );
 }
 
 #[test]

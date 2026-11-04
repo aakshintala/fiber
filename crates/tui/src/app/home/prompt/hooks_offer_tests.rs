@@ -32,7 +32,7 @@ fn fake() -> Arc<Fake> {
 }
 
 /// A local home at "/w" with a model on the chip, 80x24, and `seam`.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -52,7 +52,7 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         ..Default::default()
     });
     app.set_size(80, 24);
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app
 }
 
@@ -206,7 +206,7 @@ fn pending_start(app: &App, id: &str) {
 #[test]
 fn only_the_exact_missing_hooks_refusal_opens_the_offer() {
     // A provider's missing extension names another install: no offer.
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let id = send_start(&mut app, "hi");
     let lines = app.on_line(refused(
@@ -228,7 +228,7 @@ fn only_the_exact_missing_hooks_refusal_opens_the_offer() {
     );
 
     // The right message under the wrong code is not the offer either.
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let id = send_start(&mut app, "hi");
     app.on_line(refused(&id, "config_invalid", MISSING));
@@ -239,7 +239,7 @@ fn only_the_exact_missing_hooks_refusal_opens_the_offer() {
     );
 
     // A refused prompt is not a refused start: no offer.
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let id = send_start(&mut app, "hi");
     app.on_line(accepted(&id, "s_aaaaaaaaaaaaaaaa"));
@@ -261,23 +261,10 @@ fn only_the_exact_missing_hooks_refusal_opens_the_offer() {
 
     // The exact refusal opens the offer and queues its names query.
     let seam = fake();
-    let mut app = home(Some(Arc::clone(&seam)));
+    let mut app = home(Arc::clone(&seam));
     app.on_line(hello());
     let id = refuse_start(&mut app, "hi");
     pending_start(&app, &id);
-}
-
-#[test]
-fn no_seam_leaves_the_refusal_on_its_existing_path() {
-    let mut app = home(None);
-    app.on_line(hello());
-    let id = send_start(&mut app, "hi");
-    app.on_line(refused(&id, "extension_missing", MISSING));
-    assert!(!app.hooks_offer_open(), "no seam runs no query");
-    assert_eq!(
-        notices(&app),
-        [("extension_missing".to_owned(), MISSING.to_owned())]
-    );
 }
 
 #[test]
@@ -289,7 +276,7 @@ fn empty_names_and_query_errors_settle_the_original_refusal() {
             message: "the names could not be read".to_owned(),
         }),
     ] {
-        let mut app = home(Some(fake()));
+        let mut app = home(fake());
         app.on_line(hello());
         let id = refuse_start(&mut app, "hi");
         let job = app.take_hooks_job().expect("the query waits");
@@ -322,7 +309,7 @@ fn empty_names_and_query_errors_settle_the_original_refusal() {
 
 #[test]
 fn names_open_the_offer_and_stale_results_do_nothing() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let id = refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -353,7 +340,7 @@ fn names_open_the_offer_and_stale_results_do_nothing() {
 
 #[test]
 fn esc_cancels_without_starting_a_session() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let id = refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -377,7 +364,7 @@ fn esc_cancels_without_starting_a_session() {
 
 #[test]
 fn the_cancel_choice_cancels_through_a_click() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -401,7 +388,7 @@ fn the_cancel_choice_cancels_through_a_click() {
 
 #[test]
 fn a_click_outside_declines_through_esc() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -435,7 +422,7 @@ fn a_click_outside_declines_through_esc() {
 #[test]
 fn clear_staged_decline_stays_attached_and_sends_no_close() {
     let session = "s_aaaaaaaaaaaaaaaa";
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
@@ -467,7 +454,7 @@ fn clear_staged_decline_stays_attached_and_sends_no_close() {
 #[test]
 fn paste_over_a_clear_staged_offer_keeps_the_retained_draft() {
     let session = "s_aaaaaaaaaaaaaaaa";
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
@@ -496,7 +483,7 @@ fn paste_over_a_clear_staged_offer_keeps_the_retained_draft() {
 fn keys_edits_and_clicks_hold_while_the_names_query_runs() {
     for clear in [false, true] {
         let session = "s_aaaaaaaaaaaaaaaa";
-        let mut app = home(Some(fake()));
+        let mut app = home(fake());
         app.on_line(hello());
         if clear {
             app.attach(contract::SessionId(session.to_owned()));
@@ -537,7 +524,7 @@ fn keys_edits_and_clicks_hold_while_the_names_query_runs() {
 #[test]
 fn presses_hold_while_the_names_query_runs_over_an_attached_session() {
     let session = "s_aaaaaaaaaaaaaaaa";
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
@@ -603,7 +590,7 @@ fn presses_hold_while_the_names_query_runs_over_an_attached_session() {
 
 #[test]
 fn accepting_resends_the_retained_start_unchanged() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.launch_overrides = vec!["z=1".to_owned(), "a=2".to_owned(), "z=1".to_owned()];
     app.on_line(hello());
     let old = refuse_start(&mut app, "hi");
@@ -693,7 +680,7 @@ fn accepting_resends_the_retained_start_unchanged() {
 #[test]
 fn clear_staged_accept_closes_the_old_session_with_its_credential() {
     let old_session = "s_aaaaaaaaaaaaaaaa";
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.launch_overrides = vec!["providers.\"test\".credential=work".to_owned()];
     app.on_line(hello());
     // The first start carries the credential, so the panel records it.
@@ -772,7 +759,7 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
 
 #[test]
 fn install_failure_replaces_the_offer_and_blocks_retry() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let old = refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -823,7 +810,7 @@ fn install_failure_replaces_the_offer_and_blocks_retry() {
 /// the link's condition while the failure stands, with no retry.
 #[test]
 fn install_connection_failure_survives_a_reconnect_without_retry() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let old = refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -882,7 +869,7 @@ fn install_connection_failure_survives_a_reconnect_without_retry() {
 /// connection lost and no start goes out again.
 #[test]
 fn disconnect_upgrades_a_worker_first_clone_failure() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let old = refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -941,7 +928,7 @@ fn disconnect_upgrades_a_worker_first_clone_failure() {
 
 #[test]
 fn disconnect_while_installing_fails_without_retry() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let old = refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -984,7 +971,7 @@ fn disconnect_while_installing_fails_without_retry() {
 
 #[test]
 fn disconnect_during_the_names_query_follows_lost_link_handling() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     let old = refuse_start(&mut app, "hi");
     assert!(app.take_hooks_job().is_some(), "the query runs");
@@ -1021,7 +1008,7 @@ fn disconnect_during_the_names_query_follows_lost_link_handling() {
 
 #[test]
 fn keys_and_clicks_hold_while_the_install_runs() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -1057,7 +1044,7 @@ fn keys_and_clicks_hold_while_the_install_runs() {
 
 #[test]
 fn a_remote_with_its_link_up_commits_the_install() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     let router = crate::remote::Router::new();
     let remote = Arc::new(crate::remote::Remote::new(
         Arc::new(Fake::new(Vec::new())),
@@ -1089,7 +1076,7 @@ fn a_remote_with_its_link_up_commits_the_install() {
 #[test]
 fn clear_staged_install_failure_settles_the_clear() {
     let session = "s_aaaaaaaaaaaaaaaa";
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
@@ -1141,7 +1128,7 @@ fn clear_staged_install_failure_settles_the_clear() {
 #[test]
 fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
     let session = "s_aaaaaaaaaaaaaaaa";
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     app.attach(contract::SessionId(session.to_owned()));
     app.on_line(status(session));
@@ -1176,32 +1163,9 @@ fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
 }
 
 #[test]
-fn commits_without_a_seam_or_link_fail_at_once_with_no_job() {
-    // No seam: the install cannot run, so the offer closes on the
-    // failure naming the command instead.
-    let mut app = home(Some(fake()));
-    app.on_line(hello());
-    refuse_start(&mut app, "hi");
-    let ticket = match app.take_hooks_job().expect("the query waits") {
-        crate::install_worker::HooksJob::Query(query) => query.ticket,
-        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
-    };
-    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
-    app.set_configure(None);
-    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
-    assert!(app.take_hooks_job().is_none(), "no job runs without a seam");
-    assert!(!app.hooks_offer_open());
-    assert_eq!(
-        notices(&app),
-        [(
-            "io_failed".to_owned(),
-            "Installing is not available in this terminal. Run `fiber extension install hooks`."
-                .to_owned()
-        )]
-    );
-
+fn commits_without_a_link_fail_at_once_with_no_job() {
     // A remote whose hub link drops fails the same way, with no job.
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     let router = crate::remote::Router::new();
     let remote = Arc::new(crate::remote::Remote::new(
         Arc::new(Fake::new(Vec::new())),
@@ -1241,7 +1205,7 @@ fn spawn_failures_fold_as_their_own_side() {
     // A query that never starts settles the original refusal: the
     // spawn failure never becomes an install failure.
     let seam = fake();
-    let mut app = home(Some(Arc::clone(&seam)));
+    let mut app = home(Arc::clone(&seam));
     app.on_line(hello());
     refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -1264,7 +1228,7 @@ fn spawn_failures_fold_as_their_own_side() {
     // An install that never starts replaces the offer with the failure
     // naming the command: no seam install runs, no start goes out.
     let seam = fake();
-    let mut app = home(Some(Arc::clone(&seam)));
+    let mut app = home(Arc::clone(&seam));
     app.on_line(hello());
     refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -1307,7 +1271,7 @@ fn spawn_failures_fold_as_their_own_side() {
 
 #[test]
 fn row_clicks_cannot_clobber_the_offer() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     let lines = app.on_line(hello());
     let recent = lines
         .get(1)
@@ -1355,7 +1319,7 @@ fn row_clicks_cannot_clobber_the_offer() {
 
 #[test]
 fn the_offer_is_not_a_delete_question() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     app.on_line(hello());
     refuse_start(&mut app, "hi");
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -1381,7 +1345,7 @@ fn the_offer_is_not_a_delete_question() {
 #[test]
 fn the_wheel_over_the_offer_frame_moves_no_list() {
     let seam = fake();
-    let mut app = home(Some(Arc::clone(&seam)));
+    let mut app = home(Arc::clone(&seam));
     // Enough exited rows to scroll: the wheel over the list moves it.
     let lines = app.on_line(hello());
     let recent = lines
@@ -1442,7 +1406,7 @@ fn the_wheel_over_the_offer_frame_moves_no_list() {
 #[test]
 fn the_wheel_while_the_names_query_runs_moves_no_list() {
     let seam = fake();
-    let mut app = home(Some(Arc::clone(&seam)));
+    let mut app = home(Arc::clone(&seam));
     // Enough exited rows to scroll: the wheel over the list moves it.
     let lines = app.on_line(hello());
     let recent = lines

@@ -40,7 +40,7 @@ fn fake() -> Arc<Fake> {
 }
 
 /// An app on home at 80x24 in `/w`, with `seam`.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -50,13 +50,13 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         },
         ..Default::default()
     });
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app.set_size(80, 24);
     app
 }
 
 /// An app on home with the hub up and attached to [`SESSION`].
-fn connected(seam: Option<Arc<Fake>>) -> App {
+fn connected(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
         kind: "hub_hello".to_owned(),
@@ -131,7 +131,7 @@ fn session_line(kind: &str, payload: serde_json::Value) -> Line {
 
 #[test]
 fn slash_skills_with_no_session_is_the_notice_and_opens_nothing() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     assert_eq!(slash_skills(&mut app), Effect::None);
     assert_eq!(app.notices.newest(), Some("No session on screen."));
     assert!(!app.config_view_open());
@@ -139,7 +139,7 @@ fn slash_skills_with_no_session_is_the_notice_and_opens_nothing() {
 
 #[test]
 fn slash_skills_sends_skills_for_the_session_on_screen() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_skills(&mut app);
     assert!(id.starts_with("c_"), "{id}");
     assert!(app.config_view_open());
@@ -155,7 +155,7 @@ fn slash_skills_sends_skills_for_the_session_on_screen() {
 
 #[test]
 fn the_answer_to_the_sent_id_fills_the_view() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_skills(&mut app);
     app.on_line(session_line(
         "command_accepted",
@@ -170,7 +170,7 @@ fn the_answer_to_the_sent_id_fills_the_view() {
 
 #[test]
 fn a_wrong_kind_or_older_answer_through_the_app_is_ignored() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_skills(&mut app);
     // The sent id with a `tools` result: not this view's kind.
     app.on_line(session_line(
@@ -213,7 +213,7 @@ fn a_wrong_kind_or_older_answer_through_the_app_is_ignored() {
 
 #[test]
 fn a_session_rejection_of_skills_shows_its_message() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_skills(&mut app);
     app.on_line(session_line(
         "command_rejected",
@@ -225,7 +225,7 @@ fn a_session_rejection_of_skills_shows_its_message() {
 
 #[test]
 fn a_hub_rejection_of_skills_shows_its_message() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     let id = open_skills(&mut app);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
         kind: "command_rejected".to_owned(),
@@ -241,20 +241,8 @@ fn a_hub_rejection_of_skills_shows_its_message() {
 }
 
 #[test]
-fn without_a_seam_skills_says_not_available() {
-    let mut app = connected(None);
-    assert_eq!(slash_skills(&mut app), Effect::None);
-    let frame = app.config_view_screen().expect("the view is open");
-    assert_eq!(frame.title, "Skills");
-    assert_eq!(
-        frame.below,
-        vec!["Not available in this terminal.".to_owned()]
-    );
-}
-
-#[test]
 fn opening_skills_closes_the_open_view() {
-    let mut app = connected(Some(fake()));
+    let mut app = connected(fake());
     for ch in "/settings".chars() {
         app.on_key(Key::Char(ch), now());
     }
@@ -275,7 +263,7 @@ fn opening_skills_closes_the_open_view() {
 #[test]
 fn file_closed_rereads_the_lists_and_the_text() {
     let seam = fake();
-    let mut app = connected(Some(Arc::clone(&seam)));
+    let mut app = connected(Arc::clone(&seam));
     let id = open_skills(&mut app);
     app.on_line(session_line(
         "command_accepted",
@@ -318,7 +306,7 @@ fn file_closed_rereads_the_lists_and_the_text() {
 #[test]
 fn left_and_right_reach_the_skills_view_not_the_draft() {
     let seam = fake();
-    let mut app = connected(Some(Arc::clone(&seam)));
+    let mut app = connected(Arc::clone(&seam));
     let id = open_skills(&mut app);
     app.on_line(session_line(
         "command_accepted",

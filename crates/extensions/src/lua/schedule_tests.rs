@@ -1564,40 +1564,6 @@ fn a_finished_timer_records_timer_done_for_its_own_target() {
     );
 }
 
-/// The suspend test's hold on the timer callback's `sh`: the block FIFO
-/// open read-write, so the child's `read` parks until the test releases
-/// it. Dropping without `release` closes the end, so a failure before the
-/// release still lets the child read end-of-file and exit instead of
-/// hanging the run.
-struct HoldExec {
-    file: std::fs::File,
-}
-
-impl HoldExec {
-    /// Opens `block` read-write: the open never blocks, and the held write
-    /// end keeps the child's `read` parked.
-    fn hold(block: &std::path::Path) -> Self {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(block)
-            .unwrap();
-        Self { file }
-    }
-
-    /// Wakes the child's `read` with a line and keeps the end open: the
-    /// buffered line survives until the child reads it, even when the
-    /// release runs before the child's open. The end closes when the value
-    /// drops, so a failure before the release still lets the child read
-    /// end-of-file and exit instead of hanging the run.
-    fn release(&mut self) {
-        use std::io::Write as _;
-        match writeln!(&mut self.file) {
-            Ok(()) | Err(_) => {}
-        }
-    }
-}
-
 /// A timer whose callback suspends records no `TimerDone` while it waits
 /// on its `host.exec` run, and records exactly one once the callback
 /// finishes. Without the guard's suspend check, the hook would fire at the
@@ -1614,7 +1580,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     let ready = fakes::children::Ready::new(dir.path());
     let block = dir.path().join("block.fifo");
     fakes::fifo(&block);
-    let mut hold = HoldExec::hold(&block);
+    let mut hold = fakes::Hold::on(&block, &block.display().to_string());
     let (hub, armed) = serve_timer_init(&clock, dir.path(), "arm_exec", ready.path(), &block);
     wait_returned(&hub, armed);
     let due = clock.origin() + Duration::from_millis(100);
@@ -1652,7 +1618,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
     // (`docs/extensions.md`, "How an extension runs"), so the suspended
     // timer has not finished and settles nothing yet.
     assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
-    hold.release();
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done)
         .expect("the timer callback completed");
@@ -1669,6 +1635,7 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
         ),
         "the released exec left its group behind"
     );
+    hold.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// A release before the child opens `block` still completes the timer: the
@@ -1677,7 +1644,9 @@ fn a_suspended_timer_records_no_timer_done_until_it_finishes() {
 /// test's release lands before the child's `block` open whatever the
 /// scheduling, and the settle hook records exactly one `TimerDone`. Without
 /// the held end staying open, the child's `block` open blocks with no
-/// writer and the completion wait below expires.
+/// writer and the completion wait below expires. The fake keeps the order
+/// the FIFO keeps: a release before the next hold
+/// (`docs/testing/fakes.md`, "Fakes").
 #[test]
 fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     use std::io::Write as _;
@@ -1699,7 +1668,7 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     for fifo in [&gate, &block] {
         fakes::fifo(fifo);
     }
-    let mut hold = HoldExec::hold(&block);
+    let mut hold = fakes::Hold::on(&block, &block.display().to_string());
     let (hub, armed) =
         serve_gated_timer_init(&clock, dir.path(), "arm_gated", ready.path(), &gate, &block);
     wait_returned(&hub, armed);
@@ -1740,7 +1709,7 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
     assert!(timer_done(&log).is_empty(), "no TimerDone while suspended");
     // The release lands before the gate opens, and the child's block open
     // comes after its gate read, so the release lands before the open.
-    hold.release();
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
     // Opening read-write never blocks, and the buffered line lets the
     // child's gate read finish so it reaches the block open after the
     // release.
@@ -1767,6 +1736,7 @@ fn a_released_hold_is_not_lost_before_the_child_opens_the_fifo() {
         "the released exec left its group behind"
     );
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    hold.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
 /// A non-timer call that finishes records no `TimerDone`. Without the

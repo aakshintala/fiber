@@ -109,20 +109,25 @@ In order:
    (`docs/system-prompt.md`, "After a handoff").
 3. The context `session_start` hooks add, run with reason `handoff`, each
    logged as `context_added` (`docs/extensions.md`, "The hook points").
-4. The person's earlier messages that still bind, verbatim, oldest first. They
-   are the `reviewer_kept` selection unchanged, and a context they leave over
-   the trigger is handled by "Triggers" and "Overflow", as this turn's input is
+4. The person's earlier messages that still bind, oldest first, each in its
+   own labelled block. Each block names the message as the person's earlier
+   message and puts the reply it answered before it, rendered as the reviewer
+   sees it with the same truncation rules. They are the `reviewer_kept`
+   selection unchanged, and a context they leave over the trigger is handled
+   by "Triggers" and "Overflow", as this turn's input is
    (`docs/permissions.md`, "At a handoff"). A kept message from this turn
    appears once, as part of this turn's input. With no reviewer in the session
    there is no selection, and nothing is carried here.
 5. This turn's input from the person and any steering messages applied in this
-   turn, verbatim. A handoff between turns has none.
+   turn, verbatim, in a block labelled as the person's new message. A handoff
+   between turns has none.
 6. The handoff note.
 7. A line Fiber writes listing the jobs still running, with each job's id and
    description, as the rewind note does (`docs/events.md`, "Rewind").
-8. The skills loaded in the previous context, each sent again as its current
-   text, in the order they were first loaded, once each
-   (`docs/tools.md`, "Skills"). A skill sent again counts as loaded in the
+8. A line saying the skills were reloaded from the previous context, then
+   each skill in its own labelled block with its name, path and current text,
+   in the order they were first loaded, once each (`docs/tools.md`, "Skills").
+   A skill sent again counts as loaded in the
    new context, so a later handoff sends it again too. An agent working under
    a skill keeps it across a handoff without having to notice it was lost. A
    loaded skill whose file is gone at the handoff is not sent again, and the

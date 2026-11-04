@@ -6,6 +6,7 @@ use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
+use contract::events::EventKind;
 use contract::{ActionId, Seq, SessionId};
 
 /// About how many durable lines a page holds before it may be cut.
@@ -165,7 +166,7 @@ impl Index {
         &mut self,
         session: &SessionId,
         seq: Seq,
-        kind: &str,
+        kind: &EventKind,
         action: Option<&ActionId>,
         shown: bool,
     ) -> Cut {
@@ -222,7 +223,7 @@ impl Index {
             }
         };
         match kind {
-            "turn_started" => {
+            EventKind::TurnStarted => {
                 self.turns = self.turns.saturating_add(1);
                 let keep = self.turns.saturating_sub(1);
                 self.in_flight.retain(|_, turn| *turn >= keep);
@@ -233,45 +234,178 @@ impl Index {
                     cut = Cut::Here;
                 }
             }
-            "turn_completed" => self.candidate = None,
-            "step_started" => {
+            EventKind::TurnCompleted => self.candidate = None,
+            EventKind::StepStarted => {
                 self.candidate = None;
                 if held >= PAGE_LINES && self.in_flight.is_empty() {
                     self.candidate = Some(Candidate { seq, held });
                     cut = Cut::Candidate;
                 }
             }
-            "tool_call_requested" => {
+            EventKind::ToolCallRequested => {
                 self.candidate = None;
                 self.group |= shown;
                 begin(Flight::Call, self);
             }
-            "reasoning_started" => {
+            EventKind::ReasoningStarted => {
                 if self.group {
                     self.candidate = None;
                 }
                 self.group |= shown;
                 begin(Flight::Reasoning, self);
             }
-            "permission_requested" => begin(Flight::Permission, self),
-            "tool_call_completed" | "reasoning_completed" | "permission_resolved" => {
+            EventKind::PermissionRequested => begin(Flight::Permission, self),
+            EventKind::ToolCallCompleted
+            | EventKind::ReasoningCompleted
+            | EventKind::PermissionResolved => {
                 let flight = match kind {
-                    "tool_call_completed" => Flight::Call,
-                    "reasoning_completed" => Flight::Reasoning,
-                    _ => Flight::Permission,
+                    EventKind::ToolCallCompleted => Flight::Call,
+                    EventKind::ReasoningCompleted => Flight::Reasoning,
+                    EventKind::FiberStarted
+                    | EventKind::FiberExited
+                    | EventKind::SessionStarted
+                    | EventKind::Rewound
+                    | EventKind::Moved
+                    | EventKind::TurnStarted
+                    | EventKind::StepStarted
+                    | EventKind::TurnCompleted
+                    | EventKind::SteeringApplied
+                    | EventKind::SteeringQueue
+                    | EventKind::ShellCommand
+                    | EventKind::DirectoryAdded
+                    | EventKind::SessionNamed
+                    | EventKind::Clients
+                    | EventKind::SessionStatus
+                    | EventKind::ContextAdded
+                    | EventKind::AssistantMessageStarted
+                    | EventKind::AssistantMessageDelta
+                    | EventKind::AssistantMessageCompleted
+                    | EventKind::TextCompleted
+                    | EventKind::ToolCallArgumentsDelta
+                    | EventKind::ReasoningStarted
+                    | EventKind::ReasoningDelta
+                    | EventKind::ToolCallRequested
+                    | EventKind::ToolCallStarted
+                    | EventKind::ToolCallDelta
+                    | EventKind::PermissionRequested
+                    | EventKind::PermissionResolved
+                    | EventKind::InteractionRequested
+                    | EventKind::InteractionResolved
+                    | EventKind::RepositoryCodeOffered
+                    | EventKind::RepositoryCodeResolved
+                    | EventKind::UsageRecorded
+                    | EventKind::QuotaNoticed
+                    | EventKind::QuotaRearmed
+                    | EventKind::RetryScheduled
+                    | EventKind::Notice
+                    | EventKind::PreambleBuilt
+                    | EventKind::ModelChanged
+                    | EventKind::OpeningMessage
+                    | EventKind::InstructionFile
+                    | EventKind::DateChanged
+                    | EventKind::SkillsChanged
+                    | EventKind::HandoffStarted
+                    | EventKind::HandoffCompleted
+                    | EventKind::SkillsResent
+                    | EventKind::ContextNudged
+                    | EventKind::ReviewerKept
+                    | EventKind::McpServerFailed
+                    | EventKind::McpServerReady
+                    | EventKind::Reloaded
+                    | EventKind::ExtensionsLoaded
+                    | EventKind::ExtensionStateSet
+                    | EventKind::ExtensionStateUnset
+                    | EventKind::ExtensionUi
+                    | EventKind::ExtensionMessage
+                    | EventKind::ExtensionLog
+                    | EventKind::ExtensionExec
+                    | EventKind::ExtensionHello
+                    | EventKind::ExtensionRequest
+                    | EventKind::JobStarted
+                    | EventKind::DelegateStarted
+                    | EventKind::JobDelta
+                    | EventKind::JobLine
+                    | EventKind::DelegateFinished
+                    | EventKind::JobCompleted
+                    | EventKind::JobsPendingNotified
+                    | EventKind::CommandAccepted
+                    | EventKind::CommandRejected
+                    | EventKind::Unknown(_) => Flight::Permission,
                 };
                 if let Some(action) = action {
                     self.in_flight.remove(&(flight, action.clone()));
                 }
             }
-            "text_completed" if shown => {
+            EventKind::TextCompleted if shown => {
                 self.group = false;
                 if let Some(candidate) = self.candidate.take() {
                     self.split(candidate);
                     cut = Cut::AtCandidate;
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningDelta
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
         }
         if let Some(open) = self.pages.last_mut() {
             if open.lines == 0 {

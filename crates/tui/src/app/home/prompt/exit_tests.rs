@@ -578,6 +578,43 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
 }
 
 #[test]
+fn an_unsent_close_settles_only_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    working(&mut app, "s_bbbbbbbbbbbbbbbb");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    let parsed = commands(lines.clone());
+    let unsent_id = parsed
+        .iter()
+        .find(|line| line["command"] == "close" && line["session_id"] == "s_aaaaaaaaaaaaaaaa")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("unsent close id: {parsed:?}"));
+    let sent_id = parsed
+        .iter()
+        .find(|line| line["command"] == "close" && line["session_id"] == "s_bbbbbbbbbbbbbbbb")
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("sent close id: {parsed:?}"));
+    assert_eq!(app.outbox.waiting(unsent_id), Some(Waiting::Close));
+    assert_eq!(app.outbox.waiting(sent_id), Some(Waiting::Close));
+    // Only the never-written close settles: the written one still waits
+    // for its answer.
+    let close = lines
+        .iter()
+        .find(|line| line.contains("s_aaaaaaaaaaaaaaaa") && line.contains("close"))
+        .cloned()
+        .unwrap_or_else(|| panic!("a close line"));
+    app.write_failed(std::slice::from_ref(&close));
+    assert_eq!(app.outbox.waiting(unsent_id), None);
+    assert_eq!(app.outbox.waiting(sent_id), Some(Waiting::Close));
+}
+
+#[test]
 fn remote_exit_lines_keep_the_hub_for_live_and_attached_sessions() {
     let mut app = home_with(80, 24, launch());
     app.home.as_mut().unwrap().launch.location = crate::LaunchLocation::Remote {
@@ -1392,4 +1429,64 @@ fn the_close_all_elsewhere_boundary_holds_both_sides() {
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 2, 1)));
+}
+
+#[test]
+fn quit_closes_register_a_close_tag_each() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    let lines = commands(lines);
+    let closes: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["command"] == "close")
+        .collect();
+    assert_eq!(closes.len(), 1);
+    for close in closes {
+        let id = close["id"].as_str().unwrap_or_default();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::Close));
+    }
+}
+
+#[test]
+fn quit_close_session_answer_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    let lines = commands(lines);
+    let close = lines
+        .iter()
+        .find(|line| line["command"] == "close")
+        .unwrap_or_else(|| panic!("close line: {lines:?}"));
+    let id = close["id"].as_str().unwrap_or_else(|| panic!("close id"));
+    let session = close["session_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("close session"));
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::Close));
+    let answer = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), Value::String(id.to_owned()))]
+            .into_iter()
+            .collect(),
+    });
+    assert!(app.on_line(answer).is_empty());
+    assert_eq!(app.outbox.waiting(id), None);
 }

@@ -1,5 +1,6 @@
 //! The jigs' entry points: draw and hover frames from an events file (`docs/testing.md`, "Jigs").
 
+use contract::events::EventKind;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -328,8 +329,8 @@ pub fn measure_paging(
         if paging.app.session().is_none() {
             paging.app.attach(envelope.session_id.clone());
         }
-        turns = turns.saturating_add(usize::from(envelope.kind == "turn_started"));
-        calls = calls.saturating_add(usize::from(envelope.kind == "tool_call_requested"));
+        turns = turns.saturating_add(usize::from(envelope.kind() == EventKind::TurnStarted));
+        calls = calls.saturating_add(usize::from(envelope.kind() == EventKind::ToolCallRequested));
         paging.app.on_line(Line::Session(envelope));
         paging.most = paging.most.max(paging.app.pages().resident());
     }

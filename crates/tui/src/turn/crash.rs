@@ -7,6 +7,7 @@
 //! unless the process before it exited suspended on a request, when the
 //! turn resumes. A child of `turn`, so it closes and places in a card.
 
+use contract::events::EventKind;
 use std::collections::HashMap;
 
 use contract::events::{
@@ -243,14 +244,14 @@ pub(crate) fn before_line(fold: &mut Fold, envelope: &Envelope) {
         return;
     }
     if !matches!(
-        envelope.kind.as_str(),
-        "job_started"
-            | "job_completed"
-            | "delegate_started"
-            | "delegate_finished"
-            | "extension_state_set"
-            | "extension_state_unset"
-            | "rewound"
+        envelope.kind(),
+        EventKind::JobStarted
+            | EventKind::JobCompleted
+            | EventKind::DelegateStarted
+            | EventKind::DelegateFinished
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::Rewound
     ) {
         fold.crash.rewind_stopped.clear();
     }
@@ -259,8 +260,8 @@ pub(crate) fn before_line(fold: &mut Fold, envelope: &Envelope) {
 /// Folds `mcp_server_failed`, `fiber_exited`, `fiber_started`,
 /// `job_started` and `job_completed`; false when no card changed.
 pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> bool {
-    match envelope.kind.as_str() {
-        "mcp_server_failed" => read!(envelope, McpServerFailed).is_some_and(|failed| {
+    match envelope.kind() {
+        EventKind::McpServerFailed => read!(envelope, McpServerFailed).is_some_and(|failed| {
             place(
                 turns,
                 fold,
@@ -270,13 +271,13 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             );
             true
         }),
-        "fiber_exited" => {
+        EventKind::FiberExited => {
             if let Some(exited) = read!(envelope, FiberExited) {
                 fold.crash.suspended = exited.suspended_on.is_some();
             }
             false
         }
-        "rewound" => read!(envelope, Rewound).is_some_and(|rewound| {
+        EventKind::Rewound => read!(envelope, Rewound).is_some_and(|rewound| {
             // The line names the new session and says what was not
             // restored and which jobs stopped (`docs/tui.md`, "Rewind"):
             // a rewind never restores files, and every job still running
@@ -307,7 +308,7 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             );
             true
         }),
-        "fiber_started" => read!(envelope, FiberStarted).is_some_and(|started| {
+        EventKind::FiberStarted => read!(envelope, FiberStarted).is_some_and(|started| {
             let suspended = std::mem::take(&mut fold.crash.suspended);
             fold.crash.orphans = None;
             if !started.resumed || suspended {
@@ -320,13 +321,13 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             place(turns, fold, Aside::Line(Line::raw("↺ resumed")));
             true
         }),
-        "job_started" => {
+        EventKind::JobStarted => {
             if let Some(job) = read!(envelope, JobStarted) {
                 fold.crash.jobs.insert(job.job_id.0, job.description);
             }
             false
         }
-        "job_completed" => {
+        EventKind::JobCompleted => {
             let Some(done) = read!(envelope, JobCompleted) else {
                 return false;
             };
@@ -374,7 +375,72 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             }
             true
         }
-        _ => false,
+        EventKind::SessionStarted
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => false,
     }
 }
 

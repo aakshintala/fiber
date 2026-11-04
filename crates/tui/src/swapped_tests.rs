@@ -23,7 +23,7 @@ fn pressed(keys: &[Key], rows: usize, height: usize) -> List {
 }
 
 /// Wheel steps shift three displayed rows; focus lands on the nearest
-/// shown target (`docs/tui.md:576`).
+/// shown target (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_targets_window_moves_three_rows_and_clamps_to_targets() {
     assert_eq!(
@@ -32,7 +32,7 @@ fn wheel_targets_window_moves_three_rows_and_clamps_to_targets() {
     );
     // A stale stored top steps from what is visible: keyboard focus on
     // row 15 renders at top 10, so one step down reaches top 13 with the
-    // focus still on screen (`docs/tui.md:576`).
+    // focus still on screen (`docs/tui.md`, "Swapped views").
     assert_eq!(
         wheel_targets_window(false, 15, 3, 20, 6, &[0, 2, 5, 7, 9]),
         (15, 13)
@@ -801,7 +801,7 @@ fn a_cramped_frame_skips_the_field_at_the_footer() {
 }
 
 /// One wheel step moves the window three rows, clamped at either end
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_moves_the_window_three_rows() {
     let (selected, top) = wheel_window(false, 0, 0, 20, 6, 3);
@@ -820,7 +820,7 @@ fn wheel_moves_the_window_three_rows() {
 }
 
 /// A selection still on screen stays where it was; one that leaves the
-/// window moves to the nearest shown row (`docs/tui.md:576`).
+/// window moves to the nearest shown row (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_keeps_a_visible_selection_and_clamps_a_leaving_one() {
     // In the middle, at the first row, and at the last row: all stay.
@@ -837,7 +837,7 @@ fn wheel_keeps_a_visible_selection_and_clamps_a_leaving_one() {
 }
 
 /// An empty or short list, or a zero-height window, does not move, and a
-/// blurred selection stays blurred (`docs/tui.md:576`).
+/// blurred selection stays blurred (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_leaves_empty_short_and_zero_height_lists() {
     assert_eq!(wheel_window(false, 0, 0, 0, 6, 3), (0, 0));
@@ -854,7 +854,7 @@ fn wheel_leaves_empty_short_and_zero_height_lists() {
 }
 
 /// `List::wheel` moves the window the shared helper computes: a stale
-/// top clamps into range before stepping (`docs/tui.md:576`).
+/// top clamps into range before stepping (`docs/tui.md`, "Swapped views").
 #[test]
 fn list_wheel_shifts_the_window_and_clamps_the_selection() {
     let mut list = List::default();
@@ -877,7 +877,7 @@ fn list_wheel_shifts_the_window_and_clamps_the_selection() {
 }
 
 /// A past-end selection stays past the last row while the window still
-/// steps three rows (`docs/tui.md:576`).
+/// steps three rows (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_window_keeps_a_past_end_selection() {
     assert_eq!(wheel_window(false, 20, 0, 20, 6, 3), (20, 3));
@@ -996,9 +996,35 @@ fn below_and_field_note_breaks_after_a_wrap() {
     assert_eq!(effect, Effect::Copy("query".to_owned()));
 }
 
+/// Selecting with an unknown height never adds: a scrolled list keeps
+/// its top, and the window's edge scrolls exactly onto the selection.
+#[test]
+fn select_with_an_unknown_height_never_adds() {
+    // A scrolled list: down a short list with a small height first.
+    let mut list = List::default();
+    list.select(30, 40, 6);
+    assert_eq!((list.selected(), list.top()), (30, 25));
+    // The rewind view's unknown height: the selection moves and the top
+    // stays, instead of overflowing `top + height`.
+    list.select(30, 40, usize::MAX);
+    assert_eq!((list.selected(), list.top()), (30, 25));
+    // Just below the edge the top stays.
+    let mut list = List::default();
+    list.select(5, 10, 3);
+    assert_eq!((list.selected(), list.top()), (5, 3));
+    list.select(5, 10, 3);
+    assert_eq!((list.selected(), list.top()), (5, 3));
+    // Exactly on the edge the window scrolls onto the selection.
+    list.select(6, 10, 3);
+    assert_eq!((list.selected(), list.top()), (6, 4));
+    // Past the edge it scrolls the same way.
+    list.select(8, 10, 3);
+    assert_eq!((list.selected(), list.top()), (8, 6));
+}
+
 /// A selection exactly on the new top stays, and a target exactly on the
 /// exclusive bottom stays outside: the window still moves three rows
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_targets_window_holds_exact_edges() {
     // Selected target 0 sits exactly on the new top 0 after a wheel-up

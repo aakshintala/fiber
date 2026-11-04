@@ -17,6 +17,10 @@
 //!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
+//! - `mutants-reuse --pr N --head H --base B --mutant-count C --run-id R --draft true|false --runs FILE --jobs FILE`:
+//!   prints `reuse=true` plus the matched run id and PR-entry head sha when
+//!   an earlier completed run on the same pull request, head and base passed
+//!   every mutants shard, else `reuse=false`
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
@@ -25,10 +29,11 @@
 //! - `narrow-plan --list FILE --filter EXPR`: reads `planned` lines on stdin and the
 //!   `cargo nextest list --message-format json` in FILE, drops tests the list did
 //!   not match, and prints `dropped`, `run` and `filter` lines
-//! - `stress-plan --base REV [--labels L] [--summary FILE]`: the test functions the
-//!   working tree adds or changes against the merge base with REV that this runner
+//! - `stress-plan --base REV [--labels L] [--summary FILE] [--filter-file PATH] [--issue-text FILE] [--only named|rest]`:
+//!   the test functions the working tree adds or changes against the merge base with REV that this runner
 //!   compiles, as tab-separated lines, naming each dropped test, appending the
-//!   job-summary block to FILE when given
+//!   job-summary block to FILE when given; with `--only`, plans only the named
+//!   tests or only the rest, read from the issue text in FILE
 //! - `touched-retries --base REV --list FILE`: whether any test the working tree adds or
 //!   changes passed only on retry, reading the retry list in FILE; exit 1 when one did
 //! - `stress-check --log FILE --count N --tests T`: checks the nextest stress output
@@ -49,6 +54,9 @@
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `crate-edges`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
+//! - `doc-citations --print`: prints the allow table for code citations
+//!   (`xtask/doc-citations.allow`); `check-docs` fails what the table
+//!   does not list
 //! - `flake-report-events`: reads one JSON object on stdin carrying the
 //!   flake titles and the complete open and closed exact-title issue
 //!   lookups with their completeness, and prints the unique closed issue
@@ -76,16 +84,34 @@
 //!   it (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
+//! - `nightly-pair (--is-nightly|--prev-excluding|--parse-version|--check-extensions) <bare-version>|--count-nightly`:
+//!   the shared nightly-tag predicate, the previous-nightly lookup over the
+//!   tag list on stdin, and the `fiber --version`, extension-list and
+//!   nightly-ref parses over supplied lines (`docs/ci.md`, "Releases")
+//! - `nightly-fixture --repo <dir> --keep <bare-version>...`: prunes the
+//!   clone to the bare keeps only (`docs/ci.md`, "Releases")
 //! - `threads <cpus> <load>`: the nextest `--test-threads` count for the
 //!   host's load, printed as one integer
 //! - `budget-bounds --base REV`: whether any line changed against the merge
 //!   base with REV raises `WAITS`, `BUDGET` or `CLEANUP`, or adds a
-//!   `Deadline::after` of 60 s or more in a test, without `// ruling: #N`
+//!   `Deadline::after` of 60 s or more in a test — except the known-short
+//!   bounds (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `Duration::ZERO`) and direct literals below 60 s — without `// ruling: #N`
 //! - `screen-ratchet`: reads the inline per-file maxima from stdin as one
 //!   `<path> <maximum>` per line, and fails when a file under
 //!   `crates/main/tests/` outside `support/` holds more unmarked `.screen()`
-//!   call lines than its maximum (0 when absent)
-//!   (`docs/testing/screens.md`, "Screens")
+//!   call lines than its maximum (0 when absent); a `mouse <path> <maximum>`
+//!   line caps that file's mouse-event lines outside the frame-locked click
+//!   helper the same way (`docs/testing/screens.md`, "Screens")
+//! - `census-ratchet [--print]`: reads the inline per-file maxima from stdin
+//!   as one `<path> <maximum>` per line, and fails when a production file
+//!   under `crates/` holds more string-typed closed-set sites than its
+//!   maximum (0 when absent); with `--print` it prints the current per-file
+//!   counts instead and reads no stdin
+//! - `stale-wait-ratchet`: reads the inline per-file maxima from stdin as one
+//!   `<path> <maximum>` per line, and fails when a file under
+//!   `crates/main/tests/` outside `support/` holds more stale-wait
+//!   occurrences (`recv_reply` uses, `fn subscribe(`, `fn subscribe_full(`)
+//!   than its maximum (0 when absent)
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
 //!   mask from JetBrains Mono ExtraBold; the font is downloaded by whoever
@@ -99,17 +125,22 @@
 
 mod bench;
 mod budget_bounds;
+mod census_ratchet;
 mod ci_needs;
+mod doc_citations;
 mod docs;
 mod flake_report;
 mod logo;
 mod models_dev;
 mod models_dev_table;
 mod must_succeed;
+mod nightly_fixture;
+mod nightly_pair;
 mod rules;
 mod screen_ratchet;
 mod select;
 mod site;
+mod stale_wait_ratchet;
 mod stress;
 mod test_index;
 mod threads;
@@ -217,6 +248,20 @@ fn run(args: &[String]) -> Result<bool, String> {
                 "base_skip={}",
                 select::base_rows_skipped(&flag(rest, "--event")?, &release_paths).join(",")
             );
+            Ok(true)
+        }
+        "mutants-reuse" => {
+            let current = reuse_current(rest)?;
+            let runs = read(&flag(rest, "--runs")?)?;
+            let jobs = read(&flag(rest, "--jobs")?)?;
+            match select::matched_reuse(&current, &runs, &jobs) {
+                Some(matched) => {
+                    println!("reuse=true");
+                    println!("matched_run_id={}", matched.run_id);
+                    println!("matched_pr_head={}", matched.pr_head.0);
+                }
+                None => println!("reuse=false"),
+            }
             Ok(true)
         }
         "verdict" => {
@@ -361,6 +406,8 @@ fn run(args: &[String]) -> Result<bool, String> {
             ),
             "ok",
         ),
+        "nightly-pair" => nightly_pair::run(rest),
+        "nightly-fixture" => nightly_fixture::run(rest),
         "threads" => {
             let (cpus, load) = match rest {
                 [cpus, load] => (cpus, load),
@@ -380,10 +427,40 @@ fn run(args: &[String]) -> Result<bool, String> {
             std::io::stdin()
                 .read_to_string(&mut input)
                 .map_err(|e| format!("stdin: {e}"))?;
-            let maxima = screen_ratchet::parse_maxima(&input)?;
+            let maxima = screen_ratchet::parse_screen_maxima(&input)?;
             report(
                 "screen-ratchet",
                 &screen_ratchet::check(&rust_files(&workspace_members()?)?, &maxima),
+                "ok",
+            )
+        }
+        "census-ratchet" => {
+            let files = rust_files(&workspace_members()?)?;
+            if rest.iter().any(|arg| arg.as_str() == "--print") {
+                print!("{}", census_ratchet::table(&files));
+                Ok(true)
+            } else {
+                let mut input = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut input)
+                    .map_err(|e| format!("stdin: {e}"))?;
+                let maxima = screen_ratchet::parse_maxima(&input)?;
+                report(
+                    "census-ratchet",
+                    &census_ratchet::check(&files, &maxima),
+                    "ok",
+                )
+            }
+        }
+        "stale-wait-ratchet" => {
+            let mut input = String::new();
+            std::io::stdin()
+                .read_to_string(&mut input)
+                .map_err(|e| format!("stdin: {e}"))?;
+            let maxima = screen_ratchet::parse_maxima(&input)?;
+            report(
+                "stale-wait-ratchet",
+                &stale_wait_ratchet::check(&rust_files(&workspace_members()?)?, &maxima),
                 "ok",
             )
         }
@@ -460,7 +537,16 @@ fn run(args: &[String]) -> Result<bool, String> {
             for path in docs::checked_files(root)? {
                 failures.extend(docs::check_file(root, &path)?);
             }
+            failures.extend(doc_citations::check(root)?);
             report("check-docs", &failures, "ok")
+        }
+        "doc-citations" => {
+            if rest == ["--print"] {
+                print!("{}", doc_citations::table(Path::new("."))?);
+                Ok(true)
+            } else {
+                Err("usage: cargo xtask doc-citations --print".to_owned())
+            }
         }
         "kinds-ratchet" => {
             let max: usize = flag(rest, "--max")?
@@ -673,6 +759,28 @@ fn env_object(name: &str) -> Result<serde_json::Map<String, Value>, String> {
 
 fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The reuse decision's scalar flags for `mutants-reuse`.
+fn reuse_current(args: &[String]) -> Result<select::ReuseCurrent, String> {
+    Ok(select::ReuseCurrent {
+        pr: select::ReusePullRequestNumber(
+            flag(args, "--pr")?
+                .parse()
+                .map_err(|e| format!("--pr: {e}"))?,
+        ),
+        head: select::ReuseCommitSha(flag(args, "--head")?),
+        base: select::ReuseCommitSha(flag(args, "--base")?),
+        mutant_count: flag(args, "--mutant-count")?
+            .parse()
+            .map_err(|e| format!("--mutant-count: {e}"))?,
+        run_id: select::ReuseRunId(
+            flag(args, "--run-id")?
+                .parse()
+                .map_err(|e| format!("--run-id: {e}"))?,
+        ),
+        draft: flag(args, "--draft")? == "true",
+    })
 }
 
 /// Whether `fix` is an ancestor of `tested`: `None` when the object is
@@ -947,6 +1055,8 @@ fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
     Ok(files)
 }
 
+#[cfg(test)]
+mod check_resources_tests;
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;

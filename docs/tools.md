@@ -139,10 +139,13 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   what the hook returned (`docs/extensions.md`, "Hooks"). A foreground `shell`
   call's output past 1 MiB is cut before the hook runs ("Result and output").
 - `details`: JSON for clients, such as an edit's diff for the terminal to draw.
-  It is never sent to the model and the loop never reads it. A client that does
-  not recognise a tool's `details` shows `content` instead: tool identity is an
-  opaque name and an extension can replace any tool, so no client may depend
-  on one tool's `details`. A confined Linux shell result includes
+  It is never sent to the model and live control flow never reads it. A client
+  that does not recognise a tool's `details` shows `content` instead: tool
+  identity is an opaque name and an extension can replace any tool, so no
+  client may depend on one tool's `details`. The history fold is the one
+  exception: it reads only the reserved `file_seen` object the file tools
+  write (`docs/events.md`, `tool_call_completed`), to rebuild what the model's
+  context has seen ("Stale files"). A confined Linux shell result includes
   `protected_paths: { restored, failed }` when it restores a protected path or
   cannot restore one. The shell names each changed path in `content`; the loop
   also carries the report on the completion event.
@@ -178,9 +181,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   the processed file (`docs/model-routing.md`, "Image limits") and referenced
   by path, never inlined as base64 in the log.
 - The loop reads `status`, `error.code`, `control` and the declared effects,
-  never `content` or `details`, except that it drops `details.matches` when a
-  hook rewrote the output (Shell, "Result and output"). A tool's prose cannot
-  steer control flow.
+  never `content` or `details`, except that the history fold reads the
+  reserved `details.file_seen` ("Stale files") and that the loop drops
+  `details.matches` when a hook rewrote the output (Shell, "Result and
+  output"). A tool's prose cannot steer control flow.
 - A `failed` status is sent to the provider as that protocol's error flag on the tool result. A `failed` result whose content holds no text is sent with its `error.message` as the text, so the provider never receives an empty error result. The log keeps `content` as the tool wrote it.
 
 ## What a result proves
@@ -383,10 +387,19 @@ path's directory, ending in `/`.
 - The message says the file changed or was never read, and to read it first.
   A file changed by the session's own shell command, such as a formatter,
   counts as changed.
-- What was seen is held in memory for the live context. It is cleared at a
-  handoff, because the model's context no longer holds the file
-  (`docs/handoff.md`), and it starts empty after a resume, a fork or a rewind.
-  Nothing is logged for it.
+- What was seen follows the model's context, not the process. Each successful
+  `read`, `edit` and `write` logs the whole file's hash beside its resolved
+  path, in the completion's reserved `details.file_seen`
+  (`docs/events.md`, `tool_call_completed`); a resume, a fork and a rewind
+  rebuild what was seen from the log, up to the point the context continues
+  from. An `after_tool` hook is not given `file_seen` and cannot replace it.
+  Nothing is re-hashed at startup, so a file changed while Fiber was
+  down still meets the stored hash and is refused with the message that it
+  changed since it was read. A log written before the field existed rebuilds
+  nothing, as when the record started empty.
+- A handoff clears what was seen, because the new context has not seen the
+  file (`docs/handoff.md`); a `write` there is refused until the file is read
+  again.
 
 ### How a change lands
 
@@ -538,9 +551,13 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `run_in_background` (optional); `tty` (optional); `monitor` (optional;
   starts a monitor, "Background jobs"); `unconfined` (optional; when true
   the call leaves the OS sandbox and is reviewed exactly as with the
-  sandbox off). Fiber never reruns a failed confined call outside its
-  sandbox: the model retries explicitly with `unconfined: true` as a new
-  reviewed call. On macOS the confined shell prints a
+  sandbox off); `detach` (optional; when true the command starts in a new
+  session and process group, outside the OS sandbox, and the call returns
+  at once with the process ID and the output-log path, "Background jobs").
+  `detach` implies unconfined: with `detach` true, `unconfined: false`
+  fails with `invalid_arguments`. Fiber never reruns a failed confined call
+  outside its sandbox: the model retries explicitly with `unconfined: true`
+  as a new reviewed call. On macOS the confined shell prints a
   start marker before the user program runs; the call fails instead of
   ending normally when the marker never arrives. Each call starts fresh: a
   `cd` does not carry over to the next call.
@@ -549,6 +566,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   with `strict: false`.
 - A monitor takes neither `tty` nor `run_in_background`. Each of these
   fails with `invalid_arguments`, the message naming the argument.
+- `detach` takes neither `run_in_background`, `tty`, `monitor`, nor a
+  `timeout_ms` that is not null. Each of these fails with
+  `invalid_arguments`, the message naming the argument.
 - A bare wait is rejected. When the call is not `run_in_background` and
   the first part of the command is `sleep N` with N of 25 seconds or more,
   alone or followed by other commands, the call completes as `failed` with
@@ -569,6 +589,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - Any other call with no `timeout_ms` gets 600,000 (10 minutes). A
   foreground command's timeout stays with it after the command moves to the
   background.
+- A detached call takes no `timeout_ms` and has no timeout: neither the
+  600,000 default nor any other limit. A detached call with a `timeout_ms`
+  of any value, 0 included, fails with `invalid_arguments` and never
+  starts.
 - `timeout_ms` is at least 1: the schema says `"minimum": 1`. A call with
   0 fails the loop's schema check (`docs/loop.md`), ends `failed` with code
   `invalid_arguments`, and never starts.
@@ -608,8 +632,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   exit code and names what was left running (command names and process
   ids). The job ends when the group is empty, and keeps the command's
   timeout.
-- A process that left the group on purpose (for example with `nohup` or
-  `setsid`) is not tracked.
+- A process that left the group on purpose, for example with `setsid`,
+  is not tracked. `nohup` does not leave the group: the process stays in
+  it, and a timeout, a cancellation, a `jobs stop` and a shutdown stop it
+  with the rest.
 
 ### Stopping a command
 
@@ -624,6 +650,12 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `failed` with code `indeterminate`, never `completed`.
 - A shutdown (`docs/invocation.md`, "Shutdown") uses the same two values, on
   every group at once.
+- A timeout's receipt says Fiber stopped the whole process group ("Result
+  and output").
+- A detached command is never stopped by a timeout, a cancellation, a
+  `jobs stop` or a shutdown: it is not a job, and its group is not on the
+  list a shutdown signals ("Background jobs"). Stopping it is the person's
+  or the model's own `kill`.
 
 ### Result and output
 
@@ -637,7 +669,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   alone. The closing line ends with a newline:
   - `Exit code N.` for an exit, 0 included;
   - `Killed by SIGNAME.` for a signal;
-  - `Timed out after N ms and stopped.` for a timeout;
+  - `Timed out after N ms; Fiber stopped the whole process group.` for a timeout;
   - `The monitor's deadline of N ms passed; start it again if you still need it.` for a monitor's deadline;
   - `Cancelled and stopped.` for a cancellation;
   - `The command was stopped, and Fiber cannot tell whether it completed.` for
@@ -712,7 +744,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   declares `executes`, with no paths. A call that ran inside the OS
   sandbox on Linux or macOS carries `confined`
   (`docs/permissions.md`, "Confinement"); a call with `unconfined: true`
-  leaves the sandbox and is reviewed exactly as with the sandbox off.
+  leaves the sandbox and is reviewed exactly as with the sandbox off. A
+  detached call declares `always_reviewed`: the reviewer or the person sees
+  it as an unconfined call, and it takes no protected-path transaction
+  (`docs/permissions.md`, "Confinement").
 - The recogniser accepts only a listed set of syntax: simple commands,
   pipelines, lists joined by `&&`, `||` and `;`, quoted and unquoted words,
   variable assignments before a command, and the redirects below. Any
@@ -1012,6 +1047,21 @@ The kinds are `docs/events.md`.
 - There is no cap on running jobs, except that a session runs at most 10
   delegates at once (`docs/delegates.md`, "Limits"). Parked threads are
   measured in `docs/architecture.md` ("The threads").
+- A detached command is not a job: no `job_id`, no `jobs` entry, no
+  completion notice, no keeper. The call returns at once with the receipt
+  `Started detached. PID 48213. Output: /home/a/.fiber/detached/d_48200_0.log.
+  Fiber will not stop it.`, naming the process ID and the log path. The
+  command keeps running when the session ends; Fiber never stops it, not at
+  a timeout, not at `jobs stop` and not at shutdown ("Shell", "Stopping a
+  command"). The model reads the log with the ordinary `read` tool
+  ("Bounded results").
+- A detached call's standard input is `/dev/null`; its standard output and
+  standard error go to the log, interleaved in arrival order. Each log lives
+  under `$FIBER_HOME/detached/`, named `d_<fiber-pid>_<n>.log` from 0 up,
+  created mode 0600 in a directory mode 0700. The person owns deleting
+  logs: Fiber never removes them, and a session's deletion or pruning never
+  touches them. Logs hold command output, which may carry sensitive data,
+  until the person deletes them.
 
 ### The keeper
 
@@ -1801,6 +1851,12 @@ its tools are deferred, change only when the preamble is built.
   deferred and kept the cache, while OpenRouter's accepted the same request for
   GPT-6 Luna, sent every definition in full and let the model call a deferred
   tool without loading it.
+- The probe is `cargo run -p provider --example probe -- PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE]...` (`docs/testing/fakes.md`, "Jigs"). It sends the model one request with the probe's tools in full and two with them deferred, and prints `pass` or `fail` for `load` (the model searches first, and calls the loaded tool only after the load) and `cache` (the request after the load reads cache tokens); a check the run did not establish prints `fail` with the reason. It exits 0 when all pass, 1 when a check fails, 2 on a usage error, 3 when it cannot tell and 4 when the key is refused. A model's data sets `deferred_tools` only for a `pass` recorded below. A row probed after this change carries its spend on the run's printed summary line.
+- The probe printed no spend for the 2026-11-03 runs: the only token figure it emitted was the final request's input count inside the cache detail, which covers one of three requests and no output tokens, so the spend for each row below is unknown and is not estimated.
+- Probed 2026-11-03 on `https://api.anthropic.com/v1`: `anthropic/claude-fable-5` pass, spend unknown; `anthropic/claude-fable-5-1` pass, spend unknown; `anthropic/claude-haiku-4-5` pass, spend unknown; `anthropic/claude-haiku-4-5-20251001` pass, spend unknown; `anthropic/claude-haiku-5-5` pass, spend unknown; `anthropic/claude-opus-4-5` pass, spend unknown; `anthropic/claude-opus-4-5-20251101` pass, spend unknown; `anthropic/claude-opus-4-6` pass, spend unknown; `anthropic/claude-opus-4-7` pass, spend unknown; `anthropic/claude-opus-4-8` pass, spend unknown; `anthropic/claude-opus-5` inconclusive (probe declined to answer: This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs. To learn more, visit https://www.anthropic.com/legal/commercial-terms. API integrators: you can reduce refusals for your users by configuring a fallback model — see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback.), spend unknown; `anthropic/claude-opus-5-5` pass, spend unknown; `anthropic/claude-sonnet-4-5` pass, spend unknown; `anthropic/claude-sonnet-4-5-20250929` pass, spend unknown; `anthropic/claude-sonnet-4-6` pass, spend unknown; `anthropic/claude-sonnet-5` pass, spend unknown; `anthropic/claude-sonnet-5-5` pass., spend unknown
+- Probed 2026-11-03 on `https://api.openai.com/v1`: `openai/gpt-5.4` pass, spend unknown; `openai/gpt-5.4-mini` pass, spend unknown; `openai/gpt-5.4-nano` fail (load: HTTP 400: Tool 'tool_search' is not supported with gpt-5.4-nano.), spend unknown; `openai/gpt-5.4-pro` fail (cache: cache read 0 of 4354 input tokens), spend unknown; `openai/gpt-5.5` pass, spend unknown; `openai/gpt-5.5-pro` fail (cache: cache read 0 of 4598 input tokens), spend unknown; `openai/gpt-5.6-luna` pass, spend unknown; `openai/gpt-5.6-sol` pass, spend unknown; `openai/gpt-5.6-terra` pass, spend unknown; `openai/gpt-6-astra` inconclusive (the model did not call the loaded tool), spend unknown; `openai/gpt-6-luna` pass, spend unknown; `openai/gpt-6-sol` pass, spend unknown; `openai/gpt-6.1-sol` inconclusive (the model did not call the loaded tool)., spend unknown
+- Probed 2026-11-03 on `https://api.openai.com/v1` (repeat): `openai/gpt-6-astra` inconclusive (the model did not call the loaded tool), spend unknown; `openai/gpt-6.1-sol` inconclusive (the model did not call the loaded tool), spend unknown.
+- Total spend for the 2026-11-03 probe runs: unknown.
 - Anthropic and OpenAI Responses (gpt-5.4 and later) both defer natively.
   `openai-completions` and `google-generative-ai` do not.
 - On a model without deferral, every tool is declared in full and
@@ -1847,7 +1903,10 @@ its tools are deferred, change only when the preamble is built.
 When the definitions declared in full take more than 10% of the model's
 context window, the preamble build is followed by a `notice` with code
 `tool_definitions_large`. It names the largest sources and the configuration
-that disables tools. The session runs anyway.
+that disables tools. When deferral is off for the model (provider data that
+does not set `deferred_tools`, or a protocol that cannot defer; "Deferral is
+a property of the model"), the notice also says so: "Deferral is off for this
+model, so every tool is declared in full." The session runs anyway.
 
 ### Seeing the tools
 

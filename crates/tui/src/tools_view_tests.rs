@@ -883,7 +883,7 @@ fn tools_80x24() {
 }
 
 /// The wheel shifts the visible rows three a step, keeping a visible
-/// selection where it was (`docs/tui.md:576`, "Swapped views"; see #3578).
+/// selection where it was (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
     let (fake, mut tools) = tall();
@@ -894,7 +894,7 @@ fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
 }
 
 /// A wheel that moves clears what was said, while a clamped wheel keeps it
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_move_clears_and_clamp_preserves_what_was_said() {
     let (fake, mut tools) = tall();

@@ -286,12 +286,15 @@ pub(crate) fn plan(
         ("bug_red", pr && code && bug),
         // A draft skips it (`docs/ci.md`).
         ("stress", pr && test && !draft),
-        // Runs with the binary-level tests, on every push, or when the diff
-        // touches release code (`docs/ci.md`, "Selection").
+        // A draft skips it (`docs/ci.md`). Otherwise it runs with the
+        // binary-level tests, on every push, or when the diff touches release
+        // code (`docs/ci.md`, "Selection").
         (
             "release",
-            !pr || packages.iter().any(|p| p == BINARY_TESTS)
-                || release_paths.iter().any(|p| is_release_code(p)),
+            !draft
+                && (!pr
+                    || packages.iter().any(|p| p == BINARY_TESTS)
+                    || release_paths.iter().any(|p| is_release_code(p))),
         ),
     ]);
     Plan { jobs, shards }

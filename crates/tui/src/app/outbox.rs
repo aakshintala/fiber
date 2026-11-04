@@ -6,7 +6,7 @@
 //! The outbox owns only this correlation state: applying a failure stays
 //! with `App`, which owns the queue, the offer, the phase and the draft.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
 
 use contract::SessionId;
@@ -51,6 +51,71 @@ pub(crate) enum Kind {
     Import(ImportSource),
 }
 
+/// The feature waiting for a command's answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Waiting {
+    /// A rail card's dismiss, carrying the target session.
+    Dismiss(SessionId),
+    Fork,
+    RewindHistory,
+    RewindSend,
+    ChangeWorkspace(SessionId),
+    ClearStart,
+    ClearClose,
+    History,
+    ImageFetch,
+    ImageDisplay,
+    Sessions,
+    Abandoned,
+    /// A workspace picker `directories` listing.
+    Directories,
+    /// A home `subscribe` for a session's level.
+    Subscribe,
+    /// A `close` with `now` stopping a live row.
+    Stop,
+    /// A `delete` for an exited row.
+    Delete,
+    /// The first-run offer's `import`.
+    OfferImport,
+    /// `/delete`'s discovery dry run.
+    DeleteDiscovery,
+    /// `/delete`'s confirmed stops.
+    DeleteStop,
+    /// `/delete`'s exact-set delete.
+    DeleteFinal,
+    /// Home's `feed`.
+    Feed,
+    /// Home's `recent` pages, scoped or not.
+    Recent,
+    /// The quit question's closes.
+    Close,
+    /// A Changed files `figures` numstat query.
+    Figures,
+    /// A Changed files `diff` query.
+    Diff,
+    /// A hooks view `hooks` query.
+    Hooks,
+    /// The panel's branch query.
+    Branch,
+    /// The panel's `quota` query or the quota view's fetch.
+    Quota,
+    /// A call view's `artifact_page` fetch.
+    ArtifactPage,
+    /// A configuration view's `tools`, `skills` or `mcp_servers` ask,
+    /// or a per-server driver command for the open MCP view.
+    ConfigAsk,
+    /// A `credentials` labels query.
+    Credentials,
+    /// A `credential` switch saving its label.
+    CredentialSwitch,
+    /// A reviewer setup `propose_notes` ask.
+    ProposeNotes,
+    /// An item view's `job_stop`.
+    JobStop,
+    /// An item view's `job_input`.
+    JobInput,
+}
+
 /// The hub connection, as the terminal sees it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Link {
@@ -88,6 +153,8 @@ pub(crate) struct Kept {
 /// command id: the hooks install offer's retry resends them unchanged.
 #[derive(Debug, Default)]
 pub(crate) struct Outbox {
+    /// Feature owners, independent of generic draft settlement.
+    waits: BTreeMap<String, Waiting>,
     /// The hub connection, as the terminal sees it.
     pub(crate) link: Link,
     /// The constructed `start` lines with no answer yet, by command id.
@@ -102,6 +169,34 @@ pub(crate) struct Outbox {
 }
 
 impl Outbox {
+    /// Registers the feature owning an id, returning any replaced owner.
+    pub(crate) fn wait(&mut self, id: &str, waiting: Waiting) -> Option<Waiting> {
+        self.waits.insert(id.to_owned(), waiting)
+    }
+
+    /// Peeks at the owner before any observer settles the answer.
+    pub(crate) fn waiting(&self, id: &str) -> Option<Waiting> {
+        self.waits.get(id).cloned()
+    }
+
+    /// Takes a feature's wait once, without settling its draft.
+    pub(crate) fn settled(&mut self, id: &str) -> Option<Waiting> {
+        self.waits.remove(id)
+    }
+
+    /// Whether any id waits for this feature, regardless of its payload.
+    pub(crate) fn waiting_any(&self, waiting: &Waiting) -> bool {
+        self.waits
+            .values()
+            .any(|owner| std::mem::discriminant(owner) == std::mem::discriminant(waiting))
+    }
+
+    /// Forgets a feature at the same reset that drops its request details.
+    pub(crate) fn forget(&mut self, waiting: &Waiting) {
+        self.waits
+            .retain(|_, owner| std::mem::discriminant(owner) != std::mem::discriminant(waiting));
+    }
+
     /// Whether the hub spoke a `hub_hello` this terminal reads, and the
     /// connection has not ended since.
     pub(crate) fn is_up(&self) -> bool {

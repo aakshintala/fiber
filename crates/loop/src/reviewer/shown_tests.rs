@@ -1557,3 +1557,109 @@ fn successive_completed_handoffs_keep_old_pairs_intact() {
         ],
     );
 }
+
+#[test]
+fn person_pairs_reuse_rendered_replies_for_each_occurrence() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("Which color?"),
+        None,
+        Some(Seq(10)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::TurnStarted(TurnStarted {
+            input: vec![message("Blue", driver()), message("Green", driver())],
+        }),
+        None,
+        Some(Seq(11)),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("Which number?"),
+        None,
+        Some(Seq(12)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("Seven"), None, Some(Seq(13)));
+
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    assert_eq!(
+        Reviewed::person_pairs(&reviewed),
+        [
+            (
+                kept(11, 0),
+                "The agent: Which color?\nThe person: Blue".into()
+            ),
+            (
+                kept(11, 1),
+                "The agent: Which color?\nThe person: Green".into()
+            ),
+            (
+                kept(13, 0),
+                "The agent: Which number?\nThe person: Seven".into()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("unprompted"),
+        None,
+        Some(Seq(14)),
+    );
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    assert_eq!(
+        Reviewed::person_pairs(&reviewed),
+        [(kept(14, 0), "The person: unprompted".into())]
+    );
+
+    render_reviewed(
+        &mut reviewed,
+        &text_completed(&"é".repeat(REPLY_CAP + 1)),
+        None,
+        Some(Seq(15)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(16)));
+    let Input::User { text: reply, .. } = &reviewed[1].input else {
+        panic!("not a rendered reply");
+    };
+    let Input::User { text: person, .. } = &reviewed[2].input else {
+        panic!("not a rendered person");
+    };
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pair reuses the reviewer-rendered reply.
+    assert_eq!(
+        Reviewed::person_pairs(&reviewed)[1].1,
+        format!("{reply}\n{person}"),
+        "pair extraction reuses the capped reviewer inputs"
+    );
+}
+
+#[test]
+fn a_reply_does_not_cross_a_different_sequence_person() {
+    let mut reviewed = Vec::new();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("Which color?"),
+        None,
+        Some(Seq(10)),
+    );
+    render_reviewed(&mut reviewed, &person_turn("Blue"), None, Some(Seq(11)));
+    render_reviewed(&mut reviewed, &person_turn("Green"), None, Some(Seq(12)));
+
+    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    assert_eq!(
+        Reviewed::person_pairs(&reviewed),
+        [
+            (
+                kept(11, 0),
+                "The agent: Which color?\nThe person: Blue".into()
+            ),
+            (kept(12, 0), "The person: Green".into())
+        ]
+    );
+}

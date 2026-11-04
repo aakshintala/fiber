@@ -155,18 +155,22 @@ pub(crate) fn count_lines(root: &std::path::Path, paths: &[&str]) -> BTreeMap<St
 /// Git prints paths relative to the repository root while the card
 /// holds workspace paths, so a card path also matches by its
 /// workspace-relative form; anything else keeps the card's figures.
+/// On a remote terminal the card holds hub workspace paths, so a path
+/// the launch workspace does not strip also matches by its viewed
+/// workspace-relative form.
 pub(crate) fn resolve_figures(
     changes: &BTreeMap<String, (u64, u64)>,
     numstat: Option<&str>,
     untracked_lines: &BTreeMap<String, u64>,
     workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
 ) -> ResolvedFigures {
     let parsed = numstat.map(parse_numstat).unwrap_or_default();
     let answered = numstat.is_some();
     let mut figures = BTreeMap::new();
     let mut untracked = BTreeSet::new();
     for (path, card) in changes.iter() {
-        let figure = match lookup(&parsed, path, workspace) {
+        let figure = match lookup(&parsed, path, workspace, viewed) {
             Some(NumstatFigure::Counted(added, removed)) => (*added, *removed),
             Some(NumstatFigure::Binary) => *card,
             None if answered => match untracked_lines.get(path) {
@@ -183,18 +187,30 @@ pub(crate) fn resolve_figures(
     ResolvedFigures { figures, untracked }
 }
 
-/// The answer's figure for a card path: the path as listed, or its
-/// workspace-relative form for git's repository-relative output.
+/// The answer's figure for a card path: the path as listed, its launch
+/// workspace-relative form, or its viewed workspace-relative form for
+/// git's repository-relative output. The viewed workspace names the hub
+/// workspace on a remote terminal, whose card holds hub workspace paths.
 pub(crate) fn lookup<'a>(
     parsed: &'a BTreeMap<String, NumstatFigure>,
     path: &str,
     workspace: Option<&std::path::Path>,
+    viewed: Option<&std::path::Path>,
 ) -> Option<&'a NumstatFigure> {
     if let Some(figure) = parsed.get(path) {
         return Some(figure);
     }
-    let relative = std::path::Path::new(path).strip_prefix(workspace?).ok()?;
-    parsed.get(relative.to_str()?)
+    for root in [workspace, viewed].into_iter().flatten() {
+        if let Some(figure) = std::path::Path::new(path)
+            .strip_prefix(root)
+            .ok()
+            .and_then(|relative| relative.to_str())
+            .and_then(|relative| parsed.get(relative))
+        {
+            return Some(figure);
+        }
+    }
+    None
 }
 
 /// The diff currently being read, read, empty or failed.
@@ -257,17 +273,17 @@ fn hunk_start(line: &str) -> Option<u64> {
 /// Builds the file list or the selected file's diff frame. The list
 /// rows show `figures` where answered, the card's figures until
 /// then; an untracked path draws its line count with
-/// "· untracked, wholly added" dim. The local editor hint is omitted
-/// on a remote terminal.
+/// "· untracked, wholly added" dim. Ctrl+G edits the shown file on a
+/// local terminal, and fetches the hub file to edit on a remote one:
+/// either way the footer keeps the hint.
 pub(crate) fn frame(
     changes: &BTreeMap<String, (u64, u64)>,
     figures: Option<&ResolvedFigures>,
     chosen: Option<(&str, &Diff)>,
     list: List,
-    remote: bool,
 ) -> Frame {
     if let Some((path, diff)) = chosen {
-        return diff_frame(path, diff, list, remote);
+        return diff_frame(path, diff, list);
     }
     let resolved;
     let figures = match figures {
@@ -320,16 +336,12 @@ pub(crate) fn frame(
             format::count(files, "file", "files")
         )],
         field: None,
-        footer: if remote {
-            "↑↓ move · Enter show diff · Esc close".to_owned()
-        } else {
-            "↑↓ move · Enter show diff · Ctrl+G edits · Esc close".to_owned()
-        },
+        footer: "↑↓ move · Enter show diff · Ctrl+G edits · Esc close".to_owned(),
     }
 }
 
 /// The current diff frame, with its file in the title.
-fn diff_frame(path: &str, diff: &Diff, list: List, remote: bool) -> Frame {
+fn diff_frame(path: &str, diff: &Diff, list: List) -> Frame {
     let (rows, below) = match diff {
         Diff::Reading => (
             vec![vec![("Reading the diff…".to_owned(), None, Ink::Plain)]],
@@ -369,11 +381,7 @@ fn diff_frame(path: &str, diff: &Diff, list: List, remote: bool) -> Frame {
         list,
         below,
         field: None,
-        footer: if remote {
-            "↑↓ scroll · ← files · Esc close".to_owned()
-        } else {
-            "↑↓ scroll · Ctrl+G edits · ← files · Esc close".to_owned()
-        },
+        footer: "↑↓ scroll · Ctrl+G edits · ← files · Esc close".to_owned(),
     }
 }
 

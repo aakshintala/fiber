@@ -18,10 +18,10 @@ CI is GitHub Actions on GitHub-hosted runners: `ubuntu-24.04` for Linux
 x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
-by every repository on the account. A draft pull request runs only the
-Linux x86_64 leg, so its run uses no macOS job. A ready pull request's run
-uses one macOS job, so five ready pull requests can run before a sixth
-queues for macOS. The 40-job cap is the one CI reaches: from 2026-10-07 to
+by every repository on the account. A draft skips `release`, `test` and
+`stress`, so it uses no macOS job unless it is a bug pull request, which uses
+one (`bug_red_macos`). A ready pull request uses one (`test`), and a ready bug
+pull request two. The 40-job cap is the one CI reaches: from 2026-10-07 to
 2026-10-09 every job that queued for more than 15 minutes waited while 38 or
 more jobs ran, and the macOS cap held jobs back for 85 of 3,250 queued
 minutes. A change that saves jobs, such as fewer mutants shards, shortens the
@@ -35,10 +35,12 @@ Every runner has a C compiler, which `mlua` needs to build Lua
 One check is required to merge: `CI`. It passes only when every job the
 selection chose succeeded and every job it did not choose was skipped. If
 the selection itself fails, `CI` fails. On a draft pull request the verdict
-job reports as `CI (draft)`, so the required `CI` check stays pending until
-the pull request is marked ready, which starts the full run. The owner can
-merge without it only by a break-glass merge (`docs/workflow.md`,
-"Break-glass merge").
+job reports as `CI (draft)`, so the required `CI` check stays pending. A
+draft does not select `release`. Marking the pull request ready runs every
+job the draft skipped. A ready run whose mutants already passed at that head
+reuses the pass instead of starting shards ("On every pull request that changes code").
+The owner can merge without a green `CI` only by a break-glass merge
+(`docs/workflow.md`, "Break-glass merge").
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report without gating it
@@ -63,6 +65,9 @@ passed alone but break together. A pull request runs `main`'s workflow
 against its own head, so when a `main` commit changes `ci.yml` together with
 the code it calls, a branch from before that commit fails on what the
 workflow now passes, such as an unknown argument, until it merges `main`.
+GitHub reads the workflow from `refs/pull/N/merge`, so a pull request that
+edits `ci.yml` runs its own edit, and the pull request's own run proves that
+edit.
 
 A newer push to a pull request cancels that pull request's older run. A
 label, a change from draft to ready or a reopen at the same head cancels
@@ -70,7 +75,8 @@ nothing: the run in flight finishes, then the new event's run, which waited,
 runs the whole selection again at the same head. At most one run waits, and
 a newer event replaces it before it starts. Rerunning everything keeps the
 `CI` check, which is the latest run's, from hiding a failure in the earlier
-run. Pushes
+run. A ready run still reuses a same-head mutants pass instead of rerunning
+those shards ("On every pull request that changes code"). Pushes
 to `main` share one group that cancels nothing: the running backstop finishes
 and a newer push waits, replacing any older one that waits ("The backstop on
 `main`").
@@ -114,16 +120,18 @@ A pull request runs only what its diff can affect.
   Binary-level tests depend on every crate that ships, so any change to one
   runs them. `xtask` ships in no binary, so a change to it alone runs its
   own tests.
-- Every diff that runs the binary-level tests also runs the release-profile
-  job, `release` ("On every pull request that changes code"), and `fiber extension test`
-  for every first-party package that has cases, not only the changed ones
-  ("Testing an extension"). A change to Fiber's own code can break a package
-  that did not change.
-- A diff that touches the code the release job runs or the table it judges
-  against, `crates/bench`, `xtask/src/bench*`, `scripts/release-size`,
-  `scripts/stored-results` or `docs/performance.md`, also runs `release`, so
-  a broken harness or judge fails its own pull request rather than the
-  backstop.
+- On a ready pull request, every diff that runs the binary-level tests also
+  runs the release-profile job, `release` ("On every pull request that changes
+  code"), and `fiber extension test` for every first-party package that has
+  cases, not only the changed ones ("Testing an extension"). A change to
+  Fiber's own code can break a package that did not change.
+- On a ready pull request, a diff that touches the code the release job runs
+  or the table it judges against, `crates/bench`, `xtask/src/bench*`,
+  `scripts/release-size`, `scripts/stored-results` or `docs/performance.md`
+  also runs `release`, so a broken harness or judge fails the pull request
+  instead of waiting for the backstop. A draft that touches
+  `scripts/release-size` or `crates/bench` first sees size and benchmark
+  failures when marked ready.
 - A diff that touches `crates/loop`, `crates/bench` or `xtask/src/bench*` also runs the "Session, memory kept after 10 busy turns" workload (`docs/performance.md`) in `release`. Any other pull request skips it, and the job summary says so. The loop holds the session's state, so a diff elsewhere rarely moves the row, and the backstop catches one that does.
 - On a pull request, the head and base binaries run only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row on both passes. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log`, `crates/worktree` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`; `sandbox setup` on `crates/tools/`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A diff touching only `docs/performance.md` selects no row, since the selector treats a docs file as selecting nothing: none of the seven timing rows is measured on either pass, and the pull request is gated by the table checks and the `main` backstop alone. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
 
@@ -133,9 +141,15 @@ The selector has its own tests.
 
 On a ready pull request, one job on each of Linux x86_64, Linux arm64 and
 macOS arm64 runs `scripts/check`, the gate CI applies (`docs/workflow.md`,
-"The gate"). A draft pull request runs only the Linux x86_64 leg, because `cargo xtask plan` leaves its `test` job unselected. Each
-job:
+"The gate"). A draft pull request skips the jobs "Runners" names; marking it
+ready runs every job it skipped. Marking it ready still reuses a same-head
+mutants pass instead of rerunning those shards ("On every pull request that changes code"). Each job:
 
+- first checks free space in the scratch directory and on the `target`
+  filesystem (`scripts/check-resources preflight`), and exits 75 without
+  building when either is too low (`docs/workflow.md`)
+- exits 75 when a compile or link step is killed for lack of resources
+  (`scripts/check-resources classify`)
 - compiles the selected crates with the debug profile, every target,
   through clippy and nextest; the whole workspace is built by the backstop
   ("The backstop on `main`")
@@ -196,31 +210,62 @@ run, which can lose its report, and a later test run reports the flake
 again. No other test retries.
 
 A test the pull request adds or changes runs 30 times under the `stress`
-profile, which never retries; 100 times when the pull request fixes a
-flaky test. One failure fails the run. The retry above applies only to
-tests the pull request did not touch.
+profile, which never retries. When the pull request fixes a flaky test,
+each test the linked flake issue names runs 100 times, in every binary
+that compiles it. One failure fails the run. The retry above applies only
+to tests the pull request did not touch.
 
 The `stress` job runs on a ready pull request on Linux x86_64 beside the
 test jobs and builds from the same restored cache. The tests it runs are
 the test functions the diff adds or changes, found by
-`cargo xtask stress-plan` with the same test-file rules as the red-commit
-check, and a diff that touches no test function skips the run. A test
+`cargo xtask stress-plan`. An empty plan skips the run unless a changed
+source contains a test function, at least one indexed test binary compiles
+it, and every such binary lists no tests; this error also applies when the
+diff changes only helper code. A test-name mismatch is not caught when a
+binary lists other tests. A changed file under `tests/` with no test
+function selects nothing and skips the run. A source with a top-level
+`#![cfg(...)]` inner attribute is excluded from this error. A test
 function in a target whose `Cargo.toml` declares `test = false` is not one:
 only an explicit `--test <name>` builds such a target, so a plain filter
 matches nothing in it, and a diff whose touched test functions are all in
 such targets skips the run. The plan is then intersected with
-`cargo nextest list` on the runner, using the same filter and packages
-the run uses. A touched test the runner does not compile, such as
+`cargo nextest list` on the runner. The plan writes the filter to
+`$RUNNER_TEMP/stress.toml`, which the run step passes by path with
+`--tool-config-file`; the filter text does not travel in an environment
+variable or command-line argument. Linux caps each argument and environment
+string at 128 KiB (`MAX_ARG_STRLEN`). The run step annotates an
+`Argument list too long` failure as `Stress run could not start`. The
+always-run cost step annotates a failed run step that never wrote its start
+marker as `Stress step did not start`; no test ran. Both are job failures and stop the merge like any other; the annotation says only why no test result exists. A touched test the runner
+does not compile, such as
 `cfg(target_os = "macos")` on this Linux x86_64 job, is dropped from the
 plan, named in the job output and not stressed. It still runs in the
 macOS `scripts/check` leg. A plan left empty by that intersection skips
 the run. A run whose
-filter matches no test, or whose iteration runs fewer tests than the plan
-names, fails the job. The count is read from the linked issue's labels. The job is in `ci`'s `needs`,
+filter matches no test, or whose iteration runs a different number of tests
+than the plan names, fails the job. The count is read from the linked issue's
+labels, which decide whether the pull request fixes a flaky test. Which tests
+run 100 times is decided by the names: each test the linked flake issue names
+runs 100 times and every other selected test runs 30; when the issue names no
+test, every selected test runs 30 times. Nothing caps the test set: the job stresses
+every test the plan selects. The job is in `ci`'s `needs`,
 so one failure stops the merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched
 test still gets nextest's one retry but a pass on that retry fails the
 test job (`cargo xtask touched-retries`).
+
+Names are the test ids on the linked issue's marker lines, the body and the
+comments together: the filer's "The test `...` passed after a retry" sentence
+names one test per sighting, normalised past the binary prefix. The plan step
+writes the body and each comment to a file and `stress-plan` reads the names
+from it, matching each against the tests the plan selected; a name that
+matches no selected test runs nowhere and is reported as unmatched in the
+plan output. With names and a flaky-test fix the plan runs twice, `--only
+named` and `--only rest`, writing one filter file per group; the run step
+executes one nextest invocation per non-empty group, each with its own count
+and its own check, skipping an empty group and naming it in the summary. A
+heading per group carries its count, and the single aggregate cost step keeps
+the job envelope.
 
 The Linux x86_64 full-suite run uploads its JUnit XML as the `junit`
 artifact, kept 7 days. It holds only XML this run wrote: the full-suite
@@ -231,7 +276,8 @@ On Linux x86_64 alone:
 
 - `cargo fmt --check`
 - a process signal appears only in the guarded helpers (`cargo xtask signal-sites`); the check scans Rust tokens, so comments never count, and its allowlist is a trust list: the files it names may send signals, every other file may not
-- no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, in a `const`, a `Deadline::after`, a wait call such as `await_requests`, a `.min` cap or a socket timeout setter (`cargo xtask must-succeed`, `docs/testing.md`, "Waits and timeouts"); the check scans Rust tokens, so comments never count, and its allow-list names only each kept bound (a poll slice, a fake-clock grace or step, a bound the code under test reads, a "nothing arrives" check); it reports each site by file path, then line
+- no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, in a `const`, a `Deadline::after` or `.within`, a wait call such as `await_requests`, a `.min` cap or a socket timeout setter (`cargo xtask must-succeed`, `docs/testing.md`, "Waits and timeouts"); the check scans Rust tokens, so comments never count, and its allow-list names only each kept bound (a poll slice, a fake-clock grace or step, a bound the code under test reads, a "nothing arrives" check); it reports each site by file path, then line
+- a raised `WAITS`, `BUDGET` or `CLEANUP` bound, and a `Deadline::after` in a test that is 60 s or more or that the check cannot read, fail (`cargo xtask budget-bounds --base "$base"`, `xtask/src/budget_bounds.rs`); only lines changed against the merge base are scanned, as Rust tokens, so comments never count and unchanged lines never fail. A bound the check cannot read — a shared name outside its known list, or a computed `Duration` — fails closed: the long names (`WAITS`, `BUDGET`, `CLEANUP`, `MAX`) fail while the short ones (`WAIT`, `DEADLINE`, `MUST_SUCCEED_WITHIN`, `ZERO`) pass unruled, and anything else fails as not shown below 60 s; the check reports `Deadline::after({spelling}) is 60 s or more`, or `Deadline::after({spelling}) (readable: WAIT, DEADLINE, MUST_SUCCEED_WITHIN, Duration::ZERO) is not shown below 60 s`. A site is cleared by `// ruling: #N` on the source line holding the `after` ident, as in `crates/main/tests/support/mod.rs` (`Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2) // ruling: #4075`); the doubled bound is the relation (`docs/testing.md`, "Waits and timeouts") asks for
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, every include argument is a
   string literal, and no crate reads a repository file at run time but a
@@ -247,6 +293,7 @@ On Linux x86_64 alone:
   (`cargo xtask crate-edges`)
 - no crate enables serde_json's `preserve_order` feature in any crate linked into a workspace binary or test, over every target and feature; build-dependency edges are excluded (`cargo xtask
   preserve-order`), so prompt bytes stay cacheable (`docs/prompt-cache.md`)
+- string-typed closed-set sites stay capped per production file under `crates/` (`cargo xtask census-ratchet`): a file whose count rises above its inline maximum in `scripts/check` fails, a file missing from the list holds none, and lowering a count never fails; `cargo xtask census-ratchet --print` prints the current per-file counts
 - `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` in
   `research/tui-prototype`, when the diff touches it. The prototype is not a
   workspace member, so the checks above never reach it; it has its own
@@ -256,7 +303,7 @@ On Linux x86_64 alone:
   selects the docs job alone
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
 - `shellcheck --shell=bash` on every other `scripts/` shell file: `bug-red`,
-  `cache-prune`, `check`, `check-docs`, `flaky-tests`, `install-shells`,
+  `cache-prune`, `check`, `check-docs`, `check-resources`, `flaky-tests`, `install-shells`,
   `leak-scan`, `paging-jig`, `release-pack`, `release-size`,
   `stored-results`,
   `test-bug-red`, `test-bug-red-cargo`, `test-flake-report`, `test-flaky-tests`, `test-leak-probe`,
@@ -274,7 +321,16 @@ On Linux x86_64 alone:
 - mutation testing: `cargo-mutants --in-diff`, split across runners. It runs
   on a ready pull request and on a draft pull request
   that carries the label `mutants`, never on a push to `main`; an unlabelled draft skips it, and adding
-  the label starts a run. Shards start once the Linux x86_64 test job, its own
+  the label starts a run. A ready run whose pull request number and head sha
+  match an earlier completed run on the same head, and whose every mutants
+  shard in that run names the current merge parent in its job name and
+  succeeded with the same shard count, reuses the pass instead of starting
+  shards; `cargo xtask mutants-reuse` decides from the current run's pull
+  request number, head, base, and mutant count. Any lookup failure, head or
+  pull request mismatch, a shard naming a different base, partial, cancelled,
+  or failed shards, count mismatch, or self-match starts the shards. A reused
+  run still lists the diff's mutants in the selection
+  summary, and the label rule above is unchanged. Shards start once the Linux x86_64 test job, its own
   job `test_linux` (a job can wait for another job, not one platform's leg of
   it), passes on the head; the arm64 and macOS legs, the `test` job, run in
   parallel and still gate `CI`. Each shard runs `cargo mutants --baseline=skip
@@ -360,13 +416,17 @@ On Linux x86_64 alone:
   stops compiling unnoticed. The job's `timeout-minutes` is 10 to leave
   room for the two uncached checks alongside `scripts/check`.
 
+A draft never runs `release`; a ready pull request runs it when the
+selection chooses it. The backstop still runs it on every push to `main`
+("The backstop on `main`").
+
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull
 request's head and at its base commit (`scripts/release-size`). The base
 binary comes from the build cache when the backstop stored one for that
 commit, and is built otherwise. The scripts that build and measure both
 binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
-under 25 MiB and runs the benchmarks that gate each pull request, the rows the selection above chooses (the 10-busy-turns workload only when the selection chooses it),
+under 26 MiB and runs the benchmarks that gate each pull request, the rows the selection above chooses (the 10-busy-turns workload only when the selection chooses it),
 (`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The head and base
 binaries run only the timing benchmarks the selection chooses, in the same job on the same runner, so a
 timing comparison never crosses runners: one harness process alternates head and base timings,
@@ -407,6 +467,7 @@ network (`docs/testing.md`).
 - a relative Markdown link, or its `#anchor`, does not resolve
 - a section citation, such as `` (`docs/workflow.md`, "The gate") ``, names a
   heading the file does not have, including a citation broken across lines
+- a citation in code under `crates/`, `xtask/` or `scripts/` gives a line number (`docs/<file>.md:<n>`, `docs/<file>.md line <n>`) instead of the file and a quoted heading, or quotes a heading its file lacks, and `xtask/doc-citations.allow` does not list it
 - a backticked path under `docs/`, `crates/`, `scripts/`, `research/` or
   `.github/` does not exist. A path with a placeholder in it, such as
   `docs/<area>.md`, is not checked.
@@ -414,6 +475,8 @@ network (`docs/testing.md`).
   report jobs is missing from the verdict job's `needs`, or the report
   jobs named in "The merge gate" differ from the check's own list
   (`cargo xtask ci-needs`)
+
+`xtask/doc-citations.allow` lists, per file, each such citation still allowed and how many times. A citation beyond its count fails, and so does an entry whose citation the code no longer holds, so the list only shrinks. `cargo xtask doc-citations --print` prints it. The check reads every text file under those three directories except the allow table itself, whose own entries would otherwise read as citations.
 
 It runs in the selection job on every pull request, not only docs-only
 ones, because the change that breaks a citation is usually a code change
@@ -538,6 +601,26 @@ with its tag, in an always-run cleanup step; it does not prove the archives,
 which carry stand-in bytes while the release gate proves the real ones. Only
 `main` can run it: the `release` environment deploys only from `main`.
 
+### The nightly update check
+
+The `nightly-update-check` job in `.github/workflows/release.yml` proves the
+nightly a person on the previous nightly installs: it carries the same publish
+gate as the nightly build, installs the previous nightly into a fresh home,
+updates to the new nightly, and fails the run on the update's own failure.
+The previous nightly comes from the job's own tags: the just-published version
+picks its predecessor through `cargo xtask nightly-pair`, and an empty listing
+fails the lookup instead of reading as a skip. Fewer than two nightlies fail
+the same way: the first nightly has no predecessor to install. The deciding
+logic lives in `xtask`, tested like any other code (`docs/testing.md`,
+"Levels"): the strict nightly-tag predicate the pair lookup and the fixture
+prune share, and the deterministic probe, which re-runs the update against a
+nightly-only origin fixture holding only the two captured tags. Unlike the
+journey suite (`docs/ci.md`, "The journey suite"), a failure files a
+`Nightly update check failed` issue and fails the job. After the merge, the
+owner runs the workflow once from `main`
+(`gh workflow run release.yml -R aakshintala/fiber --ref main`); a branch
+cannot dispatch it.
+
 What the artifacts are, how a release is triggered and how it is signed is
 `docs/releasing.md`.
 
@@ -639,10 +722,10 @@ Node.js version GitHub currently supports. An action still on a deprecated
 Node.js version is moved to its newest major before it is pinned.
 
 No job polls the Actions API in a loop. The backstop's one lookup of the
-last passing `main` commit and the release job's stored-results lookup (one
-artifact listing per commit, at most 10, and one download) are the only
-Actions API calls a workflow makes to find a run; the backstop's cache pruning
-also lists and deletes cache entries.
+last passing `main` commit, the release job's stored-results lookup (one
+artifact listing per commit, at most 10, and one download), and the select
+job's same-head reuse lookup are the Actions API calls a workflow makes to
+find a run; the backstop's cache pruning also lists and deletes cache entries.
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's

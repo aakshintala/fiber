@@ -1,5 +1,6 @@
 //! Quota query state for one terminal attachment (`docs/tui.md`, "The panel").
 
+use contract::events::EventKind;
 use std::time::{Duration, Instant};
 
 use contract::{CommandId, Envelope};
@@ -77,8 +78,8 @@ impl App {
     }
 
     pub(super) fn panel_quota(&mut self, envelope: &Envelope, ended: bool) -> Option<String> {
-        match envelope.kind.as_str() {
-            "command_accepted" => {
+        match envelope.kind() {
+            EventKind::CommandAccepted => {
                 if let Some(accepted) = super::super::read!(envelope, CommandAccepted) {
                     // Every quota answer folds into the card, whatever
                     // asked for it: the view's fetch redraws the panel
@@ -95,14 +96,83 @@ impl App {
                     }
                 }
             }
-            "command_rejected" => {
+            EventKind::CommandRejected => {
                 if let Some(rejected) = super::super::read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                 {
                     self.panel_state.quota.refuse(&id.0);
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::Unknown(_) => {}
         }
         if matches!(self.panel_state.quota.ask, Ask::Due) || ended {
             self.quota_query()
@@ -128,6 +198,7 @@ impl App {
         let session = self.session()?.clone();
         let id = CommandId(mint());
         let line = session_command(&id.0, "quota", &session, None).to_string();
+        self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Asked(id);
         Some(line)
     }
@@ -166,6 +237,7 @@ impl App {
         let id = CommandId(mint());
         let line =
             session_command(&id.0, "quota", &session, Some(json!({"fetch": true}))).to_string();
+        self.outbox.wait(&id.0, super::super::Waiting::Quota);
         self.panel_state.quota.ask = Ask::Fetching(id);
         Some(line)
     }

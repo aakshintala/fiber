@@ -3,12 +3,22 @@
 
 use rustix::process::Signal;
 
-pub(super) fn send_term(pgid: u32, sent: bool, seen_empty: bool) -> bool {
+pub(super) enum Stop<'a> {
+    Group(u32),
+    Host(&'a super::hosted::Hosted),
+}
+
+pub(super) fn send_term(stop: Stop<'_>, sent: bool, seen_empty: bool) -> bool {
     if sent || seen_empty {
         return sent;
     }
-    match support::group::signal(pgid, Signal::TERM) {
-        Ok(()) | Err(_) => {}
+    match stop {
+        Stop::Group(pgid) => match support::group::signal(pgid, Signal::TERM) {
+            Ok(()) | Err(_) => {}
+        },
+        Stop::Host(hosted) => {
+            hosted.host.stop(&hosted.id);
+        }
     }
     true
 }

@@ -90,11 +90,16 @@ fn edit_details_hold_only_the_exact_unified_diff() {
         ]}),
     );
     let shown = path_text(&resolved(dir.path(), "a.txt"));
+    let path = resolved(dir.path(), "a.txt");
+    let hash = crate::files::hash_bytes("after\n".as_bytes());
     assert_eq!(
         output.details,
-        Some(json!({"diff": format!(
-            "--- {shown}\n+++ {shown}\n@@ -1 +1 @@\n-before\n+after\n"
-        )}))
+        Some(json!({
+            "diff": format!(
+                "--- {shown}\n+++ {shown}\n@@ -1 +1 @@\n-before\n+after\n"
+            ),
+            "file_seen": {"path": path_text(&path), "hash": hash},
+        }))
     );
 }
 

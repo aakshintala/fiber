@@ -171,6 +171,7 @@ fn the_copy_has_the_parsers_visible_grammar_in_both_directions() {
             "grep",
             "find",
             "image",
+            "keeper",
             "session",
             "refresh-model-lists",
             "serve",
@@ -361,6 +362,7 @@ fn the_fish_script_offers_commands_and_ends_without_file_names() {
         "\"serve\"",
         "-l installed",
         "\"session\"",
+        "\"keeper\"",
         "bash zsh fish",
     ] {
         assert!(!text.contains(absent), "{absent}\n{text}");

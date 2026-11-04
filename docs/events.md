@@ -447,6 +447,13 @@ session").
 | `name` | string or null | yes | the name; `null` when the person cleared theirs |
 | `by` | string | yes | `person`, from the `name` command, which pins the name, or `model`, from `name_session`; a closed set |
 
+#### `archived`
+
+Durable. The payload is `{}`. The hub appends it to an exited session's log
+while it holds the session's lock, with the next `seq`, when a client archives
+the session (`docs/invocation.md`, "Archiving"). The session is archived while
+this line comes after its last `fiber_started`; resuming it unarchives it.
+
 #### `directory_added`
 
 Durable. Written when the session accepts an `add_directory` driver command (`docs/invocation.md`, "Driver commands") for a folder outside the current boundary, and by a delegate at spawn for each of its parent's added folders that its folded history does not already hold (`docs/delegates.md`, "Forks"). An `add_directory` command for a folder already inside the workspace or an added folder is accepted with no event written.
@@ -471,8 +478,10 @@ Ephemeral. Written whenever a `full` connection attaches or leaves
 
 Ephemeral. The session's own summary of itself, for a client that is not
 showing it: a session list, a rail, a delegate card. Written when any field
-changes. The latest wins, and a client that subscribes, at either level, is
-sent the latest.
+changes. For `output_at` and `tool_output_at`, a change counts only once it
+has moved at least 10 seconds from the value last written, so a streaming
+reply does not write a status per delta. The latest wins, and a client that
+subscribes, at either level, is sent the latest.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -489,8 +498,11 @@ sent the latest.
 | `tool` | string | no | with `tool`, the running tool's name |
 | `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval`, `question` or `offer`, a repository's offer: "Repository code") and `summary` (string, one line) |
 | `since` | integer | yes | when this state began, as `ts` |
+| `output_at` | integer | no | with `streaming` or `retrying`: when the model last sent output for the current request (text, reasoning or tool arguments), as `ts`; absent before the request's first output |
+| `tool_output_at` | integer | no | with `tool`: when the running tool last wrote output (`tool_call_delta`), as `ts`; absent before its first output |
 | `started` | integer | yes | when the session started, as `ts` |
 | `calls` | integer | yes | tool calls the session has made so far |
+| `repeats` | integer | no | how many tool calls in a row, ending with the latest, had the same name and the same arguments; absent when it is 1 |
 | `turns` | integer | no | turns the session has run so far, counted as the usage view counts them (`docs/tui.md`); a client draws no turn count when it is absent |
 | `step` | string | no | after the first tool call: the latest call's tool name, then a space and its subject, such as "read app.rs"; the name alone when the subject is empty or the call has none (`docs/permissions.md`, "What a rule matches") |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
@@ -672,7 +684,7 @@ Durable. The call's outcome.
 | `error` | `error` | no | on `failed` |
 | `process` | `process` | no | on any call that ran a process |
 | `content` | content parts | yes | exactly what the model is sent, except a `tool_search` result, rendered from `loaded` (`docs/tools.md`, "What a result carries") |
-| `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model |
+| `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model. File tools also carry the reserved `file_seen` object here (below) |
 | `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
 | `kept` | array | no | when the result was cut, the byte ranges of the full output that `content` holds, each `[start, end]` (integers, `end` exclusive), in order (`docs/tools.md`, "Bounded results") |
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
@@ -682,6 +694,15 @@ Durable. The call's outcome.
 | `hosts_surfaced` | array of strings | no | the hosts the result surfaced, as URLs, which become known in the session (`docs/tools.md`, "What a result carries"); absent when empty |
 | `loaded` | array of strings | no | the tools a search loaded, by name, best first, ties by name; `[]` when it matched nothing; absent on every other result, and when an `after_tool` hook failed (`docs/tools.md`, "Tool search") |
 | `protected_paths` | object | no | on a confined shell call that changed a protected path: `restored` (array of strings, workspace-relative paths restored to the recorded baseline) and `failed` (array of `path` and `message` objects, one per restore that did not succeed); absent when nothing changed (`docs/sandbox.md`, "Protected paths") |
+
+On a successful `read`, `edit` or `write`, `details` carries the reserved
+`file_seen` object beside the tool's own fields: `path`, the file's resolved
+path as a string, and `hash`, the whole file's content hash as an integer.
+`read` logs the hash of the bytes it read; `edit` and `write` log the hash of
+the bytes they stored. A failed call carries no `file_seen`. The history fold
+reads only this object (`docs/tools.md`, "Stale files"): a resume, a fork or
+a rewind rebuilds what the model's context has seen from it, and only a
+completed handoff clears it.
 
 A failed model call is an assistant message that completed with a failed
 outcome and an `error`; the retry is a new action. Its codes
@@ -1468,6 +1489,7 @@ Every driver command is answered with exactly one of these, echoing its id
 | `read_file` | `data` (string), the file's bytes in standard base64, and `mime_type` (string), its media type from the file name's extension, `application/octet-stream` when Fiber does not know it, over the hub (`docs/invocation.md`, "A session's files") |
 | `configure` | the operation's result from `docs/invocation.md`, "What the hub speaks"; absent for `set_reviewer`, `switch_tool` and `switch_skill` |
 | `read_config` | `text` (string), the configuration file's UTF-8 text, and `version` (string), its content version, over the hub (`docs/invocation.md`, "What the hub speaks") |
+| `read_workspace_file` | `text` (string), the workspace file's UTF-8 text, and `version` (string), its content version, over the hub (`docs/invocation.md`, "What the hub speaks") |
 | `search_files` | `rows` (array of at most 50 strings) or `error` (string), the file panel's result on the hub's machine (`docs/invocation.md`, "What the hub speaks") |
 | `device_login` | `url` and `code` (strings), the provider's device-code step on the hub (`docs/invocation.md`, "What the hub speaks") |
 | `device_login_result` | `path` (string), the stored credential relative to the hub's Fiber home (`docs/invocation.md`, "What the hub speaks") |

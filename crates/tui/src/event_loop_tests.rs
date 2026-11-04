@@ -595,6 +595,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
                 Box::new(|_| {}),
                 clock,
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -673,6 +674,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -738,6 +740,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -799,6 +802,7 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -840,6 +844,7 @@ fn failed_reader_start_returns_io_failed() {
                 },
                 |builder, body| builder.spawn(body),
                 crate::timing::info_diag(),
+                None,
             );
             done.send(result).unwrap_or(());
         })
@@ -886,6 +891,7 @@ fn failed_tick_start_returns_io_failed() {
                 super::Reader::spawn,
                 |_, _| Err(io::Error::other("no thread")),
                 crate::timing::info_diag(),
+                None,
             );
             done.send(result).unwrap_or(());
         })
@@ -1646,7 +1652,7 @@ fn a_clean_file_editor_return_without_a_line_rereads_the_config_view() {
     });
     let seam = std::sync::Arc::new(crate::configure_fake::Fake::new(vec![]));
     lp.app
-        .set_configure(Some(seam.clone() as std::sync::Arc<dyn crate::Configure>));
+        .set_configure(seam.clone() as std::sync::Arc<dyn crate::Configure>);
     let now = contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref());
     for ch in "/settings".chars() {
         lp.app.on_key(crate::keys::Key::Char(ch), now);
@@ -1720,6 +1726,130 @@ fn a_changed_file_return_while_offline_marks_the_diff_not_connected() {
         .flat_map(|row| row.iter().map(|cell| cell.0.as_str()))
         .collect();
     assert!(text.contains("Not connected."), "{text:?}");
+    crate::term::restore();
+}
+
+/// A remote Changed files editor return stores the temporary copy
+/// through the close path: the scripted hub answers the fetch and the
+/// write, the write carries the edited text with the fetched version,
+/// and no notice shows.
+#[test]
+fn a_remote_changed_file_return_stores_the_copy_through_the_close_path() {
+    let pair = open();
+    let _frames = watch(&pair.main, Vec::new());
+    crate::term::setup(&pair.slave, true).unwrap_or_else(|err| panic!("setup: {err}"));
+    let tty = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(tty));
+    lp.var = Box::new(|name| (name == "EDITOR").then(|| ":".to_owned()));
+    lp.app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        panel_cards: vec!["changed_files".to_owned()],
+        ..Default::default()
+    });
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    lp.app.on_line(crate::app::testkit::session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "session_status",
+        serde_json::json!({
+            "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2}, "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+        Some("a_1"),
+    ));
+    let router = crate::remote::Router::new();
+    let seam: std::sync::Arc<dyn crate::Configure> =
+        std::sync::Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    lp.app
+        .set_remote(std::sync::Arc::new(crate::remote::Remote::new(
+            seam,
+            "/client".into(),
+            std::sync::Arc::clone(&router),
+        )));
+    let (client, hub) = UnixStream::pair().unwrap();
+    router.attach(client);
+    hub.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap_or_else(|err| panic!("read timeout: {err}"));
+    let mut asked = std::io::BufReader::new(hub);
+    lp.app.on_line(crate::app::testkit::session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "tool_call_completed",
+        serde_json::json!({"status": "completed", "content": [],
+            "changes": [{"path": "src/file-0.rs", "added": 1, "removed": 0}]}),
+        Some("a_1"),
+    ));
+    drop(
+        lp.app
+            .open_session_view(crate::app::SessionView::ChangedFiles),
+    );
+    assert!(lp.app.session_view_open());
+    // Ctrl+G fetches the hub file on a thread; the script answers the
+    // read, and the pressed effect opens the temporary copy.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let mut lp = lp;
+        let effect = lp
+            .app
+            .on_key(crate::keys::Key::CtrlG, crate::app::testkit::now());
+        tx.send((effect, lp)).unwrap_or(());
+    });
+    let mut line = String::new();
+    asked
+        .read_line(&mut line)
+        .unwrap_or_else(|err| panic!("the workspace read: {err}"));
+    let read: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(read["command"], "read_workspace_file");
+    let accepted = serde_json::json!({"kind":"command_accepted","ts":1,"schema_version":1,
+        "payload":{"command_id":read["id"],"result":{"text":"hub text\n","version":"v9"}}});
+    assert!(router.route(&crate::link::Line::Hub(
+        serde_json::from_value(accepted).unwrap()
+    )));
+    let (effect, mut lp) =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&rx, "the Ctrl+G return");
+    handle.join().unwrap();
+    let crate::app::Effect::OpenFile(opened) = effect else {
+        panic!("Ctrl+G opens the hub copy, got {effect:?}");
+    };
+    assert_ne!(opened.path, PathBuf::from("/w/src/file-0.rs"));
+    // The editor appends a line to the copy; returning it stores the
+    // copy through the close path, on a thread for the blocking write.
+    let (editor, var) = fake_editor("printf 'edited\n' >> \"$2\"\n");
+    lp.var = var;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let code = lp.open_file(opened);
+        tx.send((code, lp)).unwrap_or(());
+    });
+    line.clear();
+    asked
+        .read_line(&mut line)
+        .unwrap_or_else(|err| panic!("the workspace write: {err}"));
+    let written: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(written["command"], "write_workspace_file");
+    assert_eq!(
+        written["args"],
+        serde_json::json!({"workspace": "/w", "path": "src/file-0.rs",
+            "text": "hub text\nedited\n", "version": "v9"})
+    );
+    let accepted = serde_json::json!({"kind":"command_accepted","ts":1,"schema_version":1,
+        "payload":{"command_id":written["id"],"result":{}}});
+    assert!(router.route(&crate::link::Line::Hub(
+        serde_json::from_value(accepted).unwrap()
+    )));
+    let (code, lp) =
+        Deadline::after(Duration::from_secs(10)).recv_or_fail(&rx, "the editor return");
+    handle.join().unwrap();
+    assert_eq!(code, None);
+    assert_eq!(lp.app.notices.newest(), None);
+    drop(editor);
     crate::term::restore();
 }
 
@@ -1966,9 +2096,9 @@ fn opening_a_row_by_key_calls_on_attach() {
             break line;
         }
     };
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
@@ -2068,9 +2198,9 @@ fn an_exit_sends_its_lines_then_quits() {
             break line;
         }
     };
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
@@ -2160,6 +2290,7 @@ fn spawn_run_with_launch_at_height(
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -2905,6 +3036,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -3070,6 +3202,7 @@ fn with_no_model_the_picker_opens_at_start() {
                 Box::new(|_| {}),
                 clock,
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -3135,6 +3268,7 @@ fn with_a_model_home_opens_as_before() {
                 Box::new(|_| {}),
                 clock,
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {

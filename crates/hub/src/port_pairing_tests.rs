@@ -135,8 +135,16 @@ fn pair_returns_a_token_named_after_the_device_and_writes_its_record() {
         text(Deadline::after(MUST_SUCCEED_WITHIN), &client)["payload"]["result"]["clients"],
         1
     );
+    // The pairing announcement the client saw precedes the hub's log
+    // write, so the test waits for the line instead of reading once.
+    crate::testkit::await_true("the hub logs the pairing", {
+        let home = temp.dir.clone();
+        move || {
+            super::log_has(&home, "device_paired")
+                && super::log_has(&home, "phone was paired by local")
+        }
+    });
     let log = temp.log();
-    assert!(log.contains("device_paired") && log.contains("phone was paired by local"));
     assert!(!log.contains(&token) && !log.contains(&code));
     let again = helloed(port, None);
     again.text(&json!({"id":"a","command":"authenticate","args":{"token":token}}).to_string());
@@ -309,7 +317,12 @@ fn revoke_from_a_second_device_closes_the_first() {
         text(Deadline::after(MUST_SUCCEED_WITHIN), &next)["payload"]["code"],
         "unauthenticated"
     );
-    assert!(!temp.dir.join("hub/devices/a").exists());
+    // The record delete lands after the client-visible closes, so the
+    // test waits for it instead of asserting once.
+    crate::testkit::await_true("the hub deletes the revoked record", {
+        let record = temp.dir.join("hub/devices/a");
+        move || !record.exists()
+    });
     // The revoke line follows the client-visible notices and closes, so
     // wait for it under a deadline instead of reading the log once.
     crate::testkit::await_true("the hub logs the revocation", {
@@ -343,9 +356,12 @@ fn revoking_copied_records_refuses_the_token_after_a_restart() {
         deadline.recv_or_fail(&client.rx, "revoked connection EOF"),
         Item::Eof
     );
-    for name in ["phone", "tablet"] {
-        assert!(!devices.join(name).exists(), "{name} must be removed");
-    }
+    // The record deletes land after the client-visible close, so the test
+    // waits for both instead of asserting once.
+    crate::testkit::await_true("the hub removes both revoked records", {
+        let devices = devices.clone();
+        move || !devices.join("phone").exists() && !devices.join("tablet").exists()
+    });
     assert!(devices.join("other").is_file());
     assert!(devices.join("directory").is_dir());
     assert!(

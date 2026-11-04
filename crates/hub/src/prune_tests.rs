@@ -323,6 +323,23 @@ impl crate::Machine for InvokeMachine {
     ) -> Result<(), Failure> {
         self.fake.write_config(workspace, path, text, version)
     }
+    fn read_workspace_file(
+        &self,
+        workspace: &std::path::Path,
+        path: &std::path::Path,
+    ) -> Result<(String, String), Failure> {
+        self.fake.read_workspace_file(workspace, path)
+    }
+    fn write_workspace_file(
+        &self,
+        workspace: &std::path::Path,
+        path: &std::path::Path,
+        text: &str,
+        version: &str,
+    ) -> Result<(), Failure> {
+        self.fake
+            .write_workspace_file(workspace, path, text, version)
+    }
     #[allow(
         clippy::too_many_arguments,
         clippy::type_complexity,

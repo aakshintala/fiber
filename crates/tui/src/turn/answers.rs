@@ -7,6 +7,7 @@
 //! and a resumed session draw the same card.
 
 use contract::Envelope;
+use contract::events::EventKind;
 use contract::events::{
     Answer, FormAnswer, Interaction, InteractionRequested, InteractionResolved, ResolvedBy,
 };
@@ -240,13 +241,82 @@ impl Answered {
 /// Folds `interaction_requested` and `interaction_resolved`; false when no
 /// call took the line.
 pub(super) fn fold(turns: &mut [Turn], envelope: &Envelope) -> bool {
-    match envelope.kind.as_str() {
-        "interaction_requested" => {
+    match envelope.kind() {
+        EventKind::InteractionRequested => {
             read!(envelope, InteractionRequested).is_some_and(|asked| requested(turns, asked))
         }
-        "interaction_resolved" => read!(envelope, InteractionResolved)
+        EventKind::InteractionResolved => read!(envelope, InteractionResolved)
             .is_some_and(|line| resolved(turns, &line, envelope.ts)),
-        _ => false,
+        EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => false,
     }
 }
 

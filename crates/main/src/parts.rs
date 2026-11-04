@@ -87,6 +87,11 @@ pub(crate) struct Parts {
     pub(crate) repository: session_extensions::RepositoryScope,
     /// The session's per-path lock, shared by the file tools and `host.fs`.
     pub(crate) locks: Arc<tools::PathLocks>,
+    /// What the model's context has seen: the history fold's resolved
+    /// paths and whole-file hashes, seeding the session's file tools
+    /// (`docs/tools.md`, "Stale files"). Empty for a new session; a resume
+    /// or continuation fills it from the fold through its point.
+    pub(crate) seen_files: BTreeMap<PathBuf, u64>,
     pub(crate) mcp: mcp_servers::Specs,
     /// MCP starts while the session extensions load; joined before tools register.
     pub(crate) pending_mcp: Option<mcp_servers::PendingMcp>,
@@ -848,6 +853,7 @@ fn parts_inner(
         },
         resolve: crate::delegates::resolver(&providers, &config),
         web_search: model.model.web_search.clone(),
+        seen_files: BTreeMap::new(),
     })
 }
 

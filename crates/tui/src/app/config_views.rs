@@ -6,6 +6,7 @@
 
 mod credential;
 
+use contract::events::EventKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -17,6 +18,7 @@ use serde_json::{Value, json};
 use super::{App, Effect, doctor_view};
 use crate::ThemeSetting;
 use crate::configure::{Configure, ConfigureError, Layer, Saved};
+use crate::configure_fake::Fake;
 use crate::keys::{Edit, Key};
 use crate::login_view::Login;
 use crate::login_worker::{LoginJob, LoginStart, LoginStep, LoginTicket, LoginWorker};
@@ -25,10 +27,10 @@ use crate::mcp_view::Mcp;
 use crate::rules_view::Rules;
 use crate::settings_view::{Act, BUILT_IN_THEMES, Ctx, Settings, THEME};
 use crate::skills_view::Skills;
-use crate::swapped::{Frame, List, Spot};
+use crate::swapped::{Frame, Spot};
 use crate::tools_view::Tools;
 
-/// What a view says when the terminal was given no seam.
+/// What a view says when the terminal has nothing to address.
 pub(in crate::app) const UNAVAILABLE: &str = "Not available in this terminal.";
 
 /// A configuration view.
@@ -77,9 +79,6 @@ enum Open {
     Credential(credential::Picker),
     /// `/doctor`: the scrolled list and the snapshot lines.
     Doctor(doctor_view::Doctor),
-    /// A view with no seam to read through, by its title and the
-    /// command that opened it.
-    Unavailable(&'static str, &'static str),
 }
 
 impl Open {
@@ -94,7 +93,7 @@ impl Open {
             // `/logout` and `/doctor` send nothing: neither waits on
             // an answer.
             Open::Logout(_) | Open::Doctor(..) => {}
-            Open::Settings(_) | Open::Rules(_) | Open::Login(_) | Open::Unavailable(..) => {}
+            Open::Settings(_) | Open::Rules(_) | Open::Login(_) => {}
         }
     }
 }
@@ -115,10 +114,10 @@ fn build_skills(id: String, ctx: &Ctx<'_>) -> Open {
 }
 
 /// The configuration views' state.
-#[derive(Default)]
 pub(in crate::app) struct ConfigViews {
-    /// The seam `main` passed, if any.
-    seam: Option<Arc<dyn Configure>>,
+    /// The seam the views read and write through: `main` replaces this
+    /// default with the real one before the first frame.
+    seam: Arc<dyn Configure>,
     /// Hub-only operations; the configuration seam also points here remotely.
     remote: Option<Arc<crate::remote::Remote>>,
     /// The model-list reader the loop thread and the start pick read
@@ -149,9 +148,28 @@ pub(in crate::app) struct ConfigViews {
     credential: credential::Waits,
 }
 
+impl Default for ConfigViews {
+    fn default() -> Self {
+        Self {
+            seam: Arc::new(Fake::new(Vec::new())),
+            remote: None,
+            models: None,
+            feedback: None,
+            doctor: None,
+            copy: None,
+            open: None,
+            theme: None,
+            usage: None,
+            tickets: LoginTicket::default(),
+            pending_login: None,
+            credential: credential::Waits::default(),
+        }
+    }
+}
+
 impl App {
     /// Sets the seam the views read and write through.
-    pub(crate) fn set_configure(&mut self, seam: Option<Arc<dyn Configure>>) {
+    pub(crate) fn set_configure(&mut self, seam: Arc<dyn Configure>) {
         self.config_views.seam = seam;
     }
 
@@ -182,7 +200,7 @@ impl App {
 
     /// Installs the hub seam and its remote editor and search operations.
     pub(crate) fn set_remote(&mut self, remote: Arc<crate::remote::Remote>) {
-        self.config_views.seam = Some(Arc::clone(&remote) as Arc<dyn Configure>);
+        self.config_views.seam = Arc::clone(&remote) as Arc<dyn Configure>;
         self.config_views.remote = Some(remote);
     }
 
@@ -191,9 +209,9 @@ impl App {
         self.config_views.remote.clone()
     }
 
-    /// The seam the views and the model picker write through, if any.
-    pub(crate) fn configure_seam(&self) -> Option<Arc<dyn Configure>> {
-        self.config_views.seam.clone()
+    /// The seam the views and the model picker write through.
+    pub(crate) fn configure_seam(&self) -> Arc<dyn Configure> {
+        Arc::clone(&self.config_views.seam)
     }
 
     /// Runs `/theme <name>`: saves the named theme to the global file
@@ -201,14 +219,11 @@ impl App {
     /// name is matched exactly against the built-ins and the seam's
     /// file themes, so `solar dawn` is one theme and `Light` is
     /// unknown; an unknown name is refused with a notice naming it,
-    /// and nothing changes. With no seam, or nothing addressable, a
-    /// notice says so and nothing changes.
+    /// and nothing changes. With nothing addressable, a notice says
+    /// so and nothing changes.
     pub(in crate::app) fn theme_command(&mut self, name: &str) -> Effect {
         self.draft.clear();
-        let Some(seam) = self.configure_seam() else {
-            self.push_notice("io_failed", UNAVAILABLE.to_owned());
-            return Effect::None;
-        };
+        let seam = self.configure_seam();
         let Some(workspace) = self.view_workspace() else {
             // A failed remote read already pushed its notice; a local
             // terminal with no workspace says the view is unavailable.
@@ -235,19 +250,17 @@ impl App {
                 );
                 Effect::None
             }
-            None => {
-                self.push_notice("io_failed", UNAVAILABLE.to_owned());
-                Effect::None
-            }
+            // Unreachable: this runs only after `view_workspace` found
+            // an address, which is also what `write_global` writes to.
+            None => Effect::None,
         }
     }
 
     /// Saves one setting's text to the global configuration through the
     /// seam, as `fiber config set` would (`docs/tui.md`, "Layout",
-    /// "The rail"). With no seam nothing is saved; a failed save and
-    /// each warning is a notice, so it shows on the frame drawn next,
-    /// keeping the live width. With no local workspace the write goes to
-    /// the hub-global file.
+    /// "The rail"). A failed save and each warning is a notice, so it
+    /// shows on the frame drawn next, keeping the live width. With no
+    /// local workspace the write goes to the hub-global file.
     pub(crate) fn save_setting(&mut self, key: &str, value: &str) {
         let Some(result) = self.write_global(key, value) else {
             return;
@@ -294,14 +307,13 @@ impl App {
 
     /// Writes one global setting: at the workspace in use through the
     /// seam, or at the hub-global parent with no local workspace. `None`
-    /// with no seam or nothing to address; the caller keeps its own
-    /// no-seam notice.
+    /// with nothing to address; the caller keeps its own notice.
     pub(in crate::app) fn write_global(
         &self,
         key: &str,
         text: &str,
     ) -> Option<Result<Saved, ConfigureError>> {
-        let seam = self.config_views.seam.clone()?;
+        let seam = self.configure_seam();
         if self.installing() {
             return Some(Err(ConfigureError {
                 code: contract::ErrorCode::IoFailed,
@@ -337,24 +349,19 @@ impl App {
         self.model_picker.close();
         self.close_session_view();
         self.config_views.open = None;
-        let open = match self.config_views.seam.clone() {
-            Some(seam) => {
-                let Some(workspace) = self.view_workspace() else {
-                    return Effect::None;
-                };
-                Open::Login(Login::open_on(
-                    &self.config_ctx(seam.as_ref(), &workspace),
-                    provider,
-                ))
-            }
-            None => Open::Unavailable("Log in", "/login"),
+        let seam = self.configure_seam();
+        let Some(workspace) = self.view_workspace() else {
+            return Effect::None;
         };
+        let open = Open::Login(Login::open_on(
+            &self.config_ctx(seam.as_ref(), &workspace),
+            provider,
+        ));
         self.config_views.open = Some(open);
         Effect::None
     }
 
-    /// Opens `view`, closing any open, its unsaved edit dropped. With no
-    /// seam the view says it is not available.
+    /// Opens `view`, closing any open, its unsaved edit dropped.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
         if self.installing() {
             self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
@@ -364,12 +371,16 @@ impl App {
         self.model_picker.close();
         self.close_session_view();
         self.config_views.open = None;
-        let open = match (self.config_views.seam.clone(), view) {
-            // `/doctor` reads a local snapshot through no seam: with no
-            // reader the view says it is not available, and a capture
-            // failure keeps a notice and opens nothing.
-            (_, ConfigView::Doctor) => match self.config_views.doctor.clone() {
-                None => Open::Unavailable("Doctor", "/doctor"),
+        let seam = self.configure_seam();
+        let open = match view {
+            // `/doctor` reads a local snapshot through no seam reader:
+            // with no reader a notice says the view is unavailable, and
+            // a capture failure keeps a notice and opens nothing.
+            ConfigView::Doctor => match self.config_views.doctor.clone() {
+                None => {
+                    self.push_notice("io_failed", UNAVAILABLE.to_owned());
+                    return Effect::None;
+                }
                 Some(reader) => match reader() {
                     Ok(report) => Open::Doctor(doctor_view::Doctor::open(&report)),
                     Err(text) => {
@@ -378,7 +389,7 @@ impl App {
                     }
                 },
             },
-            (_, ConfigView::Credential) => {
+            ConfigView::Credential => {
                 let Some((id, line)) = self.send_config_command("credentials", None) else {
                     return Effect::None;
                 };
@@ -386,16 +397,17 @@ impl App {
                     id.clone(),
                     (super::Kind::Command, crate::input::Draft::default()),
                 );
+                self.outbox.wait(&id, super::Waiting::Credentials);
                 self.config_views.open = Some(Open::Credential(credential::Picker::open(id)));
                 return Effect::Send(vec![line]);
             }
-            (Some(seam), ConfigView::Settings) => {
+            ConfigView::Settings => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
                 Open::Settings(Settings::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
-            (Some(seam), ConfigView::Theme) => {
+            ConfigView::Theme => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
@@ -403,41 +415,33 @@ impl App {
                     &self.config_ctx(seam.as_ref(), &workspace),
                 ))
             }
-            (Some(seam), ConfigView::Tools) => {
+            ConfigView::Tools => {
                 return self.open_asking(seam, "tools", build_tools);
             }
-            (Some(seam), ConfigView::Skills) => {
+            ConfigView::Skills => {
                 return self.open_asking(seam, "skills", build_skills);
             }
-            (Some(seam), ConfigView::Rules) => {
+            ConfigView::Rules => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
                 Open::Rules(Rules::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
-            (Some(seam), ConfigView::Mcp) => {
+            ConfigView::Mcp => {
                 return self.open_asking(seam, "mcp_servers", build_mcp);
             }
-            (Some(seam), ConfigView::Login) => {
+            ConfigView::Login => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
                 Open::Login(Login::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
-            (Some(seam), ConfigView::Logout) => {
+            ConfigView::Logout => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
                 Open::Logout(Logout::open(&self.config_ctx(seam.as_ref(), &workspace)))
             }
-            (None, ConfigView::Settings) => Open::Unavailable("Settings", "/settings"),
-            (None, ConfigView::Theme) => Open::Unavailable("Themes", "/theme"),
-            (None, ConfigView::Tools) => Open::Unavailable("Tools", "/tools"),
-            (None, ConfigView::Skills) => Open::Unavailable("Skills", "/skills"),
-            (None, ConfigView::Rules) => Open::Unavailable("Rules", "/rules"),
-            (None, ConfigView::Login) => Open::Unavailable("Log in", "/login"),
-            (None, ConfigView::Logout) => Open::Unavailable("Log out", "/logout"),
-            (None, ConfigView::Mcp) => Open::Unavailable("MCP servers", "/mcp"),
         };
         self.config_views.open = Some(open);
         Effect::None
@@ -473,6 +477,7 @@ impl App {
             return Effect::None;
         };
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        self.outbox.wait(&id, super::Waiting::ConfigAsk);
         self.config_views.open = Some(build(id, &ctx));
         Effect::Send(vec![line])
     }
@@ -548,27 +553,23 @@ impl App {
             let act = doctor.key(key, height);
             return Some(self.config_act(act));
         }
-        let act = match self.config_views.seam.clone() {
-            Some(seam) => {
-                let Some(workspace) = self.view_workspace() else {
-                    return Some(Effect::None);
-                };
-                let ctx = self.config_ctx(seam.as_ref(), &workspace);
-                match &mut self.config_views.open {
-                    Some(Open::Settings(settings)) => settings.key(key, &ctx),
-                    Some(Open::Tools(tools)) => tools.key(key, &ctx),
-                    Some(Open::Skills(skills)) => skills.key(key, &ctx),
-                    Some(Open::Mcp(mcp)) => mcp.key(key, &ctx),
-                    Some(Open::Rules(rules)) => rules.key(key, &ctx),
-                    Some(Open::Login(login)) => login.key(key, &ctx),
-                    Some(Open::Logout(logout)) => logout.key(key, &ctx),
-                    // The early route above keeps `/doctor` out of the
-                    // seam match: named here for exhaustiveness.
-                    Some(Open::Doctor(..)) => esc(key),
-                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => esc(key),
-                }
-            }
-            None => esc(key),
+        let seam = self.configure_seam();
+        let Some(workspace) = self.view_workspace() else {
+            return Some(Effect::None);
+        };
+        let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        let act = match &mut self.config_views.open {
+            Some(Open::Settings(settings)) => settings.key(key, &ctx),
+            Some(Open::Tools(tools)) => tools.key(key, &ctx),
+            Some(Open::Skills(skills)) => skills.key(key, &ctx),
+            Some(Open::Mcp(mcp)) => mcp.key(key, &ctx),
+            Some(Open::Rules(rules)) => rules.key(key, &ctx),
+            Some(Open::Login(login)) => login.key(key, &ctx),
+            Some(Open::Logout(logout)) => logout.key(key, &ctx),
+            // The early routes above keep `/doctor` and the picker out
+            // of the seam match: named here for exhaustiveness.
+            Some(Open::Doctor(..)) => esc(key),
+            Some(Open::Credential(_)) | None => esc(key),
         };
         Some(self.config_act(act))
     }
@@ -590,30 +591,23 @@ impl App {
             let act = doctor.wheel(up, height);
             return Some(self.config_act(act));
         }
-        let act = match self.config_views.seam.clone() {
-            Some(seam) => {
-                let Some(workspace) = self.view_workspace() else {
-                    return Some(Effect::None);
-                };
-                let ctx = self.config_ctx(seam.as_ref(), &workspace);
-                match &mut self.config_views.open {
-                    Some(Open::Settings(settings)) => settings.wheel(up, &ctx),
-                    Some(Open::Tools(tools)) => tools.wheel(up, &ctx),
-                    Some(Open::Skills(skills)) => skills.wheel(up, &ctx),
-                    Some(Open::Mcp(mcp)) => mcp.wheel(up, &ctx),
-                    Some(Open::Rules(rules)) => rules.wheel(up, &ctx),
-                    Some(Open::Login(login)) => login.wheel(up, &ctx),
-                    Some(Open::Logout(logout)) => logout.wheel(up, &ctx),
-                    // The early routes above keep `/doctor`, the picker
-                    // and the unavailable view out of the seam match:
-                    // named here for exhaustiveness. None of them
-                    // scrolls, so the wheel is swallowed.
-                    Some(Open::Doctor(..) | Open::Credential(_) | Open::Unavailable(..)) | None => {
-                        Act::Stay
-                    }
-                }
-            }
-            None => Act::Stay,
+        let seam = self.configure_seam();
+        let Some(workspace) = self.view_workspace() else {
+            return Some(Effect::None);
+        };
+        let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        let act = match &mut self.config_views.open {
+            Some(Open::Settings(settings)) => settings.wheel(up, &ctx),
+            Some(Open::Tools(tools)) => tools.wheel(up, &ctx),
+            Some(Open::Skills(skills)) => skills.wheel(up, &ctx),
+            Some(Open::Mcp(mcp)) => mcp.wheel(up, &ctx),
+            Some(Open::Rules(rules)) => rules.wheel(up, &ctx),
+            Some(Open::Login(login)) => login.wheel(up, &ctx),
+            Some(Open::Logout(logout)) => logout.wheel(up, &ctx),
+            // The early routes above keep `/doctor` and the picker out
+            // of the seam match: named here for exhaustiveness. Neither
+            // scrolls, so the wheel is swallowed.
+            Some(Open::Doctor(..) | Open::Credential(_)) | None => Act::Stay,
         };
         Some(self.config_act(act))
     }
@@ -626,40 +620,36 @@ impl App {
         if matches!(self.config_views.open, Some(Open::Doctor(..))) {
             return Some(Effect::None);
         }
-        let act = match self.config_views.seam.clone() {
-            Some(seam) => {
-                let Some(workspace) = self.view_workspace() else {
-                    return Some(Effect::None);
-                };
-                let ctx = self.config_ctx(seam.as_ref(), &workspace);
-                match &mut self.config_views.open {
-                    Some(Open::Settings(settings)) => {
-                        settings.edit_key(edit.clone());
-                        Act::Stay
-                    }
-                    Some(Open::Tools(tools)) => {
-                        tools.edit_key(edit);
-                        Act::Stay
-                    }
-                    Some(Open::Mcp(_)) => Act::Stay,
-                    Some(Open::Skills(skills)) => {
-                        skills.edit_key(edit);
-                        Act::Stay
-                    }
-                    Some(Open::Rules(rules)) => rules.edit_key(edit, &ctx),
-                    Some(Open::Login(login)) => {
-                        login.edit_key(edit);
-                        Act::Stay
-                    }
-                    // `/logout` has no field: nothing takes an edit.
-                    Some(Open::Logout(_)) => Act::Stay,
-                    // The early route above keeps `/doctor` out of the
-                    // seam match: named here for exhaustiveness.
-                    Some(Open::Doctor(..)) => Act::Stay,
-                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
-                }
+        let seam = self.configure_seam();
+        let Some(workspace) = self.view_workspace() else {
+            return Some(Effect::None);
+        };
+        let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        let act = match &mut self.config_views.open {
+            Some(Open::Settings(settings)) => {
+                settings.edit_key(edit.clone());
+                Act::Stay
             }
-            None => Act::Stay,
+            Some(Open::Tools(tools)) => {
+                tools.edit_key(edit);
+                Act::Stay
+            }
+            Some(Open::Mcp(_)) => Act::Stay,
+            Some(Open::Skills(skills)) => {
+                skills.edit_key(edit);
+                Act::Stay
+            }
+            Some(Open::Rules(rules)) => rules.edit_key(edit, &ctx),
+            Some(Open::Login(login)) => {
+                login.edit_key(edit);
+                Act::Stay
+            }
+            // `/logout` has no field: nothing takes an edit.
+            Some(Open::Logout(_)) => Act::Stay,
+            // The early route above keeps `/doctor` out of the
+            // seam match: named here for exhaustiveness.
+            Some(Open::Doctor(..)) => Act::Stay,
+            Some(Open::Credential(_)) | None => Act::Stay,
         };
         Some(self.config_act(act))
     }
@@ -682,10 +672,11 @@ impl App {
         {
             return self.config_act(Act::Stay);
         }
-        let act = match (self.config_views.seam.clone(), spot) {
+        let seam = self.configure_seam();
+        let act = match spot {
             // The picker's `x` cancels like Esc: with the theme choices
             // open the capture is queued first, then the view closes.
-            (_, Spot::Close) => {
+            Spot::Close => {
                 let restore = match &self.config_views.open {
                     Some(Open::Settings(settings)) => settings.choices_entry(),
                     _ => None,
@@ -696,7 +687,7 @@ impl App {
                 }
                 return Effect::None;
             }
-            (Some(seam), Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
+            Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_) => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
@@ -712,15 +703,12 @@ impl App {
                     // The early route above keeps `/doctor` out of the
                     // seam match: named here for exhaustiveness.
                     Some(Open::Doctor(..)) => Act::Stay,
-                    Some(Open::Credential(_) | Open::Unavailable(..)) | None => Act::Stay,
+                    Some(Open::Credential(_)) | None => Act::Stay,
                 }
-            }
-            (None, Spot::Row(_) | Spot::Switch { .. } | Spot::Revoke(_) | Spot::Item(_)) => {
-                Act::Stay
             }
             // Only the model picker draws cells with targets of their
             // own; here a cell is never pushed.
-            (_, Spot::Cell(_, _)) => Act::Stay,
+            Spot::Cell(_, _) => Act::Stay,
         };
         self.config_act(act)
     }
@@ -740,12 +728,10 @@ impl App {
             Act::OpenLocal(file) => {
                 let file = file
                     .or_else(|| self.remote().map(|remote| remote.local_global_file()))
-                    .or_else(|| self.configure_seam().map(|seam| seam.global_file()));
-                file.map_or(Effect::None, |file| {
-                    Effect::OpenFile(crate::editor::OpenFile {
-                        path: file,
-                        line: None,
-                    })
+                    .unwrap_or_else(|| self.configure_seam().global_file());
+                Effect::OpenFile(crate::editor::OpenFile {
+                    path: file,
+                    line: None,
                 })
             }
             Act::Open(file) => {
@@ -793,16 +779,15 @@ impl App {
                 // later start: below saturation every start advances.
                 self.config_views.tickets = self.config_views.tickets.next();
                 let ticket = self.config_views.tickets;
-                if let Some(seam) = self.configure_seam() {
-                    self.config_views.pending_login = Some(LoginStart {
-                        ticket,
-                        name,
-                        seam,
-                        job: LoginJob::Browser,
-                    });
-                    if let Some(Open::Login(login)) = &mut self.config_views.open {
-                        login.wait(ticket);
-                    }
+                let seam = self.configure_seam();
+                self.config_views.pending_login = Some(LoginStart {
+                    ticket,
+                    name,
+                    seam,
+                    job: LoginJob::Browser,
+                });
+                if let Some(Open::Login(login)) = &mut self.config_views.open {
+                    login.wait(ticket);
                 }
                 Effect::None
             }
@@ -811,16 +796,15 @@ impl App {
                 // fresh ticket with the same saturation rule as a login.
                 self.config_views.tickets = self.config_views.tickets.next();
                 let ticket = self.config_views.tickets;
-                if let Some(seam) = self.configure_seam() {
-                    self.config_views.pending_login = Some(LoginStart {
-                        ticket,
-                        name: name.clone(),
-                        seam,
-                        job: LoginJob::Reviewer,
-                    });
-                    if let Some(Open::Login(login)) = &mut self.config_views.open {
-                        login.wait_reviewer(ticket, name);
-                    }
+                let seam = self.configure_seam();
+                self.config_views.pending_login = Some(LoginStart {
+                    ticket,
+                    name: name.clone(),
+                    seam,
+                    job: LoginJob::Reviewer,
+                });
+                if let Some(Open::Login(login)) = &mut self.config_views.open {
+                    login.wait_reviewer(ticket, name);
                 }
                 Effect::None
             }
@@ -844,8 +828,9 @@ impl App {
             return Effect::None;
         };
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
-            mcp.sent(server, id, login);
+            mcp.sent(server, id.clone(), login);
         }
+        self.outbox.wait(&id, super::Waiting::ConfigAsk);
         Effect::Send(vec![line])
     }
 
@@ -856,8 +841,9 @@ impl App {
             return Vec::new();
         };
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
-            mcp.expect(id);
+            mcp.expect(id.clone());
         }
+        self.outbox.wait(&id, super::Waiting::ConfigAsk);
         vec![line]
     }
 
@@ -926,16 +912,6 @@ impl App {
             Open::Login(_) => return None,
             // `/logout` draws its own overlay, as `/login` does.
             Open::Logout(_) => return None,
-            Open::Unavailable(title, command) => Frame {
-                joins: Vec::new(),
-                title: (*title).to_owned(),
-                command: (*command).to_owned(),
-                rows: Vec::new(),
-                list: List::default(),
-                below: vec![UNAVAILABLE.to_owned()],
-                field: None,
-                footer: "Esc close".to_owned(),
-            },
         })
     }
 
@@ -1001,27 +977,19 @@ impl App {
         if let Err(message) = result {
             self.notices.push("io_failed", message);
         }
-        if let Some(seam) = self.config_views.seam.clone() {
-            let Some(workspace) = self.view_workspace() else {
-                return;
-            };
-            let ctx = self.config_ctx(seam.as_ref(), &workspace);
-            match &mut self.config_views.open {
-                Some(Open::Settings(settings)) => settings.reread(&ctx),
-                Some(Open::Rules(rules)) => rules.reread(&ctx),
-                Some(Open::Skills(skills)) => skills.reread(&ctx),
-                // `/logout` and `/doctor` open no file an editor could
-                // return from: the snapshot never rereads.
-                Some(Open::Logout(_) | Open::Doctor(..)) => {}
-                Some(
-                    Open::Credential(_)
-                    | Open::Tools(_)
-                    | Open::Mcp(_)
-                    | Open::Login(_)
-                    | Open::Unavailable(..),
-                )
-                | None => {}
-            }
+        let seam = self.configure_seam();
+        let Some(workspace) = self.view_workspace() else {
+            return;
+        };
+        let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        match &mut self.config_views.open {
+            Some(Open::Settings(settings)) => settings.reread(&ctx),
+            Some(Open::Rules(rules)) => rules.reread(&ctx),
+            Some(Open::Skills(skills)) => skills.reread(&ctx),
+            // `/logout` and `/doctor` open no file an editor could
+            // return from: the snapshot never rereads.
+            Some(Open::Logout(_) | Open::Doctor(..)) => {}
+            Some(Open::Credential(_) | Open::Tools(_) | Open::Mcp(_) | Open::Login(_)) | None => {}
         }
     }
 
@@ -1030,25 +998,91 @@ impl App {
     /// it sent, of its result kind, fills it. A follow-up driver answer
     /// and a server event re-query the MCP rows. Every other line, and
     /// any line with another view open, does nothing. Returns the lines
-    /// the fold sends.
-    pub(in crate::app) fn config_views_line(&mut self, envelope: &Envelope) -> Vec<String> {
+    /// the fold sends. The asking and credential answers route by tag;
+    /// every other line folds as before.
+    pub(in crate::app) fn config_views_line(
+        &mut self,
+        envelope: &Envelope,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> Vec<String> {
+        match answer.and_then(|answer| answer.waiting.as_ref()) {
+            Some(super::Waiting::ConfigAsk) => {
+                if let Some(answer) = answer {
+                    self.outbox.settled(answer.id);
+                }
+                return self.config_asking_line(envelope, Vec::new());
+            }
+            Some(super::Waiting::Credentials) | Some(super::Waiting::CredentialSwitch) => {
+                if let Some(answer) = answer {
+                    self.outbox.settled(answer.id);
+                }
+                return self.credential_line(envelope);
+            }
+            Some(
+                super::Waiting::Dismiss(_)
+                | super::Waiting::Fork
+                | super::Waiting::RewindHistory
+                | super::Waiting::RewindSend
+                | super::Waiting::ChangeWorkspace(_)
+                | super::Waiting::ClearStart
+                | super::Waiting::ClearClose
+                | super::Waiting::History
+                | super::Waiting::ImageFetch
+                | super::Waiting::ImageDisplay
+                | super::Waiting::Sessions
+                | super::Waiting::Abandoned
+                | super::Waiting::Directories
+                | super::Waiting::Subscribe
+                | super::Waiting::Stop
+                | super::Waiting::Delete
+                | super::Waiting::OfferImport
+                | super::Waiting::DeleteDiscovery
+                | super::Waiting::DeleteStop
+                | super::Waiting::DeleteFinal
+                | super::Waiting::Feed
+                | super::Waiting::Recent
+                | super::Waiting::Close,
+            )
+            | Some(
+                super::Waiting::Figures
+                | super::Waiting::Diff
+                | super::Waiting::Hooks
+                | super::Waiting::Branch
+                | super::Waiting::Quota
+                | super::Waiting::ArtifactPage
+                | super::Waiting::ProposeNotes
+                | super::Waiting::JobStop
+                | super::Waiting::JobInput,
+            )
+            | None => {}
+        }
         let credential_send = self.credential_line(envelope);
+        self.config_asking_line(envelope, credential_send)
+    }
+
+    /// Folds one attached-session envelope into the open asking view, if
+    /// one is open: the tools, skills and MCP rows answer their own
+    /// command's id, and a server event re-queries the MCP rows.
+    /// `credential_send` carries the credential fold's follow-up lines.
+    fn config_asking_line(
+        &mut self,
+        envelope: &Envelope,
+        credential_send: Vec<String>,
+    ) -> Vec<String> {
         if !matches!(
             self.config_views.open,
             Some(Open::Tools(_) | Open::Skills(_) | Open::Mcp(_))
         ) {
             return credential_send;
         }
-        let Some(seam) = self.config_views.seam.clone() else {
-            return credential_send;
-        };
+        let seam = self.configure_seam();
         let Some(workspace) = self.view_workspace() else {
             return credential_send;
         };
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
         let mut send = credential_send;
-        match envelope.kind.as_str() {
-            "command_accepted" => {
+        match envelope.kind() {
+            EventKind::CommandAccepted => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
                     match &mut self.config_views.open {
                         Some(Open::Tools(tools)) => {
@@ -1084,14 +1118,13 @@ impl App {
                             Open::Credential(_)
                             | Open::Settings(_)
                             | Open::Rules(_)
-                            | Open::Login(_)
-                            | Open::Unavailable(..),
+                            | Open::Login(_),
                         )
                         | None => {}
                     }
                 }
             }
-            "command_rejected" => {
+            EventKind::CommandRejected => {
                 if let Some(rejected) = super::read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                     && let Some(open) = &mut self.config_views.open
@@ -1101,13 +1134,79 @@ impl App {
             }
             // A server's state changed, or its set did: the open view
             // queries again, unless its last answer is still in flight.
-            "mcp_server_failed" | "mcp_server_ready" | "reloaded" => {
+            EventKind::McpServerFailed | EventKind::McpServerReady | EventKind::Reloaded => {
                 let live = matches!(&self.config_views.open, Some(Open::Mcp(mcp)) if mcp.live());
                 if live {
                     send.extend(self.remcp_query());
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::Unknown(_) => {}
         }
         send
     }

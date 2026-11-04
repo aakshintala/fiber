@@ -39,7 +39,7 @@ fn app() -> (App, Arc<Fake>) {
     let mut app = session_app();
     let fake = Arc::new(Fake::new(Vec::new()));
     set_notes(&fake, notes("", ""));
-    app.set_configure(Some(fake.clone() as Arc<dyn crate::Configure>));
+    app.set_configure(fake.clone() as Arc<dyn crate::Configure>);
     (app, fake)
 }
 
@@ -269,9 +269,7 @@ fn the_command_clears_the_draft_reads_the_notes_and_shows_topic_ones_question() 
 #[test]
 fn with_no_session_a_notice_says_so_and_nothing_opens() {
     let mut app = crate::app::commands::commands_testkit::connected();
-    app.set_configure(Some(
-        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>);
     assert_eq!(enter(&mut app, "/reviewer-setup"), Effect::None);
     assert!(app.reviewer_setup().is_none());
     assert_eq!(
@@ -292,20 +290,6 @@ fn with_the_link_down_nothing_opens_and_the_draft_stays() {
     assert!(app.reviewer_setup().is_none());
     assert!(notices(&app).iter().all(|(code, _)| code != "io_failed"));
     assert!(on_screen(&mut app).contains("/reviewer-setup"));
-}
-
-#[test]
-fn with_no_seam_the_not_available_notice_shows() {
-    let mut app = session_app();
-    assert_eq!(enter(&mut app, "/reviewer-setup"), Effect::None);
-    assert!(app.reviewer_setup().is_none());
-    assert_eq!(
-        notices(&app),
-        [(
-            "io_failed".to_owned(),
-            "Not available in this terminal.".to_owned()
-        )]
-    );
 }
 
 #[test]
@@ -339,18 +323,14 @@ fn opens_nothing_with(app: &mut App, expect: &str) {
 #[test]
 fn with_no_home_the_session_has_not_loaded() {
     let mut app = crate::app::commands::commands_testkit::attached();
-    app.set_configure(Some(
-        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>);
     opens_nothing_with(&mut app, NOT_LOADED);
 }
 
 #[test]
 fn with_no_row_for_the_session_it_has_not_loaded() {
     let mut app = home_app();
-    app.set_configure(Some(
-        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>);
     app.attach(SessionId(OTHER.to_owned()));
     opens_nothing_with(&mut app, NOT_LOADED);
 }
@@ -1464,18 +1444,9 @@ fn a_session_with_no_project_shows_no_notice_and_is_not_marked() {
 #[test]
 fn a_session_with_no_row_shows_no_notice() {
     let mut app = home_app();
-    app.set_configure(Some(
-        Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>
-    ));
+    app.set_configure(Arc::new(Fake::new(Vec::new())) as Arc<dyn crate::Configure>);
     app.attach(SessionId(OTHER.to_owned()));
     app.on_line(with_session(OTHER, reviewer_deny()));
-    assert!(app.reviewer_setup().is_none());
-}
-
-#[test]
-fn with_no_seam_the_block_shows_no_notice() {
-    let mut app = session_app();
-    app.on_line(reviewer_deny());
     assert!(app.reviewer_setup().is_none());
 }
 
@@ -1918,4 +1889,76 @@ fn read_only_config_invalid_save_refusal_names_the_entry_on_the_diff() {
     // The entry decision survives the refusal.
     let rows = app.reviewer_setup().expect("open").line_rows();
     assert_eq!(rows.len(), 1);
+}
+
+// Part of #3696: the `propose_notes` answers route by tag.
+
+#[test]
+fn propose_notes_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = id_of(&propose(&mut app));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ProposeNotes));
+    assert!(app.outbox.pending.contains_key(&id));
+    app.on_line(accepted(&id, one_line()));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(screen(&app), Screen::Lines);
+}
+
+#[test]
+fn propose_notes_refusal_settles_its_tag() {
+    use crate::app::Waiting;
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = id_of(&propose(&mut app));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ProposeNotes));
+    app.on_line(rejected(&id, "busy", "An approval is waiting."));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(screen(&app), Screen::Question);
+}
+
+#[test]
+fn an_answer_for_another_session_settles_its_tag_and_entry_but_changes_nothing() {
+    use crate::app::Waiting;
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = id_of(&propose(&mut app));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ProposeNotes));
+    app.on_line(with_session(OTHER, accepted(&id, one_line())));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(screen(&app), Screen::Waiting);
+}
+
+#[test]
+fn a_second_propose_notes_answer_for_one_id_falls_through() {
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = ask(&mut app, one_line());
+    assert_eq!(screen(&app), Screen::Lines);
+    // The tag is gone, so the duplicate takes the untagged path: the
+    // setup already holds the lines, and nothing reopens.
+    app.on_line(accepted(&id, one_line()));
+    assert_eq!(screen(&app), Screen::Lines);
+    assert!(app.outbox.pending.is_empty());
+}
+
+#[test]
+fn a_dropped_request_answer_still_settles_its_tag() {
+    use crate::app::Waiting;
+    let (mut app, _) = app();
+    start(&mut app);
+    let id = id_of(&propose(&mut app));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::ProposeNotes));
+    // Closing the setup drops the pending request: its late answer
+    // settles silently with no notice.
+    app.reviewer_setup_close();
+    let before = notices(&app);
+    app.on_line(accepted(&id, one_line()));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.outbox.pending.is_empty());
+    assert_eq!(notices(&app), before);
 }

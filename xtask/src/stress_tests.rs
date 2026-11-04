@@ -1,6 +1,29 @@
 use super::*;
-use crate::select::{Member, TestRef};
+use crate::rules::RustFile;
+use crate::select::{Member, Members, TestRef};
 use crate::test_index::{TestBinary, TestIndex};
+
+fn member(unrun_tests: &[&str]) -> Members {
+    std::collections::BTreeMap::from([(
+        "log".to_owned(),
+        Member {
+            dir: "crates/log".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+            unrun_tests: unrun_tests.iter().map(|path| (*path).to_owned()).collect(),
+        },
+    )])
+}
+
+fn source_file(path: &str, source: &str) -> RustFile {
+    RustFile {
+        krate: "log".to_owned(),
+        path: path.to_owned(),
+        rel: path.strip_prefix("crates/log/").unwrap().to_owned(),
+        source: source.to_owned(),
+    }
+}
 
 fn binary_test() -> TestRef {
     TestRef {
@@ -21,38 +44,71 @@ fn unit_test() -> TestRef {
 }
 
 #[test]
-fn a_compiled_test_file_with_no_selected_tests_names_its_path() {
+fn empty_test_file_error_requires_a_test_function_and_an_empty_compiled_index() {
     let path = "crates/log/src/utility_tests.rs".to_owned();
-    let members = std::collections::BTreeMap::from([(
-        "log".to_owned(),
-        Member {
-            dir: "crates/log".to_owned(),
-            version: "0.0.0".to_owned(),
-            deps: Vec::new(),
-            library: true,
-            unrun_tests: Vec::new(),
-        },
-    )]);
-    let index = TestIndex::from_fixtures(vec![(path.clone(), TestBinary { tests: Vec::new() })]);
-    let selected = vec![(path.clone(), Vec::new())];
+    let files = [path.clone()];
+    let sources = [source_file(&path, "#[test] fn catches() {}")];
+    let members = member(&[]);
+    let empty = TestIndex::from_fixtures(vec![(path.clone(), TestBinary { tests: Vec::new() })]);
 
     assert_eq!(
-        empty_test_file_error(std::slice::from_ref(&path), &selected, &members, &index),
+        empty_test_file_error(&files, &sources, &members, &empty),
         Some(format!("{path}: changed test file selected no tests"))
     );
     assert_eq!(
-        empty_test_file_error(
-            std::slice::from_ref(&path),
-            &selected,
-            &members,
-            &TestIndex::default()
-        ),
+        empty_test_file_error(&files, &sources, &members, &TestIndex::default()),
+        None,
+        "an uncompiled file has no index entry"
+    );
+    let listed = TestIndex::from_fixtures(vec![(
+        path.clone(),
+        TestBinary {
+            tests: vec![unit_test()],
+        },
+    )]);
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &members, &listed),
+        None,
+        "a binary that lists tests is not an empty-index miss"
+    );
+}
+
+#[test]
+fn empty_test_file_error_ignores_files_without_test_functions() {
+    let path = "crates/log/src/utility_tests.rs".to_owned();
+    let files = [path.clone()];
+    let sources = [source_file(&path, "const BUDGET: u32 = 1;")];
+    let index = TestIndex::from_fixtures(vec![(path.clone(), TestBinary { tests: Vec::new() })]);
+
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &member(&[]), &index),
         None
     );
 }
 
 #[test]
-fn empty_test_file_error_compares_the_path_with_each_unrun_file() {
+fn empty_test_file_error_skips_cfg_inner_attributes() {
+    let path = "crates/log/src/utility_tests.rs".to_owned();
+    let files = [path.clone()];
+    let sources = [source_file(
+        &path,
+        "#![cfg(feature = \"x\")] #[test] fn catches() {}",
+    )];
+    let index = TestIndex::from_fixtures(vec![(path.clone(), TestBinary { tests: Vec::new() })]);
+
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &member(&[]), &index),
+        None
+    );
+}
+
+#[test]
+fn has_cfg_inner_attr_ignores_non_cfg_attributes_with_arguments() {
+    assert_eq!(has_cfg_inner_attr("#![allow(dead_code)]"), Ok(false));
+}
+
+#[test]
+fn empty_test_file_error_skips_unrun_test_files_but_not_run_files() {
     let normal = "crates/log/src/utility_tests.rs";
     let unrun = "crates/log/tests/main_journeys.rs";
     for (path, expected) in [
@@ -62,26 +118,13 @@ fn empty_test_file_error_compares_the_path_with_each_unrun_file() {
         ),
         (unrun, None),
     ] {
-        let members = std::collections::BTreeMap::from([(
-            "log".to_owned(),
-            Member {
-                dir: "crates/log".to_owned(),
-                version: "0.0.0".to_owned(),
-                deps: Vec::new(),
-                library: true,
-                unrun_tests: vec![unrun.to_owned()],
-            },
-        )]);
-        let files = vec![path.to_owned()];
-        let index = TestIndex::from_fixtures(vec![(
-            path.to_owned(),
-            TestBinary {
-                tests: vec![unit_test()],
-            },
-        )]);
+        let files = [path.to_owned()];
+        let sources = [source_file(path, "#[test] fn catches() {}")];
+        let index =
+            TestIndex::from_fixtures(vec![(path.to_owned(), TestBinary { tests: Vec::new() })]);
 
         assert_eq!(
-            empty_test_file_error(&files, &[], &members, &index),
+            empty_test_file_error(&files, &sources, &member(&[unrun]), &index),
             expected,
             "path {path}"
         );
@@ -89,37 +132,48 @@ fn empty_test_file_error_compares_the_path_with_each_unrun_file() {
 }
 
 #[test]
-fn an_empty_selection_in_one_test_file_fails_even_when_another_file_selects_tests() {
-    let missing = "crates/log/src/utility_tests.rs".to_owned();
-    let selected_path = "crates/log/tests/works.rs".to_owned();
-    let files = [missing.clone(), selected_path.clone()];
-    let members = std::collections::BTreeMap::from([(
-        "log".to_owned(),
-        Member {
-            dir: "crates/log".to_owned(),
-            version: "0.0.0".to_owned(),
-            deps: Vec::new(),
-            library: true,
-            unrun_tests: Vec::new(),
-        },
-    )]);
+fn empty_test_file_error_names_the_first_file_with_an_empty_index() {
+    let first = "crates/log/src/first_tests.rs".to_owned();
+    let second = "crates/log/src/second_tests.rs".to_owned();
+    let files = [first.clone(), second.clone()];
+    let sources = [
+        source_file(&first, "#[test] fn first() {}"),
+        source_file(&second, "#[test] fn second() {}"),
+    ];
     let index = TestIndex::from_fixtures(vec![
-        (missing.clone(), TestBinary { tests: Vec::new() }),
+        (first.clone(), TestBinary { tests: Vec::new() }),
         (
-            selected_path.clone(),
+            second,
             TestBinary {
                 tests: vec![unit_test()],
             },
         ),
     ]);
-    let selected = vec![
-        (missing.clone(), Vec::new()),
-        (selected_path, vec![unit_test()]),
-    ];
 
     assert_eq!(
-        empty_test_file_error(&files, &selected, &members, &index),
-        Some(format!("{missing}: changed test file selected no tests"))
+        empty_test_file_error(&files, &sources, &member(&[]), &index),
+        Some(format!("{first}: changed test file selected no tests"))
+    );
+}
+
+#[test]
+fn empty_test_file_error_requires_every_binary_for_a_file_to_list_no_tests() {
+    let path = "crates/log/src/utility_tests.rs".to_owned();
+    let files = [path.clone()];
+    let sources = [source_file(&path, "#[test] fn catches() {}")];
+    let index = TestIndex::from_fixtures(vec![
+        (path.clone(), TestBinary { tests: Vec::new() }),
+        (
+            path.clone(),
+            TestBinary {
+                tests: vec![unit_test()],
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        empty_test_file_error(&files, &sources, &member(&[]), &index),
+        None
     );
 }
 
@@ -370,6 +424,128 @@ fn a_summary_with_two_tests_uses_the_plural() {
     );
 }
 
+#[test]
+fn a_named_group_keeps_the_flaky_fix_count_and_rest_runs_the_default() {
+    assert_eq!(group_count(Some(Only::Named), "test-only"), 100);
+    assert_eq!(group_count(Some(Only::Named), "bug"), 30);
+    assert_eq!(group_count(Some(Only::Rest), "test-only"), 30);
+    assert_eq!(group_count(Some(Only::Rest), ""), 30);
+    assert_eq!(group_count(None, "test-only"), 100);
+    assert_eq!(group_count(None, ""), 30);
+}
+
+#[test]
+fn a_named_summary_names_the_group_and_its_count() {
+    assert_eq!(
+        group_summary(
+            100,
+            &["test\tb fold::tests::second".to_owned()],
+            Only::Named
+        ),
+        "### Stress job: 1 test, 100 runs each (named by the linked flake issue)\n```\ntest\tb fold::tests::second\n```\n"
+    );
+}
+
+#[test]
+fn a_rest_summary_names_the_group_and_its_count() {
+    assert_eq!(
+        group_summary(
+            30,
+            &[
+                "test\ta::t new_test".to_owned(),
+                "test\tb fold::tests::second".to_owned(),
+            ],
+            Only::Rest
+        ),
+        "### Stress job: 2 tests, 30 runs each (rest)\n```\ntest\ta::t new_test\ntest\tb fold::tests::second\n```\n"
+    );
+}
+
+#[test]
+fn an_empty_group_summary_names_the_group_with_zero_tests() {
+    assert_eq!(
+        group_summary(100, &[], Only::Named),
+        "### Stress job: 0 tests, 100 runs each (named by the linked flake issue)\n```\n```\n"
+    );
+    assert_eq!(
+        group_summary(30, &[], Only::Rest),
+        "### Stress job: 0 tests, 30 runs each (rest)\n```\n```\n"
+    );
+}
+
+#[test]
+fn only_parses_the_two_group_names() {
+    assert_eq!(parse_only(None), Ok(None));
+    assert_eq!(parse_only(Some("named".to_owned())), Ok(Some(Only::Named)));
+    assert_eq!(parse_only(Some("rest".to_owned())), Ok(Some(Only::Rest)));
+    assert_eq!(
+        parse_only(Some("bogus".to_owned())),
+        Err("--only \"bogus\" must be named or rest".to_owned())
+    );
+}
+
+#[test]
+fn unmatched_names_lists_names_matching_no_touched_test() {
+    let touched = [binary_test(), unit_test()];
+    assert_eq!(
+        unmatched_names(
+            &["bash::registers".to_owned(), "missing::ghost".to_owned()],
+            &touched
+        ),
+        vec!["missing::ghost".to_owned()]
+    );
+    assert_eq!(
+        unmatched_names(&["bash::registers".to_owned()], &touched),
+        Vec::<String>::new()
+    );
+    assert_eq!(unmatched_names(&[], &touched), Vec::<String>::new());
+}
+
+#[test]
+fn issue_text_names_are_extracted_by_issue_test_names() {
+    let temp = fakes::TempDir::new("xtask-stress-issue-text");
+    temp.write(
+        "issue.txt",
+        "The test `main bash::registers` passed after a retry on linux.\n\
+         tested deadbeef\n\
+         ```\n\
+         failure text quoting `other::t`\n\
+         ```\n\
+         ```\n\
+         The test `sneaky::inside` passed after a retry on linux.\n",
+    );
+    let path = temp.path().join("issue.txt").to_string_lossy().into_owned();
+    assert_eq!(
+        names_from_issue_text(&path),
+        Ok(vec!["bash::registers".to_owned()])
+    );
+    let missing = temp
+        .path()
+        .join("missing.txt")
+        .to_string_lossy()
+        .into_owned();
+    assert!(
+        names_from_issue_text(&missing).is_err_and(|error| error.contains("missing.txt")),
+        "{missing}"
+    );
+}
+
+#[test]
+fn an_empty_issue_text_file_yields_no_names() {
+    let temp = fakes::TempDir::new("xtask-stress-issue-text-empty");
+    temp.write("issue.txt", "");
+    let path = temp.path().join("issue.txt").to_string_lossy().into_owned();
+    assert_eq!(names_from_issue_text(&path), Ok(Vec::<String>::new()));
+}
+
+#[test]
+fn a_rest_group_without_names_runs_the_pilot_default() {
+    assert_eq!(group_count(Some(Only::Rest), "test-only"), 30);
+    assert_eq!(group_count(Some(Only::Rest), "bug"), 30);
+    assert_eq!(group_count(Some(Only::Named), "test-only"), 100);
+    assert_eq!(group_count(None, "test-only"), 100);
+}
+
 const CI_STRESS_OUTPUT_RAW: &str = include_str!("stress_tests/nextest-ci-30.raw");
 const CI_STRESS_OUTPUT_STRIPPED: &str = include_str!("stress_tests/nextest-ci-30.txt");
 
@@ -519,4 +695,61 @@ fn stress_check_command_returns_its_parser_result() {
         stress_check_command(&args("invalid.log")),
         Err("stress output: expected 30 iteration summaries, found 0".to_owned())
     );
+}
+
+fn large_stress_filter() -> String {
+    let tests = (0..2754)
+        .map(|index| TestRef {
+            package: "xtask".to_owned(),
+            binary: Some("xtask::stress".to_owned()),
+            name: format!("stress_case_{index:04}"),
+            unit: false,
+        })
+        .collect::<Vec<_>>();
+    filter(&tests)
+}
+
+fn assert_same_without_dumping_large_values(actual: &str, expected: &str) {
+    let first_difference = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(actual, expected)| actual != expected)
+        .unwrap_or(actual.len().min(expected.len()));
+    assert!(
+        actual == expected,
+        "config differs at byte {first_difference} (actual {} bytes, expected {} bytes)",
+        actual.len(),
+        expected.len()
+    );
+}
+
+#[test]
+fn stress_config_escapes_toml_basic_string_characters() {
+    let actual = stress_config(r#"test(=a\"b\\c)"#);
+    let expected = "[profile.stress]\ndefault-filter = \"test(=a\\\\\\\"b\\\\\\\\c)\"\n";
+    assert_same_without_dumping_large_values(&actual, expected);
+}
+
+#[test]
+fn stress_config_keeps_the_full_generated_filter() {
+    let filter = large_stress_filter();
+    assert!(
+        filter.len() > 131_072,
+        "generated filter is only {} bytes",
+        filter.len()
+    );
+    let expected = format!("[profile.stress]\ndefault-filter = \"{filter}\"\n");
+    let actual = stress_config(&filter);
+    assert_same_without_dumping_large_values(&actual, &expected);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn linux_rejects_an_argument_over_max_arg_strlen() {
+    let argument = "x".repeat(131_073);
+    let error = std::process::Command::new("/bin/true")
+        .arg(argument)
+        .spawn()
+        .expect_err("Linux must reject an argument longer than MAX_ARG_STRLEN");
+    assert_eq!(error.raw_os_error(), Some(7), "expected E2BIG");
 }

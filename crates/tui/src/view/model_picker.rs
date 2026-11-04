@@ -11,7 +11,7 @@ use ratatui::text::Span;
 use self::install::{error_row, install_row, logged_out_row, outcome_rows};
 use super::overlay::{self, Place, Row};
 use crate::format::width as cells;
-use crate::model_picker::{Fresh, LeftOutRow, LoggedOutRow, ModelRow, PickerView, Progress};
+use crate::model_picker::{Fresh, InstallRow, LeftOutRow, LoggedOutRow, ModelRow, PickerView};
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot;
 use crate::text::to_u16;
@@ -436,15 +436,6 @@ impl<'view> Item<'view> {
             Item::LoggedOut(row) => row.at,
         }
     }
-
-    /// The body rows the item takes past its heading: two per model,
-    /// three for a session-only choice, and one per count or logged-out row.
-    fn rows(&self) -> usize {
-        match self {
-            Item::Model(flat) => 2 + usize::from(flat.row.session_only),
-            Item::Count(_) | Item::LoggedOut(_) => 1,
-        }
-    }
 }
 
 /// The windowed items in draw order.
@@ -470,45 +461,157 @@ fn items(view: &PickerView) -> Vec<Item<'_>> {
     out
 }
 
-/// The body rows the items from `start` to `end` take. The items are the
-/// section items, logged-out rows and then the not-installed rows. A model
-/// takes two rows, three for a session-only choice, a count or logged-out
-/// row takes one, with a heading above each provider section and a blank
-/// between sections and row groups. A not-installed row takes one, two
-/// with its error, and the first in the window takes a blank above it when
-/// anything precedes it there.
-fn rows_for(view: &PickerView, items: &[Item], start: usize, end: usize) -> usize {
-    let mut rows = 0;
+/// One rendered body row: each variant carries the row it renders, so
+/// the renderer matches on the part alone and no incompatible slot/part
+/// pair is representable. The walk emits only the parts its slot's data
+/// supports, so the count agrees with the renderer by construction.
+enum Part<'view> {
+    ModelFirst(&'view Flat<'view>),
+    ModelSecond(&'view Flat<'view>),
+    ScopeFirst(&'view Flat<'view>),
+    ScopeSecond(&'view Flat<'view>),
+    SessionNote(&'view Flat<'view>),
+    Count(&'view Count<'view>),
+    LoggedOut(&'view LoggedOutRow),
+    Install(&'view InstallRow),
+    InstallError(&'view InstallRow),
+}
+
+/// One laid-out step: an item or an install in draw order.
+#[derive(Clone, Copy)]
+enum Slot<'view> {
+    Item(&'view Item<'view>),
+    Install(&'view InstallRow),
+}
+
+impl<'view> Slot<'view> {
+    /// The only place an item's own row count is decided: a plain model
+    /// takes two rows and a third for a session-only choice, a checklist
+    /// model takes two dim rows whatever the third-row flag says, and a
+    /// count, a logged-out row or an install takes one, two with its
+    /// error. Every list is non-empty, so a step always emits at least
+    /// one row. Each part carries its row's data, so only the part that
+    /// matches this slot's data can be built.
+    fn parts(self) -> impl Iterator<Item = Part<'view>> {
+        let (first, second, third): (
+            Option<Part<'view>>,
+            Option<Part<'view>>,
+            Option<Part<'view>>,
+        ) = match self {
+            Slot::Item(item) => match item {
+                Item::Model(flat) if flat.row.mark.is_some() => (
+                    Some(Part::ScopeFirst(flat)),
+                    Some(Part::ScopeSecond(flat)),
+                    None,
+                ),
+                Item::Model(flat) if flat.row.session_only => (
+                    Some(Part::ModelFirst(flat)),
+                    Some(Part::ModelSecond(flat)),
+                    Some(Part::SessionNote(flat)),
+                ),
+                Item::Model(flat) => (
+                    Some(Part::ModelFirst(flat)),
+                    Some(Part::ModelSecond(flat)),
+                    None,
+                ),
+                Item::Count(count) => (Some(Part::Count(count)), None, None),
+                Item::LoggedOut(row) => (Some(Part::LoggedOut(row)), None, None),
+            },
+            Slot::Install(install) if install::error_row(install).is_some() => (
+                Some(Part::Install(install)),
+                Some(Part::InstallError(install)),
+                None,
+            ),
+            Slot::Install(install) => (Some(Part::Install(install)), None, None),
+        };
+        [first, second, third].into_iter().flatten()
+    }
+}
+
+/// One windowed step in draw order: an item or an install with its
+/// heading when it opens a provider section, and whether a blank
+/// separates it from the earlier rows inside the window.
+struct Step<'view> {
+    slot: Slot<'view>,
+    heading: Option<(&'view str, &'view Fresh)>,
+    blank: bool,
+}
+
+impl Step<'_> {
+    /// A step's rows: its blank, its heading and one row per part.
+    fn rows(&self) -> usize {
+        usize::from(self.blank) + usize::from(self.heading.is_some()) + self.slot.parts().count()
+    }
+}
+
+/// One walk over the steps `span` covers: a step per item and install in
+/// draw order, each with its blank, its heading and its parts. `span.end`
+/// clamps to the item total, so an empty or inverted span yields nothing.
+/// A window starting inside a section continues it with no heading: the
+/// previous provider seeds from the item before the window. A step takes
+/// a blank when an in-window row precedes it and it opens a section or a
+/// row group.
+fn walk<'view>(
+    view: &'view PickerView,
+    items: &'view [Item<'view>],
+    span: std::ops::Range<usize>,
+) -> impl Iterator<Item = Step<'view>> {
+    let total = items.len() + view.installs.len();
+    let end = span.end.min(total);
     let logged_out_start = items
         .iter()
         .position(|item| matches!(item, Item::LoggedOut(_)))
         .unwrap_or(items.len());
     // A window starting inside a provider continues it with no heading;
-    // any other provider change opens one. Logged-out rows have no heading.
-    let mut before = start
+    // any other provider change opens one. Logged-out rows and installs
+    // have no heading: the seed is none at 0 and past the items.
+    let mut before = span
+        .start
         .checked_sub(1)
         .and_then(|at| items.get(at))
         .and_then(Item::provider);
-    for at in start..end {
+    (span.start..end).filter_map(move |at| {
         if let Some(item) = items.get(at) {
-            if let Some(provider) = item.provider() {
-                let headed = before.is_none_or(|previous| previous != provider);
-                before = Some(provider);
-                if headed {
-                    rows += if at == start { 1 } else { 2 };
+            let heading = match item {
+                Item::Model(flat) => {
+                    let headed = before.is_none_or(|previous| previous != flat.provider);
+                    before = Some(flat.provider);
+                    headed.then_some((flat.provider, flat.state))
                 }
-            } else if at == logged_out_start && at > start {
-                rows += 1;
-            }
-            rows += item.rows();
+                Item::Count(count) => {
+                    let headed = before.is_none_or(|previous| previous != count.provider);
+                    before = Some(count.provider);
+                    headed.then_some((count.provider, count.state))
+                }
+                Item::LoggedOut(_) => None,
+            };
+            let blank = at > span.start
+                && (heading.is_some()
+                    || at == logged_out_start && matches!(item, Item::LoggedOut(_)));
+            Some(Step {
+                slot: Slot::Item(item),
+                heading,
+                blank,
+            })
         } else if let Some(install) = view.installs.get(at.saturating_sub(items.len())) {
-            if at == items.len() && at > start {
-                rows += 1;
-            }
-            rows += 1 + usize::from(matches!(install.progress, Some(Progress::Failed(_))));
+            let blank = at > span.start && at == items.len();
+            Some(Step {
+                slot: Slot::Install(install),
+                heading: None,
+                blank,
+            })
+        } else {
+            None
         }
-    }
-    rows
+    })
+}
+
+/// The body rows the items from `start` to `end` take: the walk's steps
+/// summed, so the prediction is the renderer's own count. The window
+/// boundary is a parameter of the walk: a window starting inside a
+/// section continues it with no heading.
+fn rows_for(view: &PickerView, items: &[Item], start: usize, end: usize) -> usize {
+    walk(view, items, start..end).map(|step| step.rows()).sum()
 }
 
 /// The items around the focused one that fit `fit` body rows: the window
@@ -614,139 +717,116 @@ fn count_row(row: &LeftOutRow) -> Row {
     }
 }
 
+/// One blank separator row: no spans, no focus, trimmed only with a
+/// count heading.
+fn blank_row(trim_count: bool) -> DisplayRow {
+    DisplayRow {
+        row: Row {
+            spans: Vec::new(),
+            right: Vec::new(),
+            targets: Vec::new(),
+            barred: false,
+        },
+        focus: None,
+        trim_count,
+    }
+}
+
 /// Every rendered list row in order, with selectable starts mapped back
 /// to their layout rows. A count row and its provider heading are both
 /// marked for the existing short-viewport trim.
 fn display_rows(view: &PickerView, priced: bool) -> DisplayRows {
     let items = items(view);
-    let logged_out_start = items
-        .iter()
-        .position(|item| matches!(item, Item::LoggedOut(_)))
-        .unwrap_or(items.len());
+    let total = items.len() + view.installs.len();
     let mut rows = Vec::new();
     let mut item_starts = Vec::new();
-    let mut before: Option<&str> = None;
-    let mut first = true;
-    for (at, item) in items.iter().enumerate() {
-        let Some(provider) = item.provider() else {
-            if at == logged_out_start && !rows.is_empty() {
-                rows.push(DisplayRow {
-                    row: Row {
-                        spans: Vec::new(),
-                        right: Vec::new(),
-                        targets: Vec::new(),
-                        barred: false,
-                    },
-                    focus: None,
-                    trim_count: false,
-                });
-            }
+    for step in walk(view, &items, 0..total) {
+        if let Some((provider, state)) = step.heading {
+            // A headed step starts at its blank, while the first
+            // logged-out and install rows start past theirs, so the
+            // scroll top reads past the group blank.
             item_starts.push(rows.len());
-            if let Item::LoggedOut(logged_out) = item {
-                rows.push(DisplayRow {
-                    row: logged_out_row(logged_out, Some(logged_out.at) == view.focused),
-                    focus: Some(logged_out.at),
-                    trim_count: false,
-                });
+            let trim_count = matches!(step.slot, Slot::Item(Item::Count(_)));
+            if step.blank {
+                rows.push(blank_row(trim_count));
             }
-            continue;
-        };
-        let headed = before.is_none_or(|previous| previous != provider);
-        item_starts.push(rows.len());
-        let trim_count = headed && matches!(item, Item::Count(_));
-        if headed {
-            if !first {
-                rows.push(DisplayRow {
-                    row: Row {
-                        spans: Vec::new(),
-                        right: Vec::new(),
-                        targets: Vec::new(),
-                        barred: false,
-                    },
-                    focus: None,
-                    trim_count,
-                });
-            }
-            let state = match item {
-                Item::Model(flat) => flat.state,
-                Item::Count(count) => count.state,
-                Item::LoggedOut(_) => unreachable!("logged-out rows have no provider heading"),
-            };
             rows.push(DisplayRow {
                 row: heading_row(provider, state, &view.spinner),
                 focus: None,
                 trim_count,
             });
-            before = Some(provider);
-            first = false;
+        } else {
+            if step.blank {
+                rows.push(blank_row(false));
+            }
+            item_starts.push(rows.len());
         }
-        match item {
-            Item::Count(count) => rows.push(DisplayRow {
-                row: count_row(count.row),
-                focus: None,
-                trim_count: true,
-            }),
-            Item::Model(flat) => {
-                let focused = Some(flat.row.at) == view.focused;
-                if flat.row.mark.is_some() {
-                    rows.push(DisplayRow {
-                        row: scope_row(flat.row, focused, priced),
-                        focus: Some(flat.row.at),
-                        trim_count: false,
-                    });
-                    rows.push(DisplayRow {
-                        row: scope_second_row(flat.row),
-                        focus: None,
-                        trim_count: false,
-                    });
-                } else {
-                    rows.push(DisplayRow {
+        for part in step.slot.parts() {
+            rows.push(match part {
+                Part::ModelFirst(flat) => {
+                    let focused = Some(flat.row.at) == view.focused;
+                    DisplayRow {
                         row: model_first_row(flat.row, focused, priced),
                         focus: Some(flat.row.at),
                         trim_count: false,
-                    });
-                    rows.push(DisplayRow {
+                    }
+                }
+                Part::ModelSecond(flat) => {
+                    let focused = Some(flat.row.at) == view.focused;
+                    DisplayRow {
                         row: model_second_row(flat.row, focused),
                         focus: None,
                         trim_count: false,
-                    });
-                    if flat.row.session_only {
-                        rows.push(DisplayRow {
-                            row: session_row(flat.row),
-                            focus: None,
-                            trim_count: false,
-                        });
                     }
                 }
-            }
-            Item::LoggedOut(_) => unreachable!("handled without a provider heading"),
-        }
-        debug_assert!(at < items.len());
-    }
-    for (at, install) in view.installs.iter().enumerate() {
-        if at == 0 && !rows.is_empty() {
-            rows.push(DisplayRow {
-                row: Row {
-                    spans: Vec::new(),
-                    right: Vec::new(),
-                    targets: Vec::new(),
-                    barred: false,
+                Part::ScopeFirst(flat) => {
+                    let focused = Some(flat.row.at) == view.focused;
+                    DisplayRow {
+                        row: scope_row(flat.row, focused, priced),
+                        focus: Some(flat.row.at),
+                        trim_count: false,
+                    }
+                }
+                Part::ScopeSecond(flat) => DisplayRow {
+                    row: scope_second_row(flat.row),
+                    focus: None,
+                    trim_count: false,
                 },
-                focus: None,
-                trim_count: false,
+                Part::SessionNote(flat) => DisplayRow {
+                    row: session_row(flat.row),
+                    focus: None,
+                    trim_count: false,
+                },
+                Part::Count(count) => DisplayRow {
+                    row: count_row(count.row),
+                    focus: None,
+                    trim_count: true,
+                },
+                Part::LoggedOut(row) => DisplayRow {
+                    row: logged_out_row(row, Some(row.at) == view.focused),
+                    focus: Some(row.at),
+                    trim_count: false,
+                },
+                Part::Install(install) => {
+                    let focused = Some(install.at) == view.focused;
+                    DisplayRow {
+                        row: install_row(install, focused, &view.spinner),
+                        focus: Some(install.at),
+                        trim_count: false,
+                    }
+                }
+                Part::InstallError(install) => {
+                    let Some(row) = error_row(install) else {
+                        unreachable!("the walk emits an error part only for a failed install")
+                    };
+                    DisplayRow {
+                        row,
+                        focus: None,
+                        trim_count: false,
+                    }
+                }
             });
         }
-        item_starts.push(rows.len());
-        rows.push(DisplayRow {
-            row: install_row(install, Some(install.at) == view.focused, &view.spinner),
-            focus: Some(install.at),
-            trim_count: false,
-        });
-        rows.extend(error_row(install).into_iter().map(|row| DisplayRow {
-            row,
-            focus: None,
-            trim_count: false,
-        }));
     }
     DisplayRows { rows, item_starts }
 }

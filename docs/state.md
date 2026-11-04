@@ -46,6 +46,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   crashes/<id>-<ms>.txt           one report per panic (docs/code-quality.md)
   logs/hub.log, logs/hub.log.1    the hub's diagnostic log and its previous file
   logs/<kind>-<id>.log            one other process's diagnostic log
+  detached/d_<pid>_<n>.log        one output log per detached shell command, mode 0600, kept until the person deletes it (docs/tools.md, "Background jobs")
 ```
 
 ## Override
@@ -468,7 +469,8 @@ What is recorded:
   `tui.attached_frame`, `tui.log_read`, `tui.transcript`, `tui.frame`,
   `tui.attach_summary`, `tui.tail_wait`, `tui.preview_fold`,
   `tui.tail_install`, `tui.attach_setup`, `tui.attach_wait`,
-  `tui.attach_tail`, `tui.attach_prepare` and `tui.attach_draw`.
+  `tui.attach_tail`, `tui.attach_prepare`, `tui.attach_draw` and
+  `tui.startup`.
   `tui.extensions` covers extension loading before the first draw; when a
   loader exists it writes once per process, and without one it writes none
   (`docs/tui.md`, "How a TUI extension runs"). `tui.first_render` covers
@@ -503,6 +505,10 @@ What is recorded:
   write once, together with `tui.attached_frame`, only when the first
   attached-history draw succeeds; an attach whose parent timer is
   discarded writes none. Their `data` holds only `op` and `ms`.
+  `tui.startup` covers from after the diagnostic writer opens through
+  `run_with` entry, stamped once the level is known so info starts pay
+  only the level check; it writes once per process at debug and none at
+  info. Its `data` holds only `op` and `ms`.
   Each is written at most once per process on the first attach; an attach
   with no stream writes none. Their `data` holds only `op` and `ms`.
   Request, model, hook and network timings may overlap as nested
@@ -522,6 +528,12 @@ in it; a hook that fails in a session, for example, is a `notice` or
 or a configuration value, with one exception: an `extension_log` line is the
 extension's own text, and Fiber records it as given. A failed hook is named
 with its code, never its content.
+
+**Detached logs.** `detached/` holds one output log per detached shell
+command (`docs/tools.md`, "Background jobs"), named `d_<pid>_<n>.log` from
+0 up in a directory mode 0700, each file mode 0600. The person owns
+deleting them: Fiber never removes a log, and a session's deletion or
+pruning never touches them.
 
 **What feedback reads.** `fiber feedback` and `/feedback` copy content-free
 lines from `logs/` and `crashes/` into the Diagnostics section of the report
@@ -592,10 +604,13 @@ other file in `credentials/` (`docs/permissions.md`, "Credentials").
 **Recently exited sessions.** `recent.jsonl` at the top of Fiber home: one
 JSON line per session that exited, appended by the session itself as it
 exits. Its keys are `session_id`, `ts`, `project` (the project's key), `workspace`,
-`name`, `how` and `status`, the session's last `session_status`, which says
-what it stopped on and carries `parent` for a delegate. A session whose
+`name`, `how`, `status`, the session's last `session_status`, which says
+what it stopped on and carries `parent` for a delegate, and `archived`, true on
+an archived session's row and absent otherwise. A session whose
 process died cannot append, so the hub appends its row when it sees the
-crash (`docs/invocation.md`, "The hub"). A session
+crash (`docs/invocation.md`, "The hub"). Archiving a session appends its
+row again with `archived` true, and its next exit appends one without it; a
+session's newest row is its state (`docs/invocation.md`, "Archiving"). A session
 appends whether or not a hub is running, and nothing rewrites it, so an
 append is never lost to a rewrite. Deleting a session leaves its row, and
 every reader skips a row whose session directory is gone. The hub reads its tail at start and keeps

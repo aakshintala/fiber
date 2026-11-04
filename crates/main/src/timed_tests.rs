@@ -195,6 +195,8 @@ fn session(
         Default::default(),
         sandbox,
         None,
+        std::collections::BTreeMap::new(),
+        None,
     )
     .expect("the built-ins");
     (tools, images)

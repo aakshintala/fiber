@@ -457,6 +457,37 @@ fn the_first_hub_hello_reopens_nothing() {
 }
 
 #[test]
+fn sessions_answer_reaches_its_handler_and_takes_its_tag() {
+    for accepted in [false, true] {
+        let mut app = home();
+        linked(&mut app);
+        app.on_line(live(S_A, "stale session"));
+        let requests = parsed(&reconnect(&mut app));
+        let request = requests
+            .iter()
+            .find(|line| line["command"] == "sessions")
+            .unwrap();
+        let id = id_of(request);
+        assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Sessions));
+        let answer = if accepted {
+            hub(
+                "command_accepted",
+                json!({"command_id":id,"result":{"live":[]}}),
+            )
+        } else {
+            hub(
+                "command_rejected",
+                json!({"command_id":id,"code":"busy","message":"refused"}),
+            )
+        };
+        app.on_line(answer);
+        assert_eq!(app.outbox.waiting(&id), None);
+        let has_row = rows(&app).iter().any(|row| row.contains("stale session"));
+        assert_eq!(has_row, !accepted);
+    }
+}
+
+#[test]
 fn reconnecting_sends_feed_and_recent_again() {
     let mut app = home();
     let before = linked(&mut app);
@@ -800,7 +831,7 @@ fn a_stop_ask_is_resent_and_its_refusal_notes_the_row() {
     for want in ["subscribe", "close", "feed", "recent", "sessions"] {
         assert!(got.iter().any(|g| g == want), "missing {want}: {got:?}");
     }
-    // The scoped refetch covers the project (`docs/tui.md:268`).
+    // The scoped refetch covers the project (`docs/tui.md`, "The session list").
     assert!(
         lines
             .iter()
@@ -842,7 +873,7 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
     for want in ["feed", "recent", "sessions"] {
         assert!(got.iter().any(|g| g == want), "missing {want}: {got:?}");
     }
-    // The scoped refetch covers the project (`docs/tui.md:268`).
+    // The scoped refetch covers the project (`docs/tui.md`, "The session list").
     assert!(
         lines
             .iter()
@@ -1080,4 +1111,46 @@ fn a_reconnect_before_the_open_is_answered_carries_no_credential() {
         lines.contains(&prompt),
         "the ordinary kept prompt goes out unchanged"
     );
+}
+
+#[test]
+fn a_reset_after_reconnect_leaves_no_untagged_feature_id() {
+    let mut app = home();
+    let before = linked(&mut app);
+    let old_feed = id_of(&before[0]);
+    let old_recent = id_of(&before[1]);
+    // A scoped ask goes out for the live row's project and waits.
+    let live_out = parsed(&fold(&mut app, live(S_B, "tidy docs")));
+    let old_scoped = live_out
+        .iter()
+        .find(|line| line["command"] == "recent")
+        .map(id_of)
+        .unwrap_or_else(|| panic!("a scoped ask: {live_out:?}"));
+    assert_eq!(
+        app.outbox.waiting(&old_scoped),
+        Some(crate::app::Waiting::Recent)
+    );
+    let after = parsed(&reconnect(&mut app));
+    // The replaced entries' tags are gone, so their late answers match
+    // nothing.
+    for old in [&old_feed, &old_recent, &old_scoped] {
+        assert_eq!(app.outbox.waiting(old), None);
+    }
+    // Every feed, recent and subscribe the reset sent carries its tag.
+    for line in &after {
+        let id = id_of(line);
+        match line["command"].as_str().unwrap_or_default() {
+            "feed" => assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Feed)),
+            "recent" => assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Recent)),
+            "subscribe" => {
+                assert_eq!(
+                    app.outbox.waiting(&id),
+                    Some(crate::app::Waiting::Subscribe)
+                )
+            }
+            _ => {}
+        }
+    }
+    assert!(after.iter().any(|line| line["command"] == "feed"));
+    assert!(after.iter().any(|line| line["command"] == "recent"));
 }

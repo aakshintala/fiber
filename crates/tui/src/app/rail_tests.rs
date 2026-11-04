@@ -212,7 +212,7 @@ fn an_exited_card_leaves_a_gap_until_a_new_session_fills_it() {
 }
 
 /// Exiting removes a card but leaves the other card's number
-/// (`docs/tui.md:362–364`, "The rail").
+/// (`docs/tui.md`, "The rail").
 #[test]
 fn an_exited_row_gives_up_its_number() {
     let mut app = with(&[A, B]);
@@ -221,7 +221,7 @@ fn an_exited_row_gives_up_its_number() {
     assert_eq!(number(&app, B), Some(2));
 }
 
-/// A closing session has no card or rail number (`docs/tui.md:251–253, 362–364, 1936–1937`).
+/// A closing session has no card or rail number.
 #[test]
 fn a_closing_row_leaves_the_cards_and_gives_up_its_number() {
     let mut app = with(&[A, B]);
@@ -237,7 +237,7 @@ fn a_closing_row_leaves_the_cards_and_gives_up_its_number() {
 /// The accepted `start` answer moves the old session's number to the
 /// new id before the new row folds: a third session folding first
 /// takes the next number, the old id keeps no card and no number, and
-/// no number is duplicated (`docs/tui.md:1936–1937, 362–364`).
+/// no number is duplicated (`docs/tui.md`, "The rail").
 #[test]
 fn a_replaced_number_moves_to_the_new_session_before_its_first_status() {
     let mut app = with(&[A, B]);
@@ -257,7 +257,7 @@ fn a_replaced_number_moves_to_the_new_session_before_its_first_status() {
 }
 
 /// Replacing one card preserves unrelated numbers even when the rail has
-/// a gap (`docs/tui.md:362–364`, "The rail").
+/// a gap (`docs/tui.md`, "The rail").
 #[test]
 fn replacing_a_number_keeps_other_cards_through_a_gap() {
     let mut app = with(&[A, B, C]);
@@ -275,7 +275,7 @@ fn replacing_a_number_keeps_other_cards_through_a_gap() {
 
 /// A replaced session with no number leaves the new id unnumbered
 /// until its row folds, when it takes the smallest free number
-/// (`docs/tui.md:1936–1937, 362–364`).
+/// (`docs/tui.md`, "The rail").
 #[test]
 fn a_replaced_session_without_a_number_reserves_nothing() {
     let mut app = with(&[A]);
@@ -1085,6 +1085,36 @@ fn cross(app: &mut App, session: &str) -> Vec<Value> {
 fn carded(app: &App, session: &str) -> bool {
     app.rail_cards()
         .is_some_and(|(cards, _)| cards.iter().any(|row| row.id.0 == session))
+}
+
+#[test]
+fn a_dismiss_answer_reaches_rail_answered_by_tag_and_clears_it() {
+    let mut app = crashed();
+    let out = cross(&mut app, B);
+    let id = out[0]["id"].as_str().unwrap();
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::outbox::Waiting::Dismiss(SessionId(
+            B.to_owned()
+        )))
+    );
+    app.on_line(hub_answer("command_accepted", id, ""));
+    assert_eq!(app.outbox.waiting(id), None);
+    assert!(!carded(&app, B));
+    assert!(carded(&app, C));
+}
+
+#[test]
+fn a_second_dismiss_answer_changes_nothing() {
+    let mut app = crashed();
+    let out = cross(&mut app, B);
+    let id = out[0]["id"].as_str().unwrap();
+    app.on_line(hub_answer("command_rejected", id, "still running"));
+    assert_eq!(app.outbox.waiting(id), None);
+    assert_eq!(app.notice(), Some("still running"));
+    app.on_line(hub_answer("command_accepted", id, ""));
+    assert!(carded(&app, B));
+    assert!(carded(&app, C));
 }
 
 #[test]

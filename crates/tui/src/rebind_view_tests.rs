@@ -148,7 +148,7 @@ fn keys_failed_save_80x24() {
         *refuse = Some("disk full".to_owned());
     }
     let mut app = attached(80, 24);
-    app.set_configure(Some(fake as Arc<dyn crate::Configure>));
+    app.set_configure(fake as Arc<dyn crate::Configure>);
     slash_keys(&mut app);
     for _ in 0..5 {
         tap(&mut app, "down");
@@ -197,7 +197,7 @@ fn the_frame_targets_hold_the_cross_and_a_target_per_display_line() {
         "{targets:?}"
     );
     // Every display line of every wrapped action takes a target, not
-    // one per action (`docs/tui.md:2100`).
+    // one per action (`docs/tui.md`, "Bindings").
     let grown = crate::rebind::heights(app.keys(), 80);
     let frame = app.keys_frame(60).expect("the screen is open");
     let shown = crate::swapped::rows_height(&frame, 60);

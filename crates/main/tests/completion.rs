@@ -26,32 +26,49 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use fakes::{Watchdog, group_empties, kill_group, kill_matching, matching_exits};
+use fakes::clock::FakeClock;
+use fakes::{Watchdog, group_empties, kill_group, kill_matching, try_matching_exits};
 use support::{Deadline, Setup};
 
 /// How long one `fiber` or shell run may take.
 const RUN: Duration = Duration::from_secs(20);
 
 /// Runs one cleanup step on its own thread and returns failures so later
-/// cleanup checks still run before the test reports them. Each step carries
-/// the must-succeed bound.
+/// cleanup checks still run before the test reports them. Each step's child
+/// wait is half the outer wait, so the inner step expires first.
 #[track_caller]
 fn within_cleanup<T: Send + 'static>(
     what: &str,
-    deadline: Duration,
-    work: impl FnOnce() -> T + Send + 'static,
+    wait: Deadline,
+    work: impl FnOnce(Deadline) -> T + Send + 'static,
 ) -> Result<T, String> {
+    let bound = wait.left();
+    let inner = wait.within(bound / 2);
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        let _sent = done.send(work());
+        let _sent = done.send(work(inner));
     });
-    match Deadline::after(deadline).recv(&finished) {
+    match wait.recv(&finished) {
         Ok(result) => Ok(result),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("waited {deadline:?} for {what}")),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!("waited {bound:?} for {what}")),
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             Err(format!("{what} worker stopped without a result"))
         }
     }
+}
+
+#[test]
+fn within_cleanup_hands_its_closure_half_of_what_the_wait_has_left() {
+    let clock = Box::leak(Box::new(FakeClock::new()));
+    let wait = Deadline::on(&**clock);
+    let half = wait.left() / 2;
+    let child_left = within_cleanup("a step", wait, |inner| inner.left()).unwrap();
+    assert_eq!(child_left, half);
+}
+
+#[test]
+fn a_matching_exits_step_gets_twice_the_child_budget_of_a_plain_wait() {
+    assert_eq!(matching_exits_wait(), fakes::MUST_SUCCEED_WITHIN * 2);
 }
 
 /// The grammar a person completes, taken from the parser: every visible
@@ -221,12 +238,22 @@ fn set(words: &[&str]) -> BTreeSet<String> {
     words.iter().map(|word| (*word).to_owned()).collect()
 }
 
+/// The outer wait a `try_matching_exits` cleanup step gets: twice
+/// `fakes::MUST_SUCCEED_WITHIN`, so `within_cleanup`'s halving leaves the
+/// closure a full `MUST_SUCCEED_WITHIN`. That strictly exceeds the listing
+/// and `pgrep` bounds inside `fakes`, which are fractions of the same const,
+/// so the inner step expires first and the failure names it
+/// (`docs/testing.md`, "Waits and timeouts").
+fn matching_exits_wait() -> Duration {
+    fakes::MUST_SUCCEED_WITHIN * 2 // ruling: #4078
+}
+
 /// Runs `command` to its exit, in its own process group, with stdin a pipe
 /// the test holds open and never writes to: a run that read stdin would
 /// block until `RUN` expires. After the exit, the group and every process
-/// whose command line holds `tag` must be gone within the must-succeed
-/// bound. On expiry,
-/// both are killed and reaped before the test fails.
+/// whose command line holds `tag` must be gone within the outer wait; each
+/// step's child wait is half the outer, so the inner step expires first.
+/// On expiry, both are killed and reaped before the test fails.
 #[track_caller]
 fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     let tag = tag.to_str().unwrap().to_owned();
@@ -245,30 +272,25 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         // Both bounded kills finish before either process check starts.
         let group_killed = within_cleanup(
             &format!("killing {what}'s process group"),
-            fakes::MUST_SUCCEED_WITHIN,
-            move || kill_group(group, "KILL"),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move |_| kill_group(group, "KILL"),
         );
         let tag_for_kill = tag.clone();
         let tag_killed = within_cleanup(
             &format!("killing processes matching {tag}"),
-            fakes::MUST_SUCCEED_WITHIN,
-            move || kill_matching(&tag_for_kill),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move |_| kill_matching(&tag_for_kill),
         );
         let tag_for_wait = tag.clone();
         let group_gone = within_cleanup(
             &format!("{what}'s process group to empty"),
-            fakes::MUST_SUCCEED_WITHIN,
-            move || group_empties(group, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move |inner| group_empties(group, inner),
         );
         let tag_gone = within_cleanup(
             &format!("processes matching {tag} to exit"),
-            fakes::MUST_SUCCEED_WITHIN,
-            move || {
-                matching_exits(
-                    &tag_for_wait,
-                    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-                )
-            },
+            Deadline::after(matching_exits_wait()), // ruling: #4078
+            move |inner| try_matching_exits(&tag_for_wait, inner),
         );
         drop((group_dog, tag_dog));
         panic!(
@@ -280,32 +302,27 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     let tag_for_wait = tag.clone();
     let group_gone = within_cleanup(
         &format!("{what}'s process group to empty"),
-        fakes::MUST_SUCCEED_WITHIN,
-        move || group_empties(group, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move |inner| group_empties(group, inner),
     );
     let tag_gone = within_cleanup(
         &format!("processes matching {tag} to exit"),
-        fakes::MUST_SUCCEED_WITHIN,
-        move || {
-            matching_exits(
-                &tag_for_wait,
-                fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            )
-        },
+        Deadline::after(matching_exits_wait()), // ruling: #4078
+        move |inner| try_matching_exits(&tag_for_wait, inner),
     );
-    let stand_down = if group_gone.as_ref() == Ok(&true) && tag_gone.as_ref() == Ok(&true) {
+    let stand_down = if group_gone.as_ref() == Ok(&true) && matches!(&tag_gone, Ok(Ok(()))) {
         let group_stood_down = within_cleanup(
             "the group watchdog to exit",
-            fakes::MUST_SUCCEED_WITHIN,
-            move || {
-                group_dog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move |inner| {
+                group_dog.stand_down(inner);
             },
         );
         let tag_stood_down = within_cleanup(
             "the matching watchdog to exit",
-            fakes::MUST_SUCCEED_WITHIN,
-            move || {
-                tag_dog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move |inner| {
+                tag_dog.stand_down(inner);
             },
         );
         Some((group_stood_down, tag_stood_down))
@@ -321,7 +338,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         "{what} left a process in its group behind: {group_gone:?}"
     );
     assert!(
-        tag_gone.as_ref() == Ok(&true),
+        matches!(&tag_gone, Ok(Ok(()))),
         "{what} left a process matching its directory behind: {tag_gone:?}"
     );
     if let Some((group_stood_down, tag_stood_down)) = stand_down {

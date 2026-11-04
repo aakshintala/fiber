@@ -501,3 +501,10 @@ fn a_pdf_over_the_cap_is_classified_from_its_metadata() {
         }
     }
 }
+
+#[test]
+fn the_seen_hash_is_fnv_1a_64() {
+    // Published FNV-1a 64-bit vectors: http://www.isthe.com/chongo/tech/comp/fnv/
+    assert_eq!(super::hash_bytes(b"a"), 0xaf63_dc4c_8601_ec8c);
+    assert_eq!(super::hash_bytes(b"foobar"), 0x8594_4171_f739_67e8);
+}

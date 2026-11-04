@@ -233,9 +233,16 @@ fn the_same_folder_rejection_reads_as_invalid_arguments() {
     assert_eq!(rejected.message, "already in that folder");
 }
 
+/// Kinds the doc names that the code does not build yet; the build ticket
+/// (#3782) removes the entry.
+const NOT_BUILT: [&str; 1] = ["archived"];
+
 #[test]
 fn every_kind_in_the_doc_is_known_with_its_class() {
-    let doc = doc_kinds();
+    let doc: BTreeMap<_, _> = doc_kinds()
+        .into_iter()
+        .filter(|(kind, _)| !NOT_BUILT.contains(kind))
+        .collect();
     let code: BTreeMap<_, _> = KINDS.iter().copied().collect();
     assert_eq!(code.len(), KINDS.len(), "a kind is declared twice");
     let doc_classes: BTreeMap<_, _> = doc.iter().map(|(k, (c, _))| (*k, *c)).collect();
@@ -534,12 +541,12 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "streaming", "started": 0, "calls": 0, "since": 1, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
+            "state": "streaming", "started": 0, "calls": 0, "since": 1, "output_at": 2, "spend": usage, "delegates": 0, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
-            "state": "tool", "tool": "shell", "started": 0, "calls": 0, "step": "shell ls", "since": 1, "spend": usage,
+            "state": "tool", "tool": "shell", "started": 0, "calls": 0, "step": "shell ls", "since": 1, "tool_output_at": 2, "repeats": 2, "spend": usage,
             "delegates": 1, "jobs": 0, "project": "-w", "clients": 0}),
         ),
         (
@@ -1281,6 +1288,9 @@ fn the_samples_cover_every_key_each_kind_lists() {
         keys.extend(payload.as_object().unwrap().keys().cloned());
     }
     for (kind, (_, keys)) in doc_kinds() {
+        if NOT_BUILT.contains(&kind) {
+            continue;
+        }
         let listed: BTreeSet<String> = keys.iter().map(|k| (*k).to_owned()).collect();
         assert_eq!(covered.get(kind), Some(&listed), "{kind}");
     }

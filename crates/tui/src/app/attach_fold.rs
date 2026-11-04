@@ -4,6 +4,8 @@
 //! transitions with their landing, and the pass boundaries that open
 //! and close them.
 
+use contract::HubEventKind;
+use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandResult};
 use contract::{Envelope, Seq, SessionId};
 use serde_json::Value;
@@ -466,18 +468,22 @@ impl App {
 
     /// Discards the late answer of a history wait ended by a reopening.
     pub(crate) fn abandon_history(&mut self, id: String) {
-        self.abandoned_history.insert(id);
+        self.outbox.wait(&id, super::outbox::Waiting::Abandoned);
     }
 
     /// Updates pass boundaries before any view consumes the line. Returns
     /// true only for an abandoned answer, which must fold nowhere.
-    pub(super) fn pass_line(&mut self, line: &Line) -> bool {
+    pub(super) fn pass_line(
+        &mut self,
+        line: &Line,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> bool {
         match line {
             Line::Session(line) => {
-                if matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
-                    && let Some(id) = line.payload.get("command_id").and_then(Value::as_str)
-                    && self.abandoned_history.remove(id)
+                if let Some(answer) = answer
+                    && answer.waiting == Some(super::outbox::Waiting::Abandoned)
                 {
+                    self.outbox.settled(answer.id);
                     return true;
                 }
                 let waited = line
@@ -493,7 +499,7 @@ impl App {
                 {
                     self.mark_landing();
                 }
-                if line.kind == "command_accepted"
+                if line.kind() == EventKind::CommandAccepted
                     && let Some(accepted) = read!(line, CommandAccepted)
                 {
                     if let Some(CommandResult::Subscribe { last_seq }) = accepted.result {
@@ -517,13 +523,15 @@ impl App {
                 };
                 let session = SessionId(session.to_owned());
                 if matches!(
-                    line.kind.as_str(),
-                    "stream_reopened" | "stream_closed" | "session_left"
+                    line.kind(),
+                    HubEventKind::StreamReopened
+                        | HubEventKind::StreamClosed
+                        | HubEventKind::SessionLeft
                 ) {
                     self.reviewer_setup_stream_lost(&session);
                 }
-                match line.kind.as_str() {
-                    "stream_reopened" => {
+                match line.kind() {
+                    HubEventKind::StreamReopened => {
                         // The cause ended for this session: its notice goes.
                         self.notices.clear_code("stream_closed", &session.0);
                         self.passes.retain(|(held, _)| held != &session);
@@ -555,7 +563,7 @@ impl App {
                             }
                         }
                     }
-                    "stream_closed" => {
+                    HubEventKind::StreamClosed => {
                         self.passes.retain(|(held, pass)| {
                             held != &session || matches!(pass, Pass::Pending)
                         });
@@ -566,7 +574,7 @@ impl App {
                             self.keep_pass(&session);
                         }
                     }
-                    "session_left" => {
+                    HubEventKind::SessionLeft => {
                         self.passes.retain(|(held, pass)| {
                             held != &session || matches!(pass, Pass::Pending)
                         });
@@ -577,7 +585,12 @@ impl App {
                             self.keep_pass(&session);
                         }
                     }
-                    _ => {}
+                    HubEventKind::HubHello
+                    | HubEventKind::Attention
+                    | HubEventKind::DeviceChanged
+                    | HubEventKind::CommandAccepted
+                    | HubEventKind::CommandRejected
+                    | HubEventKind::Unknown(_) => {}
                 }
             }
         }

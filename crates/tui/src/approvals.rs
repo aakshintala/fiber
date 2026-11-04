@@ -2,6 +2,7 @@
 //! the order they arrived, the panel that shows one, and the `reply` that
 //! answers it (`docs/tui.md`, "Approvals and questions").
 
+use contract::events::EventKind;
 use std::collections::HashMap;
 
 use contract::commands::{Reply, ReplyAnswer};
@@ -387,8 +388,8 @@ impl Queue {
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
         let session = &envelope.session_id;
         let action = envelope.action_id.as_ref().map(|id| id.0.clone());
-        match envelope.kind.as_str() {
-            "tool_call_requested" => {
+        match envelope.kind() {
+            EventKind::ToolCallRequested => {
                 if let (Some(action), Some(call)) = (
                     action,
                     crate::app::read_ref::<ToolCallRequested>(&envelope.payload),
@@ -410,7 +411,7 @@ impl Queue {
                         .insert((session.0.clone(), action), (call.name, summary));
                 }
             }
-            "permission_requested" => {
+            EventKind::PermissionRequested => {
                 let Some(asked) = crate::app::read_ref::<PermissionRequested>(&envelope.payload)
                 else {
                     return;
@@ -435,7 +436,7 @@ impl Queue {
                     })
                 });
             }
-            "interaction_requested" => {
+            EventKind::InteractionRequested => {
                 let Some(asked) = crate::app::read_ref::<InteractionRequested>(&envelope.payload)
                 else {
                     return;
@@ -469,7 +470,7 @@ impl Queue {
                     }
                 }
             }
-            "permission_resolved" | "interaction_resolved" => {
+            EventKind::PermissionResolved | EventKind::InteractionResolved => {
                 let Some(request_id) = envelope.payload.get("request_id").and_then(Value::as_str)
                 else {
                     return;
@@ -487,7 +488,73 @@ impl Queue {
                 }
                 self.requests.remove(at);
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
         }
     }
 

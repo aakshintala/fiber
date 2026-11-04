@@ -27,6 +27,7 @@ struct Layout {
     extra_sources: Vec<(&'static str, &'static str)>,
     suites: Vec<Suite>,
     expected: Vec<TestRef>,
+    filter_error: Option<&'static str>,
     unrun: bool,
 }
 
@@ -115,6 +116,7 @@ fn compiler_index_covers_the_reported_layouts() {
             extra_sources: vec![],
             suites: vec![],
             expected: vec![],
+            filter_error: None,
             unrun: true,
         },
         Layout {
@@ -133,6 +135,7 @@ fn compiler_index_covers_the_reported_layouts() {
                 tests: &["linux_only"],
             }],
             expected: vec![test("log", "log::platform", false, "linux_only")],
+            filter_error: None,
             unrun: false,
         },
         Layout {
@@ -151,6 +154,7 @@ fn compiler_index_covers_the_reported_layouts() {
                 tests: &["always_built"],
             }],
             expected: vec![test("log", "log", true, "always_built")],
+            filter_error: None,
             unrun: false,
         },
         Layout {
@@ -159,7 +163,7 @@ fn compiler_index_covers_the_reported_layouts() {
             path: "crates/loop/tests/support/mod.rs",
             source: "pub fn shared_setup() {}\n",
             changed_line: 0,
-            changed_expected: None,
+            changed_expected: Some(vec![]),
             extra_sources: vec![],
             suites: vec![
                 Suite {
@@ -177,10 +181,8 @@ fn compiler_index_covers_the_reported_layouts() {
                     tests: &["runs_journey"],
                 },
             ],
-            expected: vec![
-                test("loop", "loop::driver", false, "runs_driver"),
-                test("loop", "loop::journey", false, "runs_journey"),
-            ],
+            expected: vec![],
+            filter_error: None,
             unrun: false,
         },
         Layout {
@@ -210,6 +212,7 @@ fn compiler_index_covers_the_reported_layouts() {
                 true,
                 "settings::aliases::resolves_alias",
             )],
+            filter_error: None,
             unrun: false,
         },
         Layout {
@@ -231,6 +234,7 @@ fn compiler_index_covers_the_reported_layouts() {
                 tests: &["foo::tests::adjacent"],
             }],
             expected: vec![test("log", "log", true, "foo::tests::adjacent")],
+            filter_error: None,
             unrun: false,
         },
         Layout {
@@ -249,6 +253,7 @@ fn compiler_index_covers_the_reported_layouts() {
                 tests: &["foo::tests::nested"],
             }],
             expected: vec![test("log", "log", true, "foo::tests::nested")],
+            filter_error: None,
             unrun: false,
         },
         Layout {
@@ -257,7 +262,7 @@ fn compiler_index_covers_the_reported_layouts() {
             path: "crates/log/tests/support/repo_reader.rs",
             source: "pub fn read_repo_file() { let _ = std::fs::read(\"docs/testing.md\"); }\n",
             changed_line: 0,
-            changed_expected: None,
+            changed_expected: Some(vec![]),
             extra_sources: vec![],
             suites: vec![Suite {
                 key: "reader",
@@ -266,7 +271,29 @@ fn compiler_index_covers_the_reported_layouts() {
                 dependencies: &["crates/log/tests/support/repo_reader.rs"],
                 tests: &["reads_repository_file"],
             }],
-            expected: vec![test("log", "log::reader", false, "reads_repository_file")],
+            expected: vec![],
+            filter_error: None,
+            unrun: false,
+        },
+        Layout {
+            bug: "#4106",
+            name: "test function with no matching indexed test",
+            path: "crates/log/tests/unmatched.rs",
+            source: "#[test] fn lonely() {}\n",
+            changed_line: 0,
+            changed_expected: None,
+            extra_sources: vec![],
+            suites: vec![Suite {
+                key: "unmatched",
+                binary_id: "log::unmatched",
+                kind: "test",
+                dependencies: &["crates/log/tests/unmatched.rs"],
+                tests: &["other_test"],
+            }],
+            expected: vec![],
+            filter_error: Some(
+                "crates/log/tests/unmatched.rs: compiler index maps this file to no tests",
+            ),
             unrun: false,
         },
     ];
@@ -355,27 +382,43 @@ fn compiler_index_covers_the_reported_layouts() {
             row.bug, row.name
         );
 
-        let (expression, packages) =
-            test_filter(&files, &members, &sources, &index).expect("bug filter in fixture");
-        assert_eq!(
-            expression,
-            filter(&row.expected),
-            "{} {} bug filter",
-            row.bug,
-            row.name
-        );
-        let expected_packages: Vec<String> = row
-            .expected
-            .iter()
-            .map(|test| test.package.clone())
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        assert_eq!(
-            packages, expected_packages,
-            "{} {} packages",
-            row.bug, row.name
-        );
+        match test_filter(&files, &members, &sources, &index) {
+            Ok((expression, packages)) => {
+                assert_eq!(
+                    row.filter_error, None,
+                    "{} {} bug filter unexpectedly succeeded",
+                    row.bug, row.name
+                );
+                assert_eq!(
+                    expression,
+                    filter(&row.expected),
+                    "{} {} bug filter",
+                    row.bug,
+                    row.name
+                );
+                let expected_packages: Vec<String> = row
+                    .expected
+                    .iter()
+                    .map(|test| test.package.clone())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                assert_eq!(
+                    packages, expected_packages,
+                    "{} {} packages",
+                    row.bug, row.name
+                );
+            }
+            Err(error) => {
+                assert_eq!(
+                    Some(error.as_str()),
+                    row.filter_error,
+                    "{} {} bug filter error",
+                    row.bug,
+                    row.name
+                );
+            }
+        }
         assert_eq!(
             index.binaries_for(row.path).len(),
             row.suites.len(),

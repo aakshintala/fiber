@@ -30,5 +30,8 @@ name = "decode"
 name = "record"
 path = "examples/record/main.rs"
 
+[[example]]
+name = "probe"
+
 [lints]
 workspace = true

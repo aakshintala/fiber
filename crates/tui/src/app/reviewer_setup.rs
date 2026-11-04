@@ -8,6 +8,7 @@
 //! hub's `reviewer_notes` and `save_reviewer_notes` operations through the
 //! configuration seam.
 
+use contract::events::EventKind;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
@@ -69,17 +70,14 @@ impl App {
     /// `/reviewer-setup`: reads both layers' notes for the attached
     /// session's project and opens on topic 1's question. With no session
     /// a notice says so; with the link down nothing opens and the draft
-    /// stays; with no seam, no row for the session or a failed read, one
-    /// notice and nothing opens.
+    /// stays; with no row for the session or a failed read, one notice
+    /// and nothing opens.
     pub(super) fn open_reviewer_setup(&mut self) -> Effect {
         let Some((session, _)) = self.command_session() else {
             return Effect::None;
         };
         self.draft.clear();
-        let Some(seam) = self.configure_seam() else {
-            self.push_notice("io_failed", UNAVAILABLE.to_owned());
-            return Effect::None;
-        };
+        let seam = self.configure_seam();
         let workspace = match self.reviewer_binding(&session) {
             Ok(workspace) => workspace,
             Err(why) => {
@@ -181,8 +179,8 @@ impl App {
             return;
         }
         let session = envelope.session_id.clone();
-        let (Some(seam), Ok(workspace)) = (self.configure_seam(), self.reviewer_binding(&session))
-        else {
+        let seam = self.configure_seam();
+        let Ok(workspace) = self.reviewer_binding(&session) else {
             return;
         };
         let Ok(notes) = seam.reviewer_notes(&workspace) else {
@@ -207,6 +205,7 @@ impl App {
                 let args = serde_json::to_value(&args).ok();
                 let line = session_command(&id.0, "propose_notes", &open.session, args).to_string();
                 open.pending = Some(id.clone());
+                self.outbox.wait(&id.0, super::Waiting::ProposeNotes);
                 match self
                     .outbox
                     .send(id.0, Kind::Command, Draft::default(), line)
@@ -220,12 +219,12 @@ impl App {
                 Effect::None
             }
             Act::Save { global, project } => {
-                let result = match (self.configure_seam(), self.bound_workspace()) {
-                    (Some(seam), Some(workspace)) => {
-                        seam.save_reviewer_notes(&workspace, global, project)
-                    }
-                    _ => Err(unavailable()),
+                let Some(workspace) = self.bound_workspace() else {
+                    return Effect::None;
                 };
+                let result = self
+                    .configure_seam()
+                    .save_reviewer_notes(&workspace, global, project);
                 self.finish_save(result)
             }
             Act::Reread => {
@@ -267,9 +266,9 @@ impl App {
     }
 
     fn read_notes(&self) -> Result<ReviewerNotes, ConfigureError> {
-        match (self.configure_seam(), self.bound_workspace()) {
-            (Some(seam), Some(workspace)) => seam.reviewer_notes(&workspace),
-            _ => Err(unavailable()),
+        match self.bound_workspace() {
+            Some(workspace) => self.configure_seam().reviewer_notes(&workspace),
+            None => Err(unavailable()),
         }
     }
 
@@ -298,8 +297,8 @@ impl App {
     /// request settles with no notice. True when the line was one of those.
     pub(super) fn reviewer_setup_settled(&mut self, envelope: &Envelope) -> bool {
         if !matches!(
-            envelope.kind.as_str(),
-            "command_accepted" | "command_rejected"
+            envelope.kind(),
+            EventKind::CommandAccepted | EventKind::CommandRejected
         ) {
             return false;
         }
@@ -317,7 +316,7 @@ impl App {
         if open.pending.as_ref() != Some(&id) || open.session != envelope.session_id {
             return false;
         }
-        if envelope.kind == "command_accepted" {
+        if envelope.kind() == EventKind::CommandAccepted {
             let Some(accepted) = read!(envelope, CommandAccepted) else {
                 return false;
             };
@@ -396,18 +395,87 @@ impl App {
 fn is_block(envelope: &Envelope) -> bool {
     let payload = &envelope.payload;
     let word = |key: &str| payload.get(key).and_then(Value::as_str);
-    match envelope.kind.as_str() {
-        "permission_resolved" => {
+    match envelope.kind() {
+        EventKind::PermissionResolved => {
             word("decided_by") == Some("reviewer") && word("decision") == Some("deny")
         }
-        "permission_requested" => matches!(
+        EventKind::PermissionRequested => matches!(
             payload
                 .get("escalation")
                 .and_then(|escalation| escalation.get("cause"))
                 .and_then(Value::as_str),
             Some("consecutive_blocks" | "session_blocks" | "reviewer_failed")
         ),
-        _ => false,
+        EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => false,
     }
 }
 

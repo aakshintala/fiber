@@ -11,16 +11,22 @@ fn run(arguments: &Map<String, Value>) -> contract::tool::Output {
 }
 
 #[test]
-fn the_description_names_the_cache_miss() {
+fn the_description_names_carried_context_and_the_cache_miss() {
     let definition = Handoff.definition();
 
-    assert!(
-        definition
-            .description
-            .contains("The next request misses the prompt cache"),
-        "{}",
-        definition.description
-    );
+    for detail in [
+        "Kept messages with their replies",
+        "running jobs",
+        "loaded skills",
+        "come along with the note",
+        "The next request misses the prompt cache",
+    ] {
+        assert!(
+            definition.description.contains(detail),
+            "missing {detail:?}: {}",
+            definition.description
+        );
+    }
 }
 
 #[test]

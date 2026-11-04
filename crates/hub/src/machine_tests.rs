@@ -183,6 +183,107 @@ fn config_file_commands_refuse_every_bad_shape_without_a_call() {
 }
 
 #[test]
+fn workspace_file_commands_route_typed_arguments_through_the_hub() {
+    let machine = Arc::new(FakeMachine::default());
+    let temp = fakes::TempDir::new("hw");
+    let workspace = temp.path().join("ws");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(workspace.join("a.txt"), b"hello").unwrap();
+    let ws = workspace.display().to_string();
+    let answers = exchange(
+        Some(machine.clone()),
+        vec![
+            command(
+                "read_workspace_file",
+                json!({"workspace": ws, "path": "a.txt"}),
+            ),
+            command(
+                "write_workspace_file",
+                json!({"workspace": ws, "path": "b.txt", "text": "new", "version": "missing"}),
+            ),
+        ],
+    );
+    assert_eq!(answers[0]["payload"]["result"]["text"], json!("hello"));
+    let version = answers[0]["payload"]["result"]["version"].as_str().unwrap();
+    assert_eq!(version.len(), 16);
+    assert!(
+        version
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    );
+    assert_eq!(answers[1]["kind"], "command_accepted");
+    assert!(answers[1]["payload"].get("result").is_none());
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("b.txt")).unwrap(),
+        "new"
+    );
+    {
+        let calls = lock(&machine.calls);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["read_workspace"][0], json!(ws));
+        assert_eq!(calls[1]["write_workspace"][2], json!("new"));
+    }
+    // The answered version writes back through the hub.
+    let answers = exchange(
+        Some(machine.clone()),
+        vec![command(
+            "write_workspace_file",
+            json!({"workspace": ws, "path": "a.txt", "text": "edited", "version": version}),
+        )],
+    );
+    assert_eq!(answers[0]["kind"], "command_accepted");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "edited"
+    );
+    let stale = exchange(
+        Some(machine.clone()),
+        vec![command(
+            "write_workspace_file",
+            json!({"workspace": ws, "path": "a.txt", "text": "lost", "version": version}),
+        )],
+    );
+    assert_eq!(stale[0]["kind"], "command_rejected");
+    assert_eq!(stale[0]["payload"]["code"], "stale_request");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("a.txt")).unwrap(),
+        "edited"
+    );
+}
+
+#[test]
+fn workspace_file_commands_refuse_every_bad_shape_without_a_call() {
+    let machine = Arc::new(FakeMachine::default());
+    let mut commands = Vec::new();
+    for name in ["read_workspace_file", "write_workspace_file"] {
+        let mut valid = json!({"workspace": "/w", "path": "a.txt"});
+        if name == "write_workspace_file" {
+            valid["text"] = json!("text");
+            valid["version"] = json!("v");
+        }
+        for key in valid.as_object().unwrap().keys() {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            commands.push(command(name, missing));
+            for bad in [Value::Null, json!(true), json!(5), json!([]), json!({})] {
+                let mut args = valid.clone();
+                args[key] = bad;
+                commands.push(command(name, args));
+            }
+        }
+        let mut extra = valid.clone();
+        extra["extra"] = json!(true);
+        commands.push(command(name, extra));
+        valid["workspace"] = json!("relative");
+        commands.push(command(name, valid));
+    }
+    for answer in exchange(Some(machine.clone()), commands) {
+        assert_eq!(answer["payload"]["code"], "invalid_arguments");
+    }
+    assert!(lock(&machine.calls).is_empty());
+}
+
+#[test]
 fn a_hub_without_a_machine_keeps_unknown_command() {
     // Deliberately leave the fake uninstalled: exchange(None) never calls with_machine.
     let machine = FakeMachine::default();
@@ -196,6 +297,8 @@ fn a_hub_without_a_machine_keeps_unknown_command() {
             "configure",
             "read_config",
             "write_config",
+            "read_workspace_file",
+            "write_workspace_file",
             "prune",
         ]
         .into_iter()

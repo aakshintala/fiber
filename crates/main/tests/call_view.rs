@@ -591,7 +591,7 @@ const FETCH_THOUGHT: &str = "Called 1 tool, thought once";
 const FILLER_FIRST: &str = "F0001";
 
 /// The wheel over a call's view scrolls the view, never the hidden
-/// conversation (`docs/tui.md:576`, "Swapped views"; see #3578): with the
+/// conversation (`docs/tui.md`, "Swapped views"; see #3578): with the
 /// conversation scrolled up to its thought row, three wheel-downs over
 /// the open view move its first visible row nine rows while the
 /// conversation's top marker stays exactly where the wheel found it.
@@ -624,9 +624,11 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     // above the viewport, the first filler row's downward motion proves the
     // step moved the rows. The marker itself is recorded after the call
     // opens below.
+    let mut prev = run.wait_screen("the conversation before the wheel", |grid| {
+        find_row(&grid.rows, "F0800").is_some() && find_row(&grid.rows, THOUGHT).is_none()
+    });
     let mut scrolled = false;
     for _ in 0..6 {
-        let prev = run.screen();
         run.write(WHEEL_UP);
         let grid = run.wait_screen("the thought row scrolling into view", |next| {
             match (
@@ -655,6 +657,7 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
             scrolled = true;
             break;
         }
+        prev = grid;
     }
     assert!(
         scrolled,
@@ -719,11 +722,11 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     run.write(b"\x1b[5~");
     run.write(b"\x1b[5~");
     // PageUp moves one screen of the view's visible rows
-    // (`docs/tui.md:1814`), not one terminal screen. Here the 48-row
+    // (`docs/tui.md`, "Rules"), not one terminal screen. Here the 48-row
     // terminal leaves 41 view rows after the five-row input box and the
     // view's title and footer. From the fixture's start position 120, two
     // screens, each counting the dim edge marker row
-    // (`docs/tui.md:881-884`), give 120 - 2 * (41 + 1) = 036.
+    // (`docs/tui.md`, "Swapped views"), give 120 - 2 * (41 + 1) = 036.
     // Keep this value independent of the grid being checked.
     let settled = 36;
     run.wait_screen(

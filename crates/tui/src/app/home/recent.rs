@@ -5,7 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
-use super::super::{App, Effect, mint};
+use super::super::{
+    App, Effect, mint,
+    outbox::{Outbox, Waiting},
+};
 use super::{refusal, refusal_code};
 use crate::home::{Row, Sessions, recent_rows};
 
@@ -15,12 +18,15 @@ pub(super) struct Recent {
     /// `feed` and the first `recent` page went out.
     fed: bool,
     /// The `feed` command waiting for its answer.
+    // debt: the feed command id kept here beside the outbox `Feed` tag by hand, the outbox tag becomes the sole record once the feed lookup runs off the tag alone once #4127 lands.
     feed_id: Option<String>,
     /// The latest `recent` command waiting for its answer, and whether it
     /// asked the first page.
+    // debt: the unscoped recent command id kept here beside the outbox `Recent` tag by hand, the outbox tag becomes the sole record once the recent lookup runs off the tag alone once #4127 lands.
     recent_ask: Option<(String, bool)>,
     /// The scoped `recent` commands waiting for their answers, command
     /// id to project: at most one entry per project.
+    // debt: the scoped recent command ids kept here beside the outbox `Recent` tags by hand, the outbox tags become the sole record once the scoped lookup runs off the tag alone once #4127 lands.
     scoped_asks: BTreeMap<String, String>,
 }
 
@@ -63,13 +69,23 @@ impl Notice {
 
 impl Recent {
     /// Takes the one-time feed and first unscoped page, if not sent yet.
-    pub(super) fn first_asks(&mut self) -> Option<Vec<String>> {
+    /// The call after `fed` is cleared settles the old feed and recent
+    /// ids.
+    pub(super) fn first_asks(&mut self, outbox: &mut Outbox) -> Option<Vec<String>> {
         if self.fed {
             return None;
         }
         self.fed = true;
+        if let Some(old) = self.feed_id.take() {
+            outbox.settled(&old);
+        }
+        if let Some((old, _)) = self.recent_ask.take() {
+            outbox.settled(&old);
+        }
         let feed = mint();
         let recent = mint();
+        outbox.wait(&feed, Waiting::Feed);
+        outbox.wait(&recent, Waiting::Recent);
         self.feed_id = Some(feed.clone());
         self.recent_ask = Some((recent.clone(), true));
         Some(vec![
@@ -138,15 +154,19 @@ impl Recent {
         delete_project: Option<&str>,
         sessions: &mut Sessions,
         connected: bool,
+        outbox: &mut Outbox,
     ) -> Vec<String> {
         if !connected {
             return Vec::new();
         }
         let id = mint();
-        self.recent_ask = Some((id.clone(), true));
+        if let Some((old, _)) = self.recent_ask.replace((id.clone(), true)) {
+            outbox.settled(&old);
+        }
+        outbox.wait(&id, Waiting::Recent);
         let mut out = vec![recent_line(&id, None, None)];
         if let Some(project) = delete_project {
-            out.extend(self.scoped_first(project, sessions, connected));
+            out.extend(self.scoped_first(project, sessions, connected, outbox));
         }
         out
     }
@@ -161,6 +181,7 @@ impl Recent {
         project: &str,
         sessions: &mut Sessions,
         connected: bool,
+        outbox: &mut Outbox,
     ) -> Vec<String> {
         if project.is_empty() || !connected {
             return Vec::new();
@@ -171,6 +192,7 @@ impl Recent {
         }
         let id = mint();
         self.scoped_asks.insert(id.clone(), project.to_owned());
+        outbox.wait(&id, Waiting::Recent);
         vec![recent_line(&id, Some(project), None)]
     }
 
@@ -185,6 +207,7 @@ impl Recent {
         sessions: &mut Sessions,
         launch_project: Option<&str>,
         connected: bool,
+        outbox: &mut Outbox,
     ) -> Vec<String> {
         if !connected {
             return Vec::new();
@@ -205,7 +228,7 @@ impl Recent {
             .collect();
         let mut out = Vec::new();
         for project in &projects {
-            out.extend(self.scoped_first(project, sessions, connected));
+            out.extend(self.scoped_first(project, sessions, connected, outbox));
         }
         out
     }
@@ -231,12 +254,13 @@ impl Recent {
         project: &str,
         sessions: &mut Sessions,
         connected: bool,
+        outbox: &mut Outbox,
     ) -> Vec<String> {
         if !sessions.is_dirty(project) {
             return Vec::new();
         }
         sessions.clear_dirty(project);
-        self.scoped_first(project, sessions, connected)
+        self.scoped_first(project, sessions, connected, outbox)
     }
 
     /// Asks the next scoped `recent` page for `project` past `before`,
@@ -249,6 +273,7 @@ impl Recent {
         project: &str,
         before: Option<&str>,
         connected: bool,
+        outbox: &mut Outbox,
     ) -> Option<String> {
         if project.is_empty() || !connected {
             return None;
@@ -258,6 +283,7 @@ impl Recent {
         }
         let id = mint();
         self.scoped_asks.insert(id.clone(), project.to_owned());
+        outbox.wait(&id, Waiting::Recent);
         Some(recent_line(&id, Some(project), before))
     }
 
@@ -272,6 +298,7 @@ impl Recent {
         focused: u64,
         sessions: &mut Sessions,
         connected: bool,
+        outbox: &mut Outbox,
     ) -> Option<String> {
         // The scoped page wins while the project holds more: the held
         // total is that count's source of truth.
@@ -287,7 +314,7 @@ impl Recent {
                 .then(|| (project, Some(last.id.0.clone())))
         });
         if let Some((project, before)) = scoped {
-            return self.scoped_page(&project, before.as_deref(), connected);
+            return self.scoped_page(&project, before.as_deref(), connected, outbox);
         }
         if !sessions.more() || self.recent_ask.is_some() {
             return None;
@@ -300,18 +327,24 @@ impl Recent {
             .clone();
         let id = mint();
         self.recent_ask = Some((id.clone(), false));
+        outbox.wait(&id, Waiting::Recent);
         Some(recent_line(&id, None, Some(before.as_str())))
     }
 
     /// Starts a new connection's feed cycle and queues one scoped first
-    /// page per project already on home.
+    /// page per project already on home. The dropped scoped ids settle
+    /// their tags here, so a late answer matches nothing; `feed_id` and
+    /// `recent_ask` keep their entries and their tags.
     pub(super) fn reset_for_connection(
         &mut self,
         sessions: &Sessions,
         launch_project: Option<&str>,
+        outbox: &mut Outbox,
     ) -> Vec<String> {
         self.fed = false;
-        self.scoped_asks.clear();
+        for (old, _) in std::mem::take(&mut self.scoped_asks) {
+            outbox.settled(&old);
+        }
         let projects: Vec<String> = sessions
             .sections(launch_project)
             .into_iter()
@@ -324,6 +357,7 @@ impl Recent {
             }
             let id = mint();
             self.scoped_asks.insert(id.clone(), project.clone());
+            outbox.wait(&id, Waiting::Recent);
             out.push(recent_line(&id, Some(&project), None));
         }
         out
@@ -338,22 +372,24 @@ impl App {
     /// empty project.
     pub(super) fn scoped_first(&mut self, project: &str) -> Vec<String> {
         let connected = self.outbox.is_up();
+        let outbox = &mut self.outbox;
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
         home.recent
-            .scoped_first(project, &mut home.sessions, connected)
+            .scoped_first(project, &mut home.sessions, connected, outbox)
     }
 
     /// Asks the next scoped page for a project, without marking an
     /// in-flight ask dirty.
     pub(super) fn scoped_page(&mut self, project: &str, before: Option<&str>) -> Vec<String> {
         let connected = self.outbox.is_up();
+        let outbox = &mut self.outbox;
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
         home.recent
-            .scoped_page(project, before, connected)
+            .scoped_page(project, before, connected, outbox)
             .into_iter()
             .collect()
     }
@@ -363,11 +399,12 @@ impl App {
     /// deleted row's project, or marks it dirty while one is in flight.
     pub(super) fn ask_recent_first(&mut self, delete_project: Option<&str>) -> Vec<String> {
         let connected = self.outbox.is_up();
+        let outbox = &mut self.outbox;
         let Some(home) = self.home.as_mut() else {
             return Vec::new();
         };
         home.recent
-            .ask_recent_first(delete_project, &mut home.sessions, connected)
+            .ask_recent_first(delete_project, &mut home.sessions, connected, outbox)
     }
 
     /// Folds a scoped `recent` answer for `project`: rows append by
@@ -390,6 +427,7 @@ impl App {
             home.recent
                 .answer(id, accepted, payload, &mut home.sessions)?
         };
+        self.outbox.settled(id);
         match answer {
             Outcome::Feed(notice) => {
                 if let Some(notice) = notice {
@@ -415,11 +453,13 @@ impl App {
                         .as_mut()
                         .map(|home| {
                             let launch_project = home.launch_project().map(str::to_owned);
+                            let outbox = &mut self.outbox;
                             home.recent.fan_out_scoped(
                                 &before,
                                 &mut home.sessions,
                                 launch_project.as_deref(),
                                 connected,
+                                outbox,
                             )
                         })
                         .unwrap_or_default();
@@ -447,10 +487,12 @@ impl App {
                         self.home
                             .as_mut()
                             .map(|home| {
+                                let outbox = &mut self.outbox;
                                 home.recent.follow_up_scoped(
                                     &project,
                                     &mut home.sessions,
                                     connected,
+                                    outbox,
                                 )
                             })
                             .unwrap_or_default()
@@ -475,10 +517,11 @@ impl App {
     /// exist, with nothing in flight.
     pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
         let connected = self.outbox.is_up();
+        let outbox = &mut self.outbox;
         let home = self.home.as_mut()?;
         let line = home
             .recent
-            .page_recent(focused, &mut home.sessions, connected)?;
+            .page_recent(focused, &mut home.sessions, connected, outbox)?;
         Some(Effect::Send(vec![line]))
     }
 }

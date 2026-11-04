@@ -2982,6 +2982,78 @@ fn a_cancelled_search_is_shown_to_the_hook_as_the_cancel_line() {
 }
 
 #[test]
+fn a_hook_details_replacement_keeps_the_reserved_file_seen() {
+    let hooks = FakeHooks::new(
+        changed(None, Some(json!({"redacted": true})), None),
+        &["acme"],
+        Vec::new(),
+    );
+    let ran = run(
+        fixed(Output {
+            details: Some(json!({"diff": "@@ x", "file_seen": {"path": "/w/a.txt", "hash": 7}})),
+            ..text("wrote /w/a.txt")
+        }),
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].details, Some(json!({"diff": "@@ x"})));
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "completed");
+    assert_eq!(
+        completed.payload["details"],
+        json!({"redacted": true, "file_seen": {"path": "/w/a.txt", "hash": 7}})
+    );
+}
+
+#[test]
+fn a_hook_sees_no_details_when_the_tools_details_hold_only_file_seen() {
+    let hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
+    let ran = run(
+        fixed(Output {
+            details: Some(json!({"file_seen": {"path": "/w/a.txt", "hash": 7}})),
+            ..text("wrote /w/a.txt")
+        }),
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        Arc::new(TurnCancel::default()),
+    );
+    let seen = hooks.seen();
+    assert_eq!(seen.len(), 1);
+    assert!(seen[0].details.is_none());
+    assert_eq!(
+        ran.completed().payload["details"],
+        json!({"file_seen": {"path": "/w/a.txt", "hash": 7}})
+    );
+}
+
+#[test]
+fn a_hook_non_object_details_replacement_keeps_both_values() {
+    let hooks = FakeHooks::new(
+        changed(None, Some(json!("redacted")), None),
+        &["acme"],
+        Vec::new(),
+    );
+    let ran = run(
+        fixed(Output {
+            details: Some(json!({"diff": "@@ x", "file_seen": {"path": "/w/a.txt", "hash": 7}})),
+            ..text("wrote /w/a.txt")
+        }),
+        script("probe", json!({})),
+        Some(hooks),
+        Arc::new(TurnCancel::default()),
+    );
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "completed");
+    assert_eq!(
+        completed.payload["details"],
+        json!({"value": "redacted", "file_seen": {"path": "/w/a.txt", "hash": 7}})
+    );
+}
+
+#[test]
 fn a_cancelled_search_rewritten_before_it_ran_completes_with_the_cancel_line_only() {
     let mut hooks = FakeHooks::new(AfterToolOutcome::Unchanged, &[], Vec::new());
     Arc::get_mut(&mut hooks).unwrap().before = Some(BeforeToolOutcome::Rewritten {

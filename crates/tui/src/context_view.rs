@@ -1,6 +1,7 @@
 //! The `/context` view: estimated context categories and largest tool results
 //! (`docs/tui.md`, "Swapped views").
 
+use contract::events::EventKind;
 use std::collections::BTreeMap;
 
 use contract::Envelope;
@@ -44,8 +45,8 @@ pub(crate) struct ContextFold {
 impl ContextFold {
     /// Folds preamble sizes, tool results and handoffs from the session stream.
     pub(crate) fn fold(&mut self, envelope: &Envelope) {
-        match envelope.kind.as_str() {
-            "session_started" => {
+        match envelope.kind() {
+            EventKind::SessionStarted => {
                 self.preamble = false;
                 self.system = 0;
                 self.tools = 0;
@@ -57,7 +58,7 @@ impl ContextFold {
                     .get("forked_from")
                     .is_some_and(|forked_from| !forked_from.is_null());
             }
-            "preamble_built" => {
+            EventKind::PreambleBuilt => {
                 self.preamble = true;
                 self.system = envelope
                     .payload
@@ -78,7 +79,7 @@ impl ContextFold {
                         total.saturating_add(byte_count(definition.to_string().len()))
                     });
             }
-            "tool_call_requested" => {
+            EventKind::ToolCallRequested => {
                 if let (Some(action), Some(name)) = (
                     envelope.action_id.as_ref(),
                     envelope
@@ -89,8 +90,8 @@ impl ContextFold {
                     self.names.insert(action.0.clone(), name.to_owned());
                 }
             }
-            "tool_call_completed" => self.tool_completed(envelope),
-            "handoff_completed"
+            EventKind::ToolCallCompleted => self.tool_completed(envelope),
+            EventKind::HandoffCompleted
                 if envelope
                     .payload
                     .get("outcome")
@@ -101,7 +102,74 @@ impl ContextFold {
                 self.largest.clear();
                 self.names.clear();
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
         }
     }
 

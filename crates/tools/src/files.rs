@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fs;
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Component, Path, PathBuf};
@@ -14,6 +13,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use contract::diag::Timing;
 use contract::shapes::Effect;
 use contract::tool::{Effects, EffectsError};
+use serde_json::{Value, json};
 
 pub(crate) mod land;
 mod locks;
@@ -445,6 +445,16 @@ impl Files {
         Arc::clone(&self.shared.locks)
     }
 
+    /// Seeds what the session has seen from the history fold: the resolved
+    /// paths the model's context read with their whole-file hashes
+    /// (`docs/tools.md`, "Stale files"). Absent paths stay unseen, and no
+    /// file is opened or hashed.
+    #[must_use]
+    pub fn with_seen(self, seen: BTreeMap<PathBuf, u64>) -> Self {
+        session(&self.shared.state).seen.extend(seen);
+        self
+    }
+
     /// Clears what the session has seen. The session's built-in list hands
     /// it to the handoff (`crates/main/src/builtin.rs`, `forget`).
     pub fn forget(&self) {
@@ -501,13 +511,43 @@ fn session(mutex: &Mutex<Session>) -> MutexGuard<'_, Session> {
     support::lock(mutex)
 }
 
-/// A hash of the file's bytes. In-process only: nothing persists or logs it.
+/// The reserved `file_seen` object a file tool logs beside its own details
+/// (`docs/events.md`, `tool_call_completed`): the resolved path and the
+/// whole file's content hash, so a resume, fork or rewind rebuilds what the
+/// model's context has seen (`docs/tools.md`, "Stale files").
+pub(crate) fn file_seen(path: &Path, hash: u64) -> Value {
+    json!({"path": path_text(path), "hash": hash})
+}
+
+/// Merges the reserved `file_seen` object into `details`, keeping every
+/// field already there. The tools' own details are always objects; a
+/// missing one starts as just the record.
+pub(crate) fn attach_seen(details: Option<Value>, path: &Path, hash: u64) -> Option<Value> {
+    let seen = file_seen(path, hash);
+    match details {
+        Some(Value::Object(mut object)) => {
+            object.insert("file_seen".to_owned(), seen);
+            Some(Value::Object(object))
+        }
+        _ => Some(json!({"file_seen": seen})),
+    }
+}
+
+/// A hash of the file's bytes. Persisted in `file_seen` (`docs/events.md`,
+/// `tool_call_completed`), so it is stable across Rust releases and
+/// platforms: FNV-1a 64-bit, a fixed algorithm. The live stale check and the
+/// logged hash use this same function.
 ///
 /// debt: a 64-bit hash collision lets a changed file look seen, a measured collision in a session
 pub(crate) fn hash_bytes(bytes: &[u8]) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
+    const OFFSET: u64 = 14695981039346656037;
+    const PRIME: u64 = 1099511628211;
+    let mut hash = OFFSET;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(PRIME);
+    }
+    hash
 }
 
 /// The path as text. A non-UTF-8 byte is escaped rather than rejected.

@@ -120,6 +120,14 @@ fn hub_token_revoke_deletes_the_record_and_a_client_sees_device_changed() {
     record(&setup);
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
+    // The watch registers before the revoke runs: hub.log exists (the hub
+    // is up), and the reread after registration covers a line landing
+    // before the wait.
+    let revoked_watch = watch_log(
+        &hub_log_path(&setup),
+        setup.deadline,
+        "the device_revoked line in hub.log",
+    );
     let output = run(&setup, &["hub", "token", "revoke", "phone"]);
     assert_eq!(
         output.status.code(),
@@ -134,29 +142,19 @@ fn hub_token_revoke_deletes_the_record_and_a_client_sees_device_changed() {
         line["payload"],
         json!({"change":"revoked","device":"phone","by":"local"})
     );
-    assert!(!setup.home().join("hub/devices/phone").exists());
-    let log = hub_log_path(&setup);
-    let deadline = setup.deadline;
-    let seen = bounded(deadline, "the device_revoked line in hub.log", move || {
-        loop {
-            if fs::read_to_string(&log)
-                .unwrap_or_default()
-                .contains("device_revoked")
-            {
-                return true;
-            }
-            if deadline.left().is_zero() {
-                // Stops this worker thread after `bounded` has already reported
-                // the timeout naming the line; the returned value never
-                // decides the failure text.
-                return false;
-            }
-            std::thread::yield_now();
-        }
-    });
-    assert!(
-        seen,
-        "waited until the deadline for the device_revoked line in hub.log"
+    // The announcement only proves the client heard the revoke: the record
+    // delete and the log line land after, so each gets the wait that
+    // proves it instead of a poll. The watch registered before the revoke.
+    wait_for_path_gone(
+        setup.deadline,
+        &setup.home().join("hub/devices/phone"),
+        "the revoked device record to go",
+    );
+    wait_for_watched_line(
+        &revoked_watch,
+        setup.deadline,
+        "the device_revoked line in hub.log",
+        |text| text.contains("device_revoked"),
     );
     finish(hub, client);
 }

@@ -22,7 +22,7 @@ use std::fs;
 
 use serde_json::json;
 use support::hold::Hold;
-use support::pty::{Colour, Grid, Run};
+use support::pty::{Colour, Grid, MOTION, Run, drag_bytes, hover_bytes};
 use support::{Setup, TRUECOLOUR, write_json};
 
 /// `surface` in the dark theme.
@@ -313,23 +313,6 @@ fn copied_below(grid: &Grid) -> bool {
     copied_at(grid).is_some_and(|(_, row)| row == copied)
 }
 
-/// A press at `(from, y)`, a drag to `(to, y)` and its release, in one
-/// write so the reports stay ordered.
-fn drag(run: &mut Run, y: u16, from: u16, to: u16) {
-    run.write(
-        format!(
-            "\x1b[<0;{};{}M\x1b[<32;{};{}M\x1b[<3;{};{}m",
-            from + 1,
-            y + 1,
-            to + 1,
-            y + 1,
-            to + 1,
-            y + 1,
-        )
-        .as_bytes(),
-    );
-}
-
 /// Every cell with the selection background.
 fn selected_cells(grid: &Grid) -> Vec<(u16, u16)> {
     let mut out = Vec::new();
@@ -427,7 +410,11 @@ fn a_drag_selects_and_copies() {
     let from = col_at(&grid, y, "across");
     let to = from + 5;
     let before = run.output().len();
-    drag(&mut run, y, from, to);
+    run.mouse_where(
+        "the drag across the reply row",
+        |grid| grid.text_at("across"),
+        |point| drag_bytes(point, (point.0 + 5, point.1)),
+    );
     // The selection once the release copies: every dragged cell on the
     // `selection` tint, and "Copied" at the top-right.
     let grid = run.wait_screen("the selection", drag_selected);
@@ -465,13 +452,18 @@ fn copied_sits_below_the_search_box() {
     // The bar opens first: its content row anchors the slab.
     let grid = run.wait_screen("the search bar", |grid| grid.contents.contains('⌕'));
     let bar = row_with(&grid, "⌕");
-    let grid = run.wait_screen("the reply under the bar", |grid| {
+    run.wait_screen("the reply under the bar", |grid| {
         grid.contents.contains("drag across")
     });
-    let y = row_with(&grid, "drag across");
-    assert!(y > bar + 2, "the drag stays below the slab");
-    let from = col_at(&grid, y, "across");
-    drag(&mut run, y, from, from + 5);
+    run.mouse_where(
+        "the drag across the reply row",
+        |grid| {
+            let point = grid.text_at("across")?;
+            assert!(point.1 > bar + 2, "the drag stays below the slab");
+            Some(point)
+        },
+        |point| drag_bytes(point, (point.0 + 5, point.1)),
+    );
     let grid = run.wait_screen("Copied under the bar", copied_below);
     let copied = row_with(&grid, "Copied");
     // "Copied" sits on the row under the slab's lower edge, never
@@ -512,12 +504,6 @@ fn setup_with_read() -> Setup {
             "budget": {"usd": 20}, "hub": {"idle_exit_ms": 1000}}),
     );
     setup
-}
-
-/// Clicks the cell at `(x, y)`: an SGR press then its release on the
-/// same cell.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
 }
 
 /// The top row's `surface` run around the view's title: row 0 holds
@@ -598,7 +584,7 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
     // `/context`: the top row, the bold sizes, tool results in
     // `error`, and the handoff marker and label in `attention`.
     let grid = open_view(&mut run, "context");
-    let (first, last) = assert_top_row(&grid, "Context", "/context");
+    assert_top_row(&grid, "Context", "/context");
     // The sizes row names the window: the doc's "268k tokens" bold
     // with its dim tail. ("of the" tells it from the panel's "30% of
     // window".) The base row names no window, so this fails there.
@@ -653,7 +639,10 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
     // A click on the middle of the top row returns to the
     // conversation: at the base only the ✕ closes, so the wait fails
     // there.
-    click(&mut run, (first + last) / 2, 0);
+    run.click_where("the context top row", |grid| {
+        let (first, last) = top_run(grid, "Context");
+        Some(((first + last) / 2, 0))
+    });
     run.wait_screen("the conversation back", |grid| {
         grid.contents.contains(REPLY)
     });
@@ -746,7 +735,14 @@ fn running_setup() -> (Setup, Hold, String) {
 fn narrow_running(setup: &Setup) -> Run {
     let mut run = Run::spawn(setup, 80, 24, &[], &TRUECOLOUR);
     run.ready();
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
     run.write(b"go\r");
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until(
+        "the delegate and job started with usage copied",
+        setup.deadline,
+        move || children_started(&sessions) && delegate_usage_copied(&sessions),
+    );
     run.wait_screen("the parent reply", |grid| grid.contents.contains(REPLY));
     run.wait_screen("the narrow running counts", |grid| {
         grid.contents.contains("1 delegate running") && grid.contents.contains("1 job running")
@@ -755,9 +751,8 @@ fn narrow_running(setup: &Setup) -> Run {
 }
 
 fn open_running(run: &mut Run, count: &str, heading: &str) -> Grid {
-    let grid = run.wait_screen("the running count", |grid| grid.contents.contains(count));
-    let y = row_with(&grid, count);
-    click(run, col_at(&grid, y, count), y);
+    run.wait_screen("the running count", |grid| grid.contents.contains(count));
+    run.click_where("the running count", |grid| grid.text_at(count));
     run.wait_screen("the running list", |grid| grid.contents.contains(heading))
 }
 
@@ -949,8 +944,11 @@ fn the_search_results_rows_match_the_doc() {
     run.write(b"\x06");
     let grid = run.wait_screen("the result rows, labels and inks", search_results_ready);
     assert!(search_results_ready(&grid));
-    let (first, last) = assert_top_row(&grid, "Search", "⌕ lock");
-    click(&mut run, (first + last) / 2, 0);
+    assert_top_row(&grid, "Search", "⌕ lock");
+    run.click_where("the search top row", |grid| {
+        let (first, last) = top_run(grid, "Search");
+        Some(((first + last) / 2, 0))
+    });
     run.wait_screen(
         "the conversation after the search top row returns",
         |grid| {
@@ -1020,39 +1018,22 @@ fn the_changed_files_rows_match_the_doc() {
         }),
     );
     let mut run = turned(&setup, "go");
-    let grid = run.wait_screen("the changed-files panel card", |grid| {
-        session_settled(grid) && panel_item_at(grid, "changed.txt").is_some()
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until(
+        "the parent reply's turn completion",
+        setup.deadline,
+        move || parent_reply_completed(&sessions),
+    );
+    run.wait_screen("the changed-files panel card", |grid| {
+        panel_item_at(grid, "changed.txt").is_some()
     });
-    let (_, y) = panel_item_at(&grid, "changed.txt").unwrap();
-    let x = col_at(&grid, y + 1, "+2");
-    click(&mut run, x, y + 1);
+    run.click_where("the changed file's count", |grid| {
+        let (_, y) = panel_item_at(grid, "changed.txt")?;
+        let count = y.checked_add(1)?;
+        Some((col_at_or(grid, count, "+2")?, count))
+    });
     let grid = run.wait_screen("the changed-file row and inks", changed_file_row_ready);
     assert!(changed_file_row_ready(&grid));
-}
-
-/// Turn complete (`✓ READY`) and the Session cost row figured: no later fold in
-/// this turn moves the cards. The speed row keeps its reserved place with
-/// a dash until its timed reply, so it is not part of the settle.
-fn session_settled(grid: &Grid) -> bool {
-    // The panel starts at column 100, as in `panel_item_at`: a `cost`
-    // elsewhere (a conversation echo, another card) does not settle us.
-    support::session_cost_drawn(grid, 100) && grid.contents.contains("✓ READY")
-}
-
-/// The Session spend row figured in the panel: the parent script reports
-/// input usage, so `cache hits` lands with the turn's first fold and
-/// later delegate spend only rewrites the row's values
-/// (`crates/tui/src/view/panel.rs`, `session_rows`). The reserved row
-/// draws the label with a dim dash, so the wait reads the figure: a row
-/// whose value is not the dash. A wait that supplies panel coordinates
-/// for a later write holds until the figure lands, so no later fold
-/// moves the cards under the stored coordinates.
-fn session_spend_drawn(grid: &Grid) -> bool {
-    panel_item_at(grid, "cache hits").is_some_and(|(_, y)| {
-        grid.rows
-            .get(usize::from(y))
-            .is_some_and(|row| row.contains('%'))
-    })
 }
 
 /// Whether the session log containing `REPLY` has completed that turn.
@@ -1091,6 +1072,64 @@ fn parent_reply_completed(sessions: &std::path::Path) -> bool {
     false
 }
 
+/// Whether a session log holds the delegate's copied usage: a
+/// `usage_recorded` event with a non-null `payload.origin_session_id`.
+/// The parent's own usage carries none, so the copy is the delegate's.
+fn delegate_usage_copied(sessions: &std::path::Path) -> bool {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        };
+        if support::complete_lines(&text).iter().any(|event| {
+            event["kind"] == "usage_recorded" && !event["payload"]["origin_session_id"].is_null()
+        }) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the session logs hold both a `delegate_started` and a
+/// `job_started` event: the delegate and the background job both run.
+fn children_started(sessions: &std::path::Path) -> bool {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    let (mut delegate, mut job) = (false, false);
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        };
+        for event in support::complete_lines(&text) {
+            if event["kind"] == "delegate_started" {
+                delegate = true;
+            }
+            if event["kind"] == "job_started" {
+                job = true;
+            }
+        }
+        if delegate && job {
+            return true;
+        }
+    }
+    false
+}
+
 fn panel_item_at(grid: &Grid, description: &str) -> Option<(u16, u16)> {
     grid.rows.iter().enumerate().find_map(|(y, _)| {
         let y = u16::try_from(y).ok()?;
@@ -1108,7 +1147,7 @@ fn panel_card_item_at(grid: &Grid, card: &str, description: &str) -> Option<(u16
 
 #[test]
 fn the_item_views_top_row_closes_them() {
-    let (setup, hold, command) = running_setup();
+    let (setup, _hold, command) = running_setup();
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
@@ -1116,21 +1155,21 @@ fn the_item_views_top_row_closes_them() {
     fakes::wait_until(
         "the parent reply's turn completion",
         setup.deadline,
-        move || parent_reply_completed(&sessions),
+        move || parent_reply_completed(&sessions) && delegate_usage_copied(&sessions),
     );
-    let grid = run.wait_screen(
+    run.wait_screen(
         "the completed parent reply and running panel cards",
         |grid| {
             grid.contents.contains(REPLY)
-                && grid.contents.contains("completed · 2 calls")
+                && grid
+                    .contents
+                    .lines()
+                    .any(|row| row.contains("completed ·") && row.contains(" 2 calls"))
                 && panel_item_at(grid, "review the diff").is_some()
                 && panel_item_at(grid, "Jobs").is_some()
-                && support::session_cost_drawn(grid, 100)
-                && session_spend_drawn(grid)
         },
     );
-    let (x, y) = panel_item_at(&grid, "Jobs").unwrap();
-    click(&mut run, x, y);
+    run.click_where("the Jobs card", |grid| panel_item_at(grid, "Jobs"));
     run.wait_screen("the expanded Jobs card", |grid| {
         panel_item_at(grid, "head -n 1").is_some()
     });
@@ -1142,68 +1181,39 @@ fn the_item_views_top_row_closes_them() {
         ),
         ("Jobs", "head -n 1", format!("Job  ◆ {command}")),
     ] {
-        let grid = run.wait_screen("the running panel card's first item", |grid| {
-            support::session_cost_drawn(grid, 100)
-                && session_spend_drawn(grid)
-                && panel_card_item_at(grid, card, description).is_some()
+        run.wait_screen("the running panel card's first item", |grid| {
+            panel_card_item_at(grid, card, description).is_some()
         });
-        let (x, y) = panel_card_item_at(&grid, card, description).unwrap();
         // The hover frame acknowledges this cell as a live click target.
         // Card surface (26, 26, 34) lifts by 20 per channel under the pointer.
-        run.write(format!("\x1b[<35;{};{}M", x + 1, y + 1).as_bytes());
+        let hovered = std::cell::Cell::new((0u16, 0u16));
+        run.mouse_where(
+            "the running item's hover",
+            |grid| {
+                let point = panel_card_item_at(grid, card, description)?;
+                hovered.set(point);
+                Some(point)
+            },
+            hover_bytes,
+        );
         run.wait_screen("the running item's hover acknowledgement", |grid| {
-            support::session_cost_drawn(grid, 100)
-                && session_spend_drawn(grid)
-                && panel_card_item_at(grid, card, description) == Some((x, y))
-                && grid.cell(x, y).bg == Colour::Rgb(46, 46, 54)
+            panel_card_item_at(grid, card, description) == Some(hovered.get())
+                && grid.cell(hovered.get().0, hovered.get().1).bg == Colour::Rgb(46, 46, 54)
         });
-        click(&mut run, x, y);
+        run.click_where("the running item", |grid| {
+            panel_card_item_at(grid, card, description)
+        });
         let grid = run.wait_screen("the item's breadcrumb without a cross", |grid| {
             grid.rows[0].contains(&crumb) && !grid.rows[0].contains('✕')
         });
         assert!(grid.rows[0].contains(&crumb));
         assert!(!grid.rows[0].contains('✕'));
-        click(&mut run, 80, 0);
+        run.click_where("the item view's top row", |grid| {
+            grid.rows[0].contains(&crumb).then_some((80, 0))
+        });
         run.wait_screen(
             "the conversation after clicking the item's top row",
             |grid| grid.contents.contains(REPLY) && !grid.rows[0].contains(&crumb),
-        );
-    }
-    // Tear down in the open: kill the run, unlink the FIFO, then close
-    // the release (EOF lets every blocked `head` read and exit) and
-    // re-kill the hold pattern until no holder matches. Dropping the
-    // last writer before a head opens the FIFO strands it there forever
-    // (`docs/testing.md`, "Waits and timeouts"), and the drop's one-shot
-    // watchdog kill only reaps what has exec'd by then. Unlinking first
-    // closes the delayed-start window the ticket names: a head that
-    // starts after the unlink fails its open with ENOENT and exits
-    // within milliseconds, which the temp-dir detector's bounded wait
-    // absorbs, so cleanup may stop at the first zero. The re-kill still
-    // reaps openers caught mid-syscall across the unlink. If cleanup
-    // cannot complete, it panics naming the stragglers; the temp-dir
-    // detector is skipped while unwinding.
-    let pattern = hold.path().display().to_string();
-    drop(run);
-    fs::remove_file(hold.path()).unwrap();
-    drop(hold);
-    let deadline = setup.deadline.cleanup_phase();
-    let mut clean = false;
-    while !deadline.left().is_zero() {
-        if fakes::kill_matching(pattern.as_str()).is_err() {
-            break;
-        }
-        if fakes::matching_exits(
-            pattern.as_str(),
-            fakes::Deadline::after(std::time::Duration::from_millis(100)),
-        ) {
-            clean = true;
-            break;
-        }
-    }
-    if !clean {
-        let stragglers = fakes::matching(pattern.as_str()).unwrap_or_default();
-        panic!(
-            "3875 cleanup: the hold pattern never stayed clear (stragglers: {stragglers:?}); the temp-dir detector is skipped while unwinding"
         );
     }
 }

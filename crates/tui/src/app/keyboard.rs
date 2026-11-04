@@ -474,17 +474,16 @@ impl App {
 
     /// Saves one confirmed screen change: the edits against the old
     /// keyset, in one call. No edits saves nothing; a refused save keeps
-    /// the old keyset on screen with the failure's message. With no seam
-    /// the change applies for this run only.
+    /// the old keyset on screen with the failure's message.
     fn apply_keys(&mut self, next: Keyset) -> Effect {
         let edits = next.edits(&self.keyboard.keys);
         if edits.is_empty() {
             return Effect::None;
         }
-        let saved = match self.configure_seam() {
-            Some(seam) => seam.save_keys(&edits).map_err(|error| error.message),
-            None => Ok(()),
-        };
+        let saved = self
+            .configure_seam()
+            .save_keys(&edits)
+            .map_err(|error| error.message);
         match saved {
             Ok(()) => {
                 self.keyboard.keys = next;

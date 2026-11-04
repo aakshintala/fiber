@@ -91,7 +91,7 @@ fn open_usage(app: &mut App) {
 
 fn with_settings_seam(app: &mut App) {
     let seam: Arc<dyn crate::Configure> = Arc::new(crate::configure_fake::Fake::new(Vec::new()));
-    app.set_configure(Some(seam));
+    app.set_configure(seam);
 }
 
 #[test]
@@ -1018,7 +1018,7 @@ fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1272,7 +1272,7 @@ fn a_panel_file_rank_past_the_end_opens_the_list_sending_only_the_numstat_comman
     let Effect::Send(lines) = effect else {
         panic!("a rank past the end sends only the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1304,7 +1304,7 @@ fn the_narrow_changed_files_segment_opens_the_file_list() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -2547,7 +2547,7 @@ fn open_figures(app: &mut App, width: u16, height: u16) -> String {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    assert_eq!(lines.len(), 1, "one numstat command"); // docs/tui.md:830, run when the view opens.
+    assert_eq!(lines.len(), 1, "one numstat command"); // docs/tui.md, "Swapped views", run when the view opens.
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     request["id"].as_str().unwrap_or_default().to_owned()
@@ -2831,7 +2831,7 @@ fn files_remote() -> App {
 }
 
 #[test]
-fn ctrl_g_on_a_remote_terminal_shows_the_notice_and_opens_nothing() {
+fn ctrl_g_on_a_remote_terminal_without_a_workspace_shows_the_notice_and_opens_nothing() {
     let mut app = files_remote();
     many_changes(&mut app, 1);
     let effect = app.open_session_view(SessionView::ChangedFiles);
@@ -2842,6 +2842,312 @@ fn ctrl_g_on_a_remote_terminal_shows_the_notice_and_opens_nothing() {
         app.notices.newest(),
         Some("Not available in this terminal.")
     );
+}
+
+/// A remote Changed files app whose session row names workspace `/w`,
+/// with the hub link scripted: asked hub lines arrive on `asked`, and
+/// `answer`/`reject` fold the reply back into the router.
+struct RemoteScript {
+    asked: std::sync::mpsc::Receiver<Value>,
+    router: Arc<crate::remote::Router>,
+}
+
+fn files_remote_scripted() -> (App, RemoteScript) {
+    let router = crate::remote::Router::new();
+    let seam: Arc<dyn crate::Configure> = Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        panel_cards: vec!["changed_files".to_owned()],
+        ..Default::default()
+    });
+    app.attach(SessionId(SESSION.to_owned()));
+    app.set_size(120, 35);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    // The session row names the hub-side workspace the Changed files
+    // paths address. It folds before the remote exists, so its arrival
+    // asks nothing: with a remote it would block for the script.
+    app.on_line(session_line(
+        SESSION,
+        "session_status",
+        json!({
+            "name": "work", "workspace": "/w", "project": "-w", "state": "idle",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2}, "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+        Some("a_1"),
+    ));
+    app.set_remote(Arc::new(crate::remote::Remote::new(
+        seam,
+        "/client".into(),
+        Arc::clone(&router),
+    )));
+    // The hub link attaches last: only the copy's reads and writes use
+    // it, and the script answers those.
+    let (sending, asked) = std::sync::mpsc::channel();
+    let (client, hub) = std::os::unix::net::UnixStream::pair().unwrap();
+    router.attach(client);
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut lines = std::io::BufReader::new(hub).lines();
+        while let Some(Ok(line)) = lines.next() {
+            if sending.send(serde_json::from_str(&line).unwrap()).is_err() {
+                break;
+            }
+        }
+    });
+    (app, RemoteScript { asked, router })
+}
+
+fn take_hub_line(script: &RemoteScript, what: &str) -> Value {
+    fakes::Deadline::after(std::time::Duration::from_secs(10)).recv_or_fail(&script.asked, what)
+}
+
+fn accept_hub_line(script: &RemoteScript, line: &Value, result: Value) {
+    let accepted = json!({"kind":"command_accepted","ts":1,"schema_version":1,
+        "payload":{"command_id":line["id"],"result":result}});
+    let line = crate::link::Line::Hub(serde_json::from_value(accepted).unwrap());
+    assert!(script.router.route(&line));
+}
+
+fn reject_hub_line(script: &RemoteScript, line: &Value, code: &str, message: &str) {
+    let rejected = json!({"kind":"command_rejected","ts":1,"schema_version":1,
+        "payload":{"command_id":line["id"],"code":code,"message":message}});
+    let line = crate::link::Line::Hub(serde_json::from_value(rejected).unwrap());
+    assert!(script.router.route(&line));
+}
+
+/// The app thread's return: the run's value with the app back. The hub
+/// calls inside the run block for the script's answer, so the script
+/// stays on the test thread: press, script the answer, then collect.
+fn press_ctrl_g(
+    app: App,
+) -> (
+    std::thread::JoinHandle<()>,
+    std::sync::mpsc::Receiver<(Effect, App)>,
+) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let mut app = app;
+        let effect = app.on_key(Key::CtrlG, now());
+        tx.send((effect, app)).unwrap_or(());
+    });
+    (handle, rx)
+}
+
+/// The editor's return on a thread, for the same script-then-collect
+/// reason: `path` is the returned copy, `result` the editor's outcome.
+fn close_copy(
+    app: App,
+    path: PathBuf,
+    result: Result<(), String>,
+) -> (
+    std::thread::JoinHandle<()>,
+    std::sync::mpsc::Receiver<(Vec<String>, App)>,
+) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let mut app = app;
+        let lines = app.changed_file_closed(&path, result);
+        tx.send((lines, app)).unwrap_or(());
+    });
+    (handle, rx)
+}
+
+fn collect<T>(rx: std::sync::mpsc::Receiver<(T, App)>, what: &str) -> (T, App) {
+    fakes::Deadline::after(std::time::Duration::from_secs(10)).recv_or_fail(&rx, what)
+}
+
+/// Opens the Changed files list with one file on the scripted remote.
+fn open_remote_list(app: &mut App) {
+    many_changes(app, 1);
+    let effect = app.open_session_view(SessionView::ChangedFiles);
+    assert!(app.session_view_open());
+    drop(effect);
+}
+
+/// Opens the hub copy for `src/file-0.rs` through Ctrl+G: the read
+/// answers `text` with `version`, and the pressed effect opens the
+/// temporary copy. Returns the app back with the copy's path.
+fn open_remote_copy(
+    mut app: App,
+    script: &RemoteScript,
+    text: &str,
+    version: &str,
+) -> (App, PathBuf) {
+    open_remote_list(&mut app);
+    let (handle, rx) = press_ctrl_g(app);
+    let asked = take_hub_line(script, "the workspace read");
+    assert_eq!(asked["command"], "read_workspace_file");
+    assert_eq!(
+        asked["args"],
+        json!({"workspace": "/w", "path": "src/file-0.rs"})
+    );
+    accept_hub_line(script, &asked, json!({"text": text, "version": version}));
+    let (effect, app) = collect(rx, "the workspace read");
+    handle.join().unwrap();
+    let Effect::OpenFile(opened) = effect else {
+        panic!("Ctrl+G opens the hub copy, got {effect:?}");
+    };
+    assert_eq!(opened.line, Some(1));
+    assert_ne!(opened.path, PathBuf::from("/w/src/file-0.rs"));
+    (app, opened.path)
+}
+
+#[test]
+fn ctrl_g_on_a_remote_terminal_fetches_the_hub_file_and_opens_the_copy() {
+    let (app, script) = files_remote_scripted();
+    let (app, temp) = open_remote_copy(app, &script, "hub text\n", "v9");
+    assert_eq!(
+        std::fs::read_to_string(&temp).unwrap(),
+        "hub text\n",
+        "the copy holds the hub file's text"
+    );
+    assert_eq!(app.notices.newest(), None);
+    drop((app, script));
+}
+
+#[test]
+fn returning_the_remote_copy_stores_it_and_rereads() {
+    let (app, script) = files_remote_scripted();
+    let (app, temp) = open_remote_copy(app, &script, "hub text\n", "v9");
+    std::fs::write(&temp, "edited\n").unwrap();
+    let (handle, rx) = close_copy(app, temp.clone(), Ok(()));
+    let asked = take_hub_line(&script, "the workspace write");
+    assert_eq!(asked["command"], "write_workspace_file");
+    assert_eq!(
+        asked["args"],
+        json!({"workspace": "/w", "path": "src/file-0.rs", "text": "edited\n", "version": "v9"})
+    );
+    accept_hub_line(&script, &asked, json!({}));
+    let (lines, mut app) = collect(rx, "the workspace write");
+    handle.join().unwrap();
+    // `docs/tui.md`, "Swapped views": the view reads the file's diff and
+    // numstat again. That promises both requests, in no promised order.
+    assert_eq!(lines.len(), 2);
+    let mut got: Vec<String> = shell_requests(&lines)
+        .iter()
+        .map(|request| {
+            request["args"]["command"]
+                .as_str()
+                .expect("shell request carries a command string")
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        diff_command("src/file-0.rs"),
+        numstat_command(&["src/file-0.rs"]),
+    ];
+    want.sort();
+    assert_eq!(got, want, "the reread sends the diff and the numstat");
+    assert_eq!(app.notices.newest(), None);
+    // The holder is spent: closing the same copy again sends nothing.
+    assert!(app.changed_file_closed(&temp, Ok(())).is_empty());
+}
+
+#[test]
+fn a_hub_side_edit_leaves_the_remote_copy_unwritten_with_the_notice_but_still_rereads() {
+    let (app, script) = files_remote_scripted();
+    let (app, temp) = open_remote_copy(app, &script, "hub text\n", "v9");
+    std::fs::write(&temp, "lost\n").unwrap();
+    let (handle, rx) = close_copy(app, temp, Ok(()));
+    let asked = take_hub_line(&script, "the stale workspace write");
+    assert_eq!(asked["command"], "write_workspace_file");
+    reject_hub_line(
+        &script,
+        &asked,
+        "stale_request",
+        "/w/src/file-0.rs changed since it was read.",
+    );
+    let (lines, app) = collect(rx, "the stale workspace write");
+    handle.join().unwrap();
+    assert_eq!(
+        app.notices.newest(),
+        Some("/w/src/file-0.rs changed since it was read.")
+    );
+    // `docs/tui.md`, "Swapped views": the view still reads the diff and
+    // numstat again. That promises both requests, in no promised order.
+    assert_eq!(lines.len(), 2);
+    let mut got: Vec<String> = shell_requests(&lines)
+        .iter()
+        .map(|request| {
+            request["args"]["command"]
+                .as_str()
+                .expect("shell request carries a command string")
+                .to_owned()
+        })
+        .collect();
+    got.sort();
+    let mut want = vec![
+        diff_command("src/file-0.rs"),
+        numstat_command(&["src/file-0.rs"]),
+    ];
+    want.sort();
+    assert_eq!(got, want, "the reread sends the diff and the numstat");
+}
+
+#[test]
+fn a_failed_editor_return_drops_the_remote_copy_without_storing() {
+    let (app, script) = files_remote_scripted();
+    let (app, temp) = open_remote_copy(app, &script, "hub text\n", "v9");
+    let (handle, rx) = close_copy(app, temp.clone(), Err("editor failed".to_owned()));
+    let (lines, mut app) = collect(rx, "the failed editor return");
+    handle.join().unwrap();
+    assert_eq!(app.notices.newest(), Some("editor failed"));
+    assert_eq!(lines.len(), 2);
+    assert!(script.asked.try_recv().is_err());
+    // The holder is spent without a write: closing again sends nothing.
+    assert!(app.changed_file_closed(&temp, Ok(())).is_empty());
+}
+
+#[test]
+fn returning_the_remote_copy_with_the_view_closed_still_stores_it() {
+    let (app, script) = files_remote_scripted();
+    let (mut app, temp) = open_remote_copy(app, &script, "hub text\n", "v9");
+    std::fs::write(&temp, "edited\n").unwrap();
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.session_view_open());
+    let (handle, rx) = close_copy(app, temp, Ok(()));
+    let asked = take_hub_line(&script, "the closed-view workspace write");
+    assert_eq!(asked["command"], "write_workspace_file");
+    accept_hub_line(&script, &asked, json!({}));
+    let (lines, app) = collect(rx, "the closed-view workspace write");
+    handle.join().unwrap();
+    assert!(lines.is_empty());
+    assert_eq!(app.notices.newest(), None);
+}
+
+#[test]
+fn a_remote_numstat_answer_matches_hub_absolute_paths_by_the_viewed_workspace() {
+    let (mut app, _script) = files_remote_scripted();
+    // The hub syncs absolute workspace paths while its git answers
+    // repository-relative ones, as production does.
+    app.on_line(changes_line(&[("/w/src/file-0.rs", 1, 0)]));
+    let Effect::Send(lines) = app.open_session_view(SessionView::ChangedFiles) else {
+        panic!("opening the list sends the numstat query");
+    };
+    assert_eq!(lines.len(), 1);
+    let request: Value = serde_json::from_str(&lines[0])
+        .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
+    app.on_line(accepted_figures(
+        request["id"].as_str().unwrap_or_default(),
+        "2\t0\tsrc/file-0.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("file-0.rs · +2 −0"), "{shown}");
 }
 
 /// The workspace path of the first changed file.
@@ -2965,4 +3271,146 @@ fn returning_for_an_undecodable_path_sends_nothing() {
     let path = PathBuf::from("/w").join(std::ffi::OsStr::from_bytes(b"\xff.txt"));
     assert!(app.changed_file_closed(&path, Ok(())).is_empty());
     assert_eq!(app.notices.newest(), None);
+}
+
+// Part of #3696: the figures, diff and hooks answers route by tag.
+
+#[test]
+fn figures_answer_reaches_its_handler_and_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let id = open_figures(&mut app, 120, 35);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Figures));
+    app.on_line(accepted_figures(
+        &id,
+        "5\t0\tsrc/file-0.rs\n0\t3\tsrc/file-1.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+}
+
+#[test]
+fn figures_refusal_settles_its_tag_and_keeps_the_card_figures() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Figures));
+    app.on_line(rejected_diff(SESSION, &id, "hub refused"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+}
+
+#[test]
+fn a_second_figures_answer_after_settle_changes_nothing() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &id,
+        "5\t0\tsrc/file-0.rs\n0\t3\tsrc/file-1.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &id,
+        "9\t9\tsrc/file-0.rs\n9\t9\tsrc/file-1.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+}
+
+#[test]
+fn diff_answer_reaches_its_handler_and_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    let id = request["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Diff));
+    let before = app.lines();
+    app.on_line(accepted_diff(&id, "diff line\n"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("diff line"), "{shown}");
+    assert_eq!(app.lines(), before);
+}
+
+#[test]
+fn diff_refusal_settles_its_tag_and_shows_its_message() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    let id = request["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Diff));
+    app.on_line(rejected_diff(SESSION, &id, "session refused"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("session refused"), "{shown}");
+}
+
+#[test]
+fn hooks_answer_reaches_its_handler_and_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Hooks));
+    app.on_line(accepted_hooks(
+        &id,
+        json!([
+            {"kind": "hook", "extension": "ext", "point": "before_tool", "on_failure": "blocking"},
+        ]),
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("ext"), "{shown}");
+}
+
+#[test]
+fn hooks_refusal_settles_its_tag_and_keeps_no_rows() {
+    use crate::app::Waiting;
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Hooks));
+    app.on_line(rejected_diff(SESSION, &id, "gone"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("No hooks"), "{shown}");
+}
+
+#[test]
+fn a_hub_rejection_for_hooks_drops_its_request_and_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Hooks));
+    app.on_line(hub_rejected(&id, "hub refused"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    // A late session answer finds no hooks request and folds nowhere:
+    // the view keeps showing that it holds no rows.
+    app.on_line(accepted_hooks(
+        &id,
+        json!([{"kind": "hook", "extension": "ext", "point": "before_tool", "on_failure": "blocking"}]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("No hooks"), "{shown}");
+    assert!(!shown.contains("ext"), "{shown}");
 }

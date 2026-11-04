@@ -19,6 +19,8 @@ tests come from two sources:
   name and its data (`codex-responses-probe`); or a non-streamed response
   object (`openai-responses-probe`). A test serves the bytes where a probe
   kept them, and otherwise rebuilds the stream from what the probe kept.
+  Journey transcripts live under `crates/main/tests/fixtures/provider_replay/`,
+  with a `PROVENANCE.md` naming the issue or probe source each came from.
 - **Scripted streams.** Hand-written in the real wire format, for scenarios a
   recording cannot produce on demand, such as a tool call, then a 429, then
   text. A local fake server serves them to the binary and to cross-crate tests.
@@ -73,7 +75,11 @@ is a real child session process, because it is Fiber. The fakes are:
   and `fakes::text_of` reads a tool result's text, `fakes::wait_output`
   returns a spawned system tool's output under a deadline, killing its
   group on expiry, and `fakes::wait_until` waits for a predicate to hold
-  under a deadline, polling it on a thread
+  under a deadline, polling it on a thread, and `fakes::Hold` owns a
+  parked FIFO holder: the release end opened with `Hold::on` and written
+  through `release`, and the watchdog that reaps the holder when the test
+  dies, stood down with `stand_down` once
+  `a_run_ending_after_the_extension_is_dropped_is_not_logged` sees the run end
 - a fake clock, whose time moves only when the test advances it to a named
   park through `advance_when_parked`, naming the expected park and the advance
   separately; `advance_marked` marks each thread's latest park, so
@@ -95,6 +101,8 @@ is a real child session process, because it is Fiber. The fakes are:
   ordered running-job list: the list is seeded, replaced or updated under
   one lock, and every other `Jobs` method is inert, opening, stopping or
   delivering nothing
+
+A fake keeps the order of what it replaces. Where the real thing makes one effect visible before another (a job listed before its first output, a release before the next hold, a reply after the request it answers), the fake does too, and a test in the fake's own crate pins that order. A test synchronises on the fake's order only where the fake's test pins it.
 
 The fakes live in one crate, `fakes`, which depends only on `contract` and `support` and
 is a test-only dependency of the crates that use it (`docs/architecture.md`,
@@ -195,6 +203,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `config` | `resolve` | Prints the merged configuration for a Fiber home and project. |
 | `provider` | `decode` | Runs a recorded stream through one protocol's decoder and prints what it produced. |
 | `provider` | `record` | Captures a live response as a recorded stream, with live keys, response bytes only. |
+| `provider` | `probe` | Sends one model the requests that show whether a deferred tool loads through `tool_search` and the cache holds across the load, with live keys, and prints pass or fail for each check (`docs/tools.md`, "Deferral is a property of the model"). |
 | `fakes` | `provider-server` | Serves a scripted or recorded stream on a free local port, prints that address, then prints each request it receives. |
 | `tools` | `call` | Runs one tool call with the given arguments and prints its result. |
 | `tui` | `draw` | Draws an events file at a given width and prints the screen as text. |

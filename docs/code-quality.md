@@ -127,7 +127,7 @@ the code and the list disagree.
 | `main` | `crates/main/src/alloc_stats.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
 | `log` | `crates/log/src/alloc_stats_tests.rs` | the test-only counting mirror implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System`; the test calls it explicitly, never installing it |
 | `fakes` | `crates/fakes/examples/process-extension.rs` | the SIGTERM marker handler registers with `signal-hook` and writes its file with async-signal-safe `libc` calls |
-| `main` | `crates/main/tests/support/mod.rs` | the test-only hub-log wait parks in `kqueue` for a hub.log write on macOS; the vnode fd is the watch's own open file and the event buffer is stack-owned |
+| `main` | `crates/main/tests/support/mod.rs` | the test-only hub-log wait registers its `kqueue` vnode watch and parks for a hub.log write on macOS; the vnode fd is the watch's own open file and each event buffer is stack-owned |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
 
@@ -143,7 +143,7 @@ whose fields can contradict each other: `done: bool` beside
 `enum Status { Open, Done { at: Timestamp } }` cannot. A runtime check for a
 combination "that cannot happen" marks a type that is too loose.
 
-A closed set of named cases that crosses a crate boundary, such as a notice code, a view, a version format or a prompt's source, is an enum, never a `String` or `&str`, so the wildcard lints (`docs/code-quality/lints.md`) make every consumer handle a new case. Text stays only at the process boundary, and a JSON name is parsed into the enum where it enters. A reader that must ignore what it does not know, as an event or notice consumer does (`docs/events.md`, "Versioning"), parses an unknown name into its own case, keeping the text, never one of the known cases. A command's arguments refuse an unknown name as `invalid_arguments`.
+A closed set of named cases that crosses a crate boundary, such as a notice code, a view, a version format or a prompt's source, is an enum, never a `String` or `&str`, so the wildcard lints (`docs/code-quality/lints.md`) make every consumer handle a new case. Text stays only at the process boundary, and a JSON name is parsed into the enum where it enters. A reader that must ignore what it does not know, as an event or notice consumer does (`docs/events.md`, "Versioning"), parses an unknown name into its own case, keeping the text, never one of the known cases. A command's arguments refuse an unknown name as `invalid_arguments`. The census ratchet (`cargo xtask census-ratchet`, in `scripts/check`) counts these string-typed sites per production file under `crates/` and fails when any file's count rises, while lowering a count is always free; `cargo xtask census-ratchet --print` prints the current per-file counts.
 
 ## Visibility
 
@@ -259,6 +259,7 @@ Only what no tool can:
   streams"); every pointer input follows a readiness signal, not a grid
   match (`docs/testing/screens.md`); every fake's signal is sent after the
   state it announces
+- A citation in code names the doc file and a quoted heading, never a line number.
 - the Spec review of a build pull request checks every doc line its ticket
   lists has its test (`docs/workflow.md`, "Review")
 

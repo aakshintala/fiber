@@ -22,16 +22,7 @@ use extension_harness::*;
 use fakes::Client;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, Setup, function_call, spawn_watched};
-
-fn subscribe(deadline: Deadline, client: &Client) {
-    client
-        .send_by(
-            r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
-            &|| deadline.left(),
-        )
-        .unwrap();
-}
+use support::{Deadline, KillGroup, Setup, function_call, spawn_watched, subscribe_client};
 
 fn commanded(deadline: Deadline, client: &Client, id: &str, name: &str) {
     client
@@ -68,7 +59,7 @@ fn a_command_raising_a_form_resolves_through_reply() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(setup.deadline, &client);
+    subscribe_client(setup.deadline, &client);
     commanded(setup.deadline, &client, "c_1", "askform");
     let asked = requested(setup.deadline, &client);
     assert_eq!(asked["payload"]["extension"], "fiber.test/worker");
@@ -128,7 +119,7 @@ fn an_unfit_reply_is_rejected_then_a_fitting_one_resolves_and_a_second_is_stale(
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(setup.deadline, &client);
+    subscribe_client(setup.deadline, &client);
     commanded(setup.deadline, &client, "c_1", "askform");
     let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
@@ -285,7 +276,7 @@ fn close_while_an_ask_is_pending_declines_it_by_fiber() {
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(setup.deadline, &client);
+    subscribe_client(setup.deadline, &client);
     commanded(setup.deadline, &client, "c_1", "slowask");
     let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();
@@ -345,7 +336,7 @@ fn a_resumed_interactive_session_answers_a_host_ask() {
     let mut running = setup.start_session(&id, &["--resume"]);
     let client = running.connect_client(&setup.socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(setup.deadline, &client);
+    subscribe_client(setup.deadline, &client);
     commanded(setup.deadline, &client, "c_1", "slowask");
     let asked = requested(setup.deadline, &client);
     let request_id = asked["payload"]["request_id"].as_str().unwrap().to_owned();

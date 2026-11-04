@@ -16,7 +16,9 @@ use similar::{ChangeTag, TextDiff};
 
 use crate::error::{FileError, WriteError};
 use crate::files::land::{land, shape_replacement};
-use crate::files::{Shared, declare, effects_error, hash_bytes, kind_of, path_text, resolve};
+use crate::files::{
+    Shared, attach_seen, declare, effects_error, hash_bytes, kind_of, path_text, resolve,
+};
 use crate::tool_util::errored;
 
 /// The call's arguments, checked against the schema before the call runs.
@@ -232,6 +234,7 @@ fn stored(path: &Path, created: bool, old: Option<&[u8]>, written: &[u8]) -> Out
     };
     Output {
         content: vec![ContentPart::Text { text }],
+        details: attach_seen(None, path, hash_bytes(written)),
         changes: Some(vec![FileChange {
             path: path_text(path),
             added,

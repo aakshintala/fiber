@@ -234,6 +234,50 @@ pub fn render_reviewed(
     }
 }
 
+impl Reviewed {
+    /// Extracts every person's displayed reply/message pair in occurrence
+    /// order. A reply belongs to the following consecutive person run with
+    /// the same sequence, matching `kept_flags`; rendered inputs preserve
+    /// the reviewer's cap and labels.
+    pub(crate) fn person_pairs(reviewed: &[Self]) -> Vec<(KeptMessage, String)> {
+        reviewed
+            .iter()
+            .enumerate()
+            .filter_map(|(at, person)| {
+                let key = match &person.shown {
+                    Shown::Person(key) => *key,
+                    Shown::Call(_) | Shown::Reply(_) => return None,
+                };
+                let Input::User { text, .. } = &person.input else {
+                    return None;
+                };
+                let reply = reviewed
+                    .iter()
+                    .take(at)
+                    .rev()
+                    .find_map(|prior| match &prior.shown {
+                        Shown::Person(previous) if previous.seq == key.seq => None,
+                        Shown::Reply(_) => match &prior.input {
+                            Input::User { text, .. } => Some(Some(text.as_str())),
+                            Input::Assistant { .. }
+                            | Input::Reasoning { .. }
+                            | Input::ToolCall { .. }
+                            | Input::ToolResult { .. }
+                            | Input::ToolSearchResult { .. } => Some(None),
+                        },
+                        Shown::Call(_) | Shown::Person(_) => Some(None),
+                    })
+                    .flatten();
+                let text = match reply {
+                    Some(reply) => format!("{reply}\n{text}"),
+                    None => text.clone(),
+                };
+                Some((key, text))
+            })
+            .collect()
+    }
+}
+
 /// How many characters of a reply the reviewer reads: a longer reply
 /// keeps its head, then a line saying how many characters were left out.
 /// A proposal usually sits at the end of a reply, so a cut reply can lose

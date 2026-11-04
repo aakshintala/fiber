@@ -1227,33 +1227,13 @@ impl Running {
     }
 }
 
-/// Subscribes `client` full, for the session's later lines. A late
-/// subscription replays the log first, so lines arrive until the accept.
-#[track_caller]
-fn subscribe(client: &support::Socket) {
-    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    loop {
-        let line = support::recv_reply(client, "the subscribe acknowledgement");
-        if line["kind"] == "command_accepted" {
-            assert_eq!(line["payload"]["command_id"], "c_sub", "{line}");
-            return;
-        }
-    }
-}
-
 /// Sends `close` with `now` and reads its accept, past whatever the
 /// subscription is still replaying.
 #[track_caller]
 fn close_now(client: &support::Socket) {
     client.send(r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#);
-    loop {
-        let line = support::recv_reply(client, "the close accept");
-        if line["kind"] == "command_accepted"
-            && line["payload"].get("command_id") == Some(&json!("c_close_now"))
-        {
-            return;
-        }
-    }
+    let line = support::recv_answer(client, "c_close_now", "the close accept");
+    assert_eq!(line["kind"], "command_accepted", "{line}");
 }
 
 /// The parent's log lines once `fiber ask` exits.
@@ -2159,7 +2139,7 @@ fn a_spawned_child_records_its_inherited_roots_in_its_own_log() {
         line["kind"] == "session_started"
     });
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     for (id, path) in [("c_add_b", &parent_b), ("c_add_a", &parent_a)] {
         client.send(&format!(
             "{{\"id\":{id:?},\"command\":\"add_directory\",\"args\":{{\"path\":{}}}}}",
@@ -2501,7 +2481,7 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
     // socket, so a shutdown that beats a later subscription cannot hide
     // the exit line.
     let child_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&child_id));
-    subscribe(&child_socket);
+    let sub = support::subscribe_direct(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader.
     fakes::kill_group(running.group, "KILL").unwrap();
@@ -2509,7 +2489,7 @@ fn killing_the_parent_shuts_the_stalled_child_down_with_129() {
     assert_eq!(status.code(), None);
     // End of file on the lifeline is a hangup: the child shuts down with
     // 129 within the bound.
-    let lines = support::until(&child_socket, "the child's exit", |line| {
+    let lines = support::until_after(&child_socket, &sub, "the child's exit", |line| {
         line["kind"] == "fiber_exited"
     });
     let exited = lines.last().unwrap();
@@ -2551,7 +2531,7 @@ fn a_close_with_now_stops_the_delegate_and_exits_0() {
         "the child stalled its model call"
     );
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -3099,7 +3079,7 @@ fn a_crashed_delegate_ends_failed_while_its_sibling_completes() {
     // The registry still answers commands: steer the parent, which spawns
     // a third delegate that completes on its released provider.
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     client.send(
         r#"{"id":"c_again","command":"steer","args":{"content":[{"type":"text","text":"scan again"}]}}"#,
     );
@@ -3704,7 +3684,7 @@ fn a_turn_that_hits_the_budget_stops_its_running_delegate() {
     assert_eq!(exited["kind"], "fiber_exited");
     assert_eq!(exited["payload"]["exit_code"], 143);
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -4031,7 +4011,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
         .to_owned();
     let mut child_socket =
         support::Socket::connect(setup.deadline, &setup.session_socket(&live_child));
-    subscribe(&child_socket);
+    let child_sub = support::subscribe_direct(&child_socket);
     child.release_one();
     assert!(
         child.await_requests(2, setup.deadline),
@@ -4089,15 +4069,31 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     );
     let grandchild_socket =
         support::Socket::connect(setup.deadline, &setup.session_socket(&live_grandchild));
-    subscribe(&grandchild_socket);
+    let grandchild_sub = support::subscribe_direct(&grandchild_socket);
     // Drain while the tree stops: otherwise the grandchild's socket writer
     // can spend its bounded close grace behind this unread full stream.
     let (grandchild_exit_tx, grandchild_exit_rx) = mpsc::channel();
     thread::spawn(move || {
-        let lines = support::until(&grandchild_socket, "the stopped grandchild exits", |line| {
-            line["kind"] == "fiber_exited"
-        });
+        let lines = support::until_after(
+            &grandchild_socket,
+            &grandchild_sub,
+            "the stopped grandchild exits",
+            |line| line["kind"] == "fiber_exited",
+        );
         grandchild_exit_tx.send(lines).unwrap();
+    });
+    // Pump the child's socket through the stop, as with the grandchild
+    // above: a client that stops reading is cut (docs/invocation.md,
+    // "What the hub speaks").
+    let (child_exit_tx, child_exit_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let lines = support::until_after(
+            &child_socket,
+            &child_sub,
+            "the stopped child exits",
+            |line| line["kind"] == "fiber_exited",
+        );
+        child_exit_tx.send(lines).unwrap();
     });
     child.release();
     // The crossing copy trips the budget while the root waits: the wait
@@ -4123,17 +4119,10 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     assert_eq!(copies[0]["payload"]["cost"], 100.0);
     let root_started = one(&before, "delegate_started");
     let child_id = root_started["delegate_session_id"].as_str().unwrap();
-    // A close here panics with the dump: the child's own log directory,
-    // the same one read below, plus the root session's stderr snapshot.
-    child_socket.set_diag(support::Diag::new(
-        Arc::clone(&running.stderr_snapshot),
-        sessions_in(&setup.home(), &setup.workspace()).join(child_id),
-    ));
-    observed_child.extend(support::until(
-        &child_socket,
-        "the stopped child exits",
-        |line| line["kind"] == "fiber_exited",
-    ));
+    let stopped_child = setup
+        .deadline
+        .recv_or_fail(&child_exit_rx, "the stopped child exits");
+    observed_child.extend(stopped_child);
     let observed_grandchild = setup
         .deadline
         .recv_or_fail(&grandchild_exit_rx, "the stopped grandchild exits");
@@ -4222,7 +4211,7 @@ fn a_delegate_spend_tripping_the_budget_stops_the_whole_tree() {
     // A late spawn past the trip never runs: the next turn still fails on
     // the budget before any model call is sent, so no delegate starts.
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     client.send(r#"{"id":"c_late","command":"steer","args":{"content":[{"type":"text","text":"spawn another"}]}}"#);
     let mut late = running.wait_line("the steer starts the late turn", |line| {
         line["kind"] == "turn_started"
@@ -4380,7 +4369,7 @@ fn a_delegate_whose_call_fails_without_a_claimed_trip_keeps_its_own_exit_code() 
         "the failure names its code: {child_exited:?}"
     );
     let client = running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -5202,6 +5191,8 @@ struct Opened {
     server_a: ProviderServer,
     server_b: ProviderServer,
     lines: Vec<Value>,
+    parent_sub: support::Subscribed,
+    delegate_sub: support::Subscribed,
 }
 
 /// Whether `line` is a session line for `id`.
@@ -5299,6 +5290,7 @@ fn open_delegate(
         "command_accepted",
         "{batch:?}"
     );
+    let parent_sub = support::Subscribed::from_ack(Some(&parent), batch.last().unwrap().clone());
     lines.append(&mut batch);
     let mut batch = support::until(&main, "the parent's delegate_started", |line| {
         line["kind"] == "delegate_started" && is_session(line, &parent)
@@ -5341,6 +5333,23 @@ fn open_delegate(
     // The delegate's subscribe is acknowledged once the session answers;
     // later batches carry it, and the test asserts it with the steer.
     lines.append(&mut batch);
+    // Take the acknowledgement for the bound below, keeping every line
+    // for the caller: the ack may sit in the lines read so far, or still
+    // be on the wire.
+    let ack = match lines.iter().find(|line| is_answer(line, "c_dsub")).cloned() {
+        Some(ack) => ack,
+        None => {
+            let mut batch =
+                support::until(&main, "the delegate subscribe acknowledgement", |line| {
+                    is_answer(line, "c_dsub")
+                });
+            let ack = batch.last().unwrap().clone();
+            lines.append(&mut batch);
+            ack
+        }
+    };
+    assert_eq!(ack["kind"], "command_accepted", "{ack:?}");
+    let delegate_sub = support::Subscribed::from_ack(Some(&delegate), ack);
     Opened {
         main,
         parent,
@@ -5349,6 +5358,8 @@ fn open_delegate(
         server_a,
         server_b,
         lines,
+        parent_sub,
+        delegate_sub,
     }
 }
 
@@ -5366,7 +5377,7 @@ struct FeedWatch {
 fn watch_feed(setup: &support::Setup, hub: &Arc<Mutex<Option<support::HubProc>>>) -> FeedWatch {
     let (client, _) = support::connect_hub(setup, hub);
     client.send(r#"{"id":"c_feed","command":"feed"}"#);
-    let ack = support::recv_reply(&client, "the feed acknowledgement");
+    let ack = support::recv_answer(&client, "c_feed", "the feed acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     assert_eq!(ack["payload"]["command_id"], "c_feed");
     let (each_tx, each) = mpsc::channel();
@@ -5438,6 +5449,8 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
         server_a,
         server_b,
         mut lines,
+        parent_sub,
+        delegate_sub,
     } = open_delegate(&setup, &hub, server_a, server_b);
     // The steer goes to the delegate on its own connection, then a `tools`
     // probe on the same connection: the session's reader hands each line
@@ -5477,9 +5490,12 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     );
     assert!(bodies[1].contains(MARK), "the steer joined the next call");
     server_b.release();
-    let mut batch = support::until(&main, "the delegate's fiber_exited", |line| {
-        line["kind"] == "fiber_exited" && is_session(line, &delegate)
-    });
+    let mut batch = support::until_after(
+        &main,
+        &delegate_sub,
+        "the delegate's fiber_exited",
+        |line| line["kind"] == "fiber_exited" && is_session(line, &delegate),
+    );
     lines.append(&mut batch);
     let delegate_lines = for_session(&lines, &delegate);
     assert_eq!(answered(&lines, "c_steer")["kind"], "command_accepted");
@@ -5686,7 +5702,7 @@ fn a_client_opens_a_running_delegate_through_the_hub_and_steers_it() {
     main.send(&format!(
         "{{\"id\":\"c_pclose\",\"session_id\":\"{parent}\",\"command\":\"close\",\"args\":{{\"now\":false}}}}"
     ));
-    let mut batch = support::until(&main, "the parent's fiber_exited", |line| {
+    let mut batch = support::until_after(&main, &parent_sub, "the parent's fiber_exited", |line| {
         line["kind"] == "fiber_exited" && is_session(line, &parent)
     });
     lines.append(&mut batch);
@@ -5734,6 +5750,7 @@ fn a_fresh_hub_lists_the_parent_and_never_the_running_delegate() {
         server_a: _server_a,
         server_b,
         lines,
+        ..
     } = opened;
     drop(lines);
     // The hub's stop ends no session: the parent and the delegate keep
@@ -7426,15 +7443,16 @@ fn a_finished_delegate_replays_its_transcript_to_a_full_subscribe() {
     // session replays its transcript from `session_started`.
     let hub_slot = Arc::new(Mutex::new(None));
     let (hub, _) = support::connect_hub(&setup, &hub_slot);
-    hub.send(&format!(
-        "{{\"id\":\"c_dsub\",\"session_id\":\"{delegate}\",\"command\":\"subscribe\",\"args\":{{\"level\":\"full\"}}}}"
-    ));
-    let ack = support::recv_answer(&hub, "c_dsub", "the subscribe acknowledgement");
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    let fold = support::until(&hub, "the finished delegate's replayed fold", |line| {
-        line.get("session_id").and_then(Value::as_str) == Some(delegate.as_str())
-            && line["kind"] == "fiber_exited"
-    });
+    let sub = support::subscribe_as(&hub, "c_dsub", &delegate);
+    let fold = support::until_replayed(
+        &hub,
+        &sub,
+        "the finished delegate's replayed fold",
+        |line| {
+            line.get("session_id").and_then(Value::as_str) == Some(delegate.as_str())
+                && line["kind"] == "fiber_exited"
+        },
+    );
     let started_line = fold
         .iter()
         .find(|line| {
@@ -7541,7 +7559,7 @@ fn fork_parent() -> ForkParent {
         line["kind"] == "turn_completed"
     });
     let client = parent_running.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);
@@ -7862,22 +7880,21 @@ fn row_focused(grid: &Grid, needle: &str) -> bool {
 /// panel's first stop, and Down walks the panel's stops top to bottom.
 fn focus_row(run: &mut Run, needle: &str) {
     run.write(b"\t");
-    run.wait_screen("the panel takes focus", |grid| {
+    let mut grid = run.wait_screen("the panel takes focus", |grid| {
         !focused_rows(grid).is_empty()
     });
     for _ in 0..60 {
-        let grid = run.screen();
         if row_focused(&grid, needle) {
             return;
         }
         let before = focused_rows(&grid);
         // Down steps to the next stop, holding at the panel's end.
         run.write(b"\x1b[B");
-        run.wait_screen("focus steps down", |grid| {
+        grid = run.wait_screen("focus steps down", |grid| {
             row_focused(grid, needle) || focused_rows(grid) != before
         });
     }
-    panic!("{needle:?} never took focus in\n{}", run.screen().contents);
+    panic!("{needle:?} never took focus in\n{}", grid.contents);
 }
 
 /// Quits the terminal: two interrupts and Enter, then the exit.
@@ -8161,8 +8178,8 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // four still run.
     drop(release_early);
     // The reopened view lists the running scan first: running delegates
-    // precede finished ones in start order (docs/tui.md, "Every
-    // delegate"). The old wait stopped here and pressed Enter, opening
+    // precede finished ones in start order (docs/tui.md,
+    // "Swapped views"). The old wait stopped here and pressed Enter, opening
     // the running scan's live view instead of a replay (#3490). The
     // small viewport shows three delegates, so this wait pins only a
     // running late row with no early row still running, plus a finished
@@ -9078,6 +9095,7 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
         "command_accepted",
         "{lines:?}"
     );
+    let parent_sub = support::Subscribed::from_ack(Some(&parent_id), lines.last().unwrap().clone());
     let mut batch = support::until(&main, "the parent's delegate_started", |line| {
         line["kind"] == "delegate_started" && is_session(line, &parent_id)
     });
@@ -9374,7 +9392,7 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     main.send(&format!(
         "{{\"id\":\"c_pclose\",\"session_id\":\"{parent_id}\",\"command\":\"close\",\"args\":{{\"now\":false}}}}"
     ));
-    let mut batch = support::until(&main, "the parent's fiber_exited", |line| {
+    let mut batch = support::until_after(&main, &parent_sub, "the parent's fiber_exited", |line| {
         line["kind"] == "fiber_exited" && is_session(line, &parent_id)
     });
     lines.append(&mut batch);
@@ -10182,7 +10200,7 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     // socket, so a shutdown that beats a later subscription cannot hide
     // the exit line.
     let child_socket = support::Socket::connect(bound, &setup.session_socket(&child_id));
-    subscribe(&child_socket);
+    let sub = support::subscribe_direct(&child_socket);
     // The parent is gone however it died: SIGKILL to its group, which the
     // child left when it became its own leader. The remaining deadline
     // from here is the kill-to-backfilled window the resume asserts on.
@@ -10192,7 +10210,7 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     assert_eq!(status.code(), None);
     // End of file on the lifeline is a hangup: the child shuts down with
     // 129 within the bound, releasing its session lock.
-    let lines = support::until(&child_socket, "the child's exit", |line| {
+    let lines = support::until_after(&child_socket, &sub, "the child's exit", |line| {
         line["kind"] == "fiber_exited"
     });
     let exited = lines.last().unwrap();
@@ -10238,7 +10256,7 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     assert_eq!(copies[1]["payload"]["generation_id"], "c_2");
     assert_eq!(copies[2]["payload"]["generation_id"], "c_3");
     let client = resumed.connect(&setup);
-    subscribe(&client);
+    support::subscribe_direct(&client);
     close_now(&client);
     let _tail = support::until_close(&client);
     drop(client);

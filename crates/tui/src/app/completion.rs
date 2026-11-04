@@ -188,8 +188,8 @@ impl App {
             .iter()
             .map(|name| (*name).to_owned())
             .collect();
-        if let (Some(seam), Some(workspace)) = (self.configure_seam(), self.workspace()) {
-            names.extend(seam.themes(&workspace));
+        if let Some(workspace) = self.workspace() {
+            names.extend(self.configure_seam().themes(&workspace));
         }
         let query = self.theme_query().to_lowercase();
         names

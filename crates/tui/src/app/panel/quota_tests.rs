@@ -148,7 +148,7 @@ fn a_turn_end_shares_the_branch_edge_and_is_not_held_during_a_flight() {
     let mut app = attached();
     let lines = commands(app.on_line(live(SESSION, json!({"state": "idle"}))));
     // The introducing status queues its project's scoped ask beside the
-    // turn's own lines (`docs/tui.md:268`): assert only presence, not the
+    // turn's own lines (`docs/tui.md`, "The session list"): assert only presence, not the
     // outgoing order or count.
     assert!(lines.iter().any(|v| v["command"] == "shell"));
     assert!(lines.iter().any(|v| v["command"] == "quota"));
@@ -426,4 +426,92 @@ fn a_foreign_quota_answer_updates_rows_without_clearing_the_flight() {
     assert!(app.quota_focus().is_none());
     answer(&mut app, &id);
     assert!(app.quota_focus().is_some());
+}
+
+// Part of #3696: the quota answers route by tag.
+
+#[test]
+fn quota_query_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let id = first(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Quota));
+    answer(&mut app, &id);
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.panel_state.quota.fetching());
+}
+
+#[test]
+fn quota_refusal_on_either_link_settles_its_tag() {
+    use crate::app::Waiting;
+    for hub in [false, true] {
+        let mut app = attached();
+        let id = first(&mut app);
+        assert_eq!(app.outbox.waiting(&id), Some(Waiting::Quota));
+        let payload =
+            json!({"command_id": id, "code": "unknown_command", "message": "old session"});
+        let line = if hub {
+            Line::Hub(contract::HubLine {
+                kind: "command_rejected".to_owned(),
+                ts: 0,
+                schema_version: contract::SCHEMA_VERSION,
+                payload: payload.as_object().unwrap().clone(),
+            })
+        } else {
+            session_line("command_rejected", payload)
+        };
+        assert!(queries(app.on_line(line)).is_empty());
+        assert_eq!(app.outbox.waiting(&id), None, "hub={hub}");
+        assert!(
+            matches!(app.panel_state.quota.ask, super::Ask::Refused),
+            "hub={hub}"
+        );
+    }
+}
+
+#[test]
+fn a_second_quota_answer_for_one_id_falls_through_to_the_generic_path() {
+    let mut app = attached();
+    let id = first(&mut app);
+    answer(&mut app, &id);
+    assert!(!app.panel_state.quota.fetching());
+    // The tag is gone, so the duplicate takes the untagged path: the
+    // card still folds every quota answer, and no flight reopens.
+    let quota = json!([{"provider": "codex", "credential": "work", "credit": {"remaining": 4.2}}]);
+    app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": {"quota": quota, "notice_at": 70.0}}),
+    ));
+    assert_eq!(
+        serde_json::to_value(&app.panel_state.quota.rows).unwrap(),
+        quota
+    );
+    assert!(!app.panel_state.quota.fetching());
+}
+
+#[test]
+fn attach_forgets_the_quota_tag_and_the_next_line_reasks() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let id = first(&mut app);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Quota));
+    app.attach(contract::SessionId(SESSION.to_owned()));
+    assert_eq!(app.outbox.waiting(&id), None);
+    // The old flight is `Due`: the next line re-asks under a new tag.
+    let next = first(&mut app);
+    assert_ne!(next, id);
+    assert_eq!(app.outbox.waiting(&next), Some(Waiting::Quota));
+}
+
+#[test]
+fn quota_view_fetch_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let lines = sent(app.quota_view());
+    assert_eq!(lines.len(), 1);
+    let id = lines[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Quota));
+    answer(&mut app, &id);
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(!app.panel_state.quota.fetching());
 }

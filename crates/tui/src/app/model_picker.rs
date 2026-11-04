@@ -250,17 +250,7 @@ impl App {
                 .insert(id.clone(), (session.clone(), choice.reference.clone()));
         }
         if !writes.is_empty() {
-            // With no seam nothing can ever be written: the switch still
-            // goes out, for this session only.
-            match self.configure_seam() {
-                None => self.push_notice(
-                    "io_failed",
-                    "Saving is not available; the switch is for this session only.".to_owned(),
-                ),
-                Some(_) => {
-                    self.model_picker.awaiting.insert(id.clone(), writes);
-                }
-            }
+            self.model_picker.awaiting.insert(id.clone(), writes);
         }
         self.model_picker.close();
         super::Effect::Send(vec![line])
@@ -275,31 +265,22 @@ impl App {
             self.model_picker.close();
             return super::Effect::None;
         }
-        match self.configure_seam() {
-            None if !saves(&choice).is_empty() => self.push_notice(
-                "io_failed",
-                "Saving is not available; the switch is for this session only.".to_owned(),
-            ),
-            None => {}
-            Some(_) => {
-                for (key, text) in saves(&choice) {
-                    match self.write_global(&key, &text) {
-                        Some(Ok(_)) => {
-                            // A saved model supersedes the session-only
-                            // choice the next `start` would carry.
-                            if key == "model" {
-                                self.model_picker.start_model = None;
-                            }
-                            self.picker_saved(&key, &choice)
-                        }
-                        Some(Err(error)) => {
-                            self.push_notice("io_failed", format!("Saving {key} failed: {error}"))
-                        }
-                        // No workspace to address on a local terminal:
-                        // the choice rides the next `start` unsaved.
-                        None => {}
+        for (key, text) in saves(&choice) {
+            match self.write_global(&key, &text) {
+                Some(Ok(_)) => {
+                    // A saved model supersedes the session-only
+                    // choice the next `start` would carry.
+                    if key == "model" {
+                        self.model_picker.start_model = None;
                     }
+                    self.picker_saved(&key, &choice)
                 }
+                Some(Err(error)) => {
+                    self.push_notice("io_failed", format!("Saving {key} failed: {error}"))
+                }
+                // No workspace to address on a local terminal:
+                // the choice rides the next `start` unsaved.
+                None => {}
             }
         }
         self.model_picker.close();
@@ -736,9 +717,8 @@ impl App {
         // A string list always serialises; the fallback keeps the save
         // total.
         let text = serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_owned());
-        // `write_global` is `None` with no seam, so one match covers
-        // both: with no seam, or no workspace to address on a local
-        // terminal, nothing changed.
+        // `write_global` is `None` with no workspace to address on a
+        // local terminal: nothing changed.
         match self.write_global("scoped_models", &text) {
             Some(Ok(_)) => {
                 self.model_picker.scoped = list;
@@ -812,20 +792,13 @@ impl App {
     /// Starts installing `provider`: choosing its row is the approval, so
     /// nothing asks. One install runs at a time, so a choice while one
     /// runs does nothing. The row fails at once, with no job, when there
-    /// is no seam, no hub link on a remote terminal (a dispatched call
-    /// would wait for the link with no end), or no workspace to install
-    /// into.
+    /// is no hub link on a remote terminal (a dispatched call would wait
+    /// for the link with no end), or no workspace to install into.
     fn start_install(&mut self, provider: String) -> super::Effect {
         if self.model_picker.installs.busy() {
             return super::Effect::None;
         }
-        let Some(seam) = self.configure_seam() else {
-            self.model_picker.installs.fail(
-                &provider,
-                "Installing is not available in this terminal.".to_owned(),
-            );
-            return super::Effect::None;
-        };
+        let seam = self.configure_seam();
         let remote = self.remote();
         if remote.is_some() && !self.outbox.is_up() {
             self.model_picker

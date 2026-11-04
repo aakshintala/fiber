@@ -1150,6 +1150,9 @@ fn a_device_login_with_as_to_an_already_stored_label_contacts_nothing() {
     assert!(file.is_file());
 }
 
+/// The login keeps the order the device flow keeps: stderr the reader
+/// has not yet sent stays for the drain (`docs/testing/fakes.md`,
+/// "Fakes").
 #[test]
 fn a_device_login_keeps_stderr_the_reader_has_not_yet_sent() {
     let setup = Setup::new_with_fl_root();
@@ -1735,6 +1738,9 @@ fn list_models(setup: &Setup) -> Output {
     setup.run_piped(&mut command, &["models"], "")
 }
 
+/// The screen keeps the order the terminal keeps: text the first wait
+/// saw past its mark stays for the next wait (`docs/testing/fakes.md`,
+/// "Fakes").
 #[test]
 fn screen_wait_for_keeps_trailing_text_for_the_next_wait() {
     // One read holds both prompts. The second wait must find its text

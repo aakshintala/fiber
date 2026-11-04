@@ -568,7 +568,7 @@ pub(crate) fn run_new(
                 }
             }
             .map_err(|error| failed(error.code(), error))?;
-            parts_with_session(
+            let mut composed = parts_with_session(
                 Vec::new(),
                 folded.model.as_deref(),
                 folded.credential.as_deref(),
@@ -592,7 +592,11 @@ pub(crate) fn run_new(
                     event_cursor: 0,
                 },
                 fiber_path.clone(),
-            )?
+            )?;
+            // The continuation keeps what the point's history saw, as a
+            // resume does (`docs/tools.md`, "Stale files").
+            composed.seen_files = folded.seen_files().clone();
+            composed
         }
         None => {
             let overrides_for_fix = overrides.clone();
@@ -711,6 +715,7 @@ pub(crate) fn assemble_session(
                 sandbox,
                 protection,
                 repository,
+                seen_files,
                 ..
             } = parts;
             // The log is already open: install the writer before any append the
@@ -800,6 +805,7 @@ pub(crate) fn assemble_session(
                 shell_read_only.clone(),
                 sandbox.clone(),
                 Some(protection),
+                seen_files,
             ) {
                 Ok(tools) => tools,
                 Err(failure) => {
@@ -828,6 +834,8 @@ pub(crate) fn assemble_session(
             // file and id, so the door's socket timer and every later line share
             // them, while MCP and permission lines keep the pre-attach file.
             diag.attach(&id);
+            let keeper = Arc::clone(&session_servers.keeper);
+            let _keeper_completions = keeper.observe(&log);
             let session = match Session::resume_with_timing(
                 &home,
                 dir.path(),
@@ -946,7 +954,15 @@ pub(crate) fn assemble_session(
                 crate::shutdown::start(signals, &cancel, &session, jobs.clone(), reads)
             {
                 servers.stop();
-                close(session, log, &home, dir.path(), &workspace, &*clock);
+                close(
+                    session,
+                    log,
+                    &home,
+                    dir.path(),
+                    &workspace,
+                    &*clock,
+                    &keeper,
+                );
                 return Ok(code);
             }
             match signals.commit(|| {
@@ -962,12 +978,28 @@ pub(crate) fn assemble_session(
             }) {
                 Err(code) => {
                     servers.stop();
-                    close(session, log, &home, dir.path(), &workspace, &*clock);
+                    close(
+                        session,
+                        log,
+                        &home,
+                        dir.path(),
+                        &workspace,
+                        &*clock,
+                        &keeper,
+                    );
                     return Ok(code);
                 }
                 Ok(Err(e)) => {
                     servers.stop();
-                    close(session, log, &home, dir.path(), &workspace, &*clock);
+                    close(
+                        session,
+                        log,
+                        &home,
+                        dir.path(),
+                        &workspace,
+                        &*clock,
+                        &keeper,
+                    );
                     return Err(failed(e.code(), e));
                 }
                 Ok(Ok(())) => {}
@@ -1063,7 +1095,15 @@ pub(crate) fn assemble_session(
                 },
             );
             servers.stop();
-            close(session, log, &home, dir.path(), &workspace, &*clock);
+            close(
+                session,
+                log,
+                &home,
+                dir.path(),
+                &workspace,
+                &*clock,
+                &keeper,
+            );
             Ok(code)
         }
         fresh @ Start::New { .. }
@@ -1175,6 +1215,7 @@ pub(crate) fn assemble_session(
                 switchable,
                 resolve,
                 web_search,
+                seen_files,
             } = parts;
             let (job_emit, jobs) = late_emit::registry(&dir, &clock);
             shutdown::arm(signals, &reads);
@@ -1257,6 +1298,7 @@ pub(crate) fn assemble_session(
                 shell_read_only.clone(),
                 sandbox.clone(),
                 Some(protection),
+                seen_files,
             ) {
                 Ok(tools) => tools,
                 Err(failure) => {
@@ -1301,6 +1343,8 @@ pub(crate) fn assemble_session(
             } else {
                 Box::new(io::stdout())
             };
+            let keeper = Arc::clone(&session_servers.keeper);
+            let _keeper_completions = keeper.observe(&log);
             let session = match Session::open_with_timing(
                 &home,
                 dir.path(),
@@ -1417,7 +1461,15 @@ pub(crate) fn assemble_session(
             let reads = switching.reads();
             if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone(), reads) {
                 servers.stop();
-                close(session, log, &home, dir.path(), &workspace, &*clock);
+                close(
+                    session,
+                    log,
+                    &home,
+                    dir.path(),
+                    &workspace,
+                    &*clock,
+                    &keeper,
+                );
                 return Ok(code);
             }
             let inbox_wake = session.inbox_wake();
@@ -1611,7 +1663,15 @@ pub(crate) fn assemble_session(
                 }
             }
             servers.stop();
-            close(session, log, &home, dir.path(), &workspace, &*clock);
+            close(
+                session,
+                log,
+                &home,
+                dir.path(),
+                &workspace,
+                &*clock,
+                &keeper,
+            );
             Ok(code)
         }
     }
@@ -1684,7 +1744,9 @@ pub(crate) fn close(
     dir: &Path,
     workspace: &Path,
     clock: &dyn contract::clock::Clock,
+    keeper: &crate::keeper::Host,
 ) {
+    keeper.send_shutdown();
     let status = log
         .latest("session_status")
         .and_then(|line| serde_json::from_value(line.payload.into()).ok());

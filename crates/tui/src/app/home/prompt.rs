@@ -302,7 +302,8 @@ impl App {
         let id = mint();
         lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());
         if let Some(home) = self.home.as_mut() {
-            home.questions.asks.insert(id, Ask::Stop(session));
+            home.questions.asks.insert(id.clone(), Ask::Stop(session));
+            self.outbox.wait(&id, super::super::Waiting::Stop);
         }
         Effect::Send(lines)
     }
@@ -442,7 +443,8 @@ impl App {
         }
         let (command, line) = delete_line(&id, expect.as_deref());
         if let Some(home) = self.home.as_mut() {
-            home.questions.asks.insert(command, Ask::Delete(id));
+            home.questions.asks.insert(command.clone(), Ask::Delete(id));
+            self.outbox.wait(&command, super::super::Waiting::Delete);
         }
         Effect::Send(vec![line])
     }
@@ -471,6 +473,8 @@ impl App {
                     source: source.to_owned(),
                 },
             );
+            self.outbox
+                .wait(&command, super::super::Waiting::OfferImport);
         }
         match self
             .outbox
@@ -591,6 +595,7 @@ impl App {
             .as_mut()
             .and_then(|home| home.questions.asks.remove(id));
         if ask.is_some() {
+            self.outbox.settled(id);
             self.outbox.answered(id);
         }
         ask

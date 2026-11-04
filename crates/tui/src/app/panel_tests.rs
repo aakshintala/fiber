@@ -1863,3 +1863,114 @@ fn switch_and_reset_clear_thinking_now() {
     app.panel_state.reset();
     assert!(!app.panel_state().thinking_now());
 }
+
+/// A hub rejection for a shell id settles the generic refusal before
+/// the panel's: the notice names the refusal and the branch query
+/// clears, so deleting either call fails. The shell shares the branch
+/// query's id so one rejection exercises both paths.
+#[test]
+fn panel_refused_runs_after_rejected_for_a_shell_id() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let lines = ack(&mut app, &out);
+    let shell_id = branch_query(&lines);
+    app.outbox.pending.insert(
+        shell_id.clone(),
+        (crate::app::Kind::Shell, crate::input::Draft::default()),
+    );
+    assert_eq!(app.panel_state.asked.as_deref(), Some(shell_id.as_str()));
+    let returned = app.on_line(refused(&shell_id));
+    assert_eq!(app.notice(), Some("no"));
+    assert!(!app.outbox.pending.contains_key(&shell_id));
+    assert!(app.panel_state.asked.is_none());
+    assert!(returned.is_empty());
+}
+
+/// The generic refusal settles before the panel's: `rejected` still sees
+/// the panel's asked id, which `panel_refused` clears next. Reversing the
+/// two calls in `on_hub` settles the panel first, so the snapshot reads
+/// false and this fails.
+#[test]
+fn generic_refusal_settles_before_the_panels_for_a_shell_id() {
+    let mut app = home();
+    let out = opened(&mut app);
+    let lines = ack(&mut app, &out);
+    let shell_id = branch_query(&lines);
+    app.outbox.pending.insert(
+        shell_id.clone(),
+        (crate::app::Kind::Shell, crate::input::Draft::default()),
+    );
+    let _ = app.on_line(refused(&shell_id));
+    assert!(
+        app.rejected_saw_panel_asked,
+        "rejected runs before panel_refused: the generic refusal must still see the panel's asked id"
+    );
+    assert!(app.panel_state.asked.is_none());
+}
+
+// Part of #3696: the branch query routes by its tag.
+
+#[test]
+fn branch_query_registers_its_tag_and_the_answer_settles_it() {
+    use crate::app::Waiting;
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Branch));
+    assert!(answer(&mut app, &id, "main\n").is_empty());
+    assert_eq!(
+        app.panel_state().branch(),
+        Some(&Branch::Named("main".to_owned()))
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn branch_refusal_settles_its_tag_and_clears_the_query() {
+    use crate::app::Waiting;
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Branch));
+    assert!(app.on_line(session_refused(SESSION, &id)).is_empty());
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.panel_state.asked.is_none());
+    assert_eq!(app.panel_state().branch(), Some(&Branch::Absent));
+}
+
+#[test]
+fn hub_branch_refusal_settles_its_tag_after_the_generic_refusal() {
+    use crate::app::Waiting;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Branch));
+    app.on_line(crate::link::Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    }));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.panel_state.asked.is_none());
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn a_second_branch_answer_after_settle_changes_nothing() {
+    use crate::app::panel::Branch;
+    let mut app = home();
+    let out = opened(&mut app);
+    let id = branch_query(&ack(&mut app, &out));
+    assert!(answer(&mut app, &id, "main\n").is_empty());
+    assert!(answer(&mut app, &id, "other\n").is_empty());
+    assert_eq!(
+        app.panel_state().branch(),
+        Some(&Branch::Named("main".to_owned()))
+    );
+}

@@ -1,4 +1,4 @@
-//! Binary-level tests of `/clear` (`docs/tui.md:1932–1960`): mid-turn
+//! Binary-level tests of `/clear` (`docs/tui.md`, "Clearing"): mid-turn
 //! `/clear` switches to a new empty session at once while the old one
 //! closes politely, and clearing past an asided approval asks first.
 
@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 use support::pty::Run;
 use support::{
-    HubProc, SessionGuard, Setup, Socket, connect_hub, session_dir, subscribe, until, write_json,
+    HubProc, SessionGuard, Setup, Socket, connect_hub, session_dir, subscribe, until, until_after,
+    write_json,
 };
 
 /// The pty size the journeys draw on.
@@ -176,7 +177,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     );
     let a = wait_stored(&setup, 1).into_iter().next().unwrap();
     let watch = Socket::connect(setup.deadline, &setup.hub_socket());
-    subscribe(&watch, &a);
+    let sub = subscribe(&watch, &a);
     run.write(b"/clear\r");
     // The polite close folds first, while the shell still waits on the
     // FIFO: the hub reports the old session closing.
@@ -196,9 +197,11 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     // The release lets the old turn finish; only the finished turn lets
     // the old session leave.
     std::io::Write::write_all(&mut &release, b"\n").unwrap();
-    until(&watch, "A to exit", |line| line["kind"] == "fiber_exited");
+    until_after(&watch, &sub, "A to exit", |line| {
+        line["kind"] == "fiber_exited"
+    });
     // `/clear` starts a new session while the old one finishes
-    // (`docs/tui.md:1936–1938, 1947–1952`).
+    // (`docs/tui.md`, "Clearing").
     let ids = wait_stored(&setup, 2);
     assert_eq!(ids.len(), 2, "the old and the new session: {ids:?}");
     let b = ids.into_iter().find(|id| id != &a).unwrap();
@@ -212,7 +215,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
 }
 
 /// A refused `start` leaves the old conversation on screen and shows its
-/// rejection (`docs/tui.md:1943–1945`).
+/// rejection (`docs/tui.md`, "Clearing").
 #[test]
 fn a_refused_clear_start_keeps_the_old_session_on_screen() {
     let setup = Setup::new();
@@ -252,7 +255,7 @@ fn a_refused_clear_start_keeps_the_old_session_on_screen() {
 
 /// `/clear` past an asided approval asks first: Esc stays on the old
 /// session without starting one, and Enter clears anyway, closing the old
-/// session at once once the `start` answers (`docs/tui.md:1954–1960`).
+/// session at once once the `start` answers (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_on_a_waiting_session_closes_it_at_once() {
     let setup = Setup::new();
@@ -280,7 +283,7 @@ fn clear_on_a_waiting_session_closes_it_at_once() {
     });
     let a = wait_stored(&setup, 1).into_iter().next().unwrap();
     let watch = Socket::connect(setup.deadline, &setup.hub_socket());
-    subscribe(&watch, &a);
+    let sub = subscribe(&watch, &a);
     // Esc puts the approval aside behind its badge; the session still
     // waits on it.
     run.write(b"\x1b[27u");
@@ -310,11 +313,11 @@ fn clear_on_a_waiting_session_closes_it_at_once() {
         grid.contents.contains("Clear") && grid.contents.contains("waits on an approval.")
     });
     run.write(b"\r");
-    until(&watch, "A to exit at once", |line| {
+    until_after(&watch, &sub, "A to exit at once", |line| {
         line["kind"] == "fiber_exited"
     });
     // Enter starts a fresh session while the old one exits
-    // (`docs/tui.md:1954–1960`).
+    // (`docs/tui.md`, "Clearing").
     let ids = wait_stored(&setup, 2);
     assert_eq!(ids.len(), 2, "the old and the new session: {ids:?}");
     let b = ids.into_iter().find(|id| id != &a).unwrap();

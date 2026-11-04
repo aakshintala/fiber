@@ -2102,3 +2102,79 @@ fn the_fake_answers_notes_and_records_each_save() {
         ]
     );
 }
+
+/// `fetch_workspace_file` through the test hub.
+fn workspace_fetch(remote: &Remote) -> Result<(String, String), ConfigureError> {
+    remote.fetch_workspace_file(Path::new("/remote/ws"), Path::new("src/a.rs"))
+}
+
+/// `store_workspace_file` through the test hub.
+fn workspace_store(remote: &Remote) -> Result<(), ConfigureError> {
+    remote.store_workspace_file(Path::new("/remote/ws"), Path::new("src/a.rs"), "new", "v1")
+}
+
+#[test]
+fn workspace_fetch_and_store_preserve_text_version_and_stale() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let deadline = Deadline::start();
+    let (tx, rx) = mpsc::channel();
+    let remote = hub.remote.clone();
+    thread::spawn(move || {
+        tx.send(workspace_fetch(remote.as_ref())).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "inflight workspace read");
+    assert_eq!(line["command"], "read_workspace_file");
+    // Canned hub answer in sorted wire order (`docs/invocation.md:1160`).
+    assert_eq!(
+        line["args"],
+        json!({"path":"src/a.rs","workspace":"/remote/ws"})
+    );
+    hub.reply(
+        &line,
+        json!({"text":"hub text","version":"0123456789abcdef"}),
+    );
+    assert_eq!(
+        deadline.recv_or_fail(&rx, "workspace read answer"),
+        Ok(("hub text".to_owned(), "0123456789abcdef".to_owned()))
+    );
+    let (tx, rx) = mpsc::channel();
+    let remote = hub.remote.clone();
+    thread::spawn(move || {
+        tx.send(workspace_store(remote.as_ref())).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "inflight workspace write");
+    assert_eq!(line["command"], "write_workspace_file");
+    assert_eq!(
+        line["args"],
+        json!({"path":"src/a.rs","text":"new","version":"v1","workspace":"/remote/ws"})
+    );
+    hub.reply(&line, json!({}));
+    assert_eq!(deadline.recv_or_fail(&rx, "workspace write answer"), Ok(()));
+    // A hub-side edit in between stays unwritten: the stale rejection
+    // carries through with its code and message.
+    let (tx, rx) = mpsc::channel();
+    let remote = hub.remote.clone();
+    thread::spawn(move || {
+        tx.send(workspace_store(remote.as_ref())).unwrap_or(());
+    });
+    let line = deadline.recv_or_fail(&hub.lines, "inflight stale workspace write");
+    let response=serde_json::from_value(json!({"kind":"command_rejected","ts":1,"schema_version":1,"payload":{"command_id":line["id"],"code":"stale_request","message":"src/a.rs changed since it was read."}})).unwrap();
+    assert!(hub.router.route(&crate::link::Line::Hub(response)));
+    assert_eq!(
+        deadline.recv_or_fail(&rx, "stale workspace write answer"),
+        Err(ConfigureError {
+            code: ErrorCode::StaleRequest,
+            message: "src/a.rs changed since it was read.".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn workspace_fetch_refuses_a_relative_workspace_without_sending() {
+    let hub = Hub::new(Arc::new(Fake::new(vec![])));
+    let error = hub
+        .remote
+        .fetch_workspace_file(Path::new("relative"), Path::new("src/a.rs"))
+        .unwrap_err();
+    assert_eq!(error.code, ErrorCode::IoFailed);
+}

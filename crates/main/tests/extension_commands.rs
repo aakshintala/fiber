@@ -17,11 +17,12 @@ mod support;
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::sync::mpsc;
 
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Setup, function_call, session_dir};
+use support::{Deadline, Setup, function_call, session_dir, wait_for_effect_after_accept};
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
@@ -320,9 +321,20 @@ fn commands_lists_the_extensions_command_with_tag_and_description() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until_session(&client, "the commands answer", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
-    });
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the commands answer",
+        "c_cmds",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
     let result = lines.last().unwrap()["payload"]["result"].clone();
     let commands = result["commands"].as_array().unwrap();
     assert!(
@@ -454,6 +466,94 @@ fn command_runs_during_a_turn() {
 }
 
 #[test]
+fn command_effect_wait_proves_the_parked_run_ended() {
+    let setup = Setup::new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let held = ProviderServer::start([]).unwrap();
+    held.hold();
+    let url = held.url();
+    setup.lua("worker", &SYNC_HELD.replace("{url}", &url));
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    let client = running.connect(&setup.socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(
+        &client,
+        r#"{"id":"c_1","command":"command","args":{"name":"sync-now","text":"one"}}"#,
+    );
+    // The signal: the first command is admitted at once.
+    let got = until_session(&client, "command_accepted", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_1"
+    });
+    // Fiber itself is paused between the signal and the effect: the run
+    // parked on the held host.http, so its status cannot exist yet. The old
+    // read of the lines so far fails here, deterministically.
+    assert!(
+        held.await_requests(1, setup.deadline),
+        "the first command parked on its held host.http"
+    );
+    let old = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        assert!(
+            got.iter()
+                .any(|line| line["payload"]["status"] == "synced one"),
+            "the parked run already reported: {got:?}"
+        );
+    }));
+    assert!(
+        old.is_err(),
+        "the old read must fail while the run is parked"
+    );
+    // A second command queues behind the parked run: its answer cannot land
+    // until the release ends the first run, so the helper below waits
+    // through the pause for the id-matched answer. The client rides back
+    // with the lines: every assertion stays on the test thread.
+    send(&client, r#"{"id":"c_2","command":"commands"}"#);
+    let (entered_tx, entered) = mpsc::channel::<()>();
+    let (done_tx, done) = mpsc::channel::<(Vec<Value>, Socket)>();
+    std::thread::spawn(move || {
+        entered_tx.send(()).unwrap_or(());
+        let lines = wait_for_effect_after_accept(
+            "the second command's answer",
+            "c_2",
+            |what, got| client.next(what, got),
+            |line| line["payload"].get("result").is_some(),
+        );
+        done_tx.send((lines, client)).unwrap_or(());
+    });
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&entered)
+        .expect("the waiter entered its wait");
+    held.release();
+    let (lines, client) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&done)
+        .expect("the wait answers once released");
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    assert!(
+        result["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["name"] == "sync-now"),
+        "the parked run ended and the queued answer landed: {result}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
 fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([]).unwrap();
@@ -501,9 +601,20 @@ fn replacing_a_builtin_without_replaces_unloads_with_extension_failed() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until_session(&client, "the commands answer", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
-    });
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the commands answer",
+        "c_cmds",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
     let result = lines.last().unwrap()["payload"]["result"].clone();
     assert!(
         !result["commands"]
@@ -576,9 +687,20 @@ fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until_session(&client, "the commands answer", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
-    });
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the commands answer",
+        "c_cmds",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
     let result = lines.last().unwrap()["payload"]["result"].clone();
     // None of the aliases loads: no command by that name arrives from
     // any of the four extensions.
@@ -1222,9 +1344,20 @@ fn a_skill_named_like_an_extension_command_keeps_the_commands_row() {
         r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
     );
     send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
-    let lines = until_session(&client, "the commands answer", |line| {
-        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
-    });
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the commands answer",
+        "c_cmds",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
     let result = lines.last().unwrap()["payload"]["result"].clone();
     let commands = result["commands"].as_array().unwrap();
     let syncs: Vec<&Value> = commands

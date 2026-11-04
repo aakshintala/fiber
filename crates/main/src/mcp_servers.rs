@@ -187,6 +187,8 @@ fn spec(config: &Config, server: config::McpServer) -> mcp::ServerSpec {
 /// What a session started: the failures for the log and the running
 /// servers for the session's end.
 pub(crate) struct SessionServers {
+    /// The lazy shell host shared by the model and driver shells.
+    pub keeper: Arc<crate::keeper::Host>,
     /// Uncapped built-in and MCP tools before extension registrations.
     pub base_tools: Vec<(String, Arc<dyn Tool>)>,
     /// Built-in and MCP declarations before extension replacements.
@@ -366,6 +368,7 @@ pub(crate) fn session_tools(
     shell_read_only: crate::settings::ShellReadOnly,
     sandbox: crate::settings::SandboxHandle,
     protection: Option<Arc<tools::ProtectedPaths>>,
+    seen: BTreeMap<PathBuf, u64>,
 ) -> Result<
     (
         Vec<(String, Arc<dyn Tool>)>,
@@ -377,6 +380,12 @@ pub(crate) fn session_tools(
 > {
     pending.join()?;
     let images = Arc::clone(&pending.images);
+    let keeper = crate::keeper::Host::session(
+        fiber.clone(),
+        home.to_path_buf(),
+        delegates.session().clone(),
+        Arc::clone(clock),
+    );
     let (mut tools, mut infos, driver, forget, images) = crate::builtin::builtin_timed(
         fiber,
         home,
@@ -394,6 +403,8 @@ pub(crate) fn session_tools(
         shell_read_only,
         sandbox,
         protection,
+        seen,
+        Some(keeper.clone()),
     )?;
     let (prepared, started) = pending.take_started()?;
     // The pending start settles repository approval and server startup
@@ -426,6 +437,7 @@ pub(crate) fn session_tools(
         servers: Arc::clone(&servers),
     };
     let servers = SessionServers {
+        keeper,
         base_tools,
         kept_infos,
         failed,

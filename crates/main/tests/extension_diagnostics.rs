@@ -24,8 +24,8 @@ use std::thread;
 use fakes::{Deadline, ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    HELLO_KINDS, KillGroup, Run, Setup, Socket, hello, is_status, run_to_exit, until, until_close,
-    write_json,
+    HELLO_KINDS, KillGroup, Run, Setup, Socket, hello, is_status, run_to_exit, subscribe_direct,
+    until, until_close, write_json,
 };
 
 /// Installs the Lua extension `test-ext` with hooks on every reachable
@@ -564,15 +564,6 @@ impl Running {
 }
 
 #[track_caller]
-fn subscribe(client: &Socket) {
-    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let lines = until(client, "the subscribe acknowledgement", |line| {
-        line["kind"] == "command_accepted"
-    });
-    assert_eq!(lines.len(), 1);
-}
-
-#[track_caller]
 fn prompt(client: &Socket, id: &str, text: &str) {
     client.send(&format!(
         r#"{{"id":"{id}","command":"prompt","args":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
@@ -603,7 +594,7 @@ fn late_switch_starts_fresh_with_the_sink() {
     let running = start_session(&setup, &id);
     let client = running.connect(&setup.session_socket(&id));
     running.wait_for("extensions_loaded");
-    subscribe(&client);
+    subscribe_direct(&client);
     prompt(&client, "c_prompt", "hi");
     let mut stream = until(&client, "the first turn", |line| {
         line["kind"] == "turn_completed"

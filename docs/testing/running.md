@@ -19,12 +19,16 @@ watchdog, started beside Fiber, kills Fiber's process group when the test
 process dies. A shell test's fixtures stop themselves (a stop file, 120 s at most) and the test signals no process.
 A filter that matches no
 tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
-"0 passed" and exits 0. `--test` takes a test target's name, such as `inline_images`, not a file path. To run one file, pass `-E 'binary(=<target>)'`. To run one test, pass `-E 'test(=<name>)'`. Doc-tests run under `cargo test --doc`. `scripts/check` runs nextest with one thread per CPU the host has free, from the load when the run starts, and prints the count; a loaded host runs fewer tests at once rather than starving each of them. Locally the count is `floor(cpus - load)`, at least 2 and at most `cpus`, printed as `== nextest threads: N (C cpus, load L)` via `cargo xtask threads`. Under `GITHUB_ACTIONS` the gate keeps the runner's own count instead, printing that it does so and passing no `--test-threads`.
+"0 passed" and exits 0. `--test` takes a test target's name, such as `inline_images`, not a file path. To run one file, pass `-E 'binary(=<target>)'`. To run one test, pass `-E 'test(=<name>)'`, where `<name>` is the test's full path within its binary, module included: `test(=process_group::cont_signal_tests::cont_name_reads_as_cont)` in `fakes`, not `test(=cont_name_reads_as_cont)`, which matches nothing. Doc-tests run under `cargo test --doc`. `scripts/check` runs nextest with one thread per CPU the host has free, from the load when the run starts, and prints the count; a loaded host runs fewer tests at once rather than starving each of them. Locally the count is `floor(cpus - load)`, at least 2 and at most `cpus`, printed as `== nextest threads: N (C cpus, load L)` via `cargo xtask threads`. Under `GITHUB_ACTIONS` the gate keeps the runner's own count instead, printing that it does so and passing no `--test-threads`.
 
 `scripts/check` exports `FIBER_CHECK_RUN` for the run, and `scripts/leak-scan`
 fails the run when a process still carries it after the tests, listing each
 leak's PID and command. The scan only reports: reaping stays the test's job,
-above.
+above. A process carrying the nonce whose executable is a shared build-cache
+server the toolchain starts (today only `sccache`) is listed in a warning and
+does not fail the run, since such a server outlives the run by design; a new
+name joins the list in `scripts/leak-scan` only through a pull request that
+cites the process.
 A test that clears a child's environment puts `FIBER_CHECK_RUN`
 back (`fakes::check_run`), so `fiber` and the processes it starts carry
 the nonce. The exception is the case processes of `fiber extension test`,
@@ -43,7 +47,7 @@ reads the user's processes reparented to init that started after
 `bash` or `sleep` is listed in a warning that says it may belong to another
 run, without changing the exit status. Neither case sends a signal. An
 orphan that is neither is still invisible on macOS: it is caught by the
-test's own reap above, not the scan.
+test's own cleanup above, not the scan.
 
 The completion tests need bash, zsh and fish on PATH, on Linux and macOS: they never skip at runtime for a missing shell, so a machine without one fails them.
 

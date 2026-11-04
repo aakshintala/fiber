@@ -813,6 +813,10 @@ fn a_key_not_in_the_command_line_is_refused() {
     assert!(parse(r#"{"id":"c","command":"cancel","session_id":"s_1"}"#).is_err());
 }
 
+/// Slash commands the doc table names that are not built yet; the build
+/// ticket (#3782) removes the entry.
+const NOT_BUILT: [&str; 1] = ["archive"];
+
 /// `BUILT_IN_COMMANDS` names the commands in `docs/tui.md`'s "Slash commands" table.
 #[test]
 fn built_in_commands_match_the_tui_doc_table() {
@@ -838,7 +842,7 @@ fn built_in_commands_match_the_tui_doc_table() {
         }
     }
     let listed: Vec<&str> = BUILT_IN_COMMANDS.to_vec();
-    for name in &names {
+    for name in names.iter().filter(|n| !NOT_BUILT.contains(&n.as_str())) {
         assert!(
             listed.contains(&name.as_str()),
             "`{name}` from docs/tui.md not in BUILT_IN_COMMANDS"

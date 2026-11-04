@@ -11,7 +11,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::error::{FileError, ReadError};
-use crate::files::{Inspected, Shared, declare, effects_error, hash_bytes, inspect, resolve};
+use crate::files::{
+    Inspected, Shared, attach_seen, declare, effects_error, hash_bytes, inspect, resolve,
+};
 use crate::pdf::{PageRange, page_range};
 use crate::tool_util::{errored, text_output};
 
@@ -139,7 +141,7 @@ impl Tool for Read {
                 if let Err(error) = reject_pages(&path, pages) {
                     return errored(error);
                 }
-                let output = crate::image::read(self.shared.images(), &path, &bytes, cancel);
+                let mut output = crate::image::read(self.shared.images(), &path, &bytes, cancel);
                 // Seen for a later `write`: the bytes this read took in. A
                 // failed or cancelled read returned no image, so saw nothing.
                 if output
@@ -148,12 +150,13 @@ impl Tool for Read {
                     .any(|part| matches!(part, ContentPart::Image { .. }))
                 {
                     self.shared.set_seen(&path, hash);
+                    output.details = attach_seen(output.details, &path, hash);
                 }
                 return output;
             }
             // `offset` and `limit` do not apply to a PDF.
             Ok(Inspected::Pdf { hash, .. }) => {
-                let output = crate::pdf::read(self.shared.images(), &path, pages, cancel);
+                let mut output = crate::pdf::read(self.shared.images(), &path, pages, cancel);
                 // Seen for a later `write`: the bytes this read took in. A
                 // failed or cancelled read returned no PDF, so saw nothing.
                 if output
@@ -162,6 +165,7 @@ impl Tool for Read {
                     .any(|part| matches!(part, ContentPart::Pdf(_)))
                 {
                     self.shared.set_seen(&path, hash);
+                    output.details = attach_seen(output.details, &path, hash);
                 }
                 return output;
             }
@@ -190,9 +194,10 @@ impl Tool for Read {
         let body = text.strip_prefix('\u{feff}').unwrap_or(text.as_str());
         match slice_text(body, offset, limit, self.cap) {
             Ok(shown) => {
-                self.shared.set_seen(&path, hash_bytes(text.as_bytes()));
+                let hash = hash_bytes(text.as_bytes());
+                self.shared.set_seen(&path, hash);
                 let mut output = text_output(shown);
-                output.details = Some(json!({"start_line": offset}));
+                output.details = attach_seen(Some(json!({"start_line": offset})), &path, hash);
                 output
             }
             Err(error) => errored(error),

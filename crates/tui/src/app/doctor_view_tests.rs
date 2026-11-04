@@ -40,7 +40,7 @@ fn fake() -> Arc<Fake> {
 }
 
 /// An app on home at 80x24 in `/w`, with `seam`.
-fn home(seam: Option<Arc<Fake>>) -> App {
+fn home(seam: Arc<Fake>) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(Launch {
         location: crate::LaunchLocation::Local {
@@ -50,7 +50,7 @@ fn home(seam: Option<Arc<Fake>>) -> App {
         },
         ..Default::default()
     });
-    app.set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    app.set_configure(seam as Arc<dyn Configure>);
     app.set_size(80, 24);
     app
 }
@@ -78,7 +78,7 @@ fn doctor_reader(report: &str) -> contract::feedback::ReadDoctor {
 }
 
 /// An app with `seam` and a doctor reader returning `report`.
-fn doctor_app(seam: Option<Arc<Fake>>, report: &str) -> App {
+fn doctor_app(seam: Arc<Fake>, report: &str) -> App {
     let mut app = home(seam);
     app.set_doctor(Some(doctor_reader(report)));
     app
@@ -95,7 +95,7 @@ fn slash_doctor(app: &mut App) -> Effect {
 #[test]
 fn slash_doctor_opens_the_report_view_on_home_and_attached() {
     let report = "fiber 0.0.1\nsecond line\n\nfourth";
-    let mut app = doctor_app(Some(fake()), report);
+    let mut app = doctor_app(fake(), report);
     assert_eq!(slash_doctor(&mut app), Effect::None);
     assert!(app.config_view_open());
     assert!(app.input().is_empty());
@@ -129,7 +129,7 @@ fn slash_doctor_opens_the_report_view_on_home_and_attached() {
     assert!(rows.first().is_some_and(|row| row.starts_with(" Doctor")));
     assert!(rows.iter().any(|row| row.contains("second line")));
 
-    let mut app = doctor_app(Some(fake()), report);
+    let mut app = doctor_app(fake(), report);
     app.attach(contract::SessionId(SESSION.to_owned()));
     slash_doctor(&mut app);
     assert!(app.config_view_open());
@@ -141,7 +141,7 @@ fn slash_doctor_opens_the_report_view_on_home_and_attached() {
 #[test]
 fn slash_doctor_keeps_long_lines_whole_and_clips_them_without_wrapping() {
     let report = format!("head:{}:tail", "x".repeat(120));
-    let mut app = doctor_app(Some(fake()), &report);
+    let mut app = doctor_app(fake(), &report);
     app.set_size(40, 24);
     slash_doctor(&mut app);
 
@@ -181,7 +181,7 @@ fn slash_doctor_keeps_long_lines_whole_and_clips_them_without_wrapping() {
 fn slash_doctor_ignores_extra_args_and_clears_the_draft() {
     // Extra words change nothing: the view still opens, like
     // `/status` with rest, and the draft clears.
-    let mut app = doctor_app(Some(fake()), "fiber 0.0.1");
+    let mut app = doctor_app(fake(), "fiber 0.0.1");
     for ch in "/doctor extra".chars() {
         app.on_key(Key::Char(ch), now());
     }
@@ -192,7 +192,7 @@ fn slash_doctor_ignores_extra_args_and_clears_the_draft() {
 
 #[test]
 fn slash_doctor_esc_and_the_x_close_it_and_row_clicks_stay() {
-    let mut app = doctor_app(Some(fake()), "fiber 0.0.1");
+    let mut app = doctor_app(fake(), "fiber 0.0.1");
     slash_doctor(&mut app);
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(!app.config_view_open());
@@ -220,7 +220,7 @@ fn slash_doctor_esc_and_the_x_close_it_and_row_clicks_stay() {
 #[test]
 fn slash_doctor_pages_a_report_taller_than_the_view() {
     let report = (0..60).map(|n| format!("line {n:02}")).collect::<Vec<_>>();
-    let mut app = doctor_app(Some(fake()), &report.join("\n"));
+    let mut app = doctor_app(fake(), &report.join("\n"));
     slash_doctor(&mut app);
     let frame = app.config_view_screen().expect("the view is open");
     assert_eq!(frame.list.selected(), 0);
@@ -274,24 +274,8 @@ fn slash_doctor_pages_a_report_taller_than_the_view() {
 }
 
 #[test]
-fn slash_doctor_without_a_reader_says_not_available() {
-    let mut app = home(Some(fake()));
-    slash_doctor(&mut app);
-    assert!(app.config_view_open());
-    let frame = app.config_view_screen().expect("the view is open");
-    assert_eq!(frame.title, "Doctor");
-    assert_eq!(frame.command, "/doctor");
-    assert_eq!(
-        frame.below,
-        vec!["Not available in this terminal.".to_owned()]
-    );
-    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
-    assert!(!app.config_view_open());
-}
-
-#[test]
 fn slash_doctor_capture_failure_keeps_a_notice_and_opens_nothing() {
-    let mut app = home(Some(fake()));
+    let mut app = home(fake());
     let failure = "could not capture the `fiber doctor` output: boom".to_owned();
     app.set_doctor(Some(Arc::new(move || Err(failure.clone()))));
     assert_eq!(slash_doctor(&mut app), Effect::None);
@@ -319,7 +303,7 @@ fn remote_home(remote: Arc<crate::remote::Remote>, report: &str) -> App {
     app.set_remote(remote);
     // A seam is present so the test would reach the hub-global read
     // without the early route; every Doctor input must skip it.
-    app.set_configure(Some(fake() as Arc<dyn Configure>));
+    app.set_configure(fake() as Arc<dyn Configure>);
     app.set_doctor(Some(doctor_reader(report)));
     app.set_size(80, 24);
     app

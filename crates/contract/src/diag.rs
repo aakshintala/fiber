@@ -327,6 +327,9 @@ pub enum Op {
     TuiAttachPrepare,
     /// The attached-history draw, through its completion.
     TuiAttachDraw,
+    /// The terminal's startup, from after the diagnostic writer opens
+    /// through `run_with` entry.
+    TuiStartup,
     /// One session-log write attempt.
     LogAppend,
     /// One session-log sync, when the durability policy syncs.
@@ -399,6 +402,7 @@ impl Op {
             Self::TuiAttachTail => "tui.attach_tail",
             Self::TuiAttachPrepare => "tui.attach_prepare",
             Self::TuiAttachDraw => "tui.attach_draw",
+            Self::TuiStartup => "tui.startup",
             Self::LogAppend => "log.append",
             Self::LogFsync => "log.fsync",
             Self::ToolPermission => "tool.permission",

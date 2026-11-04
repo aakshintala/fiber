@@ -47,6 +47,7 @@ fn an_info_level_run_writes_no_diagnostic_line() {
                 super::Reader::spawn,
                 |builder, body| builder.spawn(body),
                 diag,
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -1047,44 +1048,15 @@ fn refused_connect_writes_only_first_render() {
         let clock: Arc<dyn Clock> = FakeClock::new();
         clock
     });
-    let mut pair = open();
-    let slave = pair
-        .slave
-        .try_clone()
-        .unwrap_or_else(|err| panic!("dup: {err}"));
-    let frames = watch(&pair.main, vec![b"\x1b]2;fiber\x07" as &[u8]]);
-    let (done, finished) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("timing-refused".to_owned())
-        .spawn(move || {
-            let code = super::run_with(
-                slave,
-                launch(),
-                Box::new(|| Err(std::io::Error::other("refused"))),
-                Box::new(|_| {}),
-                FakeClock::new(),
-                super::Reader::spawn,
-                |builder, body| builder.spawn(body),
-                diag,
-            )
-            .unwrap_or_else(|error| panic!("run: {error}"));
-            done.send(code).unwrap_or(());
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    watched(&frames, "the connect notice", &Deadline::after(DEADLINE));
-    pair.main
-        .write_all(&[0x03, 0x03])
-        .unwrap_or_else(|err| panic!("write: {err}"));
-    pair.main
-        .flush()
-        .unwrap_or_else(|err| panic!("flush: {err}"));
-    let code = Deadline::after(DEADLINE)
-        .recv(&finished)
-        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
-    assert_eq!(code, 0);
-    let lines = op_lines(home.path());
+    let lines = refused_run_with_startup(home.path(), diag, None);
     // docs/state.md:430-432 promises the entry-to-first-draw operation.
     assert_terminal_wire(&lines, "tui.first_render");
+    // The `None` guard this run passes writes no startup line: the only
+    // line is the first render's.
+    assert!(
+        lines.iter().all(|line| line["data"]["op"] != "tui.startup"),
+        "a None guard writes no startup line: {lines:?}"
+    );
 }
 
 /// The attach-draw operation keeps the explicit stop boundary until it emits.
@@ -1109,5 +1081,84 @@ fn attach_draw_emits_the_stamped_end_after_later_clock_reads() {
     assert_eq!(
         draw[0]["data"]["ms"], 20,
         "the line uses stop_attach_draw's end, not its later drop"
+    );
+}
+
+/// A refused-connect run carrying the terminal-entry guard, quitting on
+/// double Ctrl+C: the exit code once it returns. The run's own clock is
+/// separate from the diagnostic writer's, so the stamped span is exact.
+fn refused_run_with_startup(
+    home: &std::path::Path,
+    diag: Arc<log::diag::Diag>,
+    startup: Option<log::diag::Timer>,
+) -> Vec<Value> {
+    let mut pair = open();
+    let slave = pair
+        .slave
+        .try_clone()
+        .unwrap_or_else(|err| panic!("dup: {err}"));
+    // The watcher drains the first frame, so no write blocks.
+    let frames = watch(&pair.main, vec![b"\x1b]2;fiber\x07" as &[u8]]);
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("timing-startup".to_owned())
+        .spawn(move || {
+            let code = super::run_with(
+                slave,
+                launch(),
+                Box::new(|| Err(std::io::Error::other("refused"))),
+                Box::new(|_| {}),
+                FakeClock::new(),
+                super::Reader::spawn,
+                |builder, body| builder.spawn(body),
+                diag,
+                startup,
+            )
+            .unwrap_or_else(|error| panic!("run: {error}"));
+            done.send(code).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    watched(
+        &frames,
+        "the connect notice",
+        &Deadline::after(Duration::from_secs(10)),
+    );
+    pair.main
+        .write_all(&[0x03, 0x03])
+        .unwrap_or_else(|err| panic!("write: {err}"));
+    pair.main
+        .flush()
+        .unwrap_or_else(|err| panic!("flush: {err}"));
+    let code = Deadline::after(Duration::from_secs(10))
+        .recv(&finished)
+        .unwrap_or_else(|err| panic!("waited {DEADLINE:?} for run to return: {err}"));
+    assert_eq!(code, 0);
+    op_lines(home)
+}
+
+/// The terminal-entry guard drops at `run_with` entry: its `tui.startup`
+/// line is the first one written, carrying the stamped entry instant. The
+/// `None` half lives in `refused_connect_writes_only_first_render`: one
+/// process runs `run_with` only once, so a second refused run in this
+/// test would hang before its first draw.
+#[test]
+fn entry_guard_drops_first_with_the_stamped_start() {
+    let home = fakes::TempDir::new("tui-timing-startup");
+    let diag_clock = FakeClock::new();
+    // The stamp is an instant before the frozen start, never a moved
+    // clock: raw `advance` stays banned, and nothing here waits on time.
+    let t0 = diag_clock
+        .now()
+        .checked_sub(Duration::from_millis(41))
+        .expect("41 ms before the frozen start");
+    let diag = debug_diag(home.path(), dyn_clock(&diag_clock));
+    let startup = log::diag::timed(&diag, contract::diag::Op::TuiStartup, None, Some(t0));
+    let lines = refused_run_with_startup(home.path(), diag, startup);
+    // The entry drop writes before any first-render or attach span opens.
+    let first = lines.first().expect("the entry drop writes first");
+    assert_terminal_wire(std::slice::from_ref(first), "tui.startup");
+    assert_eq!(
+        first["data"]["ms"], 41,
+        "the line covers the stamped entry instant, not guard construction"
     );
 }

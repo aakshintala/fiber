@@ -200,7 +200,7 @@ fn hold_total(app: &mut App, total: usize) {
             .is_empty()
     );
     let fanout: Vec<Value> = app.on_line(left(B, "exited")).iter().map(parse).collect();
-    // `docs/tui.md:268` (a session leaving asks for its project's total).
+    // `docs/tui.md`, "The session list" (a session leaving asks for its project's total).
     assert!(
         !fanout.is_empty(),
         "the session-left trigger asks for a scoped total"
@@ -410,7 +410,7 @@ fn the_header_draws_the_held_total_beside_the_spend() {
     let header = &drawn[0];
     let text = header.line.to_string();
     assert!(text.ends_with("$0.00 · 7 ✓"), "{text:?}");
-    // `docs/tui.md:332-335` (the project header's start target and right-aligned exited count).
+    // `docs/tui.md`, "The rail" (the project header's start target and right-aligned exited count).
     assert_eq!(
         header.spots,
         vec![

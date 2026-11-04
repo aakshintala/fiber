@@ -258,6 +258,8 @@ fn site_at(trees: &[TokenTree], i: usize, scan: &Scan) -> Option<Site> {
         format!("{word}(.., {})", short_in(second, scan, false)?)
     } else if method && word == "min" {
         format!(".min({})", short_in(&args, scan, true)?)
+    } else if method && word == "within" {
+        format!(".within({})", short_in(&args, scan, true)?)
     } else if method && SOCKET_SETTERS.contains(&word.as_str()) {
         let [part] = args.as_slice() else {
             return None;

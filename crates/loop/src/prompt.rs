@@ -586,9 +586,13 @@ pub(crate) fn build(
 /// A definition's size is its serialized bytes at four bytes a token, and
 /// its source is the `registered_by` the event records.
 /// Exactly 10% is not over, so `>` compares the
-/// unrounded cross products.
+/// unrounded cross products. `deferring` is true exactly when the loop
+/// holds a search factory and the provider defers; when false the message
+/// ends with the sentence the doc's "Size warning" gives for a model
+/// without deferral. It never changes whether the notice exists.
 pub(crate) fn definitions_notice(
     event: &contract::events::PreambleBuilt,
+    deferring: bool,
 ) -> Option<contract::events::Notice> {
     let window = event.context_window;
     let mut sources: std::collections::BTreeMap<&str, u128> = std::collections::BTreeMap::new();
@@ -598,12 +602,16 @@ pub(crate) fn definitions_notice(
     }
     let total: u128 = sources.values().sum();
     let largest = oversize(total, window, sources.into_iter().collect())?;
+    let mut message = format!(
+        "Tool definitions declared in full are about {} tokens, over 10% of the {window}-token context window. Largest: {largest}. Leave tools out with `tools.disabled` in an MCP server's or extension's configuration, or defer one with `tools.\"<name>\".deferred`.",
+        total / 4,
+    );
+    if !deferring {
+        message.push_str(" Deferral is off for this model, so every tool is declared in full.");
+    }
     Some(contract::events::Notice {
         code: contract::ErrorCode::ToolDefinitionsLarge,
-        message: format!(
-            "Tool definitions declared in full are about {} tokens, over 10% of the {window}-token context window. Largest: {largest}. Leave tools out with `tools.disabled` in an MCP server's or extension's configuration, or defer one with `tools.\"<name>\".deferred`.",
-            total / 4,
-        ),
+        message,
         extension: None,
     })
 }

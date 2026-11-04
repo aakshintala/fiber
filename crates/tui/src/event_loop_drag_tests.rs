@@ -27,7 +27,7 @@ fn shown(lp: &super::Loop<TestBackend>) -> String {
 
 /// A loop at 200x40 with home state, attached to `A`, saving through
 /// `seam`.
-fn wide(seam: Option<Arc<Fake>>) -> super::Loop<TestBackend> {
+fn wide(seam: Arc<Fake>) -> super::Loop<TestBackend> {
     let (mut lp, _) = new_loop(TestBackend::new(200, 40), None);
     lp.app.set_size(200, 40);
     lp.screen
@@ -45,8 +45,7 @@ fn wide(seam: Option<Arc<Fake>>) -> super::Loop<TestBackend> {
         ..Default::default()
     });
     lp.app.attach(contract::SessionId(A.to_owned()));
-    lp.app
-        .set_configure(seam.map(|seam| seam as Arc<dyn Configure>));
+    lp.app.set_configure(seam as Arc<dyn Configure>);
     lp
 }
 
@@ -125,7 +124,7 @@ fn step(lp: &mut super::Loop<TestBackend>, bytes: &[u8]) {
 #[test]
 fn alt_r_saves_the_choice_through_the_configure_seam() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut lp = wide(Some(Arc::clone(&fake)));
+    let mut lp = wide(Arc::clone(&fake));
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
     feed(&mut lp, vec![Input::Bytes(b"\x1b[114;3u".to_vec())]);
@@ -156,7 +155,7 @@ fn a_failed_rail_save_is_a_notice() {
     if let Ok(mut refuse) = fake.refuse.lock() {
         *refuse = Some("disk full".to_owned());
     }
-    let mut lp = wide(Some(fake));
+    let mut lp = wide(fake);
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
     feed(&mut lp, vec![Input::Bytes(b"\x1b[114;3u".to_vec())]);
@@ -170,7 +169,7 @@ fn a_failed_rail_save_is_a_notice() {
 #[test]
 fn a_drag_saves_through_the_configure_seam() {
     let fake = Arc::new(Fake::new(Vec::new()));
-    let mut lp = wide(Some(Arc::clone(&fake)));
+    let mut lp = wide(Arc::clone(&fake));
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
     feed(&mut lp, drag());
@@ -193,7 +192,7 @@ fn a_failed_save_is_a_notice() {
     if let Ok(mut refuse) = fake.refuse.lock() {
         *refuse = Some("disk full".to_owned());
     }
-    let mut lp = wide(Some(fake));
+    let mut lp = wide(fake);
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
     feed(&mut lp, drag());
@@ -205,26 +204,12 @@ fn a_failed_save_is_a_notice() {
 }
 
 #[test]
-fn without_a_seam_a_drag_saves_nothing_silently() {
-    let mut lp = wide(None);
-    lp.app.on_line(live(A));
-    lp.app.on_line(live(B));
-    // Draw the frame before the drag, so the comparison is of two frames.
-    feed(&mut lp, vec![Input::Bytes(Vec::new())]);
-    let before = shown(&lp);
-    assert!(!before.trim().is_empty(), "the first frame is drawn");
-    feed(&mut lp, drag());
-    assert_ne!(shown(&lp), before, "the drag moved the rail's edge");
-    assert!(!shown(&lp).contains("Could not save"), "{}", shown(&lp));
-}
-
-#[test]
 fn a_save_warning_is_a_notice() {
     let fake = Arc::new(Fake::new(Vec::new()));
     if let Ok(mut warnings) = fake.warnings.lock() {
         *warnings = vec!["the width moved".to_owned()];
     }
-    let mut lp = wide(Some(fake));
+    let mut lp = wide(fake);
     lp.app.on_line(live(A));
     lp.app.on_line(live(B));
     feed(&mut lp, drag());

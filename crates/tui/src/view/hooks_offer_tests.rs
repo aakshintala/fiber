@@ -42,7 +42,7 @@ fn home(width: u16, height: u16) -> (App, Arc<Fake>) {
         ..Default::default()
     });
     app.set_size(width, height);
-    app.set_configure(Some(Arc::clone(&seam) as Arc<dyn Configure>));
+    app.set_configure(Arc::clone(&seam) as Arc<dyn Configure>);
     app.on_line(Line::Hub(contract::HubLine {
         kind: "hub_hello".to_owned(),
         ts: 0,

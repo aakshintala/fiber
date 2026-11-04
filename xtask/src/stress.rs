@@ -1,7 +1,11 @@
 //! The stress job's helpers (`docs/ci.md`, "On every pull request that changes code").
 
-use crate::select::{Members, TestRef, filter, spec};
+use crate::rules::RustFile;
+use crate::select::{
+    Members, TestRef, filter, has_test_functions, issue_test_names, spec, split_named_tests,
+};
 use crate::test_index::TestIndex;
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 /// Runs of one selected test in the stress job, unless the pull request fixes a flaky test.
 pub(crate) const STRESS_COUNT: u32 = 30;
@@ -230,26 +234,60 @@ fn merge_base(base: &str) -> Result<String, String> {
         .ok_or("no merge base")?)
 }
 
-/// The workspace members with the test functions the working tree adds
-/// or changes against `base`, found with the same selector as the stress
-/// job.
+/// Whether the file's top-level inner attributes include `#![cfg(...)]`.
+fn has_cfg_inner_attr(source: &str) -> Result<bool, String> {
+    let tokens: TokenStream = source.parse().map_err(|_| "cannot parse".to_owned())?;
+    let mut tokens = tokens.into_iter();
+    while let Some(TokenTree::Punct(hash)) = tokens.next() {
+        if hash.as_char() != '#' {
+            continue;
+        }
+        let Some(TokenTree::Punct(bang)) = tokens.next() else {
+            continue;
+        };
+        if bang.as_char() != '!' {
+            continue;
+        }
+        let Some(TokenTree::Group(attribute)) = tokens.next() else {
+            continue;
+        };
+        if attribute.delimiter() != Delimiter::Bracket {
+            continue;
+        }
+        let mut attribute = attribute.stream().into_iter();
+        if matches!(attribute.next(), Some(TokenTree::Ident(name)) if name == "cfg")
+            && matches!(attribute.next(), Some(TokenTree::Group(args)) if args.delimiter() == Delimiter::Parenthesis)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// A test binary has no listed tests for a changed file that still holds a
+/// test function. Files with no functions, cfg-gated files, and files the
+/// runner did not compile need no selector-miss error.
 fn empty_test_file_error(
     files: &[String],
-    selected: &[(String, Vec<TestRef>)],
+    sources: &[RustFile],
     members: &Members,
     index: &TestIndex,
 ) -> Option<String> {
     files.iter().find_map(|path| {
         let package = crate::select::owner(path, members)?;
         let member = members.get(package)?;
-        let selected_tests = selected
-            .iter()
-            .find(|(selected_path, _)| selected_path == path)
-            .is_some_and(|(_, tests)| !tests.is_empty());
-        (!member.unrun_tests.iter().any(|unrun| unrun == path)
-            && !index.binaries_for(path).is_empty()
-            && !selected_tests)
-            .then(|| format!("{path}: changed test file selected no tests"))
+        if member.unrun_tests.iter().any(|unrun| unrun == path) {
+            return None;
+        }
+        let source = sources.iter().find(|source| source.path == *path)?;
+        if has_cfg_inner_attr(&source.source).unwrap_or(false) {
+            return None;
+        }
+        let binaries = index.binaries_for(path);
+        (!binaries.is_empty()
+            && binaries.iter().all(|binary| binary.tests.is_empty())
+            && matches!(has_test_functions(&source.source), Ok(true)))
+        .then(|| format!("{path}: changed test file selected no tests"))
     })
 }
 
@@ -276,7 +314,7 @@ fn touched_against(base: &str, profile: &str) -> Result<(Members, Vec<TestRef>),
         Some(profile),
     )?;
     let selected = crate::select::changed_tests_by_file(&diff, &members, &sources, &index)?;
-    if let Some(error) = empty_test_file_error(&test_files, &selected, &members, &index) {
+    if let Some(error) = empty_test_file_error(&test_files, &sources, &members, &index) {
         return Err(error);
     }
     let mut touched = Vec::new();
@@ -290,35 +328,144 @@ fn touched_against(base: &str, profile: &str) -> Result<(Members, Vec<TestRef>),
     Ok((members, touched))
 }
 
+pub(crate) fn stress_config(filter: &str) -> String {
+    let escaped = filter.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("[profile.stress]\ndefault-filter = \"{escaped}\"\n")
+}
+
+/// Which half of a split plan one `stress-plan` call prints: the tests the
+/// linked flake issue names, or every other selected test. Without `--only`
+/// the call prints today's single group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Only {
+    Named,
+    Rest,
+}
+
+/// The `--only` flag: which half of the split to plan, or no half when the
+/// call plans today's single group.
+fn parse_only(value: Option<String>) -> Result<Option<Only>, String> {
+    match value.as_deref() {
+        None => Ok(None),
+        Some("named") => Ok(Some(Only::Named)),
+        Some("rest") => Ok(Some(Only::Rest)),
+        Some(other) => Err(format!("--only {other:?} must be named or rest")),
+    }
+}
+
+/// Runs for one planned group: the named tests keep the flaky-fix count
+/// from the labels, every other selected test runs the pilot default.
+fn group_count(only: Option<Only>, labels: &str) -> u32 {
+    match only {
+        Some(Only::Rest) => STRESS_COUNT,
+        _ => stress_count(labels),
+    }
+}
+
+/// The `--summary` block one `--only` call appends: one heading per group
+/// with its count, over that group's fenced `test` lines. An empty group
+/// still names itself, with zero tests, so the run step can skip it.
+fn group_summary(count: u32, lines: &[String], only: Only) -> String {
+    let group = match only {
+        Only::Named => " (named by the linked flake issue)",
+        Only::Rest => " (rest)",
+    };
+    let mut block = format!(
+        "### Stress job: {} {}, {count} runs each{group}\n```\n",
+        lines.len(),
+        if lines.len() == 1 { "test" } else { "tests" },
+    );
+    for line in lines {
+        block.push_str(line);
+        block.push('\n');
+    }
+    block.push_str("```\n");
+    block
+}
+
+/// Names from the issue text that match no touched test, in file order:
+/// they run nowhere, and the rest call names them.
+fn unmatched_names(names: &[String], touched: &[TestRef]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| !touched.iter().any(|test| test.name == name.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// The normalised names in `--issue-text` FILE: the linked issue's body
+/// then each comment body, as `issue_test_names` extracts them. Nothing
+/// else in this command parses FILE: no trimming, no case folding, no
+/// prefix stripping here, because normalisation already happened inside
+/// `issue_test_names`.
+fn names_from_issue_text(path: &str) -> Result<Vec<String>, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+    Ok(issue_test_names(&text))
+}
+
 pub(crate) fn plan_command(args: &[String]) -> Result<bool, String> {
     let base = crate::flag(args, "--base")?;
     let labels = crate::optional(args, "--labels").unwrap_or_default();
     let summary = crate::optional(args, "--summary");
+    let filter_file = crate::optional(args, "--filter-file");
+    let names = match crate::optional(args, "--issue-text") {
+        Some(path) => names_from_issue_text(&path)?,
+        None => Vec::new(),
+    };
+    let only = parse_only(crate::optional(args, "--only"))?;
     let (members, touched) = touched_against(&base, "stress")?;
-    let count = stress_count(&labels);
-    println!("run\t{}", if touched.is_empty() { "false" } else { "true" });
+    let (group, unmatched) = match only {
+        None => (touched, Vec::new()),
+        Some(Only::Named) => {
+            let (named, _) = split_named_tests(&touched, &names);
+            (named, Vec::new())
+        }
+        Some(Only::Rest) => {
+            let (_, rest) = split_named_tests(&touched, &names);
+            (rest, unmatched_names(&names, &touched))
+        }
+    };
+    let count = group_count(only, &labels);
+    let filter = filter(&group);
+    if let Some(path) = filter_file {
+        std::fs::write(&path, stress_config(&filter))
+            .map_err(|error| format!("{path}: {error}"))?;
+    }
+    println!("run\t{}", if group.is_empty() { "false" } else { "true" });
     println!("count\t{count}");
-    println!("filter\t{}", filter(&touched));
-    let mut packages: Vec<String> = touched.iter().map(|t| spec(&t.package, &members)).collect();
+    println!("filter\t{filter}");
+    let mut packages: Vec<String> = group.iter().map(|t| spec(&t.package, &members)).collect();
     packages.sort();
     packages.dedup();
     for package in &packages {
         println!("package\t{package}");
     }
-    let lines = plan_test_lines(&touched);
+    let lines = plan_test_lines(&group);
     for line in &lines {
         println!("{line}");
     }
     if let Some(path) = summary {
-        std::fs::OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(&path)
-            .and_then(|mut file| {
-                use std::io::Write as _;
-                file.write_all(plan_summary(count, &lines).as_bytes())
-            })
-            .map_err(|e| format!("{path}: {e}"))?;
+        // The named call with no names prints no group: the rest call
+        // carries the fallback, so there is nothing to name here.
+        let block = match only {
+            None => Some(plan_summary(count, &lines)),
+            Some(Only::Named) if names.is_empty() => None,
+            Some(group) => Some(group_summary(count, &lines, group)),
+        };
+        if let Some(block) = block {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(&path)
+                .and_then(|mut file| {
+                    use std::io::Write as _;
+                    file.write_all(block.as_bytes())
+                })
+                .map_err(|e| format!("{path}: {e}"))?;
+        }
+    }
+    for name in &unmatched {
+        println!("Unmatched: {name}");
     }
     Ok(true)
 }

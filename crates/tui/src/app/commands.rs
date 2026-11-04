@@ -538,7 +538,8 @@ impl App {
         };
         let (effect, id) = self.send_command("change_workspace", Some(json!({"path": rest})));
         if let Some(id) = id {
-            self.change_workspace.begin(id, session);
+            self.outbox
+                .wait(&id, super::outbox::Waiting::ChangeWorkspace(session));
         }
         effect
     }
@@ -1201,19 +1202,17 @@ impl App {
     /// expanded. A recall waiting for a page waits no more.
     pub(super) fn open_in_editor(&mut self) -> Effect {
         if self.changed_files_open() {
+            if self.remote().is_some() {
+                // A remote terminal's files live on the hub: fetch the
+                // hub file at the session's workspace and edit a
+                // temporary copy, written back on return.
+                return self.open_remote_changed_file();
+            }
             return match self.changed_file_for_editor() {
                 Some((path, line)) => Effect::OpenFile(OpenFile {
                     path,
                     line: Some(line),
                 }),
-                None if self.remote().is_some() => {
-                    // A remote terminal's files live on the hub, past no
-                    // hub operation that reads and writes an arbitrary
-                    // workspace path: the existing notice, and nothing
-                    // opens.
-                    self.push_notice("io_failed", super::config_views::UNAVAILABLE.to_owned());
-                    Effect::None
-                }
                 None => Effect::None,
             };
         }

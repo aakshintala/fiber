@@ -17,12 +17,11 @@
 mod support;
 
 use std::fs;
-use std::time::Duration;
 
 use fakes::ProviderServer;
 use serde_json::json;
 use support::pty::{Colour, Grid, Run};
-use support::{Deadline, TRUECOLOUR, function_call, hello, stream, write_json};
+use support::{TRUECOLOUR, function_call, hello, stream, write_json};
 
 /// `attention` in the dark theme.
 const ATTENTION: Colour = Colour::Rgb(255, 159, 67);
@@ -175,42 +174,153 @@ fn a_steer_draws_its_queue_row_then_its_card_rule() {
         }
     }
     let _hold = ReleaseHold { server: &server };
-    // The queue row while the steer waits: a fixed bound well under the
-    // run deadline, recording a bool and never asserting inside the poll,
-    // so the held reply is released on every path below before any
-    // assertion, and a red run fails on the assertion, never hanging.
-    // The bound is one Deadline whose remainder ends the poll; each pause
-    // is a short bounded receive on a live but empty channel, never a
-    // sleep, and a poll pause is not a deadline (`docs/testing.md`,
-    // "Waits and timeouts").
-    let bound = Deadline::after(Duration::from_secs(10));
-    let (_signal, paused) = std::sync::mpsc::channel::<()>();
-    let mut saw_queue = false;
-    while !bound.left().is_zero() {
-        if queue_row(&run.screen()) {
-            saw_queue = true;
-            break;
-        }
-        assert!(
-            Deadline::after(Duration::from_millis(50))
-                .recv(&paused)
-                .is_err(),
-            "the pause elapses with no signal"
-        );
-    }
+    // The queue row while the steer waits: one wait under its own bound
+    // (`docs/testing.md`, "Waits and timeouts"), so a missing row fails
+    // naming the wait instead of hanging a poll.
+    run.wait_screen("the steering queue row", queue_row);
     server.release();
     // The release lets the turn land: the step boundary applies the steer
     // and the second request answers.
     run.turn_finished(from);
-    assert!(
-        saw_queue,
-        "the steering queue row while the steer waited (↳ use x)"
-    );
+    // debt: this wait predicate repeats the row lookup and the `"steer"` / `"use x"` cell searches that the asserts below and `col_at` also do, because a helper's grid reads sit outside the wait span and the screen ratchet bills them as bare reads (steer_drawn.rs would rise from 11 to 18 with no ruling to raise it).
+    // Upgrade trigger: the ratchet counts reads inside a registered wait helper's body (WAIT_HELPERS in xtask/src/screen_ratchet.rs gains a helper that takes the predicate), after which this predicate becomes one `fn rule_drawn(grid: &Grid) -> bool` on `Option`-returning `row_with`/`col_at`.
     // The card rule where the steer landed: the label bold in attention,
     // the dim separator, the dashes in rule to the edge, and the steered
     // text bold directly under it. The time is never read: only the
     // separator's dim span between the label and the dashes.
-    let grid = run.screen();
+    let grid = run.wait_screen("the steer card rule", |grid| {
+        let (cols, _) = grid.size();
+        let Some(pos) = grid.rows.iter().position(|row| row.contains("steer")) else {
+            return false;
+        };
+        let Ok(y) = u16::try_from(pos) else {
+            return false;
+        };
+        let want = ['s', 't', 'e', 'e', 'r'];
+        let mut at = None;
+        let mut x = 0u16;
+        while x < cols {
+            let mut ok = true;
+            for (dx, glyph) in want.iter().enumerate() {
+                let Some(xi) = x.checked_add(u16::try_from(dx).unwrap_or(u16::MAX)) else {
+                    ok = false;
+                    break;
+                };
+                if xi >= cols || grid.cell(xi, y).symbol != glyph.to_string() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                at = Some(x);
+                break;
+            }
+            let Some(next) = x.checked_add(1) else {
+                break;
+            };
+            x = next;
+        }
+        let Some(x) = at else {
+            return false;
+        };
+        for dx in 0..5u16 {
+            let Some(xi) = x.checked_add(dx) else {
+                return false;
+            };
+            if xi >= cols {
+                return false;
+            }
+            let cell = grid.cell(xi, y);
+            if cell.fg != ATTENTION || !cell.bold {
+                return false;
+            }
+        }
+        let mut dashes = x.saturating_add(5);
+        while dashes < cols && grid.cell(dashes, y).symbol != "─" {
+            dashes = dashes.saturating_add(1);
+        }
+        if dashes >= cols {
+            return false;
+        }
+        let mut dx = 5u16;
+        while x.saturating_add(dx) < dashes {
+            let Some(xi) = x.checked_add(dx) else {
+                return false;
+            };
+            if !grid.cell(xi, y).dim {
+                return false;
+            }
+            let Some(next) = dx.checked_add(1) else {
+                return false;
+            };
+            dx = next;
+        }
+        let mut dash = dashes;
+        while dash < cols {
+            let cell = grid.cell(dash, y);
+            if cell.symbol != "─" {
+                break;
+            }
+            if cell.fg != RULE {
+                return false;
+            }
+            let Some(next) = dash.checked_add(1) else {
+                return false;
+            };
+            dash = next;
+        }
+        let Some(below) = y.checked_add(1) else {
+            return false;
+        };
+        let Some(tpos) = grid.rows.iter().position(|row| row.contains("use x")) else {
+            return false;
+        };
+        let Ok(text) = u16::try_from(tpos) else {
+            return false;
+        };
+        if text != below {
+            return false;
+        }
+        let want_text = ['u', 's', 'e', ' ', 'x'];
+        let mut found = None;
+        let mut tx = 0u16;
+        while tx < cols {
+            let mut ok = true;
+            for (dx, glyph) in want_text.iter().enumerate() {
+                let Some(xi) = tx.checked_add(u16::try_from(dx).unwrap_or(u16::MAX)) else {
+                    ok = false;
+                    break;
+                };
+                if xi >= cols || grid.cell(xi, below).symbol != glyph.to_string() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                found = Some(tx);
+                break;
+            }
+            let Some(next) = tx.checked_add(1) else {
+                break;
+            };
+            tx = next;
+        }
+        let Some(tx) = found else {
+            return false;
+        };
+        for dx in 0..5u16 {
+            let Some(xi) = tx.checked_add(dx) else {
+                return false;
+            };
+            if xi >= cols {
+                return false;
+            }
+            if !grid.cell(xi, below).bold {
+                return false;
+            }
+        }
+        true
+    });
     let y = row_with(&grid, "steer");
     let x = col_at(&grid, y, "steer");
     for dx in 0..5u16 {

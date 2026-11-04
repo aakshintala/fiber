@@ -315,16 +315,20 @@ impl App {
         accepted: bool,
         payload: &Map<String, Value>,
     ) -> Option<Vec<String>> {
-        let home = self.home.as_mut()?;
-        let picker = home.chooser.picker.as_mut()?;
-        if accepted {
-            picker
-                .typed
-                .answered(id, payload.get("result"))
-                .then(Vec::new)
-        } else {
-            picker.typed.rejected(id).then(Vec::new)
+        let consumed = {
+            let home = self.home.as_mut()?;
+            let picker = home.chooser.picker.as_mut()?;
+            if accepted {
+                picker.typed.answered(id, payload.get("result"))
+            } else {
+                picker.typed.rejected(id)
+            }
+        };
+        if !consumed {
+            return None;
         }
+        self.outbox.settled(id);
+        Some(Vec::new())
     }
 
     /// The open picker's queued `directories` lines, once the link is
@@ -346,11 +350,15 @@ impl App {
         let Some(picker) = home.chooser.picker.as_mut() else {
             return Vec::new();
         };
+        let outbox = &mut self.outbox;
         picker
             .typed
             .due(mint)
             .into_iter()
-            .map(|(id, dir)| directories_line(&id, &dir))
+            .map(|(id, dir)| {
+                outbox.wait(&id, super::super::outbox::Waiting::Directories);
+                directories_line(&id, &dir)
+            })
             .collect()
     }
 
@@ -480,6 +488,8 @@ impl App {
     /// The chips read again on the next pass: the hub and its levels
     /// are gone, so the next link owes a fresh read.
     pub(in crate::app) fn picker_disconnected(&mut self) {
+        self.outbox
+            .forget(&super::super::outbox::Waiting::Directories);
         if let Some(home) = self.home.as_mut() {
             home.chooser.chip_read = ChipRead::Owed;
         }

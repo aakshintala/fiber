@@ -15,7 +15,7 @@ use contract::events::{
     ShellCommand, SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{CommandId, Envelope, HubLine, Seq, SessionId};
+use contract::{Envelope, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::layout::Rect;
 use serde_json::{Map, Value};
@@ -45,6 +45,7 @@ mod notices;
 #[path = "steering.rs"]
 mod steering;
 
+mod answer;
 mod attach_fold;
 mod attention;
 mod call_view;
@@ -80,6 +81,7 @@ mod mouse;
 mod moving;
 mod offer;
 mod outbox;
+pub(crate) use outbox::Waiting;
 mod overlay;
 pub(crate) mod panel;
 mod paste;
@@ -250,8 +252,6 @@ pub(crate) struct App {
     /// only ancestor lines strictly older than it, so already-displayed
     /// preview lines never refold.
     installed_floor: Option<(SessionId, Seq)>,
-    /// History command ids whose late answers are discarded after reopening.
-    abandoned_history: BTreeSet<String>,
     /// The launch directory `start` names: none on a remote home, which
     /// carries no local workspace.
     workspace: Option<PathBuf>,
@@ -358,6 +358,12 @@ pub(crate) struct App {
     status_rows: status_rows::StatusRowsState,
     /// The attached session's folded panel data (`docs/tui.md`, "The panel").
     panel_state: panel::PanelState,
+    /// Test-only order seam: the last `rejected` call's snapshot of
+    /// whether the panel still held its asked id, so a test pins the
+    /// generic refusal settling before the panel's. Non-test builds
+    /// carry no field.
+    #[cfg(test)]
+    pub(crate) rejected_saw_panel_asked: bool,
     /// Each delegate's latest `session_status`, by session: what the
     /// Delegates card draws while its `summary` subscription lives
     /// (`docs/tui.md`, "The panel").
@@ -384,13 +390,6 @@ pub(crate) struct App {
     session_views: session_views::SessionViews,
     /// The `/rewind` view's state (`docs/tui.md`, "Rewind").
     rewind: rewind::Rewind,
-    /// The `/cd` move's pending correlation (`docs/tui.md`, "Moving
-    /// workspace").
-    change_workspace: change_workspace::ChangeWorkspace,
-    /// A sent `/fork` waiting for its answer: its command id. It lives
-    /// beside the rewind view's state, so opening another view resets
-    /// that state without dropping the fork (`docs/tui.md`, "Rewind").
-    fork_pending: Option<CommandId>,
     /// The open delegate or job view and the per-job fold (`docs/tui.md`,
     /// "Swapped views").
     items: items::Items,
@@ -440,7 +439,6 @@ impl App {
             preview: None,
             count: None,
             installed_floor: None,
-            abandoned_history: BTreeSet::new(),
             workspace,
             home: None,
             draft: Draft::default(),
@@ -481,6 +479,8 @@ impl App {
             drag: drag::DragState::default(),
             status_rows: status_rows::StatusRowsState::default(),
             panel_state: panel::PanelState::default(),
+            #[cfg(test)]
+            rejected_saw_panel_asked: false,
             delegate_rows: HashMap::new(),
             rail_state: rail::RailState::default(),
             select: select::Selection::default(),
@@ -492,8 +492,6 @@ impl App {
             config_views: config_views::ConfigViews::default(),
             session_views: session_views::SessionViews::default(),
             rewind: rewind::Rewind::default(),
-            change_workspace: change_workspace::ChangeWorkspace::default(),
-            fork_pending: None,
             items: items::Items::default(),
             reconnect: reconnect::Reconnect::default(),
             launch_overrides: Vec::new(),
@@ -540,8 +538,13 @@ impl App {
             busy: false,
         };
         self.panel_state.attached();
+        // A new attachment re-asks quota from `Due`: the old query's
+        // answer folds nowhere.
+        self.outbox.forget(&outbox::Waiting::Quota);
         // A new attachment folds no old rewind state: the next open
         // pages the new session's chain from its tip.
+        self.outbox.forget(&outbox::Waiting::RewindHistory);
+        self.outbox.forget(&outbox::Waiting::RewindSend);
         self.rewind = rewind::Rewind::default();
         // A new session's images start over: a late answer or viewer
         // completion from the last one is dropped.
@@ -732,17 +735,18 @@ impl App {
 
     /// Handles the route without settling; the caller owns the layout pass.
     pub(crate) fn on_line_inner(&mut self, line: Line) -> Vec<String> {
+        let answer = answer::Answer::of(&line, &self.outbox);
         if let Line::Session(envelope) = &line {
             self.observe_session_status(envelope);
         }
-        if self.pass_line(&line) {
+        if self.pass_line(&line, answer.as_ref()) {
             return Vec::new();
         }
-        let mut lines = match self.home_line(&line) {
+        let mut lines = match self.home_answer(&line, answer.as_ref()) {
             Some(consumed) => consumed,
-            None => match line {
-                Line::Hub(hub) => self.on_hub(&hub),
-                Line::Session(envelope) => self.on_session(&envelope),
+            None => match &line {
+                Line::Hub(hub) => self.on_hub(hub, answer.as_ref()),
+                Line::Session(envelope) => self.on_session(envelope, answer.as_ref()),
             },
         };
         lines.extend(self.home_outgoing());
@@ -894,7 +898,7 @@ impl App {
         // The pass ends here without folding: a `/copy` waiting on it
         // has nothing new to copy.
         self.copy_owed = false;
-        self.abandoned_history.clear();
+        self.outbox.forget(&outbox::Waiting::Abandoned);
         self.end_overlay();
         if self.outbox.is_up() {
             self.outbox.link = Link::Down;
@@ -1545,8 +1549,7 @@ impl App {
         Effect::None
     }
 
-    fn on_hub(&mut self, hub: &HubLine) -> Vec<String> {
-        let command_id = hub_string(&hub.payload, "command_id");
+    fn on_hub(&mut self, hub: &HubLine, answer: Option<&answer::Answer<'_>>) -> Vec<String> {
         match hub.kind.as_str() {
             "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
                 self.hub_hello_version(&hub.payload);
@@ -1568,17 +1571,59 @@ impl App {
                 Vec::new()
             }
             "command_accepted" => {
-                let Some(id) = command_id else {
+                let Some(answer) = answer else {
                     return Vec::new();
                 };
-                self.clear_close_settled(&id);
-                if let Some(lines) = self.history_answered(&id, hub.payload.get("result")) {
-                    return lines;
-                }
-                // A `read_file` for a viewer open answers here, never
-                // in the pages: its bytes go to the loop's worker.
-                if self.image_answered(&id, hub.payload.get("result")) {
-                    return Vec::new();
+                let id = answer.id;
+                match &answer.waiting {
+                    Some(Waiting::History) => {
+                        if let Some(lines) = self.history_answered(id, answer.payload.get("result"))
+                        {
+                            return lines;
+                        }
+                    }
+                    Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                        if self.image_answered(id, answer.payload.get("result")) {
+                            return Vec::new();
+                        }
+                    }
+                    Some(Waiting::ClearClose) => self.clear_close_settled(id),
+                    Some(Waiting::ClearStart) => {}
+                    Some(Waiting::Dismiss(_)) => {}
+                    Some(Waiting::Fork) => {}
+                    Some(Waiting::RewindHistory) => {}
+                    Some(Waiting::RewindSend) => {}
+                    Some(Waiting::ChangeWorkspace(_)) => {}
+                    Some(Waiting::Sessions) => {}
+                    Some(Waiting::Abandoned) => {}
+                    Some(
+                        Waiting::Directories
+                        | Waiting::Subscribe
+                        | Waiting::Stop
+                        | Waiting::Delete
+                        | Waiting::OfferImport
+                        | Waiting::DeleteDiscovery
+                        | Waiting::DeleteStop
+                        | Waiting::DeleteFinal
+                        | Waiting::Feed
+                        | Waiting::Recent
+                        | Waiting::Close,
+                    ) => {}
+                    Some(
+                        Waiting::Figures
+                        | Waiting::Diff
+                        | Waiting::Hooks
+                        | Waiting::Branch
+                        | Waiting::Quota
+                        | Waiting::ArtifactPage
+                        | Waiting::ConfigAsk
+                        | Waiting::Credentials
+                        | Waiting::CredentialSwitch
+                        | Waiting::ProposeNotes
+                        | Waiting::JobStop
+                        | Waiting::JobInput,
+                    ) => {}
+                    None => {}
                 }
                 let session = hub
                     .payload
@@ -1586,9 +1631,11 @@ impl App {
                     .and_then(|result| result.get("session_id"))
                     .and_then(Value::as_str)
                     .map(|id| SessionId(id.to_owned()));
-                match (self.outbox.answered(&id), session) {
+                match (self.outbox.answered(id), session) {
                     (Some((Kind::Start, draft)), Some(session)) => {
-                        if let Some(lines) = self.clear_start_accepted(&id, session.clone()) {
+                        if let Some(Waiting::ClearStart) = answer.waiting
+                            && let Some(lines) = self.clear_start_accepted(id, session.clone())
+                        {
                             lines
                         } else {
                             self.model_picker.start_model = None;
@@ -1599,40 +1646,97 @@ impl App {
                 }
             }
             "command_rejected" => {
-                if let Some(id) = command_id {
+                if let Some(answer) = answer {
+                    let id = answer.id;
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
                     let code = hub_code(&hub.payload);
-                    if self.intercept_hooks_offer(&id, &code, &message) {
+                    if self.intercept_hooks_offer(id, &code, &message) {
                         return Vec::new();
                     }
-                    if self.clear_rejected(&id, &code, &message) {
-                        return Vec::new();
+                    match &answer.waiting {
+                        Some(Waiting::ClearStart) => {
+                            if self.clear_rejected(id, &code, &message) {
+                                return Vec::new();
+                            }
+                        }
+                        Some(Waiting::ClearClose) => self.clear_close_settled(id),
+                        Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                            if self.image_rejected(id, &message) {
+                                return Vec::new();
+                            }
+                        }
+                        Some(waiting @ (Waiting::Fork | Waiting::RewindSend)) => {
+                            if self.rewind_hub_refused(id, &code, &message, waiting) {
+                                return Vec::new();
+                            }
+                        }
+                        Some(Waiting::History) => {
+                            if self.history_rejected(id, &code, &message) {
+                                return Vec::new();
+                            }
+                        }
+                        Some(Waiting::ChangeWorkspace(_)) => {
+                            self.change_workspace_hub_refused(id, &code);
+                        }
+                        Some(Waiting::Dismiss(_)) => {}
+                        Some(Waiting::RewindHistory) => {}
+                        Some(Waiting::Sessions) => {}
+                        Some(Waiting::Abandoned) => {}
+                        Some(Waiting::ConfigAsk) => {
+                            self.outbox.settled(id);
+                            self.config_views_refused(id, &message);
+                        }
+                        Some(Waiting::Credentials) | Some(Waiting::CredentialSwitch) => {
+                            self.credential_hub_refused(id);
+                            self.outbox.settled(id);
+                            self.config_views_refused(id, &message);
+                        }
+                        Some(Waiting::Figures) | Some(Waiting::Diff) => {
+                            self.outbox.settled(id);
+                            self.session_views_refused(id, &message);
+                        }
+                        Some(Waiting::Hooks) => {
+                            self.hooks_hub_refused(id);
+                            self.outbox.settled(id);
+                        }
+                        Some(Waiting::Branch) | Some(Waiting::Quota) => {}
+                        Some(Waiting::ArtifactPage) | Some(Waiting::ProposeNotes) => {}
+                        Some(Waiting::JobStop) | Some(Waiting::JobInput) => {
+                            self.outbox.settled(id);
+                        }
+                        Some(
+                            Waiting::Directories
+                            | Waiting::Subscribe
+                            | Waiting::Stop
+                            | Waiting::Delete
+                            | Waiting::OfferImport
+                            | Waiting::DeleteDiscovery
+                            | Waiting::DeleteStop
+                            | Waiting::DeleteFinal
+                            | Waiting::Feed
+                            | Waiting::Recent
+                            | Waiting::Close,
+                        ) => {}
+                        None => {}
                     }
-                    if self.image_rejected(&id, &message) {
-                        return Vec::new();
-                    }
-                    // A hub-relayed failed new-session start settles
-                    // the sent `rewind` with the start's code, and goes
-                    // no further: no generic notice names it.
-                    if self.rewind_hub_refused(&id, &code, &message) {
-                        return Vec::new();
-                    }
-                    // A hub-relayed `change_workspace` refusal drops the
-                    // move's claim but keeps its generic settlement, so
-                    // the refusal still shows its notice.
-                    self.change_workspace_hub_refused(&id, &code);
                     self.offer.file_refused(
-                        &id,
+                        id,
                         &serde_json::from_value(Value::String(code.clone()))
                             .unwrap_or_else(|_| contract::ErrorCode::Other(code.clone())),
                         &message,
                     );
-                    self.config_views_refused(&id, &message);
-                    self.session_views_refused(&id, &message);
-                    if !self.history_rejected(&id, &code, &message) {
-                        self.rejected(&id, &code, message);
+                    self.rejected(id, &code, message);
+                    // The panel's refusal clears its query next, so the
+                    // generic refusal still seeing it proves it settled
+                    // first.
+                    if answer.waiting == Some(Waiting::Branch)
+                        || answer.waiting == Some(Waiting::Quota)
+                    {
+                        self.outbox.settled(id);
+                        self.panel_refused(id)
+                    } else {
+                        Vec::new()
                     }
-                    self.panel_refused(&id)
                 } else {
                     Vec::new()
                 }
@@ -1682,7 +1786,12 @@ impl App {
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
     fn rejected(&mut self, id: &str, code: &str, message: String) {
-        self.clear_close_settled(id);
+        // Order seam: the panel's refusal clears `asked` next, so the
+        // generic refusal still seeing it proves it settled first.
+        #[cfg(test)]
+        {
+            self.rejected_saw_panel_asked = self.panel_state.asked_is(id);
+        }
         // A refused `model` command drops the writes its acceptance
         // would have made.
         self.model_picker_rejected(id);
@@ -1739,7 +1848,6 @@ impl App {
         accepted: Option<&CommandAccepted>,
     ) -> Option<(Kind, Draft)> {
         let id = envelope.payload.get("command_id")?.as_str()?;
-        self.clear_close_settled(id);
         let entry = match accepted {
             Some(_) => self.outbox.answered(id),
             // An unparseable accept closes only a pending import: any
@@ -1785,9 +1893,77 @@ impl App {
     }
 
     /// Folds one session line, returning command lines to send.
-    fn on_session(&mut self, envelope: &Envelope) -> Vec<String> {
+    fn on_session(
+        &mut self,
+        envelope: &Envelope,
+        answer: Option<&answer::Answer<'_>>,
+    ) -> Vec<String> {
+        let move_from = match answer.and_then(|answer| answer.waiting.as_ref()) {
+            Some(Waiting::ChangeWorkspace(old)) => match answer.map(|answer| &answer.from) {
+                Some(answer::Source::Session(session)) => Some((old, *session)),
+                Some(answer::Source::Hub) | None => None,
+            },
+            Some(Waiting::ClearClose) => {
+                if let Some(answer) = answer {
+                    self.clear_close_settled(answer.id);
+                }
+                None
+            }
+            Some(Waiting::Dismiss(_)) => None,
+            Some(Waiting::Fork) => None,
+            Some(Waiting::RewindHistory) => None,
+            Some(Waiting::RewindSend) => None,
+            Some(Waiting::ClearStart) => None,
+            Some(Waiting::History) => None,
+            Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => None,
+            Some(Waiting::Sessions) => None,
+            Some(Waiting::Abandoned) => None,
+            Some(
+                Waiting::Directories
+                | Waiting::Subscribe
+                | Waiting::Stop
+                | Waiting::Delete
+                | Waiting::OfferImport
+                | Waiting::DeleteDiscovery
+                | Waiting::DeleteStop
+                | Waiting::DeleteFinal
+                | Waiting::Feed
+                | Waiting::Recent
+                | Waiting::Close,
+            ) => None,
+            Some(
+                Waiting::Figures
+                | Waiting::Diff
+                | Waiting::Hooks
+                | Waiting::Branch
+                | Waiting::Quota
+                | Waiting::ArtifactPage
+                | Waiting::ConfigAsk
+                | Waiting::Credentials
+                | Waiting::CredentialSwitch
+                | Waiting::ProposeNotes
+                | Waiting::JobStop
+                | Waiting::JobInput,
+            ) => None,
+            None => None,
+        };
         // The reviewer setup's `propose_notes` answers settle first, and
-        // reach no other path.
+        // reach no other path. The tag settles here so a second answer
+        // for the id falls through to the generic path below.
+        if answer.and_then(|answer| answer.waiting.as_ref()) == Some(&Waiting::ProposeNotes)
+            && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
+        {
+            self.outbox.settled(id);
+        }
+        // A `job_stop` or `job_input` answer settles its tag here so the
+        // item-session and other-session exits below, which clear the
+        // pending entry and return before `items_line`, do not leave it.
+        let waiting = answer.and_then(|answer| answer.waiting.as_ref());
+        if (waiting == Some(&Waiting::JobStop) || waiting == Some(&Waiting::JobInput))
+            && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
+        {
+            self.outbox.settled(id);
+        }
         if self.reviewer_setup_settled(envelope) {
             return Vec::new();
         }
@@ -1805,6 +1981,13 @@ impl App {
             && let Some(accepted) = read!(envelope, CommandAccepted)
         {
             let id = accepted.command_id.0.clone();
+            // The credential switch's answer settles its tag: the save
+            // folds only for its own id, and any other id leaves its
+            // owner's tag alone.
+            if answer.and_then(|answer| answer.waiting.as_ref()) == Some(&Waiting::CredentialSwitch)
+            {
+                self.outbox.settled(&id);
+            }
             self.model_picker_accepted(&id, &envelope.session_id);
             self.credential_accepted(&accepted);
         }
@@ -1819,7 +2002,10 @@ impl App {
                     self.accepted_settled(envelope, accepted.as_ref());
                     if let Some(accepted) = accepted {
                         send.extend(
-                            self.change_workspace_accepted(&envelope.session_id, &accepted)
+                            move_from
+                                .and_then(|(old, session)| {
+                                    self.change_workspace_accepted(old, session, &accepted)
+                                })
                                 .unwrap_or_default(),
                         );
                     }
@@ -1828,7 +2014,9 @@ impl App {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
-                        self.change_workspace_refused(&id.0, &rejected.code);
+                        if move_from.is_some() {
+                            self.change_workspace_refused(&id.0, &rejected.code);
+                        }
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
@@ -1853,7 +2041,10 @@ impl App {
                     self.accepted_settled(envelope, accepted.as_ref());
                     if let Some(accepted) = accepted {
                         send.extend(
-                            self.change_workspace_accepted(&envelope.session_id, &accepted)
+                            move_from
+                                .and_then(|(old, session)| {
+                                    self.change_workspace_accepted(old, session, &accepted)
+                                })
                                 .unwrap_or_default(),
                         );
                     }
@@ -1862,7 +2053,9 @@ impl App {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
-                        self.change_workspace_refused(&id.0, &rejected.code);
+                        if move_from.is_some() {
+                            self.change_workspace_refused(&id.0, &rejected.code);
+                        }
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
@@ -1876,13 +2069,13 @@ impl App {
             send.extend(lines);
             return send;
         }
-        send.extend(self.panel_line(envelope));
+        send.extend(self.panel_line(envelope, answer));
         self.pwd_arrived(envelope);
         self.reviewer_block(envelope);
         self.items_line(envelope);
         self.output_line(envelope);
-        send.extend(self.session_views_line(envelope));
-        send.extend(self.config_views_line(envelope));
+        send.extend(self.session_views_line(envelope, answer));
+        send.extend(self.config_views_line(envelope, answer));
         if envelope.kind == "turn_started"
             && let Some(started) = read!(envelope, TurnStarted)
         {
@@ -1904,9 +2097,9 @@ impl App {
                 let accepted = read!(envelope, CommandAccepted);
                 let sent = self.accepted_settled(envelope, accepted.as_ref());
                 if let Some(accepted) = accepted {
-                    if let Some(lines) =
-                        self.change_workspace_accepted(&envelope.session_id, &accepted)
-                    {
+                    if let Some(lines) = move_from.and_then(|(old, session)| {
+                        self.change_workspace_accepted(old, session, &accepted)
+                    }) {
                         send.extend(lines);
                     }
                     self.commands_answered(&accepted);
@@ -1929,7 +2122,9 @@ impl App {
                 if let Some(rejected) = read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                 {
-                    self.change_workspace_refused(&id.0, &rejected.code);
+                    if move_from.is_some() {
+                        self.change_workspace_refused(&id.0, &rejected.code);
+                    }
                     self.offer
                         .file_refused(&id.0, &rejected.code, &rejected.message);
                     self.refused(&id.0, &rejected.code, rejected.message);

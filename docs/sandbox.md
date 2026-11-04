@@ -20,7 +20,9 @@ The sandbox is opt-in and off by default. When it is on, a shell call runs
 confined on Linux under Fiber's own policy: Landlock plus seccomp; no srt,
 no bubblewrap. A confined call takes the confined fast path unless the destructive-command guard matches it (`docs/permissions.md`, 'Fast paths'). A call the model marks
 `unconfined: true` runs outside the sandbox and is reviewed exactly as with
-the sandbox off. A confined call whose sandbox cannot be applied fails;
+the sandbox off. A `detach: true` call runs outside the sandbox and is
+reviewed as an unconfined call; it takes no protected-path transaction.
+A confined call whose sandbox cannot be applied fails;
 Fiber never reruns it unconfined. This slice adds no
 `/sandbox` toggle. Each Fiber delegate inherits the parent's effective sandbox
 settings at launch, including changes made during the session. Fresh spawns,

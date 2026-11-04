@@ -25,10 +25,12 @@ impl Tool for Handoff {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "handoff".to_owned(),
-            description: "Restarts your context from the note you give. Write the note so a \
-                 fresh agent can continue the work: refer to specs, issues, commits and files \
-                 by path or URL instead of copying them, and leave out secrets. The next \
-                 request misses the prompt cache, because it starts from the note."
+            description: "Restarts your context from the note you give. Kept messages with \
+                 their replies, running jobs and loaded skills come along with the note. Write \
+                 the note so a fresh agent can continue the work: refer to specs, issues, \
+                 commits and files by path or URL instead of copying them, and leave out \
+                 secrets. The next request misses the prompt cache, because it starts from \
+                 the note."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",

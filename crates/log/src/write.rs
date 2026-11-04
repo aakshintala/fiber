@@ -116,7 +116,7 @@ impl Log {
             .mode(0o700)
             .create(&artifacts)
             .map_err(io_at(&artifacts))?;
-        let lock = lock(&dir, &id, clock.as_ref())?;
+        let lock = lock(&dir, &id, clock.as_ref(), &std::process::id().to_string())?;
         let path = dir.join(EVENTS);
         let events = OpenOptions::new()
             .append(true)
@@ -135,12 +135,23 @@ impl Log {
     /// first, and `seq` carries on from the last complete line. `clock` is
     /// the same one [`Log::create`] takes.
     pub fn open(sessions: &Path, id: SessionId, clock: Arc<dyn Clock>) -> Result<Self, Error> {
+        Self::open_as(sessions, id, clock, &std::process::id().to_string())
+    }
+
+    /// Opens an existing session as the named lock holder. A keeper uses
+    /// `keeper <pid>` so clients can distinguish it from a live session.
+    pub fn open_as(
+        sessions: &Path,
+        id: SessionId,
+        clock: Arc<dyn Clock>,
+        holder: &str,
+    ) -> Result<Self, Error> {
         let dir = session_path(sessions, &id);
         let path = dir.join(EVENTS);
         if !path.is_file() {
             return Err(Error::NotFound(dir));
         }
-        let lock = lock(&dir, &id, clock.as_ref())?;
+        let lock = lock(&dir, &id, clock.as_ref(), holder)?;
         let events = OpenOptions::new()
             .read(true)
             .append(true)
@@ -1026,14 +1037,14 @@ impl Drop for Lock {
     }
 }
 
-/// Takes the session's lock and writes the holder's pid into it, or names
+/// Takes the session's lock and writes the holder's label into it, or names
 /// who holds it.
-fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock) -> Result<Lock, Error> {
+fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock, label: &str) -> Result<Lock, Error> {
     let path = dir.join(LOCK);
     match crate::scan::try_lock_file(dir)? {
         Some(mut file) => {
             file.set_len(0).map_err(io_at(&path))?;
-            file.write_all(format!("{}\n", std::process::id()).as_bytes())
+            file.write_all(format!("{label}\n").as_bytes())
                 .map_err(io_at(&path))?;
             Ok(Lock(file))
         }
@@ -1042,6 +1053,15 @@ fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock) -> Result<Lock, Error> {
             holder: holder(&path, clock),
         }),
     }
+}
+
+/// Reads the holder's label without taking the lock. Stale text remains a
+/// label; a new writer relabels before binding the session socket. Missing,
+/// empty and unreadable files return no label, including during a relabel.
+pub fn lock_label(dir: &Path) -> Option<String> {
+    let text = fs::read_to_string(dir.join(LOCK)).ok()?;
+    let label = text.trim();
+    (!label.is_empty()).then(|| label.to_owned())
 }
 
 // debt: a holder that crashed leaves its pid, and a new holder that has

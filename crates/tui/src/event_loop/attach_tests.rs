@@ -3211,6 +3211,7 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
             },
             |builder, body| builder.spawn(body),
             crate::timing::info_diag(),
+            None,
         );
         done.send(result).unwrap();
     });
@@ -3221,7 +3222,7 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
         "first draw must observe the loader result"
     );
     observer.send("first draw").unwrap();
-    // docs/tui.md:2659: the first frame waits for the loader, so load
+    // `docs/tui.md`, "How a TUI extension runs": the first frame waits for the loader, so load
     // completion precedes the first draw observation in this trace.
     assert_eq!(
         wait.recv_or_fail(&trace, "load completion"),
@@ -3275,7 +3276,7 @@ fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() 
     );
     open.lp.app.drawn(&[]);
     let notices = open.lp.app.notices();
-    // docs/tui.md:2734: the failure keeps one hook_failed per extension and slot.
+    // `docs/tui.md`, "When an extension fails": the failure keeps one hook_failed per extension and slot.
     assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
     assert!(!open.lp.app.drawn(&[]), "a replay cannot report it twice");
 }
@@ -3364,7 +3365,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
     );
     open.lp.app.drawn(&[]);
     let notices = open.lp.app.notices();
-    // docs/tui.md:2757: one command_conflict per slot and set of contenders.
+    // `docs/tui.md`, "When two extensions want one slot": one command_conflict per slot and set of contenders.
     assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="command_conflict"&&text.contains("tail-a, tail-b"))).count(),1);
     assert!(
         !open.lp.app.drawn(&[]),
@@ -4674,7 +4675,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
             .map(|command| &command["args"])
             .collect::<Vec<_>>(),
         vec![&json!({}), &json!({"session_id": ROOT, "to_seq": point}),],
-        // docs/tui.md:2426-2440 ("History and paging"): own window before ancestor count.
+        // docs/tui.md ("History and paging"): own window before ancestor count.
         "the own window, then the ancestor's under its session: {histories:?}"
     );
     let mut preview = crate::window::Pages::new(60);
@@ -4684,7 +4685,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     assert_eq!(
         open.lp.app.scroll().1,
         preview.index().total(),
-        // docs/tui.md:2432-2434 ("History and paging"): count carries ancestor runs above the preview for the joint total.
+        // docs/tui.md ("History and paging"): count carries ancestor runs above the preview for the joint total.
         "the joint total spans the chain"
     );
     // The preview follows to the bottom: the last frame shows the
@@ -4697,7 +4698,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     // pre- and post-count frames are pixel-identical while following
     // the bottom, so no frame-content assert can state it.
     let drawn = frames(&open).join("\n");
-    // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
+    // docs/tui.md ("History and paging"): the first frame draws the preview.
     assert!(drawn.contains("child reply 29"), "the child shows: {drawn}");
     let pages = open.lp.app.pages();
     let total = pages.index().total();
@@ -4705,7 +4706,7 @@ fn the_open_walks_the_chain_and_shows_the_joint_total() {
     assert!(
         top_needs.iter().any(|(session, range)| session.0 == ROOT
             && *range == (contract::Seq(0)..=contract::Seq(point))),
-        // docs/tui.md:2484-2493 ("History and paging"): chain as one history, ancestor pages under its session.
+        // docs/tui.md ("History and paging"): chain as one history, ancestor pages under its session.
         "the ancestor stays paged under its session: {top_needs:?}"
     );
 }
@@ -4740,7 +4741,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     }
     assert!(
         child_pages.index().total() < height,
-        // docs/tui.md:2443-2445 ("History and paging"): the terminal asks
+        // docs/tui.md ("History and paging"): the terminal asks
         // for older own-segment windows until the preview fills.
         "the child alone cannot fill the display"
     );
@@ -4750,7 +4751,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     }
     assert!(
         joint_pages.index().total() >= height,
-        // docs/tui.md:2449-2450 ("History and paging"): a run that reaches
+        // docs/tui.md ("History and paging"): a run that reaches
         // `seq 0` short of the display crosses into its ancestors before
         // the first frame instead.
         "the crossed run fills the display"
@@ -4847,7 +4848,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     assert_eq!(
         first["args"],
         json!({}),
-        // docs/tui.md:2438 ("History and paging"): asks `history` with no
+        // docs/tui.md ("History and paging"): asks `history` with no
         // `from_seq` for the session's last lines.
         "the newest own window first"
     );
@@ -4872,7 +4873,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     assert_eq!(
         second["args"],
         json!({"session_id": ROOT, "to_seq": point}),
-        // docs/tui.md:2449-2450 ("History and paging"): a run that reaches
+        // docs/tui.md ("History and paging"): a run that reaches
         // `seq 0` short of the display crosses into its ancestors before
         // the first frame instead.
         "the chain-root request precedes the first frame"
@@ -4913,13 +4914,13 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
         .unwrap_or_else(|err| panic!("blocking: {err}"));
     assert!(
         first_frame.contains("▣ completed"),
-        // docs/tui.md:2445-2446 ("History and paging"): the first frame
+        // docs/tui.md ("History and paging"): the first frame
         // draws the preview.
         "the root supplies the fill: {first_frame}"
     );
     assert!(
         first_frame.contains("child prompt"),
-        // docs/tui.md:2445-2446 ("History and paging"): the first frame
+        // docs/tui.md ("History and paging"): the first frame
         // draws the preview.
         "the child remains visible: {first_frame}"
     );
@@ -4933,7 +4934,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     assert_eq!(
         raise["args"],
         json!({"level": "full"}),
-        // docs/tui.md:2451 ("History and paging"): the terminal then raises
+        // docs/tui.md ("History and paging"): the terminal then raises
         // the subscription to `full`.
         "the raise follows the root-filled frame"
     );
@@ -4946,7 +4947,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     assert_eq!(
         lp.app.scroll().1,
         joint.index().total(),
-        // docs/tui.md:2446-2448 ("History and paging"): after the frame the
+        // docs/tui.md ("History and paging"): after the frame the
         // terminal reads older windows to the chain root, carrying ancestor
         // runs above the preview for the joint total.
         "the joint total spans the chain"
@@ -4962,7 +4963,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     assert!(
         held.iter()
             .any(|(session, first, last)| session == ROOT && *first == 0 && *last == point),
-        // docs/tui.md:2492-2493 ("History and paging"): a dropped ancestor
+        // docs/tui.md ("History and paging"): a dropped ancestor
         // page loads again with `history` under its `session_id`.
         "the ancestor stays paged under its session: {held:?}"
     );
@@ -5057,7 +5058,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     }
     assert!(
         filled.index().total() >= height,
-        // docs/tui.md:2430-2431 ("History and paging"): older own-segment windows until the preview fills.
+        // docs/tui.md ("History and paging"): older own-segment windows until the preview fills.
         "the own window fills the screen"
     );
     // Acking the summary starts the tail read on a worker; the first
@@ -5089,7 +5090,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     let read = socket_line(&mut reader).unwrap_or_else(|| panic!("the tail read"));
     let read: serde_json::Value = serde_json::from_str(&read).unwrap_or_default();
     assert_eq!(read["command"], "history");
-    // docs/tui.md:2428-2430 ("History and paging"): asks history with no from_seq for the last lines.
+    // docs/tui.md ("History and paging"): asks history with no from_seq for the last lines.
     assert_eq!(read["args"], json!({}), "the newest own window first");
     let history = read["id"]
         .as_str()
@@ -5106,7 +5107,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     // The first frame draws before any ancestor read: the parked flush
     // reports, while any hub command on the socket fails: the ancestor
     // count and the raise both follow the frame.
-    // docs/tui.md:2431-2434 ("History and paging"): the first frame draws
+    // docs/tui.md ("History and paging"): the first frame draws
     // the preview before the ancestor count and the raise.
     let wait = Deadline::after(DEADLINE);
     let first = wait.recv_or_fail(&events, "the first frame");
@@ -5129,7 +5130,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
         .get_mut()
         .set_nonblocking(false)
         .unwrap_or_else(|err| panic!("blocking: {err}"));
-    // docs/tui.md:2445-2446 ("History and paging"): the first frame draws the preview.
+    // docs/tui.md ("History and paging"): the first frame draws the preview.
     assert!(
         first.contains("child reply 29"),
         "the first frame shows the child's last page: {first}"
@@ -5146,7 +5147,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     assert_eq!(
         count["args"],
         json!({"session_id": ROOT, "to_seq": point}),
-        // docs/tui.md:2432-2434 ("History and paging"): after the frame, older windows and ancestors for the joint total.
+        // docs/tui.md ("History and paging"): after the frame, older windows and ancestors for the joint total.
         "the ancestor count follows the frame"
     );
     let count_id = count["id"]
@@ -5167,7 +5168,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     assert_eq!(
         raise["args"],
         json!({"level": "full"}),
-        // docs/tui.md:2451 ("History and paging"): then raises the subscription to full.
+        // docs/tui.md ("History and paging"): then raises the subscription to full.
         "the raise follows the count"
     );
     let (lp, out) = worker.join().unwrap_or_else(|_| panic!("the worker"));
@@ -5181,7 +5182,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     assert_eq!(
         lp.app.scroll().1,
         joint.index().total(),
-        // docs/tui.md:2432-2434 ("History and paging"): count carries ancestor runs above the preview for the joint total.
+        // docs/tui.md ("History and paging"): count carries ancestor runs above the preview for the joint total.
         "the joint total spans the chain"
     );
     let pages = lp.app.pages();
@@ -5198,7 +5199,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     assert!(
         held.iter()
             .any(|(session, first, last)| session == ROOT && *first == 0 && *last == point),
-        // docs/tui.md:2484-2493 ("History and paging"): chain as one history, ancestor pages under its session.
+        // docs/tui.md ("History and paging"): chain as one history, ancestor pages under its session.
         "the ancestor stays paged under its session: {held:?}"
     );
     assert!(
@@ -5210,7 +5211,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
                 .iter()
                 .skip_while(|(session, _, _)| session == ROOT)
                 .all(|(session, _, _)| session == CHILD),
-        // docs/tui.md:2484-2489 ("History and paging"): chain as one history, ancestors before the own run.
+        // docs/tui.md ("History and paging"): chain as one history, ancestors before the own run.
         "ancestors first, then the own run: {held:?}"
     );
 }

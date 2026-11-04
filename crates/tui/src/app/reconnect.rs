@@ -37,8 +37,6 @@ pub(crate) struct Reconnect {
     was_up: bool,
     /// `sessions` is due on the next outgoing after a reconnect.
     sessions_due: bool,
-    /// The `sessions` command waiting for its answer, if one is out.
-    sessions: Option<String>,
     /// Sessions with a `session_status` after `sessions` was sent: their
     /// rows stay even when the answer omits them.
     fresh: HashSet<SessionId>,
@@ -152,7 +150,7 @@ impl App {
         }
         self.reconnect.sessions_due = false;
         let id = super::mint();
-        self.reconnect.sessions = Some(id.clone());
+        self.outbox.wait(&id, super::outbox::Waiting::Sessions);
         self.reconnect.fresh.clear();
         vec![serde_json::json!({"id": id, "command": "sessions"}).to_string()]
     }
@@ -160,7 +158,7 @@ impl App {
     /// A `session_status` folded into the rows: after `sessions` was sent,
     /// its session stays even when the answer omits it.
     pub(super) fn note_feed(&mut self, session: &SessionId) {
-        if self.reconnect.sessions.is_some() {
+        if self.outbox.waiting_any(&super::outbox::Waiting::Sessions) {
             self.reconnect.fresh.insert(session.clone());
         }
     }
@@ -169,18 +167,17 @@ impl App {
     /// so one arriving before the next `hub_hello` matches nothing and
     /// drops no rows.
     pub(super) fn sessions_dropped(&mut self) {
-        self.reconnect.sessions = None;
+        self.outbox.forget(&super::outbox::Waiting::Sessions);
         self.reconnect.fresh.clear();
     }
 
-    /// The `sessions` answer with `id`: when it is the one waiting, drop
-    /// every live row its running set omits, except one with a feed line
-    /// after `sessions` was sent, and take the wait off. A stale id, from
-    /// before a later `sessions`, changes nothing. True when handled.
-    pub(super) fn sessions_accepted(&mut self, id: &str, result: &Value) -> bool {
-        if self.reconnect.sessions.as_deref() != Some(id) {
-            return false;
-        }
+    /// The `sessions` answer for the waiting id: drop every live row
+    /// its running set omits, except one with a feed line after
+    /// `sessions` was sent, and take the wait off. The router matches
+    /// `Waiting::Sessions` before calling, so a stale id never reaches
+    /// here.
+    pub(super) fn sessions_accepted(&mut self, id: &str, result: &Value) {
+        self.outbox.settled(id);
         let running: HashSet<SessionId> = result
             .get("live")
             .and_then(Value::as_array)
@@ -204,20 +201,15 @@ impl App {
                 home.sessions.remove(&session);
             }
         }
-        self.reconnect.sessions = None;
         self.reconnect.fresh.clear();
-        true
     }
 
-    /// A rejected `sessions` with `id`: when it is the one waiting, take
-    /// the wait off and keep the rows. True when handled.
-    pub(super) fn sessions_rejected(&mut self, id: &str) -> bool {
-        if self.reconnect.sessions.as_deref() != Some(id) {
-            return false;
-        }
-        self.reconnect.sessions = None;
+    /// A rejected `sessions` for the waiting id: take the wait off and
+    /// keep the rows. The router matches `Waiting::Sessions` before
+    /// calling.
+    pub(super) fn sessions_rejected(&mut self, id: &str) {
+        self.outbox.settled(id);
         self.reconnect.fresh.clear();
-        true
     }
 
     /// Whether a failed connect says so in a notice: only the first of a

@@ -47,7 +47,10 @@ use support::clock::Parker;
 /// The stop bound the tests run with, on the fake clock.
 const BOUND: Duration = Duration::from_secs(5);
 
-/// A fake watch: replays queued replies and records when it ran.
+/// A fake watch: replays queued replies and records when it ran. The
+/// fake keeps the order the watch keeps: every line it delivers is
+/// persisted before its fold, and the fold is sent after `on_line`
+/// returns (`docs/testing/fakes.md`, "Fakes").
 struct Script {
     clock: Arc<FakeClock>,
     calls: Mutex<Vec<std::time::Instant>>,
@@ -825,6 +828,81 @@ fn wait_folded(rig: &Rig, n: usize) {
     for _ in 0..n {
         deadline.recv_or_fail(&folded, "the watch to fold its lines");
     }
+}
+
+/// Every delivered line is already in the output file when its fold
+/// runs: `on_line` reads the file at the exact point of the fold, on the
+/// test's own thread, so the order is program order inside `emit`, not a
+/// race. The second line proves the file grows line by line.
+#[test]
+fn a_delivered_line_is_in_the_output_file_before_its_fold() {
+    let dir = TempDir::new("fiber-script-persist-order");
+    let clock = FakeClock::new();
+    let output_path = dir.path().join("output.jsonl");
+    let lines = vec![
+        envelope(1, "turn_completed", serde_json::json!({})),
+        fiber_exited_line(2, "Done."),
+    ];
+    let script = Script::scripted(&clock, vec![WatchReply::Exited(lines)], output_path.clone());
+    let mut folds = Vec::new();
+    script
+        .watch(
+            &SessionId("s_child".into()),
+            None,
+            &mut |line: &Envelope| {
+                folds.push(serde_json::to_string(line).unwrap());
+                let mut want = String::new();
+                for folded in &folds {
+                    want.push_str(folded);
+                    want.push('\n');
+                }
+                let text = std::fs::read_to_string(&output_path).unwrap_or_default();
+                assert_eq!(text, want, "the file holds every line delivered so far");
+            },
+        )
+        .expect("the watch delivers both lines");
+}
+
+/// The folded signal comes after `on_line` returns: the test sees the
+/// watcher thread enter `on_line`, finds the fold still unsent, releases
+/// it, and only then receives the fold. This pins the order `wait_folded`
+/// synchronises on: the fold is sent after the delivery loop, never
+/// before it (`docs/testing/fakes.md`, "Fakes").
+#[test]
+fn the_folded_signal_comes_after_on_line_returns() {
+    let dir = TempDir::new("fiber-script-fold-order");
+    let clock = FakeClock::new();
+    let output_path = dir.path().join("output.jsonl");
+    let script = Script::scripted(
+        &clock,
+        vec![WatchReply::Exited(vec![fiber_exited_line(1, "Done.")])],
+        output_path,
+    );
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    std::thread::scope(|s| {
+        let watching = Arc::clone(&script);
+        s.spawn(move || {
+            let mut on_line = |_line: &Envelope| {
+                entered_tx.send(()).unwrap();
+                Deadline::after(MUST_SUCCEED_WITHIN)
+                    .recv_or_fail(&release_rx, "the test to release on_line");
+            };
+            watching
+                .watch(&SessionId("s_child".into()), None, &mut on_line)
+                .expect("the watch delivers its line");
+        });
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&entered_rx, "the watch to reach on_line");
+        assert!(
+            script.folded_rx.lock().unwrap().try_recv().is_err(),
+            "the fold waits for on_line to return"
+        );
+        release_tx.send(()).unwrap();
+        let folded = script.folded_rx.lock().unwrap();
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&folded, "the watch to fold after on_line returned");
+    });
 }
 
 /// Wakes the runner through one refused-watch backoff: the runner parks

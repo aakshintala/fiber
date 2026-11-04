@@ -109,9 +109,9 @@ fn delegate_setup() -> (Setup, Hold) {
 #[test]
 fn hold_drop_releases_and_reaps_the_holder() {
     let setup = Setup::new();
-    // Pid-scoped like the job command, so parallel tests cannot
-    // cross-match; the absolute path keeps the helper on its hold-path
-    // derivation.
+    // Per-process like the job command, not per-hold: a sibling test
+    // process can match by pid prefix; the absolute path keeps the helper
+    // on its hold-path derivation.
     let command = format!(
         "head -n 1 {} #{}",
         setup.workspace().join("hold").display(),
@@ -158,8 +158,9 @@ fn hold_drop_releases_and_reaps_the_holder() {
 /// it, so the test clicks only the row that names it.
 fn job_setup() -> (Setup, Hold, String) {
     let setup = Setup::new();
-    // A shell comment with this process id keeps the watchdog's
-    // pattern to this test's `head`: parallel tests hold their own.
+    // A shell comment with this process id scopes the watchdog's pattern
+    // to this test process, not to this hold: a sibling test process
+    // whose pid extends this pid still matches by prefix.
     let command = format!("head -n 1 hold #{}", std::process::id());
     let workdir = setup.workspace().to_string_lossy().into_owned();
     write_json(
@@ -188,9 +189,67 @@ fn start_run(setup: &Setup) -> Run {
     run
 }
 
+/// Whether the session log holds the parent turn's completion after its
+/// "Done." text: the turn is durably done, so the panel rows it drew are
+/// final until the test's own click expands them. The finished title
+/// never emits while an item is held, so no byte wait can read it; the
+/// log's `turn_completed` is the readiness signal instead.
+fn turn_completed_after_done(sessions: &std::path::Path) -> bool {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        };
+        let events = support::complete_lines(&text);
+        let Some(done) = events.iter().position(|event| {
+            event["kind"] == "text_completed" && event["payload"]["text"] == "Done."
+        }) else {
+            continue;
+        };
+        let Some(turn_id) = events[done]["turn_id"].as_str() else {
+            continue;
+        };
+        if events
+            .iter()
+            .skip(done + 1)
+            .any(|event| event["kind"] == "turn_completed" && event["turn_id"] == turn_id)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// The job row, wherever the panel lays it out, or none before it draws.
 fn job_row_index(rows: &[String], command: &str) -> Option<usize> {
     rows.iter().position(|row| row.contains(command))
+}
+
+/// Which read the last grid seen by the item-view-open wait implies, in
+/// words: the job row never drew, it drew somewhere other than the row
+/// clicked, or it is still on the row clicked. Failure-path words only;
+/// it runs only on expiry. The trailing newline is the separator the
+/// leading wait leaves to its caller.
+fn item_view_open_lead(rows: &[String], command: &str, clicked: u16) -> String {
+    match job_row_index(rows, command) {
+        None => {
+            "the job row is at no y: the job never registered or the panel dropped it\n".to_owned()
+        }
+        Some(y) if y as u16 != clicked => format!(
+            "the job row is at y={y}, not at the y={clicked} that was clicked: the panel reflowed under the click\n"
+        ),
+        Some(y) => format!(
+            "the job row is still at y={y}, the y that was clicked: the click did not open the view\n"
+        ),
+    }
 }
 
 /// The first row containing `needle`, or a panic naming it.
@@ -242,23 +301,19 @@ fn assert_dim(grid: &Grid, y: u16, needle: &str) {
     }
 }
 
-/// Clicks the cell at `(x, y)`: an SGR press then its release on the
-/// same cell.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
-}
-
 /// Opens the panel row holding `needle`: clicks its text, then waits
 /// for the item view's top row. The caller waits for the turn's
-/// completion first, so the row's position is final: the parent's turn
-/// is done and the one held item parks on the test-held FIFO, so later
-/// folds only tick in place.
+/// `turn_completed` session-log event first, so the row's position is
+/// final: the parent's turn is done and the one held item parks on the
+/// test-held FIFO, so later folds only tick in place.
 fn open_row(run: &mut Run, needle: &str, top: &str) -> Grid {
-    let grid = run.wait_screen("the panel lists the row", |grid| {
+    run.wait_screen("the panel lists the row", |grid| {
         grid.contents.contains(needle)
     });
-    let y = row_with(&grid, needle);
-    click(run, col_at(&grid, y, needle), y);
+    run.click_where("the panel row", |grid| {
+        let y = row_with(grid, needle);
+        Some((col_at(grid, y, needle), y))
+    });
     run.wait_screen("the item view opens", |grid| grid.contents.contains(top))
 }
 
@@ -278,6 +333,10 @@ fn assert_span_tint(grid: &Grid, y: u16, needle: &str, tint: Colour) {
 fn the_delegate_view_matches_the_doc() {
     let (setup, hold) = delegate_setup();
     let mut run = start_run(&setup);
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until("the parent turn's completion", setup.deadline, move || {
+        turn_completed_after_done(&sessions)
+    });
     // The parent's turn completes before the click, so the panel row's
     // position is final: the completed footer proves the turn is done,
     // and the delegate parks on the test-held FIFO, so no further
@@ -424,6 +483,57 @@ fn job_row_predicate_rejects_the_pre_expansion_grid() {
 }
 
 #[test]
+fn item_view_open_lead_names_the_read_the_last_grid_implies() {
+    let command = "head -n 1 hold #7";
+    let clicked = 20u16;
+    let rows_with_job_at = |y: usize| -> Vec<String> {
+        (0..24)
+            .map(|i| {
+                if i == y {
+                    format!("job j_1 · {command}")
+                } else {
+                    format!("filler row {i}")
+                }
+            })
+            .collect()
+    };
+    let missing = vec!["Jobs  1 running".to_owned(), "Done.".to_owned()];
+    let below = rows_with_job_at(clicked as usize - 1);
+    let at = rows_with_job_at(clicked as usize);
+    let above = rows_with_job_at(clicked as usize + 1);
+
+    let no_row = item_view_open_lead(&missing, command, clicked);
+    let reflowed_below = item_view_open_lead(&below, command, clicked);
+    let still_there = item_view_open_lead(&at, command, clicked);
+    let reflowed_above = item_view_open_lead(&above, command, clicked);
+
+    assert_eq!(
+        no_row,
+        "the job row is at no y: the job never registered or the panel dropped it\n"
+    );
+    assert_eq!(
+        reflowed_below,
+        format!(
+            "the job row is at y={}, not at the y={clicked} that was clicked: the panel reflowed under the click\n",
+            clicked - 1
+        )
+    );
+    assert_eq!(
+        still_there,
+        format!(
+            "the job row is still at y={clicked}, the y that was clicked: the click did not open the view\n"
+        )
+    );
+    assert_eq!(
+        reflowed_above,
+        format!(
+            "the job row is at y={}, not at the y={clicked} that was clicked: the panel reflowed under the click\n",
+            clicked + 1
+        )
+    );
+}
+
+#[test]
 fn fifo_release_written_before_reader_opens_is_read() {
     let setup = Setup::new();
     let fifo = setup.workspace().join("hold");
@@ -462,25 +572,60 @@ fn the_job_pty_view_matches_the_doc() {
     // completion — not `turn_finished` — is the readiness signal here.
     // No session event lands between the two clicks; only the first
     // click's own expansion changes the screen.
-    let grid = run.wait_screen("the tty job starts", |grid| {
-        grid.contents.contains("Jobs")
-            && grid.contents.contains("Done.")
-            && grid.contents.contains("completed")
+    // A frame with "READY", no Jobs card and a collapsed "Ran 1 command"
+    // means either the shell call opened no job or the job ended before
+    // step 2; the event path cannot lose a job that opened. The
+    // session-log tail shows which: `job_started` shows the job opened;
+    // `job_completed` carries `process.exit_code`, `process.signal` and
+    // `error.code` in the raw lines.
+    let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until("the parent turn's completion", setup.deadline, {
+        let sessions = sessions_dir.clone();
+        move || turn_completed_after_done(&sessions)
     });
-    let title = row_with(&grid, "Jobs");
-    click(&mut run, col_at(&grid, title, "Jobs"), title);
-    let grid = run.wait_screen("the job row draws", |grid| {
+    run.wait_screen_reporting(
+        "the tty job starts",
+        |grid| {
+            grid.contents.contains("Jobs")
+                && grid.contents.contains("Done.")
+                && grid.contents.contains("completed")
+        },
+        || support::session_logs_tail(&sessions_dir),
+    );
+    run.click_where("the Jobs title", |grid| {
+        let title = row_with(grid, "Jobs");
+        Some((col_at(grid, title, "Jobs"), title))
+    });
+    run.wait_screen("the job row draws", |grid| {
         job_row_index(&grid.rows, &command).is_some()
     });
-    let job = job_row_index(&grid.rows, &command).unwrap() as u16;
-    let (width, _) = grid.size();
-    let job_x = (0..width)
-        .find(|x| grid.cell(*x, job).symbol != " ")
-        .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
-    click(&mut run, job_x, job);
-    let grid = run.wait_screen("the item view opens", |grid| {
-        grid.contents.contains("Job  ◆ ")
+    let clicked = std::cell::Cell::new(0u16);
+    run.click_where("the job row", |grid| {
+        let job = job_row_index(&grid.rows, &command)? as u16;
+        let (width, _) = grid.size();
+        let job_x = (0..width)
+            .find(|x| grid.cell(*x, job).symbol != " ")
+            .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
+        clicked.set(job);
+        Some((job_x, job))
     });
+    // The lead reads the last grid the wait saw and names which read it
+    // implies; it runs only on expiry.
+    let last: std::cell::RefCell<Option<Vec<String>>> = std::cell::RefCell::new(None);
+    let grid = run.wait_screen_leading(
+        "the item view opens",
+        |grid| {
+            *last.borrow_mut() = Some(grid.rows.clone());
+            grid.contents.contains("Job  ◆ ")
+        },
+        || {
+            item_view_open_lead(
+                last.borrow().as_deref().unwrap_or(&[]),
+                &command,
+                clicked.get(),
+            )
+        },
+    );
     // The status row names the job twice: once in the row, once in the
     // stop target. The row is short enough to draw whole: no `…` cuts
     // it, so the finish fold below reads the outcome off the screen.

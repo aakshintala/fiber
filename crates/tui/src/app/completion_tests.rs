@@ -8,6 +8,7 @@ use super::super::commands::commands_testkit::{
     session_line, shown, table_lines, turn_starts, type_any, type_text,
 };
 use crate::app::{App, Effect};
+use crate::home::Launch;
 use crate::keys::{Edit, Key};
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -30,7 +31,7 @@ fn typing_filters_prefix_matches_first() {
     answer_commands(&mut app, &["tdd", "areview"]);
     type_text(&mut app, "/re");
     // Prefix matches first, each group in the `/` list's drawn order
-    // (`docs/tui.md:1971`): resume, release-notes, reviewer-setup,
+    // (`docs/tui.md`, "Slash commands"): resume, release-notes, reviewer-setup,
     // rewind, name by its `rename` alias, and reload; then the
     // contains matches, credential and the `areview` skill.
     assert_eq!(
@@ -894,7 +895,7 @@ fn theme_attached() -> (App, std::sync::Arc<crate::configure_fake::Fake>) {
     fake.themes = vec!["solar".to_owned(), "solar dawn".to_owned()];
     let seam = std::sync::Arc::new(fake);
     let mut app = attached();
-    app.set_configure(Some(Arc::clone(&seam) as Arc<dyn crate::Configure>));
+    app.set_configure(Arc::clone(&seam) as Arc<dyn crate::Configure>);
     (app, seam)
 }
 
@@ -1012,8 +1013,11 @@ fn slash_theme_with_an_image_is_a_prompt() {
 }
 
 #[test]
-fn slash_theme_name_without_a_seam_is_a_notice() {
+fn slash_theme_name_without_a_workspace_is_a_notice() {
     let mut app = attached();
+    app.set_home(Launch::default());
+    let seam = Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    app.set_configure(seam as Arc<dyn crate::Configure>);
     let lines = sent(enter(&mut app, "/theme light"));
     assert!(lines.is_empty());
     assert_eq!(app.draft(), "");
