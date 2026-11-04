@@ -4,4 +4,3 @@ xtask/src/screen_ratchet_tests.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhous
 xtask/src/main.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 docs/testing/screens.md	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 .config/nextest.toml	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
-crates/main/tests/completion.rs	fiber-4078	plan	2026-11-04T02:14:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
