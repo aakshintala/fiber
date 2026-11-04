@@ -24,6 +24,19 @@ fn maxima(entries: &[(&str, usize)]) -> BTreeMap<String, usize> {
         .collect()
 }
 
+fn screen_maxima(reads: &[(&str, usize)], mouse: &[(&str, usize)]) -> Maxima {
+    Maxima {
+        reads: reads
+            .iter()
+            .map(|(path, maximum)| ((*path).to_owned(), *maximum))
+            .collect(),
+        mouse: mouse
+            .iter()
+            .map(|(path, maximum)| ((*path).to_owned(), *maximum))
+            .collect(),
+    }
+}
+
 #[test]
 fn the_line_rule_counts_plain_calls() {
     let cases: &[(&str, usize)] = &[
@@ -293,7 +306,7 @@ fn support_files_are_outside_the_rule() {
         "crates/main/tests/support/pty.rs",
         "    let grid = self.screen();\n    let other = run.screen();\n",
     )];
-    assert!(check(&files, &maxima(&[])).is_empty());
+    assert!(check(&files, &screen_maxima(&[], &[])).is_empty());
 }
 
 #[test]
@@ -306,7 +319,10 @@ fn per_file_maxima_are_independent() {
         ),
     ];
     assert_eq!(
-        check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])),
+        check(
+            &files,
+            &screen_maxima(&[("crates/main/tests/a.rs", 1)], &[])
+        ),
         ["crates/main/tests/b.rs holds 2 unmarked grid-read lines (maximum 0)"]
     );
 }
@@ -318,7 +334,7 @@ fn an_absent_file_has_maximum_zero() {
         "    let grid = run.screen();\n",
     )];
     assert_eq!(
-        check(&files, &maxima(&[])),
+        check(&files, &screen_maxima(&[], &[])),
         ["crates/main/tests/fresh.rs holds 1 unmarked grid-read lines (maximum 0)"]
     );
 }
@@ -329,7 +345,13 @@ fn a_file_at_its_maximum_passes() {
         "crates/main/tests/a.rs",
         "    let grid = run.screen();\n",
     )];
-    assert!(check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])).is_empty());
+    assert!(
+        check(
+            &files,
+            &screen_maxima(&[("crates/main/tests/a.rs", 1)], &[])
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -339,7 +361,10 @@ fn a_count_above_the_pinned_maximum_fails() {
         "    let grid = run.screen();\n    assert!(grid.contents.contains(\"hi\"));\n",
     )];
     assert_eq!(
-        check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])),
+        check(
+            &files,
+            &screen_maxima(&[("crates/main/tests/a.rs", 1)], &[])
+        ),
         ["crates/main/tests/a.rs holds 2 unmarked grid-read lines (maximum 1)"]
     );
 }
@@ -351,7 +376,10 @@ fn a_failure_names_the_file_the_count_and_the_maximum() {
         "    let a = run.screen();\n    assert!(a.contents.contains(\"hi\"));\n",
     )];
     assert_eq!(
-        check(&files, &maxima(&[("crates/main/tests/a.rs", 1)])),
+        check(
+            &files,
+            &screen_maxima(&[("crates/main/tests/a.rs", 1)], &[])
+        ),
         ["crates/main/tests/a.rs holds 2 unmarked grid-read lines (maximum 1)"]
     );
 }
@@ -426,13 +454,16 @@ fn a_suffixed_wait_name_opens_a_wait() {
         "    run.wait_screen_leading(\"x\", |grid| true);",
         "    run.wait_screen2(\"x\", |grid| true);",
     ] {
-        assert!(opens_wait(&code_part(code, 0).0), "code: {code:?}");
+        assert!(
+            opens_call(&code_part(code, 0).0, ".wait_screen"),
+            "code: {code:?}"
+        );
     }
 }
 
 #[test]
 fn a_decoy_wait_prefix_does_not_hide_a_later_wait() {
-    assert!(opens_wait("ab.wait_screened.wait_screen("));
+    assert!(opens_call("ab.wait_screened.wait_screen(", ".wait_screen"));
 }
 
 #[test]
@@ -518,4 +549,194 @@ fn char_literal_lengths_count_the_body_and_its_closing_quote() {
     assert_eq!(char_end("a'"), Some(2));
     assert_eq!(char_end("\\n'"), Some(3));
     assert_eq!(char_end("'_x"), None);
+}
+
+#[test]
+fn the_screen_maxima_table_parses_mouse_entries() {
+    let parsed = parse_screen_maxima("crates/main/tests/a.rs 1\nmouse crates/main/tests/b.rs 2\n")
+        .expect("both entries parse");
+    assert_eq!(
+        parsed.reads,
+        maxima(&[("crates/main/tests/a.rs", 1)]),
+        "a plain line stays a grid-read entry"
+    );
+    assert_eq!(
+        parsed.mouse,
+        maxima(&[("crates/main/tests/b.rs", 2)]),
+        "a mouse line lands in the mouse map"
+    );
+    assert!(
+        parse_screen_maxima("")
+            .expect("empty input parses")
+            .mouse
+            .is_empty()
+            && parse_screen_maxima("")
+                .expect("empty input parses")
+                .reads
+                .is_empty()
+    );
+}
+
+#[test]
+fn the_screen_maxima_table_rejects_malformed_mouse_lines_with_exact_errors() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "mouse crates/main/tests/a.rs\n",
+            "line 1: expected `mouse <path> <maximum>`, got `mouse crates/main/tests/a.rs`",
+        ),
+        (
+            "mouse crates/main/tests/a.rs 1 extra\n",
+            "line 1: expected `mouse <path> <maximum>`, got `mouse crates/main/tests/a.rs 1 extra`",
+        ),
+        (
+            "mouse crates/main/tests/a.rs many\n",
+            "line 1: maximum for crates/main/tests/a.rs: invalid digit found in string",
+        ),
+        (
+            "mouse crates/main/tests/a.rs 1\nmouse crates/main/tests/a.rs 2\n",
+            "line 2: duplicate maximum for crates/main/tests/a.rs",
+        ),
+        (
+            "crates/main/tests/a.rs 1\nmouse badline\n",
+            "line 2: expected `mouse <path> <maximum>`, got `mouse badline`",
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            parse_screen_maxima(input),
+            Err((*expected).to_owned()),
+            "input: {input:?}"
+        );
+    }
+}
+
+#[test]
+fn the_plain_maxima_table_rejects_a_mouse_line() {
+    assert_eq!(
+        parse_maxima("mouse crates/main/tests/a.rs 1\n"),
+        Err("line 1: expected `<path> <maximum>`, got `mouse crates/main/tests/a.rs 1`".to_owned()),
+        "the census and stale-wait blocks take plain lines only"
+    );
+}
+
+#[test]
+fn the_mouse_count_matches_press_release_drag_and_motion() {
+    let cases: &[(&str, usize)] = &[
+        ("    run.write(b\"\\x1b[<0;5;3M\");\n", 1),
+        ("    run.write(b\"\\x1b[<0;5;3m\");\n", 1),
+        ("    run.write(b\"\\x1b[<3;5;3m\");\n", 1),
+        ("    run.write(b\"\\x1b[<32;5;3M\");\n", 1),
+        ("    run.write(b\"\\x1b[<35;5;3M\");\n", 1),
+        ("    run.write(b\"\\x1b[<64;5;3M\");\n", 0),
+        ("    run.write(b\"\\x1b[<65;5;3M\");\n", 0),
+        ("    // run.write(b\"\\x1b[<0;5;3M\");\n", 0),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(count_mouse(source), *expected, "source: {source:?}");
+    }
+}
+
+#[test]
+fn a_mouse_report_inside_a_block_comment_counts() {
+    assert_eq!(
+        count_mouse("    /* run.write(b\"\\x1b[<0;5;3M\"); */\n"),
+        1,
+        "the mouse count stays a conservative upper bound"
+    );
+}
+
+#[test]
+fn a_mouse_literal_above_a_helper_call_counts() {
+    assert_eq!(
+        count_mouse(
+            "    let probe = \"\\x1b[<0;5;3M\";\n    run.click_where(\"the row\", |grid| grid.text_at(\"x\").map(|(x, y)| (x, y)));\n"
+        ),
+        1,
+        "above the opening line"
+    );
+}
+
+#[test]
+fn mouse_literals_inside_a_helper_call_do_not_count() {
+    let source = "    run.click_where(\"the row\", |grid| {\n        let point = grid.text_at(\"x\").unwrap();\n        run.write(format!(\"\\x1b[<0;{};{}M\", point.0, point.1).as_bytes());\n    });\n";
+    assert_eq!(count_mouse(source), 0, "opening, inner and closing lines");
+    let mouse = "    run.mouse_where(\"the row\", |grid| grid.text_at(\"x\"), |point| {\n        hover_bytes(point)\n    });\n";
+    assert_eq!(count_mouse(mouse), 0, "a mouse_where span too");
+    let paused = "    run.mouse_where_paused(\"the row\", |grid| grid.text_at(\"x\"), click_bytes, |_| {});\n";
+    assert_eq!(count_mouse(paused), 0, "a mouse_where_paused span too");
+}
+
+#[test]
+fn a_mouse_literal_below_a_helper_call_counts() {
+    assert_eq!(
+        count_mouse(
+            "    run.click_where(\"the row\", |grid| grid.text_at(\"x\"));\n    run.write(b\"\\x1b[<0;5;3M\");\n"
+        ),
+        1,
+        "below the closing line"
+    );
+}
+
+#[test]
+fn a_helper_name_inside_a_string_or_comment_opens_no_mouse_span() {
+    assert_eq!(
+        count_mouse(
+            "    let note = \"run.click_where(\\\"x\\\")\";\n    run.write(b\"\\x1b[<0;5;3M\");\n"
+        ),
+        1,
+        "a string mention opens no span"
+    );
+    assert_eq!(
+        count_mouse(
+            "    // the next line used to call run.mouse_where(\"x\") here\n    run.write(b\"\\x1b[<0;5;3M\");\n"
+        ),
+        1,
+        "a comment mention opens no span"
+    );
+}
+
+#[test]
+fn a_file_missing_from_the_mouse_map_holds_none() {
+    let files = [file(
+        "crates/main/tests/fresh.rs",
+        "    run.write(b\"\\x1b[<0;5;3M\");\n",
+    )];
+    assert_eq!(
+        check(&files, &screen_maxima(&[], &[])),
+        ["crates/main/tests/fresh.rs holds 1 mouse-event lines outside the helper (maximum 0)"]
+    );
+}
+
+#[test]
+fn a_file_at_its_mouse_maximum_passes_and_one_over_fails() {
+    let files = [file(
+        "crates/main/tests/a.rs",
+        "    run.write(b\"\\x1b[<0;5;3M\");\n",
+    )];
+    assert!(
+        check(
+            &files,
+            &screen_maxima(&[], &[("crates/main/tests/a.rs", 1)])
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        check(&files, &screen_maxima(&[], &[])),
+        ["crates/main/tests/a.rs holds 1 mouse-event lines outside the helper (maximum 0)"]
+    );
+}
+
+#[test]
+fn the_mouse_and_read_maxima_are_independent() {
+    let files = [file(
+        "crates/main/tests/a.rs",
+        "    let grid = run.screen();\n    run.write(b\"\\x1b[<0;5;3M\");\n",
+    )];
+    assert_eq!(
+        check(
+            &files,
+            &screen_maxima(&[("crates/main/tests/a.rs", 1)], &[])
+        ),
+        ["crates/main/tests/a.rs holds 1 mouse-event lines outside the helper (maximum 0)"]
+    );
 }

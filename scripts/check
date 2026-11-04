@@ -164,10 +164,14 @@ if [ "$scope" != platform ]; then
     # `// settled:` on the read line or the line before it exempts a read,
     # even inside a string literal, since the count is a conservative
     # upper bound. `crates/main/tests/support/` is outside the rule,
-    # and a `.screen` field access (as in `login.rs`) is not a call. Read
-    # detection, wait-span tracking, comment recognition and the per-file
-    # comparison live in `cargo xtask screen-ratchet`
-    # (docs/testing.md, "Levels").
+    # and a `.screen` field access (as in `login.rs`) is not a call. A
+    # `mouse <path> <maximum>` line caps that file's mouse-event lines
+    # (`[<0;`, `[<3;`, `[<32;`, `[<35;` press, release, drag and motion
+    # reports) outside the frame-locked click helper the same way, and a
+    # file missing from the mouse entries holds none; wheel reports stay
+    # outside the count. Read detection, wait-span tracking, comment
+    # recognition and the per-file comparison live in
+    # `cargo xtask screen-ratchet` (docs/testing.md, "Levels").
     cargo xtask screen-ratchet <<'EOF'
 crates/main/tests/approval_look.rs 53
 crates/main/tests/ask_user_form_look.rs 66
@@ -229,6 +233,29 @@ crates/main/tests/tui_timing_tests.rs 2
 crates/main/tests/wheel_scroll.rs 10
 crates/main/tests/working_line_look.rs 69
 crates/main/tests/workspace_picker.rs 1
+mouse crates/main/tests/approval_look.rs 1
+mouse crates/main/tests/call_view.rs 1
+mouse crates/main/tests/delegates.rs 1
+mouse crates/main/tests/doctor_command.rs 1
+mouse crates/main/tests/group_look.rs 1
+mouse crates/main/tests/hover_look.rs 2
+mouse crates/main/tests/inline_images.rs 1
+mouse crates/main/tests/item_views_look.rs 1
+mouse crates/main/tests/journeys.rs 3
+mouse crates/main/tests/link_look.rs 1
+mouse crates/main/tests/look.rs 2
+mouse crates/main/tests/main_journeys.rs 1
+mouse crates/main/tests/model_picker_keys.rs 2
+mouse crates/main/tests/opened_call_look.rs 1
+mouse crates/main/tests/panel_look.rs 1
+mouse crates/main/tests/pinned_call_row.rs 1
+mouse crates/main/tests/rail_look.rs 2
+mouse crates/main/tests/release_notes.rs 2
+mouse crates/main/tests/search_look.rs 5
+mouse crates/main/tests/stream_closed_notice.rs 1
+mouse crates/main/tests/swapped_panels_look.rs 1
+mouse crates/main/tests/terminal.rs 1
+mouse crates/main/tests/wheel_scroll.rs 1
 EOF
     echo "== kinds ratchet"
     cargo xtask kinds-ratchet --max 238 --support-max 36

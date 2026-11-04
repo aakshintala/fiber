@@ -88,8 +88,9 @@
 //! - `screen-ratchet`: reads the inline per-file maxima from stdin as one
 //!   `<path> <maximum>` per line, and fails when a file under
 //!   `crates/main/tests/` outside `support/` holds more unmarked `.screen()`
-//!   call lines than its maximum (0 when absent)
-//!   (`docs/testing/screens.md`, "Screens")
+//!   call lines than its maximum (0 when absent); a `mouse <path> <maximum>`
+//!   line caps that file's mouse-event lines outside the frame-locked click
+//!   helper the same way (`docs/testing/screens.md`, "Screens")
 //! - `census-ratchet [--print]`: reads the inline per-file maxima from stdin
 //!   as one `<path> <maximum>` per line, and fails when a production file
 //!   under `crates/` holds more string-typed closed-set sites than its
@@ -397,7 +398,7 @@ fn run(args: &[String]) -> Result<bool, String> {
             std::io::stdin()
                 .read_to_string(&mut input)
                 .map_err(|e| format!("stdin: {e}"))?;
-            let maxima = screen_ratchet::parse_maxima(&input)?;
+            let maxima = screen_ratchet::parse_screen_maxima(&input)?;
             report(
                 "screen-ratchet",
                 &screen_ratchet::check(&rust_files(&workspace_members()?)?, &maxima),
