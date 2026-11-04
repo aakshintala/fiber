@@ -1302,7 +1302,7 @@ fn the_fold_matches_the_turn_cards_prompts_when_narrowed() {
         // The input carries the turn card's start, however narrow.
         // `docs/tui.md`, "The slots": working_line draws the working line with started.
         let inputs = fake.inputs.borrow();
-        assert_eq!(inputs.len(), 1, "one folded input"); // `docs/tui.md`, "How a TUI extension runs": one call on the miss; 2872-2878: working_line fields.
+        assert_eq!(inputs.len(), 1, "one folded input"); // `docs/tui.md`, "How a TUI extension runs": one call on the miss.
         assert_eq!(inputs[0].started, Some(WALL - 674_000));
         assert!(inputs[0].retry.is_none());
     }

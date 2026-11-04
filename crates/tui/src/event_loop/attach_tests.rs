@@ -3222,7 +3222,7 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
         "first draw must observe the loader result"
     );
     observer.send("first draw").unwrap();
-    // The first frame waits for the loader, so load
+    // `docs/tui.md`, "How a TUI extension runs": the first frame waits for the loader, so load
     // completion precedes the first draw observation in this trace.
     assert_eq!(
         wait.recv_or_fail(&trace, "load completion"),

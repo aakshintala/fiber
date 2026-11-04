@@ -5619,7 +5619,7 @@ fn home_counts_come_from_the_held_total() {
         app.on_line(accepted(&other_id, json!({"sessions": [], "total": 1})))
             .is_empty()
     );
-    // `docs/tui.md`, "The session list" (sections order), `254-255` (exited rows and More), and `268` (counts from scoped totals).
+    // `docs/tui.md`, "The session list" (sections order, exited rows and More, counts from scoped totals).
     assert_eq!(
         list_shapes(&app),
         [
@@ -5649,7 +5649,7 @@ fn home_draws_no_exited_head_at_total_zero() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     );
     answer_scoped_empty(&mut app, &fanout, 0);
-    // `docs/tui.md`, "The session list" (exited rows and More) and `268` (count from the scoped total).
+    // `docs/tui.md`, "The session list" (exited rows and More, count from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "row"]);
     // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), ["○  a"]);
@@ -5668,7 +5668,7 @@ fn home_draws_no_more_when_the_total_meets_the_loaded_rows() {
         ]}),
     );
     answer_scoped_empty(&mut app, &fanout, 2);
-    // `docs/tui.md`, "The session list" (More when rows remain) and `268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More when rows remain, More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 2", "row", "row"]);
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
@@ -5690,7 +5690,7 @@ fn home_more_draws_one_more_at_total_one_above_shown() {
         ]}),
     );
     answer_scoped_empty(&mut app, &fanout, 3);
-    // `docs/tui.md`, "The session list" (exited rows and More) and `268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (exited rows and More, More counts from the scoped total).
     assert_eq!(
         list_shapes(&app),
         ["section w", "head 3", "row", "row", "more 1"]
@@ -5715,7 +5715,7 @@ fn home_draws_no_more_when_the_total_falls_below_loaded() {
     answer_scoped_empty(&mut app, &fanout, 1);
     // Below loaded rows the count never goes negative and no `More`
     // draws.
-    // `docs/tui.md`, "The session list" (More when rows remain) and `268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More when rows remain, More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 1", "row", "row"]);
 }
 
@@ -5747,7 +5747,7 @@ fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
         ))
         .is_empty()
     );
-    // `docs/tui.md`, "The session list" (exited rows and More) and `268` (counts from the scoped total).
+    // `docs/tui.md`, "The session list" (exited rows and More, counts from the scoped total).
     assert_eq!(
         list_shapes(&app),
         ["section w", "head 3", "row", "row", "more 1"]
@@ -6860,7 +6860,7 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
 
 /// The wheel over the open key map on home is the map's: the home
 /// session list keeps its scroll, while the same wheel with the map
-/// closed scrolls the list three rows (see #3578).
+/// closed scrolls the list three rows (`docs/tui.md`, "The session list"; see #3578).
 #[test]
 fn wheel_over_keymap_on_home_leaves_the_session_list() {
     let mut app = home_with(80, 24, launch());

@@ -264,7 +264,7 @@ fn wide_and_combining_marks_draw_whole() {
 
 #[test]
 fn steering_card_with_title_entries_and_hint() {
-    // docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first.
+    // docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first; docs/tui.md, "The panel": panel.
     insta::assert_snapshot!(
         "steering_card_with_title_entries_and_hint",
         screen(&queued(60, 12), 60, 12)
@@ -275,7 +275,7 @@ fn steering_card_with_title_entries_and_hint() {
 fn the_card_draws_title_entries_and_hint() {
     let shown = screen(&queued(80, 12), 80, 12);
     // The title with its figure, each entry with its mark, and the key
-    // hint: the undroppable row draws no ✕ (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first).
+    // hint: the undroppable row draws no ✕ (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first; docs/tui.md, "The panel": panel).
     for line in [
         "Steering",
         "2 queued · joins at the next step",
@@ -296,7 +296,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
     let app = three_wrapping(80, 24);
     let shown = screen(&app, 80, 24);
     // The title row, three entries with the long one's continuation
-    // aligned under its text, and the key hint (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first).
+    // aligned under its text, and the key hint (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first; docs/tui.md, "The panel": panel).
     for line in [
         "Steering",
         "3 queued · joins at the next step",
@@ -319,7 +319,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
     let cont = rows.get(first + 1).expect("its continuation");
     assert!(cont.starts_with("▌   "), "{cont:?}");
     assert!(!cont.contains('↳') && !cont.contains('▸'), "{cont:?}");
-    // docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first.
+    // docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first; docs/tui.md, "The panel": panel.
     insta::assert_snapshot!(
         "three_entries_wrap_with_continuations_under_the_text",
         shown
@@ -599,7 +599,7 @@ fn below_rows_counts_the_cards_title_entry_hint_and_edges() {
             {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
         ]}),
     ));
-    assert_eq!(app.below_rows(), bare + 5); // docs/tui.md, "Steering": title, entry, hint with edges.
+    assert_eq!(app.below_rows(), bare + 5); // docs/tui.md, "Steering": title, entry, hint with edges; docs/tui.md, "The panel": panel card.
 }
 
 #[test]
@@ -1169,7 +1169,7 @@ fn an_empty_replacement_hides_the_whole_card() {
     // an edge row above and below.
     let plain = queued(80, 24);
     // docs/tui.md, "The slots": the card's six rows hide together.
-    assert_eq!(app.below_rows() + 6, plain.below_rows()); // docs/tui.md, "The slots": six rows hide; docs/tui.md, "Steering": card.
+    assert_eq!(app.below_rows() + 6, plain.below_rows()); // docs/tui.md, "The slots": six rows hide; docs/tui.md, "Steering": card; docs/tui.md, "The panel": panel.
     // With no rows at all and no renderer, the builtin reserves nothing
     // either: the whole card hides with the rows.
     let mut drained = queued(80, 24);

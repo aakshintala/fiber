@@ -589,7 +589,7 @@ fn more_text_at_the_total_copies_nothing() {
     let mut rows = listed(&app);
     rows.sort_unstable();
     assert_eq!(rows, ["○  a", "○  b"]);
-    // `docs/tui.md`, "The session list" (More when rows remain) and `268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More when rows remain, More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 2", "row", "row"]);
     // Loaded rows meet the held total: the `More` text is nothing. With
     // `>=` the met total reads as more and copies "… 0 more".

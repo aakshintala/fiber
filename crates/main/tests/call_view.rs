@@ -722,7 +722,7 @@ fn wheel_over_a_call_view_scrolls_the_view_not_the_conversation() {
     run.write(b"\x1b[5~");
     run.write(b"\x1b[5~");
     // PageUp moves one screen of the view's visible rows
-    // (`docs/tui.md`, "Swapped views"), not one terminal screen. Here the 48-row
+    // (`docs/tui.md`, "Rules"), not one terminal screen. Here the 48-row
     // terminal leaves 41 view rows after the five-row input box and the
     // view's title and footer. From the fixture's start position 120, two
     // screens, each counting the dim edge marker row
