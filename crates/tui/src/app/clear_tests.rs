@@ -628,9 +628,9 @@ fn clear_refusal_only_settles_the_matching_start() {
         .as_str()
         .unwrap_or_else(|| panic!("start id"));
 
-    assert!(!app.clear_rejected("c_unrelated", ErrorCode::from_name("busy"), "Unrelated."));
+    assert!(!app.clear_rejected("c_unrelated", ErrorCode::Busy, "Unrelated."));
     assert!(app.clear_pending_command_id().is_some());
-    assert!(app.clear_rejected(id, ErrorCode::from_name("busy"), "Busy."));
+    assert!(app.clear_rejected(id, ErrorCode::Busy, "Busy."));
     assert!(app.clear_pending_command_id().is_none());
     assert_eq!(app.notice(), Some("Busy."));
 }

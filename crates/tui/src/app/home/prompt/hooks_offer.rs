@@ -351,6 +351,8 @@ impl App {
         if let Some(state) = self.take_hooks_offer() {
             let code = if matches!(error.code, ErrorCode::ConnectionFailed) {
                 ErrorCode::ExtensionFailed
+            } else if error.code.name().is_empty() {
+                ErrorCode::IoFailed
             } else {
                 error.code.clone()
             };

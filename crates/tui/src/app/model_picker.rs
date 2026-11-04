@@ -853,7 +853,13 @@ impl App {
         let code = result
             .as_ref()
             .err()
-            .map(|error| error.code.clone())
+            .map(|error| {
+                if error.code.name().is_empty() {
+                    ErrorCode::IoFailed
+                } else {
+                    error.code.clone()
+                }
+            })
             .unwrap_or(ErrorCode::IoFailed);
         match self.model_picker.land_install(provider, result) {
             Landed::Installed { notices } => {

@@ -92,13 +92,7 @@ fn from_name_maps_every_declared_label_to_its_variant() {
     for code in KNOWN {
         let parsed = ErrorCode::from_name(code.name());
         assert_eq!(&parsed, code, "{:?}", code.name());
-        assert!(
-            !matches!(parsed, ErrorCode::Other(_)),
-            "{:?} read as Other",
-            code.name()
-        );
     }
-    assert_eq!(ErrorCode::from_name("usage"), ErrorCode::Usage);
 }
 
 #[test]

@@ -2939,15 +2939,10 @@ fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
 fn rewind_hub_refused_tells_fork_from_other_waits() {
     use crate::app::Waiting;
     let mut app = attached();
-    assert!(app.rewind_hub_refused(
-        "c_fork",
-        ErrorCode::from_name("busy"),
-        "busy happened",
-        &Waiting::Fork
-    ));
+    assert!(app.rewind_hub_refused("c_fork", ErrorCode::Busy, "busy happened", &Waiting::Fork));
     assert!(!app.rewind_hub_refused(
         "c_other",
-        ErrorCode::from_name("busy"),
+        ErrorCode::Busy,
         "busy happened",
         &Waiting::History
     ));

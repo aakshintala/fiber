@@ -4,6 +4,7 @@
 
 use super::super::{App, Effect};
 use crate::catalogue::{Catalogue, ModelEntry};
+use crate::configure::ConfigureError;
 use crate::home::Launch;
 use contract::ErrorCode;
 use contract::events::Notice;
@@ -4773,6 +4774,30 @@ fn on_models_arrival_clears_models_loading() {
     );
     app.on_models(Err("gone".to_owned()));
     assert!(!has_code(&app, ErrorCode::ModelsLoading));
+}
+
+#[test]
+fn an_install_error_with_an_empty_code_notices_io_failed() {
+    // A hub refusal with an empty code reads as Other(""): the install
+    // notice falls back to io_failed, as on main.
+    use std::sync::Arc;
+
+    let (mut app, seam) = choosing_app();
+    app.model_picker
+        .installs
+        .start(crate::model_picker::InstallStart {
+            provider: "acme".to_owned(),
+            workspace: PathBuf::from("/w"),
+            seam: seam.clone() as Arc<dyn crate::Configure>,
+        });
+    app.on_install(
+        "acme".to_owned(),
+        Err(ConfigureError {
+            code: ErrorCode::Other(String::new()),
+            message: "blank".to_owned(),
+        }),
+    );
+    assert_eq!(newest_code(&app), ErrorCode::IoFailed);
 }
 
 /// A catalogue with five models, so three steps fit without clamping.

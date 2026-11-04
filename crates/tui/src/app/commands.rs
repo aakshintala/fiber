@@ -628,7 +628,7 @@ fn run_add_dir(app: &mut App, rest: &str) -> Option<Effect> {
     let path = rest.trim();
     if path.is_empty() {
         app.push_notice(
-            ErrorCode::from_name("add-dir"),
+            ErrorCode::Other("add-dir".to_owned()),
             "Add a folder after /add-dir, then press Enter.".to_owned(),
         );
         app.draft.clear();
