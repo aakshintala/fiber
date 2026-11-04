@@ -117,6 +117,8 @@ pub(crate) struct Maxima {
 /// line for grid reads, and one `mouse <path> <maximum>` per line for
 /// mouse events. Blank lines and `#` comment lines are ignored. A
 /// malformed or duplicate `mouse` line fails with its line number.
+// debt: keeps separate mouse/plain validate-parse-insert branches to avoid refactoring the line parser now;
+// revisit when a third line kind is added.
 pub(crate) fn parse_screen_maxima(input: &str) -> Result<Maxima, String> {
     let mut maxima = Maxima {
         reads: BTreeMap::new(),

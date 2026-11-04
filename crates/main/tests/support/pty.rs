@@ -392,6 +392,8 @@ impl Grid {
     /// character's continuation cell contributes nothing, and the match
     /// offset maps back to the starting cell's column. A caller wanting
     /// another match passes its own closure to `mouse_where`.
+    // debt: keeps the starts-vector index mapping instead of a cumulative byte count over columns to avoid reworking the scan for two callers;
+    // revisit when text_at gains a third caller or a cell-mapping bug appears.
     pub(crate) fn text_at(&self, needle: &str) -> Option<(u16, u16)> {
         if needle.is_empty() {
             return None;
