@@ -7,6 +7,7 @@
 //! action, a reply by its first text, a call by the raw arguments that
 //! announced it. A replayed log has no deltas and lands in the same places.
 
+use contract::events::EventKind;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
@@ -658,28 +659,35 @@ impl Turn {
 pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envelope) -> bool {
     let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
     let ts = envelope.ts;
-    let kind = envelope.kind.as_str();
+    let kind = envelope.kind();
     crash::before_line(fold, envelope);
     // A model call that got through ends the wait to retry.
-    if (matches!(
+    if matches!(
         kind,
-        "assistant_message_delta" | "text_completed" | "reasoning_started" | "turn_completed"
-    ) || kind.starts_with("tool_call_"))
-        && let Some(turn) = open(turns)
+        EventKind::AssistantMessageDelta
+            | EventKind::TextCompleted
+            | EventKind::ReasoningStarted
+            | EventKind::TurnCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+    ) && let Some(turn) = open(turns)
     {
         turn.retry = None;
     }
     // The request ends at a handoff, whose note request is its own, and at a
     // call that completed; a failed call is the request's retry.
-    let request_ended = kind == "handoff_started"
-        || (kind == "assistant_message_completed"
+    let request_ended = kind == EventKind::HandoffStarted
+        || (kind == EventKind::AssistantMessageCompleted
             && read!(envelope, AssistantMessageCompleted)
                 .is_some_and(|done| done.outcome != MessageOutcome::Failed));
     if request_ended && let Some(turn) = open(turns) {
         turn.attempts = 0;
     }
     let changed = match kind {
-        "turn_started" => read!(envelope, TurnStarted).is_some_and(|started| {
+        EventKind::TurnStarted => read!(envelope, TurnStarted).is_some_and(|started| {
             let prompts = started
                 .input
                 .iter()
@@ -717,13 +725,13 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
             turns.push(turn);
             true
         }),
-        "turn_completed" => read!(envelope, TurnCompleted).is_some_and(|done| {
+        EventKind::TurnCompleted => read!(envelope, TurnCompleted).is_some_and(|done| {
             open(turns).is_some_and(|turn| {
                 turn.complete(done, ts);
                 true
             })
         }),
-        "usage_recorded" => read!(envelope, UsageRecorded).is_some_and(|line| {
+        EventKind::UsageRecorded => read!(envelope, UsageRecorded).is_some_and(|line| {
             // A line folds where its generation already is, so a late
             // correction updates a closed card; else into the open turn.
             let known = turns
@@ -740,7 +748,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
                 true
             }) || sized
         }),
-        "steering_applied" => read!(envelope, SteeringApplied).is_some_and(|applied| {
+        EventKind::SteeringApplied => read!(envelope, SteeringApplied).is_some_and(|applied| {
             open(turns).is_some_and(|turn| {
                 if applied.sender.origin == Origin::Driver {
                     turn.steer(
@@ -756,33 +764,94 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
                 true
             })
         }),
-        "step_started" => {
+        EventKind::StepStarted => {
             if let Some(turn) = open(turns) {
                 turn.step_started();
             }
             false
         }
-        "assistant_message_started" => {
+        EventKind::AssistantMessageStarted => {
             if let Some(turn) = open(turns) {
                 turn.message_started();
             }
             false
         }
-        "retry_scheduled" => read!(envelope, RetryScheduled).is_some_and(|retry| {
+        EventKind::RetryScheduled => read!(envelope, RetryScheduled).is_some_and(|retry| {
             open(turns).is_some_and(|turn| {
                 turn.retry(retry, ts, fold);
                 true
             })
         }),
-        "mcp_server_failed" | "fiber_started" | "fiber_exited" | "job_started"
-        | "job_completed" | "rewound" => crash::fold(turns, fold, envelope),
-        "preamble_built" | "handoff_started" | "handoff_completed" | "context_nudged" => {
-            handoff::fold(turns, fold, envelope)
-        }
+        EventKind::McpServerFailed
+        | EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::JobStarted
+        | EventKind::JobCompleted
+        | EventKind::Rewound => crash::fold(turns, fold, envelope),
+        EventKind::PreambleBuilt
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::ContextNudged => handoff::fold(turns, fold, envelope),
         // Interaction lines name their calls in the payload, not the
         // envelope.
-        "interaction_requested" | "interaction_resolved" => answers::fold(turns, envelope),
-        _ => action.is_some_and(|action| fold_action(turns, fold, envelope, action)),
+        EventKind::InteractionRequested | EventKind::InteractionResolved => {
+            answers::fold(turns, envelope)
+        }
+        EventKind::SessionStarted
+        | EventKind::Moved
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::Notice
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::SkillsResent
+        | EventKind::ReviewerKept
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => {
+            action.is_some_and(|action| fold_action(turns, fold, envelope, action))
+        }
     };
     if let Some(turn) = open(turns) {
         turn.last = turn.last.max(ts);
@@ -801,57 +870,186 @@ fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action:
     let ts = envelope.ts;
     // Completions may follow their turn's end, so they search back
     // through every card; streaming goes only to the open one.
-    match envelope.kind.as_str() {
-        "tool_call_started" => turns
+    match envelope.kind() {
+        EventKind::ToolCallStarted => turns
             .iter_mut()
             .rev()
             .any(|turn| turn.call_started(action, ts)),
-        "tool_call_completed" => read!(envelope, ToolCallCompleted).is_some_and(|done| {
+        EventKind::ToolCallCompleted => read!(envelope, ToolCallCompleted).is_some_and(|done| {
             turns
                 .iter_mut()
                 .rev()
                 .any(|turn| turn.call_completed(&envelope.session_id, action, &done, ts))
         }),
-        "permission_requested" | "permission_resolved" => {
-            let asking = envelope.kind == "permission_requested";
+        EventKind::PermissionRequested | EventKind::PermissionResolved => {
+            let asking = envelope.kind() == EventKind::PermissionRequested;
             turns
                 .iter_mut()
                 .rev()
                 .any(|turn| turn.permission(action, asking))
         }
-        "reasoning_completed" => read!(envelope, ReasoningCompleted).is_some_and(|done| {
+        EventKind::ReasoningCompleted => read!(envelope, ReasoningCompleted).is_some_and(|done| {
             let mut text = Some(done.text);
             turns
                 .iter_mut()
                 .rev()
                 .any(|turn| turn.reasoning_completed(action, text.take().unwrap_or_default(), ts))
         }),
-        kind => {
+        kind @ (EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallDelta
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_)) => {
             let Some(turn) = turns.last_mut().filter(|turn| turn.is_open()) else {
                 return false;
             };
             match kind {
-                "assistant_message_completed" => turn.message_completed(action),
-                "assistant_message_delta" => read!(envelope, TextDelta)
+                EventKind::AssistantMessageCompleted => turn.message_completed(action),
+                EventKind::AssistantMessageDelta => read!(envelope, TextDelta)
                     .is_some_and(|delta| turn.text_delta(action, &delta.text, fold)),
-                "text_completed" => read!(envelope, TextCompleted)
+                EventKind::TextCompleted => read!(envelope, TextCompleted)
                     .is_some_and(|done| turn.text_completed(action, done.text, fold)),
-                "tool_call_arguments_delta" => {
-                    read!(envelope, ToolCallArgumentsDelta).is_some_and(|delta| {
+                EventKind::ToolCallArgumentsDelta => read!(envelope, ToolCallArgumentsDelta)
+                    .is_some_and(|delta| {
                         turn.arguments_delta(action, delta, ts, fold);
                         true
-                    })
-                }
-                "reasoning_started" => turn.reasoning_started(action, ts, fold),
-                "reasoning_delta" => read!(envelope, TextDelta)
+                    }),
+                EventKind::ReasoningStarted => turn.reasoning_started(action, ts, fold),
+                EventKind::ReasoningDelta => read!(envelope, TextDelta)
                     .is_some_and(|delta| turn.reasoning_delta(action, &delta.text, ts)),
-                "tool_call_requested" => {
+                EventKind::ToolCallRequested => {
                     read!(envelope, ToolCallRequested).is_some_and(|requested| {
                         turn.call_requested(action, requested, ts, fold);
                         true
                     })
                 }
-                _ => false,
+                EventKind::FiberStarted
+                | EventKind::FiberExited
+                | EventKind::SessionStarted
+                | EventKind::Rewound
+                | EventKind::Moved
+                | EventKind::TurnStarted
+                | EventKind::StepStarted
+                | EventKind::TurnCompleted
+                | EventKind::SteeringApplied
+                | EventKind::SteeringQueue
+                | EventKind::ShellCommand
+                | EventKind::DirectoryAdded
+                | EventKind::SessionNamed
+                | EventKind::Clients
+                | EventKind::SessionStatus
+                | EventKind::ContextAdded
+                | EventKind::AssistantMessageStarted
+                | EventKind::ReasoningCompleted
+                | EventKind::ToolCallStarted
+                | EventKind::ToolCallDelta
+                | EventKind::ToolCallCompleted
+                | EventKind::PermissionRequested
+                | EventKind::PermissionResolved
+                | EventKind::InteractionRequested
+                | EventKind::InteractionResolved
+                | EventKind::RepositoryCodeOffered
+                | EventKind::RepositoryCodeResolved
+                | EventKind::UsageRecorded
+                | EventKind::QuotaNoticed
+                | EventKind::QuotaRearmed
+                | EventKind::RetryScheduled
+                | EventKind::Notice
+                | EventKind::PreambleBuilt
+                | EventKind::ModelChanged
+                | EventKind::OpeningMessage
+                | EventKind::InstructionFile
+                | EventKind::DateChanged
+                | EventKind::SkillsChanged
+                | EventKind::HandoffStarted
+                | EventKind::HandoffCompleted
+                | EventKind::SkillsResent
+                | EventKind::ContextNudged
+                | EventKind::ReviewerKept
+                | EventKind::McpServerFailed
+                | EventKind::McpServerReady
+                | EventKind::Reloaded
+                | EventKind::ExtensionsLoaded
+                | EventKind::ExtensionStateSet
+                | EventKind::ExtensionStateUnset
+                | EventKind::ExtensionUi
+                | EventKind::ExtensionMessage
+                | EventKind::ExtensionLog
+                | EventKind::ExtensionExec
+                | EventKind::ExtensionHello
+                | EventKind::ExtensionRequest
+                | EventKind::JobStarted
+                | EventKind::DelegateStarted
+                | EventKind::JobDelta
+                | EventKind::JobLine
+                | EventKind::DelegateFinished
+                | EventKind::JobCompleted
+                | EventKind::JobsPendingNotified
+                | EventKind::CommandAccepted
+                | EventKind::CommandRejected
+                | EventKind::Unknown(_) => false,
             }
         }
     }

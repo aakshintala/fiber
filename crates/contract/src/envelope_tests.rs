@@ -1,5 +1,75 @@
 use super::*;
 
+#[test]
+fn session_kind_accessor_preserves_wire_and_reads_the_current_field() {
+    use crate::events::EventKind;
+
+    let cases = [
+        ("turn_started", EventKind::TurnStarted),
+        ("text_completed", EventKind::TextCompleted),
+        ("", EventKind::Unknown("".into())),
+        (" \t", EventKind::Unknown(" \t".into())),
+        ("future_kind_é", EventKind::Unknown("future_kind_é".into())),
+    ];
+    for (name, expected) in cases {
+        let wire = format!(
+            r#"{{"kind":{},"session_id":"s_x","ts":0,"schema_version":1,"payload":{{}}}}"#,
+            serde_json::to_string(name).unwrap()
+        );
+        let line: Envelope = serde_json::from_str(&wire).unwrap();
+        assert_eq!(line.kind(), expected);
+        assert_eq!(serde_json::to_string(&line).unwrap(), wire);
+    }
+    let mut line = parse(
+        r#"{"kind":"turn_started","session_id":"s_x","ts":0,"schema_version":1,"payload":{}}"#,
+    );
+    assert_eq!(line.kind(), EventKind::TurnStarted);
+    line.kind = "text_completed".into();
+    assert_eq!(line.kind(), EventKind::TextCompleted);
+    line.kind = "future_kind_é".into();
+    assert_eq!(line.kind(), EventKind::Unknown("future_kind_é".into()));
+}
+
+#[test]
+fn hub_kind_accessor_preserves_wire_and_reads_the_current_field() {
+    use crate::HubEventKind;
+
+    let cases = [
+        ("hub_hello", HubEventKind::HubHello),
+        ("attention", HubEventKind::Attention),
+        ("device_changed", HubEventKind::DeviceChanged),
+        ("session_left", HubEventKind::SessionLeft),
+        ("stream_closed", HubEventKind::StreamClosed),
+        ("stream_reopened", HubEventKind::StreamReopened),
+        ("command_accepted", HubEventKind::CommandAccepted),
+        ("command_rejected", HubEventKind::CommandRejected),
+        ("", HubEventKind::Unknown("".into())),
+        (" \t", HubEventKind::Unknown(" \t".into())),
+        (
+            "future_kind_é",
+            HubEventKind::Unknown("future_kind_é".into()),
+        ),
+    ];
+    for (name, expected) in cases {
+        let wire = format!(
+            r#"{{"kind":{},"ts":0,"schema_version":1,"payload":{{}}}}"#,
+            serde_json::to_string(name).unwrap()
+        );
+        let line: HubLine = serde_json::from_str(&wire).unwrap();
+        assert_eq!(line.kind(), expected);
+        assert_eq!(serde_json::to_string(&line).unwrap(), wire);
+    }
+    let mut line: HubLine = serde_json::from_str(
+        r#"{"kind":"command_accepted","ts":0,"schema_version":1,"payload":{}}"#,
+    )
+    .unwrap();
+    assert_eq!(line.kind(), HubEventKind::CommandAccepted);
+    line.kind = "command_rejected".into();
+    assert_eq!(line.kind(), HubEventKind::CommandRejected);
+    line.kind = "future_kind_é".into();
+    assert_eq!(line.kind(), HubEventKind::Unknown("future_kind_é".into()));
+}
+
 /// The example lines under `docs/events.md`, "The envelope".
 fn doc_examples() -> Vec<&'static str> {
     let doc = include_str!("../../../docs/events.md");
