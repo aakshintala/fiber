@@ -517,12 +517,9 @@ fn narrow_status_rows_match_the_doc() {
                 }
             }
         }
-        let cells: Vec<char> = line.chars().collect();
-        let joiner: Vec<char> = "  │  ".chars().collect();
-        let Some(at) = cells
-            .windows(joiner.len())
-            .position(|window| window == joiner.as_slice())
-            .map(|at| at as u16)
+        let Some(at) = line
+            .find("  │  ")
+            .map(|at| line[..at].chars().count() as u16)
         else {
             return false;
         };
@@ -539,13 +536,7 @@ fn narrow_status_rows_match_the_doc() {
         };
         let bar: String = (1..100).map(|x| grid.cell(x, status).symbol).collect();
         let bar = bar.trim_end();
-        let stamped: Vec<char> = bar.chars().collect();
-        let needle: Vec<char> = "ctx".chars().collect();
-        let Some(ctx) = stamped
-            .windows(needle.len())
-            .position(|window| window == needle.as_slice())
-            .map(|at| at as u16)
-        else {
+        let Some(ctx) = bar.find("ctx").map(|at| bar[..at].chars().count() as u16) else {
             return false;
         };
         (0..8)
