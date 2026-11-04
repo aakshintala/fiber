@@ -20,5 +20,5 @@ if [ -n "${CHECK_RESOURCES_DF_AVAIL_KIB_TARGET-}" ]; then
     ;;
   esac
 else
-  printf 'testfs  200000000  100000000  %s  50%%  /testmnt\n' "${CHECK_RESOURCES_DF_AVAIL_KIB:-0}"
+printf 'testfs  200000000  100000000  %s  50%%  /testmnt\n' "${CHECK_RESOURCES_DF_AVAIL_KIB:-0}"
 fi
