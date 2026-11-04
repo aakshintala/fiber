@@ -289,7 +289,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         );
         let tag_gone = within_cleanup(
             &format!("processes matching {tag} to exit"),
-            Deadline::after(matching_exits_wait()),
+            Deadline::after(matching_exits_wait()), // ruling: #4078
             move |inner| try_matching_exits(&tag_for_wait, inner),
         );
         drop((group_dog, tag_dog));
@@ -307,7 +307,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     );
     let tag_gone = within_cleanup(
         &format!("processes matching {tag} to exit"),
-        Deadline::after(matching_exits_wait()),
+        Deadline::after(matching_exits_wait()), // ruling: #4078
         move |inner| try_matching_exits(&tag_for_wait, inner),
     );
     let stand_down = if group_gone.as_ref() == Ok(&true) && matches!(&tag_gone, Ok(Ok(()))) {
