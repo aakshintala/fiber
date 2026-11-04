@@ -3584,7 +3584,7 @@ fn many_targets() -> Vec<LoginTarget> {
 
 /// The wheel over the rows shifts the window three rows and keeps a
 /// focus still on screen: five Downs put it mid-window, so one step
-/// down moves the window three rows under it (`docs/tui.md:576`).
+/// down moves the window three rows under it (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_keeps_a_visible_focus_and_shifts_the_window_three() {
     let fake = fake_with(many_targets());
@@ -3605,7 +3605,7 @@ fn wheel_keeps_a_visible_focus_and_shifts_the_window_three() {
 }
 
 /// The wheel after keyboard focus leaves the stored window steps three
-/// rows from what is visible, not the stale stored top (`docs/tui.md:576`).
+/// rows from what is visible, not the stale stored top (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_after_keyboard_outside_the_window_steps_from_what_is_visible() {
     let fake = fake_with(many_targets());
@@ -3631,7 +3631,7 @@ fn wheel_after_keyboard_outside_the_window_steps_from_what_is_visible() {
 }
 
 /// The body length counts wrapped status rows, and a short draw clips
-/// safely (`docs/tui.md:576`).
+/// safely (`docs/tui.md`, "Swapped views").
 #[test]
 fn body_len_counts_wrapped_status_and_short_draw_clips() {
     let fake = fake_with(many_targets());
@@ -3655,7 +3655,7 @@ fn body_len_counts_wrapped_status_and_short_draw_clips() {
 /// The wheel clamps a focus that leaves the window to the nearest
 /// shown target row: from the first target, one step down moves the
 /// window three rows and the focus to its first shown row.
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_clamps_a_leaving_focus_to_the_window() {
     let fake = fake_with(many_targets());
@@ -3688,7 +3688,7 @@ fn keyboard_navigation_after_wheel_keeps_its_one_target_step() {
 /// The wheel up from the top row moves nothing, and a panel step takes
 /// no wheel: Enter opens the panel, and the wheel over it changes
 /// nothing.
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_up_at_the_top_and_over_a_panel_step_moves_nothing() {
     let fake = fake_with(many_targets());

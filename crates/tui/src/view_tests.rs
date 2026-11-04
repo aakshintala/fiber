@@ -2377,7 +2377,7 @@ fn painted_item_and_notice_keys_join_the_shared_frame_mark() {
     let (_, painted) = super::render_frame(&app, area, &mut buf, None);
     assert_eq!(item.frames.borrow().clone(), vec![0]);
     assert_eq!(notice.frames.borrow().clone(), vec![0]);
-    // docs/tui.md:2984: painted item and notice rows alike reach the one mark.
+    // `docs/tui.md`, "Animation": painted item and notice rows alike reach the one mark.
     assert_eq!(painted.len(), 4);
     let mut ids: Vec<Option<usize>> = painted.iter().map(|key| key.notice_id()).collect();
     ids.sort();
@@ -2425,10 +2425,10 @@ fn an_offscreen_item_never_advances_or_asks() {
     assert!(!body.contains("anim"), "{body}");
     // At most the initial still render: the item drew once for the
     // draw, was never marked, and asks for no wake.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // `docs/tui.md`, "Animation": frame 0 is the still form.
     assert_eq!(app.take_wake(), None);
     paint_conversation(&app, later(t0, 500), height);
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2968: calls follow paint in the previous frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // `docs/tui.md`, "Animation": calls follow paint in the previous frame.
     assert_eq!(app.take_wake(), None);
 }
 
@@ -2442,7 +2442,7 @@ fn a_partially_painted_item_stays_active_with_dues() {
     let body = text(&full);
     assert!(body.contains("anim0-0"), "{body}");
     assert!(body.contains("anim0-2"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // `docs/tui.md`, "Animation": frame 0 is the still form.
     assert_eq!(
         app.take_wake(),
         Some(later(t0, 500)),
@@ -2464,7 +2464,7 @@ fn a_partially_painted_item_stays_active_with_dues() {
     assert!(!body.contains("anim1-0"), "{body}");
     assert!(body.contains("anim1-1"), "{body}");
     assert!(body.contains("anim1-2"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2968: calls follow paint in the previous frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // `docs/tui.md`, "Animation": calls follow paint in the previous frame.
     assert_eq!(app.take_wake(), Some(later(t1, 500)));
 }
 
@@ -2477,21 +2477,21 @@ fn a_changed_frame_line_count_recounts_before_the_corrective_paint() {
     let before = app.scroll().1;
     let first = paint_conversation(&app, t0, 40);
     assert!(text(&first).contains("anim0-0"));
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:2974: frame 0 is the still form.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // `docs/tui.md`, "Animation": frame 0 is the still form.
     assert_eq!(app.take_wake(), Some(later(t0, 500)));
 
     let t1 = later(t0, 500);
     app.set_now(t1, wall + 500);
     let second = paint_conversation(&app, t1, 40);
     assert!(text(&second).contains("anim1-1"));
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // `docs/tui.md`, "Animation": the renderer is called again when the frame advances.
     // The paint changed the page's line count. The immediate correction
     // is earlier than the next animation due.
     assert_eq!(app.take_wake(), Some(t1));
 
     app.set_now(t1, wall + 500);
     assert_eq!(app.scroll().1, before + 1);
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2962: the renderer is called again when the frame advances.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // `docs/tui.md`, "Animation": the renderer is called again when the frame advances.
 }
 
 #[test]
@@ -2518,7 +2518,7 @@ fn a_scrolled_off_item_resumes_without_restarting() {
     let away = paint_conversation(&app, t1, height);
     let body = text(&away);
     assert!(!body.contains("anim"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // `docs/tui.md`, "Animation": one scroll-off call, then resume at the stored frame.
     assert_eq!(app.take_wake(), None);
     // Back on screen: hits its stored frame with no recall, and the
     // next due tick continues the counter instead of restarting it.
@@ -2526,13 +2526,13 @@ fn a_scrolled_off_item_resumes_without_restarting() {
     let back = paint_conversation(&app, t2, 40);
     let body = text(&back);
     assert!(body.contains("anim1-0"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1]); // `docs/tui.md`, "Animation": one scroll-off call, then resume at the stored frame.
     assert_eq!(app.take_wake(), Some(later(t1, 500)));
     let t3 = later(t0, 1500);
     let onward = paint_conversation(&app, t3, 40);
     let body = text(&onward);
     assert!(body.contains("anim2-0"), "{body}");
-    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2]); // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+    assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2]); // `docs/tui.md`, "Animation": one scroll-off call, then resume at the stored frame.
 }
 
 #[test]
@@ -2546,7 +2546,7 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
     let _ = render(&app, area, &mut full, None);
     let body = text(&full);
     assert!(body.contains("anim0-0"), "{body}");
-    // docs/tui.md:2974: frame 0 is the still form.
+    // `docs/tui.md`, "Animation": frame 0 is the still form.
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(app.take_wake(), Some(later(t0, 500)));
     // A swapped view hides the conversation: nothing paints, so no call
@@ -2559,7 +2559,7 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
         let _ = render(&app, area, &mut hidden, None);
         let body = text(&hidden);
         assert!(!body.contains("anim"), "{body}");
-        // docs/tui.md:2971: a swapped view that hides the conversation
+        // `docs/tui.md`, "Animation": a swapped view that hides the conversation
         // counts as an unpainted frame.
         assert_eq!(fake.frames.borrow().clone(), vec![0]);
         assert_eq!(app.take_wake(), None);
@@ -2574,7 +2574,7 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
     let _ = render(&app, area, &mut back, None);
     let body = text(&back);
     assert!(body.contains("anim0-0"), "{body}");
-    // docs/tui.md:2972: the item resumes at its stored frame when the
+    // `docs/tui.md`, "Animation": the item resumes at its stored frame when the
     // conversation returns.
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     // The stored paint changes nothing: the due still names the last tick.
@@ -2585,7 +2585,7 @@ fn a_swapped_view_suppresses_calls_until_it_closes() {
     let _ = render(&app, area, &mut onward, None);
     let body = text(&onward);
     assert!(body.contains("anim1-0"), "{body}");
-    // docs/tui.md:2970: one scroll-off call, then resume at the stored frame.
+    // `docs/tui.md`, "Animation": one scroll-off call, then resume at the stored frame.
     assert_eq!(fake.frames.borrow().clone(), vec![0, 1]);
 }
 
@@ -2605,7 +2605,7 @@ fn one_visible_animated_row_marks_its_item_painted() {
         !body.contains("anim0-0") && !body.contains("anim0-2"),
         "{body}"
     );
-    // docs/tui.md:2968: a painted row advances and asks for its next frame.
+    // `docs/tui.md`, "Animation": a painted row advances and asks for its next frame.
     assert_eq!(app.take_wake(), Some(later(t0, 500)));
 }
 
@@ -2687,11 +2687,11 @@ fn shown_exposes_animation_tags_only_for_in_range_items() {
     let start = y.saturating_sub(40 - total);
     assert_eq!(app.take_wake(), Some(later(t0, 500)));
     // The full range exposes one tag per animated row, all one item.
-    // docs/tui.md:2968: only rows painted in the previous frame are exposed.
+    // `docs/tui.md`, "Animation": only rows painted in the previous frame are exposed.
     let shown = app.shown(0, 40);
     assert_eq!(shown.anims.len(), 3, "one tag per animated row");
     let boundary = app.shown(start.saturating_add(1), 1);
-    // docs/tui.md:2968: only a row inside the viewport is exposed as painted.
+    // `docs/tui.md`, "Animation": only a row inside the viewport is exposed as painted.
     assert_eq!(
         boundary.anims.len(),
         1,
@@ -3593,7 +3593,7 @@ fn copied_draws_nothing_on_a_zero_height_area() {
 fn a_zero_height_conversation_draws_no_pin() {
     // A conversation area with no rows pins nothing, even with the top
     // inside opened content: the height guard owns the pin, so widening
-    // it pins row 0 of nothing (`docs/tui.md`, "Pinned call").
+    // it pins row 0 of nothing (`docs/tui.md`, "Tool groups and the ledger").
     let (mut app, _, call, _, first) = pinned_call(30, true);
     app.jump(first + 2);
     assert_eq!(
@@ -4380,7 +4380,7 @@ fn following_draws_no_pin() {
 fn rows_above_the_top_take_no_zero_height_target() {
     // The lines above the top draw no rows: their line and turn targets
     // take no hit, not even a zero-height one. Widening either height
-    // guard pushes one (`docs/tui.md`, "Pinned call").
+    // guard pushes one (`docs/tui.md`, "Tool groups and the ledger").
     const W: u16 = 60;
     const H: u16 = 12;
     let (mut app, _, _, _, _) = pinned_call(30, true);
@@ -4882,7 +4882,7 @@ fn a_turn_wholly_above_the_top_draws_no_turn_stop_while_pinned() {
     const H: u16 = 12;
     // The earlier turn sits wholly above the top row, so its stop would
     // cover no rows: only a widened bound draws it (`docs/tui.md`,
-    // "Pinned call").
+    // "Tool groups and the ledger").
     let (mut app, _, _, _, first) = pinned_call_with_prior_turn(30);
     app.jump(first + 2);
     assert!(app.pinned_row().is_some(), "a pinned call");
@@ -4906,7 +4906,7 @@ fn the_pinned_turn_keeps_its_stop_below_the_top_row() {
     const H: u16 = 12;
     // The pin covers the top row, not the turn under it: the turn's stop
     // still spans the rows below, so only a flipped row check drops it
-    // (`docs/tui.md`, "Pinned call").
+    // (`docs/tui.md`, "Tool groups and the ledger").
     let (mut app, _, _, _, first) = pinned_call(30, true);
     app.jump(first + 2);
     assert!(app.pinned_row().is_some(), "a pinned call");
@@ -5172,7 +5172,7 @@ fn a_drag_holds_a_fading_notice_until_after_the_release_copy() {
     let _ = report(&mut app, MouseKind::Press(Button::Left), at.0, at.1, t0);
     let _ = report(&mut app, MouseKind::Drag(Button::Left), at.0 + 4, at.1, t0);
     // Past the fade, mid-drag, the row still shows: the fade waits
-    // for the release (`docs/tui.md:1553`: on release the copy
+    // for the release (`docs/tui.md`, "Selection and copy": on release the copy
     // happens first, then the waiting fade).
     app.sweep_notices(t0 + std::time::Duration::from_secs(30));
     let mut buf = Buffer::empty(area);

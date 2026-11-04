@@ -644,7 +644,7 @@ fn quit(run: support::pty::Run) {
 /// `/quota` opens the quota view, marks the in-flight fetch, and shows
 /// the fetched values: the view's fetch waits on a gate the test
 /// releases, so the mark draws deterministically (`docs/tui.md`,
-/// "The quota view").
+/// "Swapped views").
 #[test]
 fn slash_quota_opens_the_view_and_shows_the_fetched_values() {
     let setup = Setup::new();

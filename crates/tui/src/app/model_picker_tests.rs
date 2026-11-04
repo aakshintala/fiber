@@ -4889,7 +4889,7 @@ fn wheel_outside_the_picker_slab_moves_the_picker_not_the_conversation() {
 
 /// A Backspace with an empty query keeps the wheel position, while one
 /// that shortens the query resets to the focus window, both with rendered
-/// rows (`docs/tui.md:576`).
+/// rows (`docs/tui.md`, "Swapped views").
 #[test]
 fn backspace_empty_keeps_and_shortening_resets_the_window() {
     let (mut app, _) = choosing_app();
@@ -4930,7 +4930,7 @@ fn backspace_empty_keeps_and_shortening_resets_the_window() {
 }
 
 /// Tab with nothing to show keeps the wheel position with rendered rows
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn tab_with_nothing_to_show_keeps_the_window() {
     let (mut app, _) = choosing_app();
@@ -4954,7 +4954,7 @@ fn tab_with_nothing_to_show_keeps_the_window() {
 
 /// The picker on home-with-a-session sizes from the conversation, like
 /// attached, not from the screen like home, with rendered rows
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn picker_on_home_with_a_session_sizes_from_the_conversation() {
     use std::path::PathBuf;
@@ -5001,7 +5001,7 @@ fn picker_on_home_with_a_session_sizes_from_the_conversation() {
 
 /// A wheel outside the conversation with a swapped view open on
 /// home-with-a-session reaches neither the picker nor the conversation,
-/// while on home alone the swapped view owns it (`docs/tui.md:576`).
+/// while on home alone the swapped view owns it (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_outside_with_swapped_open_home_session_vs_home() {
     use std::path::PathBuf;

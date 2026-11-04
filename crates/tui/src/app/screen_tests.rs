@@ -1129,7 +1129,7 @@ fn a_closed_ledger_pins_nothing_on_the_asking_call_row() {
     // The asking call keeps its row while its ledger is closed, and the
     // row's own text still names the group: the pin needs the ledger
     // open, so the key match alone pins nothing (`docs/tui.md`,
-    // "Pinned call").
+    // "Tool groups and the ledger").
     let (mut screen, group, calls) = read_group(1, &[false], 5, &[true]);
     screen.open(group);
     let row = line_row(&screen, calls[0]).expect("the asking call row");
@@ -1143,7 +1143,7 @@ fn a_closed_ledger_pins_nothing_on_the_asking_call_row() {
 fn an_opened_summary_on_the_top_row_pins_nothing() {
     // The summary row names no scope of its own: the top row's text sits
     // outside every section, so nothing pins (`docs/tui.md`,
-    // "Pinned call").
+    // "Tool groups and the ledger").
     let (mut screen, group, _) = read_group(1, &[true], 30, &[false]);
     let header = line_row(&screen, group).expect("the summary row");
     screen.jump(header);
@@ -1156,7 +1156,7 @@ fn an_opened_summary_on_the_top_row_pins_nothing() {
 fn every_pin_sits_above_its_top_row() {
     // A section's header draws before its body opens its scope, so a
     // found header is never the top row itself: every pin sits above
-    // the row it pins for (`docs/tui.md`, "Pinned call").
+    // the row it pins for (`docs/tui.md`, "Tool groups and the ledger").
     for (_, mut screen) in [
         ("open", read_group(1, &[true], 30, &[false]).0),
         ("approval", read_group(1, &[false], 5, &[true]).0),

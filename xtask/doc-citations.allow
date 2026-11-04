@@ -105,7 +105,6 @@ crates/extensions/src/timing_tests.rs	8	docs/state.md, "Diagnostic logs"
 crates/extensions/src/timing_tests.rs	1	docs/state.md`, "Diagnostic\n//! logs"
 crates/extensions/src/tui_vm_tests.rs	1	docs/extensions.md:1507-1509
 crates/extensions/src/tui_vm_tests.rs	13	docs/extensions.md:1526-1530
-crates/extensions/src/tui_vm_tests.rs	1	docs/tui.md:3060-3062
 crates/extensions/src/update_tests.rs	1	docs/state.md, "Diagnostic logs"
 crates/extensions/tests/lazy_commands.rs	2	docs/extensions.md:1356-57
 crates/extensions/tests/lazy_commands.rs	1	docs/extensions.md:1360-61
@@ -210,7 +209,6 @@ crates/loop/src/before_message.rs	2	docs/state.md`, "Prompt history"
 crates/loop/src/before_message_tests.rs	2	docs/errors.md`, "Notices"
 crates/loop/src/before_tool_tests.rs	1	docs/errors.md`,\n    // "Notices"
 crates/loop/src/calls.rs	2	docs/extensions.md`, "after_tool"
-crates/loop/src/calls.rs	1	docs/tui.md`, "/rules"
 crates/loop/src/calls_tests.rs	1	docs/events.md, "tool_call_completed"
 crates/loop/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
 crates/loop/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
@@ -259,49 +257,16 @@ crates/main/src/startup_log.rs	1	docs/state.md`, "Diagnostic logs"
 crates/main/src/timing_tests.rs	1	docs/state.md`, "Diagnostic logs"
 crates/main/src/tui_extensions_tests.rs	1	docs/extensions.md:1526
 crates/main/src/tui_extensions_tests.rs	1	docs/extensions.md:1529-1530
-crates/main/src/tui_extensions_tests.rs	3	docs/tui.md:1233
-crates/main/src/tui_extensions_tests.rs	7	docs/tui.md:2678
-crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:2754
-crates/main/src/tui_extensions_tests.rs	3	docs/tui.md:2757
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2877-2878,2754
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2891
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2899-2901,2905-2906
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2905-2906,2928
-crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:2919,2923-2924,2928,2754
-crates/main/src/tui_extensions_tests.rs	6	docs/tui.md:2923
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2934
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2940
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2946-2947
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:2953-2956
-crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3024-3027
-crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3027-3029
-crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3044-3049
-crates/main/src/tui_extensions_tests.rs	3	docs/tui.md:3049
-crates/main/src/tui_extensions_tests.rs	3	docs/tui.md:3050-3052
-crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3059-3062
-crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3060-3062
-crates/main/src/tui_extensions_tests.rs	2	docs/tui.md:3063-3064
-crates/main/src/tui_extensions_tests.rs	1	docs/tui.md:3063-3064, 3069
-crates/main/src/tui_extensions_tests.rs	4	docs/tui.md:3121
 crates/main/tests/alloc_stats.rs	2	docs/state.md:306
 crates/main/tests/alloc_stats.rs	1	docs/state.md:345-355
 crates/main/tests/alloc_stats.rs	1	docs/state.md`, "Diagnostic logs"
 crates/main/tests/approve.rs	1	docs/extensions.md`, "Approving\n//! outside a session"
 crates/main/tests/ask.rs	1	docs/errors.md`, "Notices"
-crates/main/tests/at_path_search.rs	1	docs/tui.md`,\n//! "File search"
-crates/main/tests/call_view.rs	1	docs/tui.md:1814
-crates/main/tests/call_view.rs	1	docs/tui.md:576
-crates/main/tests/call_view.rs	1	docs/tui.md:881-884
 crates/main/tests/change_workspace.rs	1	docs/invocation.md,\n    // "Deleting a session"
 crates/main/tests/change_workspace.rs	1	docs/invocation.md, "Deleting a session"
 crates/main/tests/change_workspace.rs	2	docs/invocation.md`, "Change workspace"
 crates/main/tests/changed_files_editor.rs	1	docs/testing/screens.md`, "A pointer event…"
 crates/main/tests/changed_files_remote.rs	1	docs/testing/screens.md`, "A pointer event…"
-crates/main/tests/changed_files_remote.rs	1	docs/tui.md`, "Changed files"
-crates/main/tests/clear.rs	1	docs/tui.md:1932
-crates/main/tests/clear.rs	1	docs/tui.md:1936
-crates/main/tests/clear.rs	1	docs/tui.md:1943
-crates/main/tests/clear.rs	2	docs/tui.md:1954
 crates/main/tests/continue_session.rs	1	docs/invocation.md`, "`start` `continues`"
 crates/main/tests/delegates.rs	1	docs/delegates.md:123
 crates/main/tests/delegates.rs	2	docs/delegates.md:168-171
@@ -315,7 +280,6 @@ crates/main/tests/delegates.rs	2	docs/events.md:285-286
 crates/main/tests/delegates.rs	2	docs/events.md:296
 crates/main/tests/delegates.rs	2	docs/events.md:339
 crates/main/tests/delegates.rs	1	docs/testing.md:95
-crates/main/tests/delegates.rs	1	docs/tui.md, "Every\n    // delegate"
 crates/main/tests/delete.rs	1	docs/testing.md:95
 crates/main/tests/diagnostics.rs	1	docs/state.md`, "Diagnostic\n//! logs"
 crates/main/tests/diagnostics.rs	3	docs/state.md`, "Diagnostic logs"
@@ -377,21 +341,17 @@ crates/main/tests/main_journeys.rs	1	docs/errors.md`, "Notices"
 crates/main/tests/main_journeys.rs	1	docs/extensions.md:1797, 1805-1807
 crates/main/tests/main_journeys.rs	1	docs/extensions.md:1798-1799
 crates/main/tests/main_journeys.rs	1	docs/releasing.md`, "Install\n/// steps"
-crates/main/tests/main_journeys.rs	1	docs/tui.md:710-714
 crates/main/tests/mcp_login.rs	1	docs/state.md, "Diagnostic logs"
 crates/main/tests/mcp_remote.rs	1	docs/state.md, "Diagnostic logs"
 crates/main/tests/mcp_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
 crates/main/tests/model_picker_keys.rs	2	docs/state.md, "Diagnostic logs"
 crates/main/tests/model_switch.rs	16	docs/events.md, "clients"
-crates/main/tests/pinned_call_row.rs	1	docs/tui.md`, "Pinned\n//! call"
 crates/main/tests/process_extensions.rs	2	docs/extensions.md:209
 crates/main/tests/process_extensions.rs	2	docs/extensions.md:211
 crates/main/tests/process_extensions.rs	2	docs/extensions.md:222
 crates/main/tests/process_extensions.rs	1	docs/state.md, "Diagnostic logs"
 crates/main/tests/provider_diagnostics.rs	2	docs/state.md, "Diagnostic logs"
 crates/main/tests/provider_diagnostics.rs	1	docs/state.md`, "Diagnostic logs"
-crates/main/tests/quota_fetch_session.rs	1	docs/tui.md`,\n/// "The quota view"
-crates/main/tests/rail_focus.rs	1	docs/tui.md:254-255
 crates/main/tests/repository_hooks.rs	1	docs/extensions.md`, "Pinning"
 crates/main/tests/repository_servers.rs	1	docs/testing.md:95
 crates/main/tests/resume.rs	1	docs/events.md`,\n    // "Only the window a consumer actually needs is parsed"
@@ -412,13 +372,6 @@ crates/main/tests/shutdown.rs	1	docs/invocation.md`, "What\n    // happens, all 
 crates/main/tests/shutdown.rs	1	docs/invocation.md`, "What\n    // is written"
 crates/main/tests/shutdown.rs	3	docs/invocation.md`, "What is written"
 crates/main/tests/slash_aliases.rs	1	docs/tools.md:562-568,575-577
-crates/main/tests/slash_aliases.rs	1	docs/tui.md:1970,1997
-crates/main/tests/slash_aliases.rs	1	docs/tui.md:1974,1997
-crates/main/tests/slash_aliases.rs	1	docs/tui.md:1978,1993
-crates/main/tests/slash_aliases.rs	1	docs/tui.md:1985,1993
-crates/main/tests/slash_aliases.rs	3	docs/tui.md:1990-1993,1997
-crates/main/tests/slash_aliases.rs	1	docs/tui.md:2130-2132
-crates/main/tests/slash_aliases.rs	1	docs/tui.md:604
 crates/main/tests/socket.rs	1	docs/events.md:1174-1175
 crates/main/tests/socket.rs	1	docs/events.md:285-286
 crates/main/tests/socket.rs	1	docs/events.md:534-535
@@ -442,8 +395,6 @@ crates/main/tests/stop.rs	2	docs/state.md`, "Sockets"
 crates/main/tests/stream_closed_notice.rs	1	docs/events.md`, "session_status"
 crates/main/tests/support/mod.rs	1	docs/state.md`,\n/// "Sockets"
 crates/main/tests/support/pty.rs	1	docs/testing.md`,\n        // "Races are forced, not waited for"
-crates/main/tests/swapped_panels_look.rs	1	docs/tui.md:905-908
-crates/main/tests/swapped_panels_look.rs	1	docs/tui.md:909-910
 crates/main/tests/terminal.rs	1	docs/configuration.md:119
 crates/main/tests/terminal.rs	3	docs/invocation.md:115
 crates/main/tests/terminal.rs	2	docs/invocation.md:1268-1270
@@ -453,12 +404,6 @@ crates/main/tests/terminal_overrides.rs	1	docs/invocation.md`, "Sessions"
 crates/main/tests/tool_search.rs	1	docs/testing.md:95
 crates/main/tests/tool_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
 crates/main/tests/tools.rs	1	docs/state.md, "Diagnostic logs"
-crates/main/tests/tui_extensions.rs	1	docs/tui.md:1233
-crates/main/tests/tui_extensions.rs	1	docs/tui.md:2678
-crates/main/tests/tui_extensions.rs	2	docs/tui.md:2734
-crates/main/tests/tui_extensions.rs	2	docs/tui.md:2740
-crates/main/tests/tui_extensions.rs	1	docs/tui.md:2757
-crates/main/tests/tui_extensions.rs	1	docs/tui.md:3007
 crates/main/tests/tui_timing_tests.rs	1	docs/state.md:428-429
 crates/main/tests/tui_timing_tests.rs	1	docs/state.md:430-432
 crates/main/tests/tui_timing_tests.rs	1	docs/state.md:432-435
@@ -470,9 +415,6 @@ crates/main/tests/update.rs	1	docs/extensions.md:1797, 1805-1807
 crates/main/tests/update.rs	2	docs/extensions.md:1798-1799
 crates/main/tests/update.rs	1	docs/extensions.md:1805-1807
 crates/main/tests/watchers.rs	3	docs/extensions.md:1651-1657
-crates/main/tests/working_line_look.rs	1	docs/tui.md:1296-1306
-crates/main/tests/working_line_look.rs	2	docs/tui.md:1299-1300
-crates/main/tests/working_line_look.rs	1	docs/tui.md:3048
 crates/main/tests/worktree_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
 crates/mcp/src/cache.rs	1	docs/state.md`, "Cache"
 crates/mcp/src/http_tests.rs	7	docs/state.md, "Diagnostic logs"
@@ -496,193 +438,31 @@ crates/tools/tests/shell.rs	1	docs/sandbox.md:100-102
 crates/tools/tests/shell.rs	2	docs/sandbox.md:64-73
 crates/tui/src/app.rs	1	docs/invocation.md`, "Sessions"
 crates/tui/src/app.rs	1	docs/testing.md`, "a test of how much work something does counts\n/// the work"
-crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1974,1997
-crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1991,1997
-crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1993,1997
-crates/tui/src/app/aliases_tests.rs	7	docs/tui.md:1997
-crates/tui/src/app/aliases_tests.rs	7	docs/tui.md:2006
-crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:604
-crates/tui/src/app/call_view_tests.rs	2	docs/tui.md:576
-crates/tui/src/app/clear_tests.rs	12	docs/tui.md:2148
-crates/tui/src/app/clear_tests.rs	2	docs/tui.md:268
-crates/tui/src/app/commands_tests.rs	1	docs/tui.md:268
-crates/tui/src/app/completion_tests.rs	1	docs/tui.md:1971
 crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is\n//! reached on its own connection"
 crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is reached on\n    /// its own connection"
 crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is reached on its own\n            // connection"
-crates/tui/src/app/exit_alias_tests.rs	1	docs/tui.md:1956,1965
-crates/tui/src/app/exit_alias_tests.rs	2	docs/tui.md:1956,1965,1974
 crates/tui/src/app/home.rs	2	docs/invocation.md`, "Sessions"
 crates/tui/src/app/home/open_at_tests.rs	1	docs/invocation.md:1044
-crates/tui/src/app/home/open_at_tests.rs	7	docs/tui.md:268
 crates/tui/src/app/home/scoped_page_tests.rs	8	docs/invocation.md:1102
-crates/tui/src/app/home/scoped_page_tests.rs	1	docs/tui.md:233-234
-crates/tui/src/app/home/scoped_page_tests.rs	2	docs/tui.md:254-255
-crates/tui/src/app/home/scoped_page_tests.rs	11	docs/tui.md:268
-crates/tui/src/app/home/workspace_tests.rs	1	docs/tui.md`, "The workspace picker"
 crates/tui/src/app/home_tests.rs	29	docs/invocation.md:1102
-crates/tui/src/app/home_tests.rs	8	docs/tui.md:233-234
-crates/tui/src/app/home_tests.rs	1	docs/tui.md:242
-crates/tui/src/app/home_tests.rs	13	docs/tui.md:254-255
-crates/tui/src/app/home_tests.rs	52	docs/tui.md:268
-crates/tui/src/app/home_tests.rs	1	docs/tui.md`, "Key map"
 crates/tui/src/app/hub_version_tests.rs	1	docs/testing.md`, "A test asserts an order\n/// or a count only where a doc promises it"
 crates/tui/src/app/items/output_tests.rs	1	docs/events.md:697-701
 crates/tui/src/app/items_tests.rs	1	docs/events.md:699-701
-crates/tui/src/app/items_tests.rs	1	docs/tui.md:2734
-crates/tui/src/app/items_tests.rs	10	docs/tui.md:576
-crates/tui/src/app/keyboard_screen_tests.rs	1	docs/tui.md:589
-crates/tui/src/app/keyboard_screen_tests.rs	1	docs/tui.md`, "Key map"
-crates/tui/src/app/keyboard_tests.rs	16	docs/tui.md:2953-2966
-crates/tui/src/app/keyboard_tests.rs	2	docs/tui.md:3050-3053
-crates/tui/src/app/links_tests.rs	1	docs/tui.md:2100
 crates/tui/src/app/model_picker_tests.rs	1	docs/errors.md`, "Notices"
-crates/tui/src/app/model_picker_tests.rs	4	docs/tui.md:576
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:1280
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3016
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3020
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3023
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3025
-crates/tui/src/app/offer_tests.rs	5	docs/tui.md:576
-crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2430-2431
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2430-2436
-crates/tui/src/app/overlay_tests.rs	2	docs/tui.md:2431-2434
-crates/tui/src/app/overlay_tests.rs	7	docs/tui.md:2432-2434
-crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2439-2440
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2440-2442
-crates/tui/src/app/overlay_tests.rs	9	docs/tui.md:2445-2446
-crates/tui/src/app/overlay_tests.rs	3	docs/tui.md:2446-2448
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2449-2450
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2458-2459
-crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2470-2473
-crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2474-2475
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2484-2489
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2484-2493
-crates/tui/src/app/overlay_tests.rs	3	docs/tui.md:2492-2493
-crates/tui/src/app/panel/quota_tests.rs	1	docs/tui.md:268
 crates/tui/src/app/rail_tests.rs	1	docs/testing.md`, "A test asserts an order or a count only where\n    // a doc promises it"
-crates/tui/src/app/rail_tests.rs	2	docs/tui.md:1936
-crates/tui/src/app/rail_tests.rs	1	docs/tui.md:251
-crates/tui/src/app/rail_tests.rs	2	docs/tui.md:362
-crates/tui/src/app/reconnect_tests.rs	2	docs/tui.md:268
-crates/tui/src/app/results_tests.rs	1	docs/tui.md:576
-crates/tui/src/app/rewind_tests.rs	2	docs/tui.md:576
-crates/tui/src/app/screen_tests.rs	2	docs/tui.md`,\n    // "Pinned call"
-crates/tui/src/app/screen_tests.rs	1	docs/tui.md`, "Pinned call"
-crates/tui/src/app/session_views_tests.rs	4	docs/tui.md:830
-crates/tui/src/app/session_views_tests.rs	2	docs/tui.md`, "Changed files"
 crates/tui/src/app_focus.rs	1	docs/errors.md`, "Notices"
 crates/tui/src/app_focus_tests.rs	1	docs/errors.md`, "Notices"
-crates/tui/src/app_tests.rs	2	docs/tui.md:1296-1306
-crates/tui/src/app_tests.rs	1	docs/tui.md:444-447
-crates/tui/src/changed_files_view_tests.rs	1	docs/tui.md:830
 crates/tui/src/event_loop.rs	1	docs/invocation.md`, "Three signals, one path"
 crates/tui/src/event_loop/attach_tests.rs	1	docs/state.md`,\n/// "Diagnostic logs"
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2426-2440
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2428-2430
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2430-2431
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2431-2434
-crates/tui/src/event_loop/attach_tests.rs	3	docs/tui.md:2432-2434
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2438
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2443-2445
-crates/tui/src/event_loop/attach_tests.rs	4	docs/tui.md:2445-2446
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2446-2448
-crates/tui/src/event_loop/attach_tests.rs	2	docs/tui.md:2449-2450
-crates/tui/src/event_loop/attach_tests.rs	2	docs/tui.md:2451
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2484-2489
-crates/tui/src/event_loop/attach_tests.rs	2	docs/tui.md:2484-2493
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2492-2493
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2659
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2734
-crates/tui/src/event_loop/attach_tests.rs	1	docs/tui.md:2757
-crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2525-2528
-crates/tui/src/event_loop/kitty_writer_tests.rs	13	docs/tui.md:2529
-crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2529-2530
-crates/tui/src/event_loop/kitty_writer_tests.rs	4	docs/tui.md:2529-2532
-crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2530-2531
-crates/tui/src/event_loop/kitty_writer_tests.rs	3	docs/tui.md:2531-2532
-crates/tui/src/event_loop/kitty_writer_tests.rs	2	docs/tui.md:2532-2534
-crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2534-2535
-crates/tui/src/event_loop/kitty_writer_tests.rs	3	docs/tui.md:2548-2551
-crates/tui/src/event_loop/kitty_writer_tests.rs	1	docs/tui.md:2550-2551
-crates/tui/src/event_loop_loop_tests.rs	1	docs/tui.md:2438
-crates/tui/src/event_loop_loop_tests.rs	2	docs/tui.md:2446-2448
-crates/tui/src/event_loop_loop_tests.rs	1	docs/tui.md:2529
-crates/tui/src/event_loop_loop_tests.rs	1	docs/tui.md:2529-2532
-crates/tui/src/event_loop_mouse_tests.rs	3	docs/tui.md:1296-1306
-crates/tui/src/event_loop_mouse_tests.rs	3	docs/tui.md:1301-1302
-crates/tui/src/event_loop_mouse_tests.rs	6	docs/tui.md:3048
 crates/tui/src/event_loop_tests.rs	4	docs/invocation.md:1102
 crates/tui/src/event_loop_tests.rs	1	docs/invocation.md`,\n/// "Exit codes"
 crates/tui/src/event_loop_tests.rs	3	docs/state.md:432-435
-crates/tui/src/event_loop_tests.rs	4	docs/tui.md:268
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:2682
-crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2683
-crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2684
-crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2688
-crates/tui/src/ext/cache_tests.rs	3	docs/tui.md:2745
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:2772
-crates/tui/src/ext/cache_tests.rs	3	docs/tui.md:2924
-crates/tui/src/ext/cache_tests.rs	7	docs/tui.md:2977
-crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2980
-crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:2983
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:2985
-crates/tui/src/ext/cache_tests.rs	15	docs/tui.md:2989
-crates/tui/src/ext/cache_tests.rs	7	docs/tui.md:2991
-crates/tui/src/ext/cache_tests.rs	4	docs/tui.md:2992
-crates/tui/src/ext/cache_tests.rs	4	docs/tui.md:2993
-crates/tui/src/ext/cache_tests.rs	6	docs/tui.md:2994
-crates/tui/src/ext/cache_tests.rs	4	docs/tui.md:3013
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3016
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3017
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3018
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3019
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3020
-crates/tui/src/ext/cache_tests.rs	2	docs/tui.md:3021
-crates/tui/src/ext/cache_tests.rs	1	docs/tui.md:3022
-crates/tui/src/ext_tests.rs	2	docs/tui.md:2996
 crates/tui/src/history.rs	1	docs/state.md`, "Prompt\n//! history"
 crates/tui/src/home.rs	1	docs/invocation.md`, "Sessions"
 crates/tui/src/home_tests.rs	10	docs/invocation.md:1102
-crates/tui/src/home_tests.rs	5	docs/tui.md:233-234
-crates/tui/src/home_tests.rs	5	docs/tui.md:254-255
-crates/tui/src/home_tests.rs	15	docs/tui.md:268
-crates/tui/src/home_view_tests.rs	1	docs/tui.md:254-255
-crates/tui/src/home_view_tests.rs	1	docs/tui.md:268
-crates/tui/src/keyset_tests.rs	2	docs/tui.md:1941-1954
-crates/tui/src/login_view_tests.rs	5	docs/tui.md:576
-crates/tui/src/logout_view_tests.rs	5	docs/tui.md:576
-crates/tui/src/mcp_view_tests.rs	2	docs/tui.md:576
-crates/tui/src/model_picker_tests.rs	13	docs/tui.md:661-668
-crates/tui/src/notices_tests.rs	1	docs/tui.md:1204
-crates/tui/src/offer_tests.rs	4	docs/tui.md:576
-crates/tui/src/rebind_tests.rs	13	docs/tui.md:2100
-crates/tui/src/rebind_tests.rs	1	docs/tui.md:2109
-crates/tui/src/rebind_tests.rs	3	docs/tui.md:576
-crates/tui/src/rebind_tests.rs	3	docs/tui.md:589
-crates/tui/src/rebind_view_tests.rs	1	docs/tui.md:2100
-crates/tui/src/release_notes.rs	2	docs/tui.md`, "Markdown in replies"
 crates/tui/src/remote/decode_tests.rs	1	docs/invocation.md:1160
 crates/tui/src/remote_tests.rs	2	docs/invocation.md:1160
-crates/tui/src/rows_tests.rs	1	docs/tui.md:3001
-crates/tui/src/rules_view_tests.rs	2	docs/tui.md:576
-crates/tui/src/settings_view_tests.rs	3	docs/tui.md:576
 crates/tui/src/skills_view_tests.rs	1	docs/invocation.md:474
-crates/tui/src/skills_view_tests.rs	2	docs/tui.md:576
-crates/tui/src/skills_view_tests.rs	1	docs/tui.md:885-888
-crates/tui/src/skills_view_tests.rs	1	docs/tui.md:886-888
-crates/tui/src/skills_view_tests.rs	3	docs/tui.md:892-901
-crates/tui/src/skills_view_tests.rs	2	docs/tui.md:895
-crates/tui/src/skills_view_tests.rs	5	docs/tui.md:899-901
-crates/tui/src/skills_view_tests.rs	2	docs/tui.md:901-902
-crates/tui/src/slash_tests.rs	1	docs/tui.md:1940-1993
-crates/tui/src/slash_tests.rs	1	docs/tui.md:1940-1997
-crates/tui/src/slash_tests.rs	1	docs/tui.md:1978,1993
-crates/tui/src/slash_tests.rs	1	docs/tui.md:1990-1993
-crates/tui/src/slash_tests.rs	1	docs/tui.md:2006
-crates/tui/src/steering_tests.rs	5	docs/tui.md:3048
-crates/tui/src/steering_tests.rs	1	docs/tui.md:3050
-crates/tui/src/swapped_tests.rs	8	docs/tui.md:576
 crates/tui/src/timing.rs	1	docs/state.md`, "Diagnostic logs"
 crates/tui/src/timing_tests.rs	1	docs/state.md:428-429
 crates/tui/src/timing_tests.rs	3	docs/state.md:430-432
@@ -696,27 +476,8 @@ crates/tui/src/timing_tests.rs	3	docs/state.md:446-448,453
 crates/tui/src/timing_tests.rs	4	docs/state.md:448-450,453
 crates/tui/src/timing_tests.rs	4	docs/state.md:450-454
 crates/tui/src/timing_tests.rs	4	docs/state.md`, "Diagnostic logs"
-crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1130-1132
-crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1130-1135
-crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1134-1135
-crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1136-1141
-crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1142-1144
-crates/tui/src/tool_group_nesting_tests.rs	1	docs/tui.md:1145-1146
-crates/tui/src/tools_view_tests.rs	2	docs/tui.md:576
 crates/tui/src/turn/group_tests.rs	1	docs/events.md:697-701
-crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1130-1132
-crates/tui/src/turn/group_tests.rs	4	docs/tui.md:1130-1135
-crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1131-1132
-crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1132-1134
-crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1136-1138
-crates/tui/src/turn/group_tests.rs	2	docs/tui.md:1136-1141
-crates/tui/src/turn/group_tests.rs	5	docs/tui.md:1142-1144
 crates/tui/src/turn_tests.rs	1	docs/events.md:697-701
-crates/tui/src/view/clear_tests.rs	1	docs/tui.md:1957
-crates/tui/src/view/completions_tests.rs	1	docs/tui.md:1682
-crates/tui/src/view/completions_tests.rs	2	docs/tui.md:1974,1997
-crates/tui/src/view/conversation.rs	1	docs/tui.md`,\n    // "Pinned call"
-crates/tui/src/view/conversation.rs	2	docs/tui.md`, "Pinned call"
 crates/tui/src/view/model_picker_tests.rs	6	docs/tui.md:589
 crates/tui/src/view/model_picker_tests.rs	2	docs/tui.md:642-644
 crates/tui/src/view/model_picker_tests.rs	10	docs/tui.md:661-668
@@ -725,36 +486,7 @@ crates/tui/src/view/model_picker_tests.rs	1	docs/tui.md:691-693
 crates/tui/src/view/model_picker_tests.rs	1	docs/tui.md:706-709
 crates/tui/src/view/model_picker_tests.rs	6	docs/tui.md:710-714
 crates/tui/src/view/model_picker_tests.rs	1	docs/tui.md:740-742
-crates/tui/src/view/notice_rows_tests.rs	1	docs/tui.md:2740
-crates/tui/src/view/notice_rows_tests.rs	1	docs/tui.md:3017
-crates/tui/src/view/notice_rows_tests.rs	1	docs/tui.md:3023
 crates/tui/src/view/rail_tests.rs	1	docs/invocation.md:1102
-crates/tui/src/view/rail_tests.rs	1	docs/tui.md:268
-crates/tui/src/view/rail_tests.rs	1	docs/tui.md:332-335
-crates/tui/src/view/steering_queue_tests.rs	8	docs/tui.md:1296-1306
-crates/tui/src/view/steering_queue_tests.rs	1	docs/tui.md:1301-1302
-crates/tui/src/view/steering_queue_tests.rs	6	docs/tui.md:2891
-crates/tui/src/view/steering_queue_tests.rs	4	docs/tui.md:2893
-crates/tui/src/view/steering_queue_tests.rs	4	docs/tui.md:3042-3044
-crates/tui/src/view/steering_queue_tests.rs	2	docs/tui.md:3044
-crates/tui/src/view/steering_queue_tests.rs	6	docs/tui.md:3048
-crates/tui/src/view/steering_queue_tests.rs	1	docs/tui.md:3121
-crates/tui/src/view/steering_queue_tests.rs	6	docs/tui.md:444-447
-crates/tui/src/view/working_line_tests.rs	2	docs/tui.md:2872-2878
-crates/tui/src/view/working_line_tests.rs	4	docs/tui.md:2880
-crates/tui/src/view/working_line_tests.rs	2	docs/tui.md:2880-2883
-crates/tui/src/view/working_line_tests.rs	4	docs/tui.md:3044
-crates/tui/src/view/working_line_tests.rs	1	docs/tui.md:3121
-crates/tui/src/view_tests.rs	1	docs/tui.md:1553
-crates/tui/src/view_tests.rs	2	docs/tui.md:2962
-crates/tui/src/view_tests.rs	5	docs/tui.md:2968
-crates/tui/src/view_tests.rs	4	docs/tui.md:2970
-crates/tui/src/view_tests.rs	1	docs/tui.md:2971
-crates/tui/src/view_tests.rs	1	docs/tui.md:2972
-crates/tui/src/view_tests.rs	4	docs/tui.md:2974
-crates/tui/src/view_tests.rs	1	docs/tui.md:2984
-crates/tui/src/view_tests.rs	1	docs/tui.md`,\n    // "Pinned call"
-crates/tui/src/view_tests.rs	3	docs/tui.md`, "Pinned call"
 scripts/cache-prune	1	docs/ci.md, "The backstop"
 scripts/class-data	2	docs/performance.md, "The class columns"
 scripts/test-journey-report	10	docs/ci.md:459-461

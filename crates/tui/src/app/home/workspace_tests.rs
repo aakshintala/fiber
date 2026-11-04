@@ -1287,7 +1287,7 @@ fn an_empty_choice_clears_the_pick_and_enter_reopens_the_picker() {
     app.choose_workspace(String::new());
     assert_eq!(app.home_workspace(), None);
     // Enter on the prompt with no workspace reopens the picker
-    // (`docs/tui.md`, "The workspace picker") instead of starting.
+    // (`docs/tui.md`, "Home") instead of starting.
     key(&mut app, Key::Enter);
     assert!(picker_open(&app));
 }

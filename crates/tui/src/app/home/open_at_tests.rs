@@ -212,9 +212,9 @@ fn a_list_launch_focuses_the_list_after_the_first_recent_page() {
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
     )));
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
-    // `docs/tui.md:268` (scoped ask carries the project's key).
+    // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     assert!(spent(&app));
     drawn(&mut app);
@@ -256,7 +256,7 @@ fn a_list_launch_with_an_empty_first_page_but_a_live_row_focuses_the_list() {
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("unscoped recent id"));
     let scoped = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md:268` (a newly appearing project earns one scoped ask).
+    // `docs/tui.md`, "The session list" (a newly appearing project earns one scoped ask).
     assert_eq!(scoped.len(), 1);
     assert_eq!(scoped[0]["command"], "recent");
     assert_eq!(scoped[0]["args"]["project"], "-w");
@@ -307,9 +307,9 @@ fn a_home_launch_never_focuses_the_list() {
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
     )));
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
-    // `docs/tui.md:268` (scoped ask carries the project's key).
+    // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     drawn(&mut app);
     assert_eq!(app.focused(), None);
@@ -809,9 +809,9 @@ fn home_with_row() -> App {
         recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old work")]}),
     )));
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 1);
-    // `docs/tui.md:268` (scoped ask carries the project's key).
+    // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
     assert_eq!(fanout[0]["args"]["project"], "-w");
     app
 }

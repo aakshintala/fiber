@@ -611,7 +611,7 @@ impl Loop {
     fn judge_call(&self, tool: &str, effects: &Effects) -> Verdict {
         // The rules are read once for every call, including ones that later
         // fast-path, so a revoked rule applies to the next call judged
-        // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
+        // (`docs/tui.md`, "Swapped views"). `judge` runs the credential deny before
         // it looks at them, so an unreadable rules file never stops that
         // deny.
         let rules = self.rules.read();

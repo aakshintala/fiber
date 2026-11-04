@@ -8178,8 +8178,8 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
     // four still run.
     drop(release_early);
     // The reopened view lists the running scan first: running delegates
-    // precede finished ones in start order (docs/tui.md, "Every
-    // delegate"). The old wait stopped here and pressed Enter, opening
+    // precede finished ones in start order (docs/tui.md,
+    // "Swapped views"). The old wait stopped here and pressed Enter, opening
     // the running scan's live view instead of a replay (#3490). The
     // small viewport shows three delegates, so this wait pins only a
     // running late row with no early row still running, plus a finished

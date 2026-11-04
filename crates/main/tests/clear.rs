@@ -1,4 +1,4 @@
-//! Binary-level tests of `/clear` (`docs/tui.md:1932–1960`): mid-turn
+//! Binary-level tests of `/clear` (`docs/tui.md`, "Clearing"): mid-turn
 //! `/clear` switches to a new empty session at once while the old one
 //! closes politely, and clearing past an asided approval asks first.
 
@@ -201,7 +201,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
         line["kind"] == "fiber_exited"
     });
     // `/clear` starts a new session while the old one finishes
-    // (`docs/tui.md:1936–1938, 1947–1952`).
+    // (`docs/tui.md`, "Clearing").
     let ids = wait_stored(&setup, 2);
     assert_eq!(ids.len(), 2, "the old and the new session: {ids:?}");
     let b = ids.into_iter().find(|id| id != &a).unwrap();
@@ -215,7 +215,7 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
 }
 
 /// A refused `start` leaves the old conversation on screen and shows its
-/// rejection (`docs/tui.md:1943–1945`).
+/// rejection (`docs/tui.md`, "Clearing").
 #[test]
 fn a_refused_clear_start_keeps_the_old_session_on_screen() {
     let setup = Setup::new();
@@ -255,7 +255,7 @@ fn a_refused_clear_start_keeps_the_old_session_on_screen() {
 
 /// `/clear` past an asided approval asks first: Esc stays on the old
 /// session without starting one, and Enter clears anyway, closing the old
-/// session at once once the `start` answers (`docs/tui.md:1954–1960`).
+/// session at once once the `start` answers (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_on_a_waiting_session_closes_it_at_once() {
     let setup = Setup::new();
@@ -317,7 +317,7 @@ fn clear_on_a_waiting_session_closes_it_at_once() {
         line["kind"] == "fiber_exited"
     });
     // Enter starts a fresh session while the old one exits
-    // (`docs/tui.md:1954–1960`).
+    // (`docs/tui.md`, "Clearing").
     let ids = wait_stored(&setup, 2);
     assert_eq!(ids.len(), 2, "the old and the new session: {ids:?}");
     let b = ids.into_iter().find(|id| id != &a).unwrap();

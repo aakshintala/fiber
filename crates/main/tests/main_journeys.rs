@@ -1522,7 +1522,7 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                     .is_some()
             });
             let (mark_row, mark_text) = mark.expect("the marker row");
-            // `docs/tui.md:710-714` keeps the session model and heading
+            // `docs/tui.md`, "The model picker" keeps the session model and heading
             // visible on open; the focused model and heading stay visible
             // after scrolling. Place the wheel in the compact list using
             // fixture-derived row arithmetic; SGR coordinates add one.

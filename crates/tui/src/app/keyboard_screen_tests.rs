@@ -473,7 +473,7 @@ fn wheel(col: u16, row: u16, down: bool) -> crate::keys::Mouse {
 }
 
 /// The wheel over the `/keys` screen moves three display lines a step,
-/// never the conversation under it (`docs/tui.md:589`). Three Downs move
+/// never the conversation under it (`docs/tui.md`, "Swapped views"). Three Downs move
 /// the selection three actions down, and the wheel steps the window under it.
 #[test]
 fn wheel_over_keys_steps_browse_not_the_conversation() {
@@ -518,8 +518,7 @@ fn wheel_over_keys_steps_browse_not_the_conversation() {
 
 /// The wheel over the open key map is swallowed across the content
 /// area it replaces: the scrolled conversation under it keeps its
-/// scroll and the map stays open (`docs/tui.md`, "Key map"; see
-/// #3578). Points near the area's corners stand in for the whole
+/// scroll and the map stays open (see #3578). Points near the area's corners stand in for the whole
 /// drawn area.
 #[test]
 fn wheel_over_keymap_leaves_a_scrolled_conversation() {

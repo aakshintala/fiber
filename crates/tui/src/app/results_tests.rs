@@ -759,7 +759,7 @@ fn wheel_with_search_open_and_no_results_reaches_the_conversation() {
 }
 
 /// A wheel outside the drawn conversation with results open reaches
-/// neither the results nor the conversation (`docs/tui.md:576`).
+/// neither the results nor the conversation (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_outside_the_conversation_with_results_open_moves_neither() {
     let matches: Vec<String> = (1..=18).map(|n| format!("needle {n:02}")).collect();
