@@ -29,6 +29,15 @@ set -euo pipefail
 # TMPDIR, `CARGO_BUILD_JOBS=3 CARGO_INCREMENTAL=0`): 1916936 KiB, rounded
 # up to 1873 MiB and doubled.
 PREFLIGHT_TMPDIR_MIN_MIB_LINUX=3746
+# CI floor for Linux runners when GITHUB_ACTIONS=true: measured TMPDIR peak
+# 1873 MiB plus a 10% margin, rounded up per floor: ceil(1873 * 1.1) = 2061.
+# The minimum 10% is used because every extra margin point adds about 292 MiB
+# to the reclaim burden, while 10% keeps the small shape usable once reclaim
+# frees more (see RULING-4152-1). The per-floor ceil sums to 32161 MiB with
+# the target floor below; ceil-of-sum would be 32160 MiB, and the 1 MiB
+# difference is why per-floor ceil is stated here.
+# debt: CI TMPDIR floor stays at measured peak plus 10% with per-floor ceil. Upgrade trigger: a `cow-root` runner refuses at the CI floor. When that fires, re-measure the peak; the floor is never raised without a new measurement.
+PREFLIGHT_TMPDIR_MIN_MIB_LINUX_CI=2061
 # Darwin: not measured; equal to Linux until the macOS figures are harvested
 # from CI (surveyor RULING-3954-1, step 3); see #4027.
 # debt: Darwin TMPDIR floor stays equal to the Linux floor. Upgrade trigger:
@@ -42,6 +51,10 @@ PREFLIGHT_TMPDIR_MIN_MIB_DARWIN=3746
 # doubled. Only `CARGO_TARGET_DIR` is read (the repo's `.cargo/config.toml`
 # sets no target directory).
 PREFLIGHT_TARGET_MIN_MIB_LINUX=54726
+# CI floor for Linux runners when GITHUB_ACTIONS=true: measured target peak
+# 27363 MiB plus a 10% margin, rounded up per floor: ceil(27363 * 1.1) = 30100.
+# debt: CI target floor stays at measured peak plus 10% with per-floor ceil. Upgrade trigger: a `cow-root` runner refuses at the CI floor. When that fires, re-measure the peak; the floor is never raised without a new measurement.
+PREFLIGHT_TARGET_MIN_MIB_LINUX_CI=30100
 # Darwin: not measured; equal to Linux until the macOS figures are harvested
 # from CI (surveyor RULING-3954-1, step 3); see #4027.
 # debt: Darwin target floor stays equal to the Linux floor. Upgrade trigger:
@@ -51,13 +64,24 @@ PREFLIGHT_TARGET_MIN_MIB_LINUX=54726
 PREFLIGHT_TARGET_MIN_MIB_DARWIN=54726
 # The active pair is keyed by platform: `release.yml` gates both Linux and
 # macOS on this script, so one shared pair would leave macOS unmeasured.
-# Any other `uname -s` value keeps the Linux pair.
+# Any other `uname -s` value keeps the Linux pair. On Linux with
+# GITHUB_ACTIONS=true the pair is the measured peak plus margin above;
+# Linux with an empty, false, or unset value keeps the doubled local pair.
 case $(uname -s) in
   Darwin)
     PREFLIGHT_TMPDIR_MIN_MIB=$PREFLIGHT_TMPDIR_MIN_MIB_DARWIN
     PREFLIGHT_TARGET_MIN_MIB=$PREFLIGHT_TARGET_MIN_MIB_DARWIN
     ;;
-  Linux | *)
+  Linux)
+    if [ "${GITHUB_ACTIONS-}" = "true" ]; then
+      PREFLIGHT_TMPDIR_MIN_MIB=$PREFLIGHT_TMPDIR_MIN_MIB_LINUX_CI
+      PREFLIGHT_TARGET_MIN_MIB=$PREFLIGHT_TARGET_MIN_MIB_LINUX_CI
+    else
+      PREFLIGHT_TMPDIR_MIN_MIB=$PREFLIGHT_TMPDIR_MIN_MIB_LINUX
+      PREFLIGHT_TARGET_MIN_MIB=$PREFLIGHT_TARGET_MIN_MIB_LINUX
+    fi
+    ;;
+  *)
     PREFLIGHT_TMPDIR_MIN_MIB=$PREFLIGHT_TMPDIR_MIN_MIB_LINUX
     PREFLIGHT_TARGET_MIN_MIB=$PREFLIGHT_TARGET_MIN_MIB_LINUX
     ;;
