@@ -2583,7 +2583,8 @@ fn mutants_reuse_malformed_runs_json_prints_false() {
 #[test]
 fn mutants_reuse_matching_fixture_prints_true() {
     // 40 mutants derive a 3-shard total, and the candidate passed exactly
-    // those three shards.
+    // those three shards (docs/ci.md, "On every pull request that changes
+    // code").
     let dir = workspace();
     let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
     let jobs = serde_json::json!({ "7": reuse_shards(3, "success") }).to_string();
@@ -2595,6 +2596,8 @@ fn mutants_reuse_matching_fixture_prints_true() {
 
 #[test]
 fn mutants_reuse_shard_count_mismatch_prints_false() {
+    // Four successful shards against a derived 3-shard total reuses nothing
+    // (docs/ci.md, "On every pull request that changes code").
     let dir = workspace();
     let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
     let jobs = serde_json::json!({ "7": reuse_shards(4, "success") }).to_string();

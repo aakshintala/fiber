@@ -190,6 +190,10 @@ jobs:
             head_sha="$HEAD_SHA"
             head_ref="$HEAD_REF"
             pr_number="$PR_NUMBER"
+            # Any lookup failure starts the shards (docs/ci.md, "On every
+            # pull request that changes code"): a failed jobs lookup must
+            # not let a later matching candidate reuse the pass.
+            lookup_failed=false
             if runs_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$head_ref&per_page=20" 2>/dev/null); then
               echo "$runs_json" >"$RUNNER_TEMP/runs.json"
               echo '{}' >"$RUNNER_TEMP/jobs.json"
@@ -201,11 +205,18 @@ jobs:
                     mv "$tmp" "$RUNNER_TEMP/jobs.json"
                   else
                     rm -f "$tmp"
+                    lookup_failed=true
                   fi
+                else
+                  lookup_failed=true
                 fi
               done
-              if reuse_out=$(cargo xtask mutants-reuse --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null); then
-                reuse="${reuse_out#reuse=}"
+              if [ "$lookup_failed" != true ]; then
+                if reuse_out=$(cargo xtask mutants-reuse --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null); then
+                  reuse="${reuse_out#reuse=}"
+                fi
+              else
+                echo "mutants reuse: jobs lookup failed; starting shards"
               fi
             fi
             echo "mutants reuse: reuse=$reuse (head $head_sha, base $BASE)"

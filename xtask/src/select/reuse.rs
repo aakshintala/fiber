@@ -13,25 +13,39 @@ use serde_json::Value;
 
 use super::plan::mutant_shards;
 
+/// A pull request number. Never a run id.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct PullRequestNumber(pub u64);
+
+/// An Actions run id. Never a pull request number.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct RunId(pub u64);
+
+/// A commit sha: a head sha or a base sha.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct CommitSha(pub String);
+
 /// The current run's side of the reuse predicate: the pull request under
 /// test, its head and base shas, the raw mutant count the list step counted,
 /// the current run id, and whether the current run is a draft.
 pub(crate) struct Current {
-    pub pr: u64,
-    pub head: String,
-    pub base: String,
+    pub pr: PullRequestNumber,
+    pub head: CommitSha,
+    pub base: CommitSha,
     pub mutant_count: u64,
-    pub run_id: u64,
+    pub run_id: RunId,
     pub draft: bool,
 }
 
-/// The shard index of a `Mutants (shard N)` job name: `None` for anything
-/// else, including the unexpanded matrix name of a run that never selected
-/// mutants, so such a run contributes no shard.
-fn shard_index(name: &str) -> Option<u64> {
-    name.strip_prefix("Mutants (shard ")?
-        .strip_suffix(')')
-        .and_then(|index| index.parse().ok())
+/// Whether a job name is one of a run's `Mutants (shard N)` jobs: false
+/// for anything else, including the unexpanded matrix name of a run that
+/// never selected mutants, so such a run contributes no shard. The index
+/// itself is never compared, so this is a boolean rather than the parsed
+/// index.
+fn is_mutants_shard(name: &str) -> bool {
+    name.strip_prefix("Mutants (shard ")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .is_some_and(|index| index.parse::<u64>().is_ok())
 }
 
 /// Whether one candidate run supplies the pass the current run reuses: a
@@ -42,14 +56,14 @@ fn run_matches(current: &Current, total: u64, run: &Value, jobs_by_run: &Value) 
     if run
         .get("id")
         .and_then(Value::as_u64)
-        .is_none_or(|id| id == current.run_id)
+        .is_none_or(|id| id == current.run_id.0)
     {
         return false;
     }
     if run.get("status").and_then(Value::as_str) != Some("completed") {
         return false;
     }
-    if run.get("head_sha").and_then(Value::as_str) != Some(current.head.as_str()) {
+    if run.get("head_sha").and_then(Value::as_str) != Some(current.head.0.as_str()) {
         return false;
     }
     let same_pr_and_base = run
@@ -57,12 +71,12 @@ fn run_matches(current: &Current, total: u64, run: &Value, jobs_by_run: &Value) 
         .and_then(Value::as_array)
         .is_some_and(|refs| {
             refs.iter().any(|pull| {
-                pull.get("number").and_then(Value::as_u64) == Some(current.pr)
+                pull.get("number").and_then(Value::as_u64) == Some(current.pr.0)
                     && pull
                         .get("base")
                         .and_then(|base| base.get("sha"))
                         .and_then(Value::as_str)
-                        == Some(current.base.as_str())
+                        == Some(current.base.0.as_str())
             })
         });
     if !same_pr_and_base {
@@ -79,7 +93,7 @@ fn run_matches(current: &Current, total: u64, run: &Value, jobs_by_run: &Value) 
         .filter(|job| {
             job.get("name")
                 .and_then(Value::as_str)
-                .is_some_and(|name| shard_index(name).is_some())
+                .is_some_and(is_mutants_shard)
         })
         .collect();
     shards.len() as u64 == total

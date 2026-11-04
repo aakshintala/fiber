@@ -241,17 +241,21 @@ fn run(args: &[String]) -> Result<bool, String> {
         }
         "mutants-reuse" => {
             let current = select::ReuseCurrent {
-                pr: flag(rest, "--pr")?
-                    .parse()
-                    .map_err(|e| format!("--pr: {e}"))?,
-                head: flag(rest, "--head")?,
-                base: flag(rest, "--base")?,
+                pr: select::ReusePullRequestNumber(
+                    flag(rest, "--pr")?
+                        .parse()
+                        .map_err(|e| format!("--pr: {e}"))?,
+                ),
+                head: select::ReuseCommitSha(flag(rest, "--head")?),
+                base: select::ReuseCommitSha(flag(rest, "--base")?),
                 mutant_count: flag(rest, "--mutant-count")?
                     .parse()
                     .map_err(|e| format!("--mutant-count: {e}"))?,
-                run_id: flag(rest, "--run-id")?
-                    .parse()
-                    .map_err(|e| format!("--run-id: {e}"))?,
+                run_id: select::ReuseRunId(
+                    flag(rest, "--run-id")?
+                        .parse()
+                        .map_err(|e| format!("--run-id: {e}"))?,
+                ),
                 draft: flag(rest, "--draft")? == "true",
             };
             let runs = read(&flag(rest, "--runs")?)?;
