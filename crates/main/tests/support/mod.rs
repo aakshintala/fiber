@@ -3834,6 +3834,175 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     hold.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN).cleanup_phase());
 }
 
+/// The child half of `holder_dies_with_the_test_process_that_parked_it`:
+/// parks a holder on a FIFO, acks its pid on stdout, then blocks forever.
+/// The outer test SIGKILLs this process: the kernel closes the hold's
+/// ends, the watchdog sees end of file, and its group kill reaps the
+/// holder. Ignored in the normal suite; the outer test re-runs this
+/// helper with `--exact ... --ignored`.
+#[test]
+#[ignore = "re-run by holder_dies_with_the_test_process_that_parked_it with --exact --ignored"]
+fn holder_dies_child_parks_a_holder() {
+    let dir = fakes::TempDir::new("holder-dies-child");
+    let fifo = dir.path().join("hold");
+    let ready = fakes::children::Ready::new(dir.path());
+    let pattern = format!("holder-dies-{}", dir.path().display());
+    // The command embeds the FIFO path, so the watchdog pattern is the
+    // path itself: unique to this run through the fresh directory above.
+    // The pid line follows the FIFO open in program order, so its arrival
+    // proves the reader opened; the read then parks until a kill.
+    let command = format!(
+        "exec 3<'{fifo}'; echo $$ > '{ready}'; read line <&3; exit 0 # {pattern}",
+        fifo = fifo.display(),
+        ready = ready.path().display(),
+    );
+    let _hold = fakes::Hold::park(&fifo, &command);
+    let _holder = Command::new("sh")
+        .args(["-c", &command])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("the parked holder to spawn");
+    let pid = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    println!("parked {pid} {}", fifo.display());
+    io::stdout()
+        .flush()
+        .expect("the parked line to reach the outer test");
+    // Block forever: the outer test SIGKILLs this process, and the
+    // watchdog owns the holder from there.
+    let (_never, forever) = mpsc::channel::<()>();
+    match forever.recv() {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+#[test]
+fn holder_dies_with_the_test_process_that_parked_it() {
+    // The reader thread starts before the child spawns, so the ack line
+    // cannot land before the reader exists; the pipe crosses on a handoff
+    // channel once the spawn makes it.
+    let (parked_tx, parked) = mpsc::channel::<(u32, PathBuf)>();
+    let (out_tx, out_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let out = match out_rx.recv() {
+            Ok(out) => out,
+            Err(_) => return,
+        };
+        let mut reader = BufReader::new(out);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            // The harness's `test ... ... ` prefix shares the ack's line,
+            // so the marker can start mid-line: search, never strip.
+            if let Some(start) = line.find("parked ") {
+                let rest = &line[start + "parked ".len()..];
+                if let Some((pid, fifo)) = rest.trim_end().split_once(' ') {
+                    if let Ok(pid) = pid.parse() {
+                        match parked_tx.send((pid, PathBuf::from(fifo))) {
+                            Ok(()) | Err(_) => return,
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let exe = std::env::current_exe().expect("the test binary knows its path");
+    let mut child = Command::new(exe)
+        .args([
+            "--exact",
+            "support::holder_dies_child_parks_a_holder",
+            "--nocapture",
+            "--test-threads=1",
+            "--ignored",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .process_group(0)
+        .spawn()
+        .expect("the child test process to spawn");
+    let pid = child.id();
+    let group = Watchdog::group(pid);
+    out_tx
+        .send(child.stdout.take().expect("the child to pipe its stdout"))
+        .unwrap_or(());
+    // A reaper, so the SIGKILLed child leaves no zombie; the watchdog
+    // above owns the kill, this thread only waits.
+    let (reaped_tx, reaped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let mut child = child;
+        match child.wait() {
+            Ok(_) | Err(_) => {}
+        }
+        reaped_tx.send(()).unwrap_or(());
+    });
+    // The ack names the holder pid and its FIFO: the pid first, then the
+    // path verbatim, so no space-splitting of the path.
+    let (holder, fifo): (u32, PathBuf) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&parked, "the parked holder's ack line");
+    let pattern = fifo
+        .to_str()
+        .expect("the holder's FIFO path is UTF-8")
+        .to_owned();
+    // The outer writer holds a write end across the kill: after the
+    // child's death closes the hold's release end, a writer still remains,
+    // so the holder's read cannot see end of file and only the watchdog's
+    // group kill can end it.
+    let (writing_tx, writing) = mpsc::channel();
+    thread::spawn({
+        let fifo = fifo.clone();
+        move || {
+            if let Ok(file) = fs::OpenOptions::new().write(true).open(&fifo) {
+                writing_tx.send(file).unwrap_or(());
+            }
+        }
+    });
+    let _outer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&writing, "the outer writer to open the holder's FIFO");
+    // The listing names the acked pid, tying the listed process to the
+    // acknowledged reader and closing the spawn-vs-list race.
+    let listed = pattern.clone();
+    fakes::wait_until(
+        "the parked holder to list",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            fakes::matching(&listed)
+                .unwrap_or_default()
+                .contains(&holder)
+        },
+    );
+    // The holder lives in another group, so this SIGKILL reaches only the
+    // child: the watchdog owns the holder from here.
+    fakes::kill_pid(pid, "KILL").expect("SIGKILL to reach the child test process");
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reaped)
+        .expect("the SIGKILLed child to be reaped");
+    // The child is reaped, so the drop path no longer owns it: disarm the
+    // watchdog without signalling.
+    group.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN).cleanup_phase());
+    if let Err(err) =
+        fakes::try_matching_exits(&pattern, Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+    {
+        // The exact group id from the ack line, no pattern sweep: the
+        // holder is the group leader, and the outer writer has kept it
+        // parked, so the pid cannot have been reused.
+        match fakes::kill_group(holder, "KILL") {
+            Ok(_) | Err(_) => {}
+        }
+        panic!("the holder outlived the SIGKILLed test process that parked it: {err}");
+    }
+    // Best-effort: the SIGKILLed child never dropped its own directory.
+    drop(fs::remove_dir_all(
+        fifo.parent().expect("the holder's FIFO has a directory"),
+    ));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn platform_watch_catches_write_before_first_wait() {
