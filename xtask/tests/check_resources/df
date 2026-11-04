@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Checked-in `df` stub for `check_resources_tests`: prints a fixed `df -Pk`
+# Checked-in `df` stub for `check_resources_tests`: prints one fixed `df -Pk`
 # table whose free-space field comes from CHECK_RESOURCES_DF_AVAIL_KIB, which
-# each preflight test sets. When CHECK_RESOURCES_DF_AVAIL_KIB_TARGET is set,
-# scratch and target report distinct filesystems with per-path free space from
-# CHECK_RESOURCES_DF_AVAIL_KIB_SCRATCH and CHECK_RESOURCES_DF_AVAIL_KIB_TARGET;
-# otherwise every path reports the same filesystem, so scratch and target
-# share it.
+# each preflight test sets. Arguments (the measured path) are ignored: every
+# path reports the same filesystem, so scratch and target share it.
+# When CHECK_RESOURCES_DF_AVAIL_KIB_TARGET is set, scratch and target report
+# distinct filesystems instead, with per-path free space from
+# CHECK_RESOURCES_DF_AVAIL_KIB_SCRATCH and CHECK_RESOURCES_DF_AVAIL_KIB_TARGET.
 set -euo pipefail
 printf 'Filesystem  1024-blocks  Used Available Capacity Mounted on\n'
 if [ -n "${CHECK_RESOURCES_DF_AVAIL_KIB_TARGET-}" ]; then
