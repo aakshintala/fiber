@@ -210,8 +210,15 @@ pub(crate) const MATCHING_PATTERN_VAR: &str = "FIBER_WATCHDOG_PATTERN";
 /// line from stdin means the run finished; EOF means the test process died,
 /// so the script kills every process whose command line matches, and its
 /// process group. An empty pattern, which matches every process, exits with
-/// status 2 before `pgrep` can run.
-pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || for p in $(pgrep -f -- "$FIBER_WATCHDOG_PATTERN"); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done"#;
+/// status 2 before `pgrep` can run. The `pgrep` runs in the background
+/// against a scratch file under `${TMPDIR:-/tmp}`, bounded by
+/// [`WATCHDOG_LOOKUP_WITHIN`]: a hung lookup is killed and whatever it
+/// listed is still killed, so the script always exits. The bound waits in
+/// the background beside the lookup, so a fast lookup returns at once
+/// without waiting out the sleep. All of `&`, `wait`, `sleep`, `kill`,
+/// `$$`, redirection and `:-` are POSIX shell, so the script runs on macOS
+/// too, where `timeout(1)` is unavailable.
+pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || { out="${TMPDIR:-/tmp}/fiber-watchdog-$$"; pgrep -f -- "$FIBER_WATCHDOG_PATTERN" > "$out" 2>/dev/null & lookup=$!; (sleep 3; kill -9 "$lookup" 2>/dev/null) & killer=$!; wait "$lookup" 2>/dev/null; kill -9 "$killer" 2>/dev/null; wait "$killer" 2>/dev/null; wait "$lookup" 2>/dev/null; for p in $(cat "$out" 2>/dev/null); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done; rm -f "$out"; } # lookup bound: WATCHDOG_LOOKUP_WITHIN"#;
 
 /// `text` as an extended regular expression matching itself, for `pgrep -f`.
 /// A leading plain character becomes a bracket expression (`/tmp/x` is
@@ -267,6 +274,21 @@ const LISTING_WITHIN: Duration = Duration::from_secs(MUST_SUCCEED_WITHIN.as_secs
 /// `pgrep` expires inside the listing that waits for it and the failure
 /// names the step.
 const PGREP_WITHIN: Duration = Duration::from_millis(LISTING_WITHIN.as_secs() * 1000 / 2);
+
+/// How long a matching watchdog's lookup may run before the script kills
+/// it and kills whatever it listed: far above a healthy `pgrep`
+/// (hundredths of a second), far below the must-succeed bound the
+/// test-side exit wait carries, so a hung lookup never strands a holder
+/// past the test-side timeout. The script carries this bound as its own
+/// `sleep`, pinned to this const by
+/// `the_matching_watchdog_script_bounds_its_lookup`, so the two cannot
+/// drift. This bounds only the watcher; [`PGREP_WITHIN`] still bounds
+/// only the test-side per-`pgrep` budget.
+#[allow(
+    dead_code,
+    reason = "the watchdog script carries the bound as its own sleep; tests pin the const to the text"
+)]
+pub(crate) const WATCHDOG_LOOKUP_WITHIN: Duration = Duration::from_secs(3);
 
 /// The pids of the processes whose command line contains `text`.
 ///

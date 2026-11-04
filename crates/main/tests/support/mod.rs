@@ -3760,27 +3760,33 @@ fn log_line_fails_fast_while_held_and_passes_after_release() {
 fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     let dir = fakes::TempDir::new("wait-refresh-exit");
     let fifo = dir.path().join("hold");
-    fakes::fifo(&fifo);
     let pattern = format!("wait-refresh-exit-{}", dir.path().display());
     // The marker rides the child's command line, so the match is this
     // test's own; the FIFO keeps the child parked between the old wait's
     // signal and the exit: opening it for read blocks until the test
-    // opens the write end to release it.
+    // writes the release line through the hold's release end.
+    let command = format!(
+        "read line < '{fifo}'; exit 0 # {pattern}",
+        fifo = fifo.display()
+    );
+    // The hold owns the FIFO, the release end, and the watchdog: if this
+    // test dies while the child is parked, the kernel closes the hold's
+    // ends, the watchdog sees end of file, and its group kill reaps the
+    // child. The command embeds the FIFO path, so the watchdog pattern
+    // is the path itself.
+    let mut hold = fakes::Hold::park(&fifo, &command);
     let child = Command::new("sh")
-        .args([
-            "-c",
-            &format!(
-                "read line < '{fifo}'; exit 0 # {pattern}",
-                fifo = fifo.display()
-            ),
-        ])
+        .args(["-c", &command])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()
         .unwrap();
+    let pid = child.id();
     // A reaper, so the exit leaves no zombie for the match to keep seeing.
+    // It waits only: the watchdog owns the kill, and the hold owns the
+    // teardown below.
     let (reaped_tx, reaped) = mpsc::channel::<()>();
     thread::spawn(move || {
         let mut child = child;
@@ -3789,6 +3795,14 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
         }
         reaped_tx.send(()).unwrap_or(());
     });
+    // The parked child is listed before the release goes out, so a vacuous
+    // pass cannot hide a holder that never parked.
+    let listed = pattern.clone();
+    fakes::wait_until(
+        "the parked refresh child to list",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || fakes::matching(&listed).unwrap_or_default().contains(&pid),
+    );
     // The old wait checks the match at once: the parked child is still
     // listed, so the bare assertion fails.
     let old = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -3799,23 +3813,233 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     }));
     assert!(old.is_err(), "the old wait must fail while held");
     let waited = pattern.clone();
-    // The release is opening the write end and closing it at once: the
-    // parked read sees end of file, the child exits, and the reaper
-    // clears it. The close happens before the wait below, never after.
+    // The release is one line written through the hold's open release end:
+    // the parked read consumes it, the child exits, and the reaper clears
+    // it. The write happens before the wait below, never after.
     held_wait_passes_after_release(
         &pattern,
         fakes::MUST_SUCCEED_WITHIN,
         move |deadline| wait_for_refresh_exit(deadline, &waited),
-        move || {
-            fs::OpenOptions::new()
-                .write(true)
-                .open(&fifo)
-                .expect("the held child opened its FIFO for read");
+        || {
+            hold.release()
+                .write_all(b"\n")
+                .expect("the release line reaches the parked refresh child");
         },
     );
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&reaped)
         .expect("the reaper cleared the exited child");
+    // The holder already exited on the success path: the stand-down drops
+    // the release handle and disarms the watchdog without signalling.
+    hold.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN).cleanup_phase());
+}
+
+/// The child half of `holder_dies_with_the_test_process_that_parked_it`:
+/// parks a holder on a FIFO, acks its pid on stdout, then blocks forever.
+/// The outer test SIGKILLs this process: the watchdog sees end of file,
+/// and its group kill reaps the holder. Ignored in the normal suite; the
+/// outer test re-runs this helper with `--exact ... --ignored`.
+#[test]
+#[ignore = "re-run by holder_dies_with_the_test_process_that_parked_it with --exact --ignored"]
+#[allow(clippy::print_stdout, reason = "the parent test reads this line")]
+fn holder_dies_child_parks_a_holder() {
+    // Standalone guard: `--run-ignored` runs every ignored test in this
+    // binary (look-diff's comparator, leak-probe's run), and this helper
+    // blocks forever unless the outer test drives it. Without the marker
+    // only the outer test sets on the child, pass quietly.
+    if std::env::var_os("HOLDER_DIES_CHILD").is_none() {
+        return;
+    }
+    let dir = fakes::TempDir::new("holder-dies-child");
+    let fifo = dir.path().join("hold");
+    // No `Hold` release end here: the FIFO starts with no pre-opened ends,
+    // so the holder's `read` blocks opening until the outer writer opens
+    // for write. That open succeeding is the acknowledgement at the
+    // blocking point itself, not a step before it.
+    fakes::fifo(&fifo);
+    let ready = fakes::children::Ready::new(dir.path());
+    let pattern = format!("holder-dies-{}", dir.path().display());
+    // The command embeds the FIFO path, so the watchdog pattern is the
+    // path itself: unique to this run through the fresh directory above.
+    // The pid line follows in program order, so its arrival proves the
+    // holder started; the outer writer open below proves the holder's
+    // `read` opened the FIFO, and the held writer keeps it parked there.
+    let command = format!(
+        "echo $$ > '{ready}'; read line < '{fifo}'; exit 0 # {pattern}",
+        fifo = fifo.display(),
+        ready = ready.path().display(),
+    );
+    let fifo_text = fifo
+        .to_str()
+        .expect("the holder's FIFO path is UTF-8")
+        .to_owned();
+    let _watchdog = Watchdog::matching(&fifo_text);
+    let holder = Command::new("sh")
+        .args(["-c", &command])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .expect("the parked holder to spawn");
+    thread::spawn(move || {
+        let mut holder = holder;
+        match holder.wait() {
+            Ok(_) | Err(_) => {}
+        }
+    });
+    let pid = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    println!("parked {pid} {}", fifo.display());
+    io::stdout()
+        .flush()
+        .expect("the parked line to reach the outer test");
+    // Block forever: the outer test SIGKILLs this process, and the
+    // watchdog owns the holder from there.
+    let (_never, forever) = mpsc::channel::<()>();
+    match forever.recv() {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+#[test]
+fn holder_dies_with_the_test_process_that_parked_it() {
+    // The reader thread starts before the child spawns, so the ack line
+    // cannot land before the reader exists; the pipe crosses on a handoff
+    // channel once the spawn makes it.
+    let (parked_tx, parked) = mpsc::channel::<(u32, PathBuf)>();
+    let (out_tx, out_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let out = match out_rx.recv() {
+            Ok(out) => out,
+            Err(_) => return,
+        };
+        let mut reader = BufReader::new(out);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {}
+            }
+            // The harness's `test ... ... ` prefix shares the ack's line,
+            // so the marker can start mid-line: search, never strip.
+            if let Some(start) = line.find("parked ")
+                && let Some((pid, fifo)) =
+                    line[start + "parked ".len()..].trim_end().split_once(' ')
+                && let Ok(pid) = pid.parse()
+            {
+                match parked_tx.send((pid, PathBuf::from(fifo))) {
+                    Ok(()) | Err(_) => return,
+                }
+            }
+        }
+    });
+    let exe = std::env::current_exe().expect("the test binary knows its path");
+    let mut child = Command::new(exe)
+        .env("HOLDER_DIES_CHILD", "1")
+        .args([
+            "--exact",
+            "support::holder_dies_child_parks_a_holder",
+            "--nocapture",
+            "--test-threads=1",
+            "--ignored",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .process_group(0)
+        .spawn()
+        .expect("the child test process to spawn");
+    let pid = child.id();
+    // Guard the group before anything that can panic (the watchdog start,
+    // the stdout take): like `spawn_watched`, a `KillGroup` owns the kill
+    // until the watchdog takes it, so a panic cannot leak the child.
+    let guard = KillGroup(pid);
+    let group = Watchdog::group(pid);
+    std::mem::forget(guard);
+    out_tx
+        .send(child.stdout.take().expect("the child to pipe its stdout"))
+        .unwrap_or(());
+    // A reaper, so the SIGKILLed child leaves no zombie; the watchdog
+    // above owns the kill, this thread only waits.
+    let (reaped_tx, reaped) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let mut child = child;
+        match child.wait() {
+            Ok(_) | Err(_) => {}
+        }
+        reaped_tx.send(()).unwrap_or(());
+    });
+    // The ack names the holder pid and its FIFO: the pid first, then the
+    // path verbatim, so no space-splitting of the path.
+    let (holder, fifo): (u32, PathBuf) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&parked, "the parked holder's ack line");
+    let pattern = fifo
+        .to_str()
+        .expect("the holder's FIFO path is UTF-8")
+        .to_owned();
+    // The outer writer is the controlled hold at the blocking point. The
+    // FIFO has no pre-opened ends (no `Hold` release), so this write-end
+    // open blocks until the holder's `read` opens the FIFO. With the end
+    // held open and unwritten, the holder has exactly one possible future:
+    // block in `read`. The open-to-`read` window holds no syscalls,
+    // signals, or exit paths. Alive-at-kill comes from the `matching`
+    // listing below containing the acked pid, not from the open alone.
+    // This is not kernel-level proof that the holder sits inside `read(2)`
+    // at the kill instant. The ack strictly precedes the block, so a
+    // scheduler preemption between them stays theoretically possible.
+    // Reading the holder's wait state instead (`/proc/<pid>/stat` or
+    // `wchan`) does not exist on Darwin. A proof that runs on only one of
+    // the two platforms the suite runs on is worse than a sound causal
+    // argument. #4077 asks that the holder not outlive its test process,
+    // not where in the kernel it is parked.
+    let (writing_tx, writing) = mpsc::channel();
+    thread::spawn({
+        let fifo = fifo.clone();
+        move || {
+            if let Ok(file) = fs::OpenOptions::new().write(true).open(&fifo) {
+                writing_tx.send(file).unwrap_or(());
+            }
+        }
+    });
+    let _outer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&writing, "the holder's read to open the FIFO");
+    // The listing names the acked pid, tying the listed process to the
+    // acknowledged reader and closing the spawn-vs-list race.
+    let listed = pattern.clone();
+    fakes::wait_until(
+        "the parked holder to list",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || {
+            fakes::matching(&listed)
+                .unwrap_or_default()
+                .contains(&holder)
+        },
+    );
+    // The holder lives in another group, so this SIGKILL reaches only the
+    // child: the watchdog owns the holder from here.
+    fakes::kill_pid(pid, "KILL").expect("SIGKILL to reach the child test process");
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&reaped)
+        .expect("the SIGKILLed child to be reaped");
+    // The child is reaped, so the drop path no longer owns it: disarm the
+    // watchdog without signalling.
+    group.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN).cleanup_phase());
+    if let Err(err) =
+        fakes::try_matching_exits(&pattern, Deadline::after(fakes::MUST_SUCCEED_WITHIN))
+    {
+        // The exact group id from the ack line, no pattern sweep: the
+        // holder is the group leader, and the outer writer has kept it
+        // parked, so the pid cannot have been reused.
+        match fakes::kill_group(holder, "KILL") {
+            Ok(_) | Err(_) => {}
+        }
+        panic!("the holder outlived the SIGKILLed test process that parked it: {err}");
+    }
+    // Best-effort: the SIGKILLed child never dropped its own directory.
+    drop(fs::remove_dir_all(
+        fifo.parent().expect("the holder's FIFO has a directory"),
+    ));
 }
 
 #[cfg(target_os = "macos")]

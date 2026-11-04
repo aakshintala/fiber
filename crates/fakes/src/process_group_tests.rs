@@ -626,6 +626,117 @@ fn the_matching_watchdog_script_refuses_an_empty_pattern() {
 }
 
 #[test]
+fn the_matching_watchdog_script_bounds_its_lookup() {
+    // The authored bound travels in the script text: the const and the
+    // text cannot drift, or a bumped const leaves a stale sleep behind.
+    let bound = format!("sleep {}", super::WATCHDOG_LOOKUP_WITHIN.as_secs());
+    assert!(
+        MATCHING_WATCHDOG_SCRIPT.contains(&bound),
+        "the watchdog script bounds its lookup with {bound:?}: {MATCHING_WATCHDOG_SCRIPT:?}"
+    );
+    // No text-order pin: `the_matching_watchdog_script_refuses_an_empty_pattern`
+    // proves the refusal behaviorally (exit 2, sentinel survives), so a move of
+    // `pgrep` before the refusal still fails there.
+    // A hung lookup still ends: the script kills the lookup, kills what it
+    // listed, and exits, all within the bound plus kill time.
+    let dir = crate::TempDir::new("watchdog-hung-lookup");
+    let victim = Command::new("sh")
+        .args(["-c", "sleep 30"])
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let group = victim.id();
+    let guard = KillOnDrop(group);
+    // A `pgrep` that lists the victim and then hangs past the bound,
+    // shadowing the real one on the script's path only: the test's own
+    // environment keeps the real `pgrep`.
+    let fake = dir.path().join("pgrep");
+    std::fs::write(&fake, format!("#!/bin/sh\necho {group}\nexec sleep 30\n")).unwrap();
+    let mut permissions = std::fs::metadata(&fake).unwrap().permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&fake, permissions).unwrap();
+    let path = format!(
+        "{}:{}",
+        dir.path().to_string_lossy(),
+        std::env::var("PATH").unwrap()
+    );
+    // Null stdin is EOF, so the script reaches the lookup at once.
+    let status = crate::within(
+        "the watchdog script to exit past a hung lookup",
+        // The shared must-succeed bound: the script exits ~3 s past a hung lookup (WATCHDOG_LOOKUP_WITHIN), so 10 s keeps ~7 s margin and still bites if the lookup goes unbounded.
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || {
+            Command::new("sh")
+                .args(["-c", MATCHING_WATCHDOG_SCRIPT, "watchdog"])
+                .env(MATCHING_PATTERN_VAR, pattern("watchdog-hung-lookup"))
+                .env("PATH", &path)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+        },
+    );
+    assert!(
+        status.success(),
+        "the watchdog script exits past a hung lookup: {status}"
+    );
+    crate::wait_until(
+        "the watchdog to kill what its timed-out lookup listed",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || !alive(group),
+    );
+    drop(guard);
+    reaped(victim, "the listed victim");
+}
+
+#[test]
+fn the_matching_watchdog_kills_without_tmpdir() {
+    let dir = crate::TempDir::new("watchdog-no-tmpdir");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let mut child = marked(&marker);
+    let out = child.stdout.take().unwrap();
+    Piped::new(out).forked("the marked shell to fork");
+    let group = child.id();
+    let guard = KillOnDrop(group);
+    // `TMPDIR` leaves only the spawned script's environment: the `:-`
+    // fallback still resolves under `/tmp`, never `/`, so the kill flow
+    // runs. No test touches its own process environment.
+    let status = crate::within(
+        "the watchdog script to kill without TMPDIR",
+        // The shared must-succeed bound: the script exits ~3 s past a hung lookup (WATCHDOG_LOOKUP_WITHIN), so 10 s keeps ~7 s margin and still bites if the lookup goes unbounded.
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || {
+            Command::new("sh")
+                .args(["-c", MATCHING_WATCHDOG_SCRIPT, "watchdog"])
+                .env(MATCHING_PATTERN_VAR, pattern(&marker))
+                .env_remove("TMPDIR")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+        },
+    );
+    assert!(
+        status.success(),
+        "the watchdog script exits without TMPDIR: {status}"
+    );
+    // Before the guard drops: the kill below must be the script's, not the
+    // guard's, or a neutered script still passes.
+    crate::wait_until(
+        "the watchdog to kill the marked shell without TMPDIR",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || !alive(group),
+    );
+    drop(guard);
+    reaped(child, "the marked shell the watchdog killed without TMPDIR");
+}
+
+#[test]
 fn group_empties_reports_an_empty_group_and_a_live_one() {
     let child = marked("group_empties");
     let group = child.id();
