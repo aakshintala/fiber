@@ -673,7 +673,8 @@ fn the_matching_watchdog_script_bounds_its_lookup() {
     // Null stdin is EOF, so the script reaches the lookup at once.
     let status = crate::within(
         "the watchdog script to exit past a hung lookup",
-        Deadline::after(super::WATCHDOG_LOOKUP_WITHIN + Duration::from_secs(2)),
+        // 5 s = WATCHDOG_LOOKUP_WITHIN (3 s) + 2 s margin; a literal because budget-bounds accepts only known short names and direct literals below 60 s.
+        Deadline::after(Duration::from_secs(5)),
         move || {
             Command::new("sh")
                 .args(["-c", MATCHING_WATCHDOG_SCRIPT, "watchdog"])
@@ -713,7 +714,8 @@ fn the_matching_watchdog_kills_without_tmpdir() {
     // runs. No test touches its own process environment.
     let status = crate::within(
         "the watchdog script to kill without TMPDIR",
-        Deadline::after(super::WATCHDOG_LOOKUP_WITHIN + Duration::from_secs(2)),
+        // 5 s = WATCHDOG_LOOKUP_WITHIN (3 s) + 2 s margin; a literal because budget-bounds accepts only known short names and direct literals below 60 s.
+        Deadline::after(Duration::from_secs(5)),
         move || {
             Command::new("sh")
                 .args(["-c", MATCHING_WATCHDOG_SCRIPT, "watchdog"])
