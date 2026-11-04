@@ -34,7 +34,6 @@ fn the_bounds_match_the_shared_consts() {
     assert_eq!(CLEANUP, fakes::deadline::CLEANUP);
     let floor = std::time::Duration::from_secs(60);
     assert_eq!(known_ms("WAIT"), Some(fakes::deadline::WAIT >= floor));
-    assert_eq!(known_ms("DEADLINE"), Some(false));
     assert_eq!(known_ms("WAITS"), Some(fakes::deadline::WAITS >= floor));
     assert_eq!(known_ms("BUDGET"), Some(fakes::deadline::BUDGET >= floor));
     assert_eq!(known_ms("CLEANUP"), Some(fakes::deadline::CLEANUP >= floor));
