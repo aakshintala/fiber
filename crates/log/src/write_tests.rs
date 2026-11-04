@@ -1595,3 +1595,80 @@ fn a_failed_moved_sync_keeps_its_line_without_truncation() {
     assert_eq!(crate::read(&dir).unwrap().len(), 1);
     after_sync(|| None);
 }
+
+#[test]
+fn a_keeper_probe_never_makes_a_writer_see_its_lock_held() {
+    // The probe reads the label first and takes no flock for a lock that is
+    // not a keeper's, so no concurrent create can find the lock busy.
+    for round in 0..500 {
+        let sessions = fakes::TempDir::new("log-probe-no-contend");
+        let id = SessionId(format!("s_{round:016x}"));
+        let dir = session_path(sessions.path(), &id);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let probing = dir.clone();
+        let probe = thread::spawn(move || {
+            while !flag.load(std::sync::atomic::Ordering::SeqCst) {
+                assert_eq!(lock_label_with(&probing, "keeper "), None);
+            }
+        });
+        let created = Log::create(sessions.path(), id, fakes::clock::FakeClock::new());
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        probe.join().unwrap();
+        assert!(
+            created.is_ok(),
+            "round {round}: a non-keeper probe refused the create"
+        );
+    }
+}
+
+#[test]
+fn lock_label_with_names_a_live_keeper_and_nothing_else() {
+    let (sessions, id, dir) = created_session();
+    let log = Log::open_as(
+        sessions.path(),
+        id,
+        fakes::clock::FakeClock::new(),
+        "keeper 4242",
+    )
+    .unwrap();
+    assert_eq!(
+        lock_label_with(&dir, "keeper "),
+        Some("keeper 4242".to_owned())
+    );
+    assert_eq!(lock_label_with(&dir, "process "), None);
+    drop(log);
+    assert_eq!(lock_label_with(&dir, "keeper "), None);
+}
+
+#[test]
+fn an_unlocked_keeper_text_is_not_a_live_holder_under_the_gated_probe() {
+    let (_sessions, _id, dir) = created_session();
+    std::fs::write(dir.join(LOCK), "keeper 4242\n").unwrap();
+    assert_eq!(lock_label_with(&dir, "keeper "), None);
+    assert_eq!(
+        std::fs::read_to_string(dir.join(LOCK)).unwrap(),
+        "keeper 4242\n"
+    );
+}
+
+/// Creates session `s_1` under a fresh temp home and releases its lock.
+fn created_session() -> (fakes::TempDir, SessionId, std::path::PathBuf) {
+    let sessions = fakes::TempDir::new("log-gated-label");
+    let id = SessionId("s_1".into());
+    drop(Log::create(sessions.path(), id.clone(), fakes::clock::FakeClock::new()).unwrap());
+    let dir = session_path(sessions.path(), &id);
+    (sessions, id, dir)
+}
+
+#[test]
+fn the_gated_probe_reads_no_label_from_a_busy_lock_that_is_not_a_keeper_s() {
+    let (sessions, id, dir) = created_session();
+    let log = Log::open(sessions.path(), id, fakes::clock::FakeClock::new()).unwrap();
+    assert!(
+        lock_label(&dir).is_some(),
+        "the busy pid lock names its holder"
+    );
+    assert_eq!(lock_label_with(&dir, "keeper "), None);
+    drop(log);
+}

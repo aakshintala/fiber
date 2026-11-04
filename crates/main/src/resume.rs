@@ -125,12 +125,10 @@ pub(crate) fn before_resume_open(hook: impl FnOnce() + 'static) {
 }
 
 fn keeper_held(dir: &Path, id: &SessionId) -> Option<log::Error> {
-    log::lock_label(dir)
-        .filter(|label| label.starts_with("keeper "))
-        .map(|holder| log::Error::Held {
-            session: id.0.clone(),
-            holder,
-        })
+    log::lock_label_with(dir, "keeper ").map(|holder| log::Error::Held {
+        session: id.0.clone(),
+        holder,
+    })
 }
 
 fn open_or_attach(

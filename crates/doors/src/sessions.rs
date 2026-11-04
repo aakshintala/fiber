@@ -281,8 +281,8 @@ fn guarded_connect(
     connect: impl FnOnce() -> io::Result<UnixStream>,
 ) -> io::Result<UnixStream> {
     let keeper_holds = || {
-        dir.and_then(log::lock_label)
-            .is_some_and(|label| label.starts_with("keeper "))
+        dir.and_then(|dir| log::lock_label_with(dir, "keeper "))
+            .is_some()
     };
     if keeper_holds() {
         return Err(io::ErrorKind::ConnectionRefused.into());

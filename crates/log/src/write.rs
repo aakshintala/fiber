@@ -1055,6 +1055,19 @@ fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock, label: &str) -> Result<Lo
     }
 }
 
+/// The live holder label of the lock in `dir`, when it starts with `prefix`.
+/// The label text is read first: a lock whose text does not start with
+/// `prefix` is never probed, so a probe cannot contend with the writer that
+/// is creating or opening that log. A holder that is mid-write fails the
+/// text check and reads as not holding, the same as before its label lands.
+pub fn lock_label_with(dir: &Path, prefix: &str) -> Option<String> {
+    let text = fs::read_to_string(dir.join(LOCK)).ok()?;
+    if !text.trim_start().starts_with(prefix) {
+        return None;
+    }
+    lock_label(dir).filter(|label| label.starts_with(prefix))
+}
+
 /// Returns the current holder's label, only while its flock is busy.
 /// Missing files and probe or read failures return no label. An acquired
 /// probe guard drops without modifying stale holder text.

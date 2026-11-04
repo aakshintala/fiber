@@ -70,8 +70,8 @@ pub use search::{Identity, SessionScan};
 pub use state_fold::{Fold, Ruled, StateSeed, fold, fold_boundary, fold_from, seed};
 pub use usage::usage;
 pub use weak_emit::WeakEmit;
-pub use write::lock_label;
 pub use write::{Log, Subscription, cut_joined, cut_notice};
+pub use write::{lock_label, lock_label_with};
 
 impl std::fmt::Display for FirstLineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

@@ -162,7 +162,7 @@ fn parent_run_open(home: &Path, parent: &SessionId, job: &JobId) -> bool {
 
 /// Whether a live keeper, rather than a session, holds the log.
 pub(crate) fn keeper_holds(dir: &Path) -> bool {
-    log::lock_label(dir).is_some_and(|label| label.starts_with("keeper "))
+    log::lock_label_with(dir, "keeper ").is_some()
 }
 
 /// Connects only to a session, never a keeper's crashed-session socket.
