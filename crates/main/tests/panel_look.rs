@@ -19,7 +19,9 @@ mod support;
 use std::fs;
 use std::path::Path;
 
-use fakes::{ProviderServer, Response, Watchdog};
+use fakes::{ProviderServer, Response};
+use ratatui::style::Style;
+use ratatui::text::Span;
 use serde_json::json;
 use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
@@ -211,6 +213,95 @@ fn delegate_duration(text: &str) -> bool {
     }
 }
 
+/// Exact subject text, either complete or maximally cut at the content edge.
+fn delegate_subject_matches(shown: &str, expected: &str, slot: usize) -> bool {
+    if Span::raw(expected).width() <= slot {
+        return shown == expected;
+    }
+    let mut prefix = String::new();
+    let mut used = 0;
+    for grapheme in Span::raw(expected).styled_graphemes(Style::default()) {
+        let width = Span::raw(grapheme.symbol).width();
+        if used + width > slot.saturating_sub(1) {
+            break;
+        }
+        prefix.push_str(grapheme.symbol);
+        used += width;
+    }
+    prefix.push('…');
+    shown == prefix && shown.starts_with("shell head -n 1 ")
+}
+
+#[test]
+fn delegate_subject_matching_is_exact_at_the_content_edge() {
+    let expected = "shell head -n 1 /tmp/hold";
+    let width = ratatui::text::Span::raw(expected).width();
+    for (shown, slot, matches) in [
+        (expected, width - 1, false),
+        (expected, width, true),
+        (expected, width + 1, true),
+        ("shell head -n 1 /tmp/ho…", width - 1, true),
+        ("shell head -n 1 /tmp/hol…", width, false),
+        ("shell head -n 1 /tmp/hol…", width + 1, false),
+        ("shell head -n 1 /tmp/xx…", width - 1, false),
+        ("shell head -n 1 /tmp/ho", width - 1, false),
+        ("shell head -n 1 /tmp/h…", width - 1, false),
+        ("shell head -n 1 /tmp/h… ", width - 1, false),
+        ("shell", width, false),
+        ("read a.txt", width, false),
+        ("done", width, false),
+        ("shell head -…", 12, false),
+        ("…", 1, false),
+        ("", 0, false),
+    ] {
+        assert_eq!(
+            delegate_subject_matches(shown, expected, slot),
+            matches,
+            "{shown:?}, slot {slot}"
+        );
+    }
+    assert!(delegate_subject_matches("done", "done", 4));
+    assert!(delegate_subject_matches("done", "done", 5));
+    assert!(!delegate_subject_matches("done", "done", 3));
+    assert!(!delegate_subject_matches("don…", "done", 3));
+    // At column 120 with 39 columns available, the next two-column
+    // grapheme cannot fit the 38-column prefix budget. The ellipsis is
+    // therefore at 157, with one unavoidable unused column before 159.
+    let wide = "shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界/hold'";
+    let clipped = "shell head -n 1 '/tmp/aaaaaaaaaaaaaaa…";
+    assert_eq!(
+        ratatui::text::Span::raw(clipped.trim_end_matches('…')).width(),
+        37
+    );
+    for (shown, slot, matches) in [
+        (clipped, 38, true),
+        (clipped, 39, true),
+        (clipped, 40, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界…", 40, true),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa… ", 39, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaa…", 39, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界…", 39, false),
+    ] {
+        assert_eq!(
+            delegate_subject_matches(shown, wide, slot),
+            matches,
+            "{shown:?}, slot {slot}"
+        );
+    }
+    // Combining marks belong to the base grapheme, not a byte or char edge.
+    assert_eq!(Span::raw("shell head -n 1 /e\u{301}").width(), 18);
+    assert!(delegate_subject_matches(
+        "shell head -n 1 /e\u{301}…",
+        "shell head -n 1 /e\u{301}xy",
+        19
+    ));
+    assert!(!delegate_subject_matches(
+        "shell head -n 1 /e…",
+        "shell head -n 1 /e\u{301}xy",
+        19
+    ));
+}
+
 /// A whole dim progress row below the delegate's description, in the panel.
 fn delegate_progress(grid: &Grid, tail: &str, finished: bool) -> bool {
     grid.rows.iter().enumerate().any(|(y, row)| {
@@ -228,16 +319,23 @@ fn delegate_progress(grid: &Grid, tail: &str, finished: bool) -> bool {
         };
         let text = next[start..].trim_end();
         let parts: Vec<_> = text.split(" · ").collect();
-        if parts.len() != 3
-            || parts[0] != "2 calls"
-            || !delegate_duration(parts[1])
-            || parts[2] != tail
-        {
+        if parts.len() != 3 || parts[0] != "2 calls" || !delegate_duration(parts[1]) {
             return false;
         }
-        let x = u16::try_from(next[..start].chars().count()).unwrap();
-        let y = u16::try_from(y + 1).unwrap();
-        (0..u16::try_from(text.chars().count()).unwrap()).all(|offset| {
+        let Some((x, progress_y)) = grid.text_at(text) else {
+            return false;
+        };
+        if usize::from(progress_y) != y + 1 {
+            return false;
+        }
+        let prefix_width = Span::raw(format!("2 calls · {} · ", parts[1])).width();
+        let subject_x = usize::from(x) + prefix_width;
+        let content_end = usize::from(grid.size().0.saturating_sub(1));
+        if !delegate_subject_matches(parts[2], tail, content_end.saturating_sub(subject_x)) {
+            return false;
+        }
+        let y = progress_y;
+        (0..u16::try_from(Span::raw(text).width()).unwrap()).all(|offset| {
             let cell = grid.cell(x + offset, y);
             cell.dim && cell.fg == Colour::Default
         })
@@ -266,13 +364,12 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
     let setup = Setup::new();
     let workspace = setup.workspace();
     fs::write(workspace.join("a.txt"), "hello\n").unwrap();
-    let hold = workspace.join("hold");
-    fakes::fifo(&hold);
-    let mut release = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&hold)
-        .unwrap();
+    let path = workspace.join("hold");
+    let command = format!(
+        "head -n 1 '{}'",
+        path.display().to_string().replace('\'', "'\\''")
+    );
+    let mut hold = Hold::park(&setup, &command);
     write_json(
         &workspace.join("s.json"),
         &json!({"steps": [
@@ -285,7 +382,7 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         &workspace.join("d.json"),
         &json!({"steps": [
             {"tool_calls": [{"name": "read", "arguments": {"path": "a.txt"}}]},
-            {"tool_calls": [{"name": "shell", "arguments": {"command": "head -n 1 hold"}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
             {"text": ["Reviewed."]}
         ]}),
     );
@@ -306,24 +403,23 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         format!(
             "{}\n{}\n",
             json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
-            json!({"decision": "allow", "tool": "shell", "prefix": "head -n 1 hold"})
+            json!({"decision": "allow", "tool": "shell", "prefix": command})
         ),
     )
     .unwrap();
-    // Keeps its own hold: the screen pins this call's subject, which a pid-scoped or absolute command would lose or overflow (#3844).
-    let guard = Watchdog::matching("head -n 1 hold");
+    let subject = format!("shell {command}");
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
     run.write(b"go\r");
     run.wait_screen("the delegate's two calls and shell subject, dim", |grid| {
-        delegate_progress(grid, "shell head -n 1 hold", false)
+        delegate_progress(grid, &subject, false)
     });
-    std::io::Write::write_all(&mut release, b"done\n").unwrap();
+    std::io::Write::write_all(hold.release(), b"done\n").unwrap();
     run.wait_screen(
         "the finished delegate's calls, elapsed and done, dim",
         |grid| delegate_progress(grid, "done", true),
     );
-    guard.stand_down(setup.deadline.cleanup_phase());
+    hold.stand_down(setup.deadline.cleanup_phase());
     quit(run);
 }
 

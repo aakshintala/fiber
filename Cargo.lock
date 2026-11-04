@@ -1746,6 +1746,7 @@ dependencies = [
  "mcp",
  "picture",
  "provider",
+ "ratatui",
  "routing",
  "rustix",
  "serde_json",

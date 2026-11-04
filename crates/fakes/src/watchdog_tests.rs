@@ -180,6 +180,148 @@ fn dropping_a_matching_watchdog_kills_every_match() {
 }
 
 #[test]
+fn a_failing_scoped_watchdog_leaves_a_sibling_holder_alive() {
+    use std::io::Write as _;
+
+    const CHILD: &str = "FIBER_SCOPED_WATCHDOG_CHILD";
+    const PANIC: &str = "deliberate scoped watchdog failure";
+    const CLEANED: &str = "scoped watchdog cleanup complete";
+
+    // Owns only a spawned fixture's group and its single reaper. On any
+    // failed assertion, kill that known group before waiting for the reaper.
+    struct Reaper {
+        group: Option<u32>,
+        exit: Option<mpsc::Receiver<std::io::Result<std::process::ExitStatus>>>,
+    }
+    impl Reaper {
+        fn new(mut child: Child) -> Self {
+            let group = child.id();
+            let (tx, exit) = mpsc::channel();
+            thread::spawn(move || drop(tx.send(child.wait())));
+            Self {
+                group: Some(group),
+                exit: Some(exit),
+            }
+        }
+
+        fn wait(&mut self, what: &str) -> std::process::ExitStatus {
+            let status = Deadline::after(MUST_SUCCEED_WITHIN)
+                .recv_or_fail(self.exit.as_ref().unwrap(), what)
+                .unwrap();
+            self.exit = None;
+            status
+        }
+    }
+    impl Drop for Reaper {
+        fn drop(&mut self) {
+            if let Some(group) = self.group.take() {
+                drop(kill_group(group, "KILL"));
+                if let Some(exit) = self.exit.take() {
+                    drop(Deadline::after(MUST_SUCCEED_WITHIN).recv(&exit));
+                }
+            }
+        }
+    }
+
+    if std::env::var_os(CHILD).is_some() {
+        let dir = crate::TempDir::new("scoped-watchdog-owned");
+        let marker = dir.path().to_str().unwrap();
+        let mut owned = marked(marker);
+        let out = owned.stdout.take().unwrap();
+        let mut owned = Reaper::new(owned);
+        let piped = Piped::new(out);
+        piped.forked("the owned holder's acknowledged fork");
+        let mut watchdog = Watchdog::matching(marker);
+        // Retain the real watchdog's reaper outside the unwind, so dropping
+        // its stdin is followed by an observed script exit, not a timing guess.
+        let mut watchdog_exit = Reaper::new(watchdog.child.take().unwrap());
+        let failure = panic::catch_unwind(AssertUnwindSafe(move || {
+            let _guard = watchdog;
+            panic!("{PANIC}");
+        }))
+        .unwrap_err();
+        assert!(
+            watchdog_exit
+                .wait("the matching watchdog's cleanup")
+                .success()
+        );
+        assert_eq!(
+            owned.wait("the owned holder to be killed").signal(),
+            Some(9)
+        );
+        piped.closed("the owned holder's group stdout to close");
+        owned.group = None;
+        watchdog_exit.group = None;
+        writeln!(std::io::stdout(), "\n{CLEANED}").unwrap();
+        panic::resume_unwind(failure);
+    }
+
+    let dir = crate::TempDir::new("scoped-watchdog-sibling");
+    let path = dir.path().join("hold");
+    let command = format!(
+        "exec 3<'{}'; echo opened; read -r line <&3; printf '%s\\n' \"$line\"",
+        path.display().to_string().replace('\'', "'\\''")
+    );
+    let mut hold = crate::Hold::park(&path, &command);
+    let marker = "head -n 1 hold sibling";
+    assert!(marker.contains("head -n 1 hold"));
+    // Register the stdout reader before the holder can announce its open.
+    let (reader, writer) = std::io::pipe().unwrap();
+    let (tx, lines) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            if tx.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let holder = Command::new("sh")
+        .args(["-c", &command, marker])
+        .stdout(writer)
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pid = holder.id();
+    let mut holder = Reaper::new(holder);
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&lines, "the sibling holder to open its FIFO")
+            .unwrap(),
+        "opened"
+    );
+    let output = crate::rerun_prepared(
+        "watchdog::tests::a_failing_scoped_watchdog_leaves_a_sibling_holder_alive",
+        &[(CHILD, "1")],
+        Deadline::after(crate::deadline::WAIT),
+        |_| {},
+    );
+    assert!(!output.status.success(), "the child must really fail");
+    assert!(String::from_utf8_lossy(&output.stderr).contains(PANIC));
+    assert!(
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .any(|line| line == CLEANED),
+        "child stdout: {}\nchild stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The child reaped its watchdog and owned holder before acknowledging
+    // cleanup. Keep this sibling's release open across that entire chain.
+    assert!(crate::pid_alive(pid), "cleanup killed the sibling holder");
+    hold.release().write_all(b"sibling survived\n").unwrap();
+    assert_eq!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv_or_fail(&lines, "the sibling holder to consume its release")
+            .unwrap(),
+        "sibling survived"
+    );
+    assert!(holder.wait("the released sibling holder to exit").success());
+    holder.group = None;
+    hold.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
 fn stand_down_leaves_matching_processes_alive() {
     let dir = crate::TempDir::new("ws");
     let marker = dir.path().to_string_lossy().into_owned();
