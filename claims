@@ -1,9 +1,3 @@
-crates/main/tests/support/pty.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
-xtask/src/screen_ratchet.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
-xtask/src/screen_ratchet_tests.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
-xtask/src/main.rs	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
-docs/testing/screens.md	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
-.config/nextest.toml	fiber-3979	plan	2026-11-03T23:32:43Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 crates/tui/src/app.rs crates/tui/src/app/outbox.rs crates/tui/src/app/session_views.rs crates/tui/src/app/panel.rs crates/tui/src/app/panel/quota.rs crates/tui/src/app/call_view.rs crates/tui/src/app/config_views.rs crates/tui/src/app/config_views/credential.rs crates/tui/src/app/reviewer_setup.rs crates/tui/src/app/items.rs	fiber-3696	plan	2026-11-04T06:57:37Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/fakes/src/hold.rs	fiber-4030	plan	2026-11-04T06:59:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fakes/4030-pid-prefix-macos-leg	
 crates/fakes/src/hold_tests.rs	fiber-4030	plan	2026-11-04T06:59:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fakes/4030-pid-prefix-macos-leg	
