@@ -1,5 +1,5 @@
 //! A remote terminal edits a changed workspace file through the hub
-//! (`docs/tui.md`, "Changed files"): the binary-level acceptance for the
+//! (`docs/tui.md`, "Swapped views"): the binary-level acceptance for the
 //! remote Ctrl+G path. Through the built binary on a pty, a client of the
 //! [`hub_remote_terminal`](hub_remote_terminal.rs) jig's listed hub opens a
 //! session whose scripted model appends a line to the hub's committed file,

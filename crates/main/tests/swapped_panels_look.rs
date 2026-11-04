@@ -652,7 +652,7 @@ fn skills_setup() -> Setup {
 }
 
 /// The `/skills` row for the winning `review` skill, with the documented
-/// cells in order (`docs/tui.md:905-908`).
+/// cells in order (`docs/tui.md`, "Swapped views").
 /// Only the row's own cells are read: the view does not span the full
 /// grid, so a side panel may draw to its right.
 fn skill_row(grid: &Grid) -> Option<(u16, String)> {
@@ -869,7 +869,7 @@ fn narrow_skills_ready(grid: &Grid) -> bool {
 
 /// Every property read after Enter has drawn: both complete shadow paths in
 /// source-precedence order, the blank separator, and the skill text
-/// (`docs/tui.md:909-910`; `docs/testing/screens.md`, "Screens").
+/// (`docs/tui.md`, "Swapped views"; `docs/testing/screens.md`, "Screens").
 fn shadow_list_ready(grid: &Grid, personal_path: &str, extension_path: &str) -> bool {
     let pane: String = grid
         .rows

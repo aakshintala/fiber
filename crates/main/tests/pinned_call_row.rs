@@ -1,5 +1,5 @@
-//! Binary-level test of the pinned call row (`docs/tui.md`, "Pinned
-//! call"): the real binary on a 160x48 pty in truecolour, with a
+//! Binary-level test of the pinned call row (`docs/tui.md`, "Tool groups
+//! and the ledger"): the real binary on a 160x48 pty in truecolour, with a
 //! scripted provider. Each scenario opens the ledger and a `read` call
 //! with a long tail below it, scrolls the call row off the top, and
 //! asserts the pin's text, tint and click on the real frames.
