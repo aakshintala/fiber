@@ -267,8 +267,8 @@ fn delegate_subject_matching_is_exact_at_the_content_edge() {
     // At column 120 with 39 columns available, the next two-column
     // grapheme cannot fit the 38-column prefix budget. The ellipsis is
     // therefore at 157, with one unavoidable unused column before 159.
-    let wide = "shell head -n 1 '/tmp/aaaaaaaaaaaaaaaa界/hold'";
-    let clipped = "shell head -n 1 '/tmp/aaaaaaaaaaaaaaaa…";
+    let wide = "shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界/hold'";
+    let clipped = "shell head -n 1 '/tmp/aaaaaaaaaaaaaaa…";
     assert_eq!(
         ratatui::text::Span::raw(clipped.trim_end_matches('…')).width(),
         37
@@ -277,10 +277,10 @@ fn delegate_subject_matching_is_exact_at_the_content_edge() {
         (clipped, 38, true),
         (clipped, 39, true),
         (clipped, 40, false),
-        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaaa界…", 40, true),
-        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaaa… ", 39, false),
-        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa…", 39, false),
-        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaaa界…", 39, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界…", 40, true),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa… ", 39, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaa…", 39, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界…", 39, false),
     ] {
         assert_eq!(
             delegate_subject_matches(shown, wide, slot),
@@ -289,15 +289,16 @@ fn delegate_subject_matching_is_exact_at_the_content_edge() {
         );
     }
     // Combining marks belong to the base grapheme, not a byte or char edge.
+    assert_eq!(Span::raw("shell head -n 1 /e\u{301}").width(), 18);
     assert!(delegate_subject_matches(
         "shell head -n 1 /e\u{301}…",
         "shell head -n 1 /e\u{301}xy",
-        18
+        19
     ));
     assert!(!delegate_subject_matches(
         "shell head -n 1 /e…",
         "shell head -n 1 /e\u{301}xy",
-        18
+        19
     ));
 }
 

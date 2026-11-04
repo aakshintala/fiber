@@ -186,8 +186,6 @@ fn a_failing_scoped_watchdog_leaves_a_sibling_holder_alive() {
     const CHILD: &str = "FIBER_SCOPED_WATCHDOG_CHILD";
     const PANIC: &str = "deliberate scoped watchdog failure";
     const CLEANED: &str = "scoped watchdog cleanup complete";
-    // Covers sequential child setup, watchdog cleanup and the resumed panic.
-    const CHILD_EXIT_WITHIN: std::time::Duration = std::time::Duration::from_secs(40);
 
     // Owns only a spawned fixture's group and its single reaper. On any
     // failed assertion, kill that known group before waiting for the reaper.
@@ -295,7 +293,7 @@ fn a_failing_scoped_watchdog_leaves_a_sibling_holder_alive() {
     let output = crate::rerun_prepared(
         "watchdog::tests::a_failing_scoped_watchdog_leaves_a_sibling_holder_alive",
         &[(CHILD, "1")],
-        Deadline::after(CHILD_EXIT_WITHIN),
+        Deadline::after(crate::deadline::WAIT),
         |_| {},
     );
     assert!(!output.status.success(), "the child must really fail");
