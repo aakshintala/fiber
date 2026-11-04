@@ -3842,6 +3842,7 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
 /// helper with `--exact ... --ignored`.
 #[test]
 #[ignore = "re-run by holder_dies_with_the_test_process_that_parked_it with --exact --ignored"]
+#[allow(clippy::print_stdout, reason = "the parent test reads this line")]
 fn holder_dies_child_parks_a_holder() {
     // Standalone guard: `--run-ignored` runs every ignored test in this
     // binary (look-diff's comparator, leak-probe's run), and this helper
@@ -3864,7 +3865,7 @@ fn holder_dies_child_parks_a_holder() {
         ready = ready.path().display(),
     );
     let _hold = fakes::Hold::park(&fifo, &command);
-    let _holder = Command::new("sh")
+    let holder = Command::new("sh")
         .args(["-c", &command])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -3872,6 +3873,12 @@ fn holder_dies_child_parks_a_holder() {
         .process_group(0)
         .spawn()
         .expect("the parked holder to spawn");
+    thread::spawn(move || {
+        let mut holder = holder;
+        match holder.wait() {
+            Ok(_) | Err(_) => {}
+        }
+    });
     let pid = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     println!("parked {pid} {}", fifo.display());
     io::stdout()
@@ -3907,14 +3914,13 @@ fn holder_dies_with_the_test_process_that_parked_it() {
             }
             // The harness's `test ... ... ` prefix shares the ack's line,
             // so the marker can start mid-line: search, never strip.
-            if let Some(start) = line.find("parked ") {
-                let rest = &line[start + "parked ".len()..];
-                if let Some((pid, fifo)) = rest.trim_end().split_once(' ') {
-                    if let Ok(pid) = pid.parse() {
-                        match parked_tx.send((pid, PathBuf::from(fifo))) {
-                            Ok(()) | Err(_) => return,
-                        }
-                    }
+            if let Some(start) = line.find("parked ")
+                && let Some((pid, fifo)) =
+                    line[start + "parked ".len()..].trim_end().split_once(' ')
+                && let Ok(pid) = pid.parse()
+            {
+                match parked_tx.send((pid, PathBuf::from(fifo))) {
+                    Ok(()) | Err(_) => return,
                 }
             }
         }
