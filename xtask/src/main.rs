@@ -18,10 +18,9 @@
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
 //! - `mutants-reuse --pr N --head H --base B --mutant-count C --run-id R --draft true|false --runs FILE --jobs FILE`:
-//!   prints `reuse=true` when an earlier completed run on the same pull
-//!   request, head and base passed every mutants shard, else `reuse=false`
-//! - `mutants-reuse-id` (same flags): prints the matched run id on a match,
-//!   nothing otherwise, so the select step can log which run it reuses
+//!   prints `reuse=true` plus the matched run id and PR-entry head sha when
+//!   an earlier completed run on the same pull request, head and base passed
+//!   every mutants shard, else `reuse=false`
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
@@ -245,15 +244,13 @@ fn run(args: &[String]) -> Result<bool, String> {
             let current = reuse_current(rest)?;
             let runs = read(&flag(rest, "--runs")?)?;
             let jobs = read(&flag(rest, "--jobs")?)?;
-            println!("reuse={}", select::decide_reuse(&current, &runs, &jobs));
-            Ok(true)
-        }
-        "mutants-reuse-id" => {
-            let current = reuse_current(rest)?;
-            let runs = read(&flag(rest, "--runs")?)?;
-            let jobs = read(&flag(rest, "--jobs")?)?;
-            if let Some(id) = select::matched_run_id(&current, &runs, &jobs) {
-                println!("{id}");
+            match select::matched_reuse(&current, &runs, &jobs) {
+                Some(matched) => {
+                    println!("reuse=true");
+                    println!("matched_run_id={}", matched.run_id);
+                    println!("matched_pr_head={}", matched.pr_head.0);
+                }
+                None => println!("reuse=false"),
             }
             Ok(true)
         }
@@ -752,8 +749,7 @@ fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
-/// The reuse decision's scalar flags, shared by `mutants-reuse` and
-/// `mutants-reuse-id` so the two lookups can never disagree on inputs.
+/// The reuse decision's scalar flags for `mutants-reuse`.
 fn reuse_current(args: &[String]) -> Result<select::ReuseCurrent, String> {
     Ok(select::ReuseCurrent {
         pr: select::ReusePullRequestNumber(

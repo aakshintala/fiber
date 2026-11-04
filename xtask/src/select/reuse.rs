@@ -48,42 +48,58 @@ fn is_mutants_shard(name: &str) -> bool {
         .is_some_and(|index| index.parse::<u64>().is_ok())
 }
 
+/// The run the current run would reuse: the matched run's id plus the
+/// matched pull-request entry's head sha, so the select log can name the
+/// exact pass it reuses. A missing entry head sha fails closed like every
+/// other missing field.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct MatchedReuse {
+    pub run_id: u64,
+    pub pr_head: CommitSha,
+}
+
 /// Whether one candidate run supplies the pass the current run reuses: a
 /// different completed run on the same pull request, head and base, whose
 /// every mutants shard succeeded and whose successful-shard count equals
-/// the shard total the current mutant count derives.
-fn run_matches(current: &Current, total: u64, run: &Value, jobs_by_run: &Value) -> bool {
-    let Some(id) = run.get("id").and_then(Value::as_u64) else {
-        return false;
-    };
+/// the shard total the current mutant count derives. Returns the matched
+/// run id with the matched entry's head sha.
+fn match_in_run(
+    current: &Current,
+    total: u64,
+    run: &Value,
+    jobs_by_run: &Value,
+) -> Option<MatchedReuse> {
+    let id = run.get("id").and_then(Value::as_u64)?;
     if id == current.run_id.0 {
-        return false;
+        return None;
     }
     if run.get("status").and_then(Value::as_str) != Some("completed") {
-        return false;
+        return None;
     }
     if run.get("head_sha").and_then(Value::as_str) != Some(current.head.0.as_str()) {
-        return false;
+        return None;
     }
-    let same_pr_and_base = run
+    let pr_head = run
         .get("pull_requests")
         .and_then(Value::as_array)
-        .is_some_and(|refs| {
-            refs.iter().any(|pull| {
-                pull.get("number").and_then(Value::as_u64) == Some(current.pr.0)
+        .and_then(|refs| {
+            refs.iter().find_map(|pull| {
+                if pull.get("number").and_then(Value::as_u64) == Some(current.pr.0)
                     && pull
                         .get("base")
                         .and_then(|base| base.get("sha"))
                         .and_then(Value::as_str)
                         == Some(current.base.0.as_str())
+                {
+                    pull.get("head")
+                        .and_then(|head| head.get("sha"))
+                        .and_then(Value::as_str)
+                } else {
+                    None
+                }
             })
-        });
-    if !same_pr_and_base {
-        return false;
-    }
-    let Some(jobs) = jobs_by_run.get(id.to_string()).and_then(Value::as_array) else {
-        return false;
-    };
+        })?;
+    let jobs = jobs_by_run.get(id.to_string()).and_then(Value::as_array)?;
     let shards: Vec<&Value> = jobs
         .iter()
         .filter(|job| {
@@ -92,16 +108,28 @@ fn run_matches(current: &Current, total: u64, run: &Value, jobs_by_run: &Value) 
                 .is_some_and(is_mutants_shard)
         })
         .collect();
-    shards.len() as u64 == total
+    if shards.len() as u64 == total
         && shards
             .iter()
             .all(|job| job.get("conclusion").and_then(Value::as_str) == Some("success"))
+    {
+        Some(MatchedReuse {
+            run_id: id,
+            pr_head: CommitSha(pr_head.to_owned()),
+        })
+    } else {
+        None
+    }
 }
 
-/// The id of the first candidate run the current run would reuse, if any:
-/// the same guard clauses as the reuse decision, so an absent id always
-/// means the decision is false and a logged id always names a real match.
-pub(crate) fn matched_run_id(current: &Current, runs_json: &str, jobs_json: &str) -> Option<u64> {
+/// The first candidate run the current run would reuse, if any: the same
+/// guard clauses as the reuse decision, so an absent match always means the
+/// decision is false and a logged match always names a real pass.
+pub(crate) fn matched_reuse(
+    current: &Current,
+    runs_json: &str,
+    jobs_json: &str,
+) -> Option<MatchedReuse> {
     if current.draft {
         return None;
     }
@@ -114,21 +142,10 @@ pub(crate) fn matched_run_id(current: &Current, runs_json: &str, jobs_json: &str
     runs.get("workflow_runs")
         .and_then(Value::as_array)
         .and_then(|candidates| {
-            candidates.iter().find_map(|run| {
-                if run_matches(current, total, run, &jobs_by_run) {
-                    run.get("id").and_then(Value::as_u64)
-                } else {
-                    None
-                }
-            })
+            candidates
+                .iter()
+                .find_map(|run| match_in_run(current, total, run, &jobs_by_run))
         })
-}
-
-/// Whether the current run reuses a prior pass instead of starting shards.
-/// A draft never reuses, even at a matching head; a zero mutant count never
-/// reuses; any parse failure or missing field reruns the shards.
-pub(crate) fn decide(current: &Current, runs_json: &str, jobs_json: &str) -> bool {
-    matched_run_id(current, runs_json, jobs_json).is_some()
 }
 
 #[cfg(test)]

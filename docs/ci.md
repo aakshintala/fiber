@@ -38,7 +38,7 @@ the selection itself fails, `CI` fails. On a draft pull request the verdict
 job reports as `CI (draft)`, so the required `CI` check stays pending. A
 draft does not select `release`. Marking the pull request ready runs every
 job the draft skipped. A ready run whose mutants already passed at that head
-reuses the pass instead of starting shards ("Mutation testing").
+reuses the pass instead of starting shards ("On every pull request that changes code").
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report without gating it
@@ -698,11 +698,11 @@ Node.js version GitHub currently supports. An action still on a deprecated
 Node.js version is moved to its newest major before it is pinned.
 
 No job polls the Actions API in a loop. The backstop's one lookup of the
-last passing `main` commit and the release job's stored-results lookup (one
-artifact listing per commit, at most 10, and one download) are the only
-Actions API calls a workflow makes to find a run; the backstop's cache pruning
-also lists and deletes cache entries. The select job's same-head reuse lookup
-is a third such call ("Mutation testing").
+last passing `main` commit, the release job's stored-results lookup (one
+artifact listing per commit, at most 10, and one download), and the select
+job's same-head reuse lookup are the Actions API calls a workflow makes to
+find a run; the backstop's cache pruning also lists and deletes cache entries.
+The select job's same-head reuse lookup is a third such call ("Mutation testing").
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's

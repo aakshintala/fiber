@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use super::{CommitSha, Current, PullRequestNumber, RunId, decide, matched_run_id};
+use super::{CommitSha, Current, MatchedReuse, PullRequestNumber, RunId, matched_reuse};
 
 const PR: u64 = 3899;
 const HEAD: &str = "abc123";
@@ -65,11 +65,22 @@ fn successful_shards(total: usize) -> Value {
 }
 
 fn decide_with(current: &Current, runs: &Value, jobs: &Value) -> bool {
-    decide(current, &runs.to_string(), &jobs.to_string())
+    matched_reuse(current, &runs.to_string(), &jobs.to_string()).is_some()
 }
 
-fn matched_with(current: &Current, runs: &Value, jobs: &Value) -> Option<u64> {
-    matched_run_id(current, &runs.to_string(), &jobs.to_string())
+fn matched_with(current: &Current, runs: &Value, jobs: &Value) -> Option<MatchedReuse> {
+    matched_raw(current, &runs.to_string(), &jobs.to_string())
+}
+
+fn matched_raw(current: &Current, runs: &str, jobs: &str) -> Option<MatchedReuse> {
+    matched_reuse(current, runs, jobs)
+}
+
+fn matched_run(run_id: u64, pr_head: &str) -> MatchedReuse {
+    MatchedReuse {
+        run_id,
+        pr_head: CommitSha(pr_head.to_owned()),
+    }
 }
 
 fn jobs_for(id: u64, jobs: Value) -> Value {
@@ -280,13 +291,19 @@ fn missing_jobs_entry_reruns() {
 #[test]
 fn malformed_json_reruns() {
     let runs = json!({ "workflow_runs": [matching_candidate()] });
-    assert!(!decide(
-        &current(),
-        "not json",
-        &jobs_for(7, successful_shards(SHARD_TOTAL)).to_string()
-    ));
-    assert!(!decide(&current(), &runs.to_string(), "not json"));
-    assert!(!decide(&current(), "[1, 2]", &json!({}).to_string()));
+    assert_eq!(
+        matched_raw(
+            &current(),
+            "not json",
+            &jobs_for(7, successful_shards(SHARD_TOTAL)).to_string()
+        ),
+        None
+    );
+    assert_eq!(matched_raw(&current(), &runs.to_string(), "not json"), None);
+    assert_eq!(
+        matched_raw(&current(), "[1, 2]", &json!({}).to_string()),
+        None
+    );
 }
 
 #[test]
@@ -323,7 +340,7 @@ fn later_matching_candidate_reuses() {
 }
 
 #[test]
-fn matched_run_id_names_the_match() {
+fn matched_run_names_the_match() {
     let runs = json!({ "workflow_runs": [matching_candidate()] });
     assert_eq!(
         matched_with(
@@ -331,22 +348,41 @@ fn matched_run_id_names_the_match() {
             &runs,
             &jobs_for(7, successful_shards(SHARD_TOTAL))
         ),
-        Some(7)
+        Some(matched_run(7, HEAD))
     );
 }
 
 #[test]
-fn matched_run_id_names_the_first_match() {
+fn matched_run_names_the_first_match() {
     let runs = json!({ "workflow_runs": [
         candidate(9, HEAD, HEAD, PR, Some(BASE), "completed"),
         matching_candidate(),
     ]});
     let jobs = json!({ "9": successful_shards(SHARD_TOTAL), "7": successful_shards(SHARD_TOTAL) });
-    assert_eq!(matched_with(&current(), &runs, &jobs), Some(9));
+    assert_eq!(
+        matched_with(&current(), &runs, &jobs),
+        Some(matched_run(9, HEAD))
+    );
 }
 
 #[test]
-fn matched_run_id_is_absent_without_a_match() {
+fn matched_run_reports_the_matched_entry_head() {
+    // The entry head moved on after the run, while the top-level sha still
+    // pins the tested code: the log must name the entry, not the live head.
+    let runs =
+        json!({ "workflow_runs": [candidate(7, HEAD, "moved-on", PR, Some(BASE), "completed")] });
+    assert_eq!(
+        matched_with(
+            &current(),
+            &runs,
+            &jobs_for(7, successful_shards(SHARD_TOTAL))
+        ),
+        Some(matched_run(7, "moved-on"))
+    );
+}
+
+#[test]
+fn matched_run_is_absent_without_a_match() {
     let runs =
         json!({ "workflow_runs": [candidate(7, "other", "other", PR, Some(BASE), "completed")] });
     assert_eq!(
@@ -357,10 +393,15 @@ fn matched_run_id_is_absent_without_a_match() {
         ),
         None
     );
+    assert!(!decide_with(
+        &current(),
+        &runs,
+        &jobs_for(7, successful_shards(SHARD_TOTAL))
+    ));
 }
 
 #[test]
-fn matched_run_id_is_absent_for_a_draft_current_run() {
+fn matched_run_is_absent_for_a_draft_current_run() {
     let draft = Current {
         draft: true,
         ..current()
@@ -370,4 +411,26 @@ fn matched_run_id_is_absent_for_a_draft_current_run() {
         matched_with(&draft, &runs, &jobs_for(7, successful_shards(SHARD_TOTAL))),
         None
     );
+}
+
+#[test]
+fn matched_run_is_absent_when_the_entry_head_is_missing() {
+    // A base-matching entry without a head sha fails closed: the log could
+    // name no pass, so the shards start.
+    let mut run = matching_candidate();
+    run["pull_requests"][0]["head"] = Value::Null;
+    let runs = json!({ "workflow_runs": [run] });
+    assert_eq!(
+        matched_with(
+            &current(),
+            &runs,
+            &jobs_for(7, successful_shards(SHARD_TOTAL))
+        ),
+        None
+    );
+    assert!(!decide_with(
+        &current(),
+        &runs,
+        &jobs_for(7, successful_shards(SHARD_TOTAL))
+    ));
 }

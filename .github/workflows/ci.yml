@@ -74,7 +74,7 @@ jobs:
           else
             # The backstop compares against the last main commit whose
             # backstop passed. The release job's stored-results lookup (scripts/stored-results) is the only other Actions API call CI makes to find a run.
-            # The select job's same-head reuse lookup is the third (docs/ci.md, "Mutation testing").
+            # The select job's same-head reuse lookup is the third (docs/ci.md, "On every pull request that changes code").
             base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
               -q '.workflow_runs[0].head_sha // empty')
             if [ -z "$base" ] || ! git merge-base --is-ancestor "$base" HEAD; then
@@ -182,7 +182,7 @@ jobs:
           else
             echo "mutants in the diff: $count"
           fi
-          # Same-head reuse (docs/ci.md, "Mutation testing"): a ready run on
+          # Same-head reuse (docs/ci.md, "On every pull request that changes code"): a ready run on
           # a head whose mutants already passed reuses the pass. Every error
           # below keeps reuse off and starts the shards.
           reuse=false
@@ -199,7 +199,13 @@ jobs:
               echo '{}' >"$RUNNER_TEMP/jobs.json"
               ids=$(echo "$runs_json" | jq -r '.workflow_runs[]?.id' 2>/dev/null || true)
               for id in $ids; do
-                if jobs_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --paginate 2>/dev/null | jq -c '.jobs // []' 2>/dev/null); then
+                # `gh api --paginate` prints one JSON object per page, so
+                # slurp every page into one jobs array before `--argjson`
+                # (docs/ci.md, "On every pull request that changes code"):
+                # a same-head pass with more than 30 jobs still reuses.
+                if jobs_pages=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --paginate 2>/dev/null) \
+                  && [ -n "$jobs_pages" ] \
+                  && jobs_json=$(printf '%s' "$jobs_pages" | jq -c -s 'map(.jobs // []) | add // []' 2>/dev/null); then
                   tmp="$RUNNER_TEMP/jobs-$id.json"
                   if jq --arg id "$id" --argjson jobs "$jobs_json" '. + {($id): $jobs}' "$RUNNER_TEMP/jobs.json" >"$tmp" 2>/dev/null; then
                     mv "$tmp" "$RUNNER_TEMP/jobs.json"
@@ -213,21 +219,23 @@ jobs:
               done
               if [ "$lookup_failed" != true ]; then
                 if reuse_out=$(cargo xtask mutants-reuse --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null); then
-                  reuse="${reuse_out#reuse=}"
+                  reuse=false
+                  matched_run_id=""
+                  matched_pr_head=""
+                  if [ "$(printf '%s' "$reuse_out" | sed -n '1p')" = "reuse=true" ]; then
+                    matched_run_id=$(printf '%s' "$reuse_out" | sed -n 's/^matched_run_id=//p')
+                    matched_pr_head=$(printf '%s' "$reuse_out" | sed -n 's/^matched_pr_head=//p')
+                    if [ -n "$matched_run_id" ] && [ -n "$matched_pr_head" ]; then
+                      reuse=true
+                    fi
+                  fi
                 fi
               else
                 echo "mutants reuse: jobs lookup failed; starting shards"
               fi
             fi
-            matched_run_id=""
           if [ "$reuse" = true ]; then
-            matched_run_id=$(cargo xtask mutants-reuse-id --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null || true)
-            if [ -z "$matched_run_id" ]; then
-              reuse=false
-            fi
-          fi
-          if [ "$reuse" = true ]; then
-            echo "mutants reuse: reuse=$reuse matched_run_id=$matched_run_id (head $head_sha, base $BASE)"
+            echo "mutants reuse: reuse=$reuse matched_run_id=$matched_run_id matched_pr_head=$matched_pr_head (head $head_sha, base $BASE)"
           else
             echo "mutants reuse: reuse=$reuse (head $head_sha, base $BASE)"
           fi

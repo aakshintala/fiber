@@ -24,8 +24,7 @@ use plan::BINARY_TESTS;
 pub(crate) use plan::{base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict};
 pub(crate) use reuse::{
     CommitSha as ReuseCommitSha, Current as ReuseCurrent,
-    PullRequestNumber as ReusePullRequestNumber, RunId as ReuseRunId, decide as decide_reuse,
-    matched_run_id,
+    PullRequestNumber as ReusePullRequestNumber, RunId as ReuseRunId, matched_reuse,
 };
 pub(crate) use runtime_read::runtime_read_mismatches;
 pub(crate) use runtime_read::string_literal;
