@@ -74,7 +74,8 @@ An implementer is given:
 
 ## The gate
 
-`scripts/check` passing in CI on the exact head gates the merge. Before a
+`scripts/check` passing in CI on the exact head gates the merge. The one
+exception is an owner's break-glass merge ("Break-glass merge"). Before a
 push, the implementer runs the checks for the paths they changed ("Rules by
 path").
 
@@ -310,3 +311,50 @@ done; marking it ready starts CI's full run (`docs/ci.md`). When `CI` is
 green, the full run passed on the exact head, and every review finding is
 resolved, the orchestrator squash-merges the pull request, deletes its
 branch and checks the ticket closed.
+
+### Break-glass merge
+
+When the `CI` check itself is broken and that blocks other pull requests, the
+owner can merge the fix without a green `CI`. Only the owner breaks glass.
+Agents never do, and never ask a peer to.
+
+A pull request is eligible only when all of these hold:
+
+- its diff stays inside `xtask/`, `.github/`, `scripts/`, `docs/ci.md` and
+  the root-level gate configuration that `RUN_ALL_ROOTS` in
+  `xtask/src/select.rs` lists, and every changed file is needed to repair
+  the defect;
+- its own `CI` fails or cannot finish because of the defect it fixes, and
+  that defect blocks one or more other open pull requests; a `CI` that is
+  only slow, or red for another reason, does not qualify.
+
+Before asking the owner, the orchestrator confirms on the exact head:
+
+- `scripts/check` passes locally;
+- the review loop is done, with every finding resolved;
+- when the diff changes what a required check does, a surveyor approval
+  comment is on the pull request;
+- the pull request body starts with `Break-glass:`, then names its ticket,
+  the blocked pull requests and the defect that stops its own `CI`.
+
+The `main` ruleset keeps no bypass actors outside a break-glass merge; check
+`bypass_actors` on the ruleset after each one. To break glass, the owner, in
+the browser:
+
+1. adds the repository-admin role to the `main` ruleset's bypass list, in
+   pull-request mode, so a direct push to `main` is still refused;
+2. merges on the pull request page with "Merge without waiting for
+   requirements to be met", as a squash merge;
+3. removes the bypass at once, leaving the list empty.
+
+`CI` still runs on the merge commit. The orchestrator classifies each
+failure with `ci-triage`. If the break-glass diff caused it, the
+orchestrator opens a revert pull request at once, and nobody fixes it
+forward. A failure the diff did not cause is handled like any other failure
+on `main`.
+
+While the bypass list is empty, an `--admin` merge fails on GitHub's side,
+whoever runs it. Agents run `gh` with the owner's admin login, so nothing on
+GitHub stops one from editing the ruleset, or from using the bypass while
+the owner has it on: agents never merge with `--admin`, never change a
+ruleset, branch protection or repository setting, and never ask a peer to.

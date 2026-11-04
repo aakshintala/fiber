@@ -39,6 +39,8 @@ job reports as `CI (draft)`, so the required `CI` check stays pending. A
 draft does not select `release`. Marking the pull request ready runs every
 job the draft skipped. A ready run whose mutants already passed at that head
 reuses the pass instead of starting shards ("On every pull request that changes code").
+The owner can merge without a green `CI` only by a break-glass merge
+(`docs/workflow.md`, "Break-glass merge").
 
 Every job in `.github/workflows/ci.yml` but the verdict job is in the
 verdict job's `needs`, except the jobs that report without gating it
