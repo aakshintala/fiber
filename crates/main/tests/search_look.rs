@@ -22,7 +22,7 @@ use std::fs;
 
 use serde_json::json;
 use support::hold::Hold;
-use support::pty::{Colour, Grid, Run, hover_bytes};
+use support::pty::{Colour, Grid, MOTION, Run, hover_bytes};
 use support::{Setup, TRUECOLOUR, write_json};
 
 /// `surface` in the dark theme.
@@ -759,7 +759,12 @@ fn running_setup() -> (Setup, Hold, String) {
 fn narrow_running(setup: &Setup) -> Run {
     let mut run = Run::spawn(setup, 80, 24, &[], &TRUECOLOUR);
     run.ready();
+    run.wait_bytes(0, MOTION, "mouse motion enabled");
     run.write(b"go\r");
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until("the delegate and job started", setup.deadline, move || {
+        children_started(&sessions)
+    });
     run.wait_screen("the parent reply", |grid| grid.contents.contains(REPLY));
     run.wait_screen("the narrow running counts", |grid| {
         grid.contents.contains("1 delegate running") && grid.contents.contains("1 job running")
@@ -1109,6 +1114,38 @@ fn delegate_usage_copied(sessions: &std::path::Path) -> bool {
         if support::complete_lines(&text).iter().any(|event| {
             event["kind"] == "usage_recorded" && !event["payload"]["origin_session_id"].is_null()
         }) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the session logs hold both a `delegate_started` and a
+/// `job_started` event: the delegate and the background job both run.
+fn children_started(sessions: &std::path::Path) -> bool {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    let (mut delegate, mut job) = (false, false);
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        };
+        for event in support::complete_lines(&text) {
+            if event["kind"] == "delegate_started" {
+                delegate = true;
+            }
+            if event["kind"] == "job_started" {
+                job = true;
+            }
+        }
+        if delegate && job {
             return true;
         }
     }

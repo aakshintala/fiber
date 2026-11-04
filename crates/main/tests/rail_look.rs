@@ -418,6 +418,7 @@ fn session_card_rows_hold_still_while_usage_lands() {
         grid.rows.iter().any(|row| row.contains("relay down"))
     });
     let tools_y_before = find_row(&before.rows, "relay down");
+    let tools_x_before = locate(&before.rows[usize::from(tools_y_before)], "tools");
     server.release();
     // The release's `usage_recorded` envelope, however many folds come
     // first: each line takes what remains of the test's deadline. The
@@ -439,12 +440,22 @@ fn session_card_rows_hold_still_while_usage_lands() {
     });
     let tools_y_after = find_row(&after.rows, "relay down");
     assert_eq!(tools_y_before, tools_y_after, "the Tools row keeps its y");
-    // The held frame's coordinates still name the Tools row after usage
-    // lands; clicking them opens the Tools view.
+    // The held frame's point is asserted, not reused: the click finds
+    // the Tools row in the frame it acts on, and the held coordinates
+    // still name the Tools row after usage lands; clicking there opens
+    // the Tools view.
     run.click_where("the Tools row", |grid| {
         let row = grid.rows.get(usize::from(tools_y_before))?;
-        (row.contains("relay down") || row.contains("tools"))
-            .then(|| (locate(row, "tools"), tools_y_before))
+        if !(row.contains("relay down") || row.contains("tools")) {
+            return None;
+        }
+        let found = (locate(row, "tools"), tools_y_before);
+        assert_eq!(
+            found,
+            (tools_x_before, tools_y_before),
+            "the Tools row keeps its cell"
+        );
+        Some(found)
     });
     run.wait_screen("the Tools view", |grid| grid.contents.contains("Tools"));
     drop((watch, control));

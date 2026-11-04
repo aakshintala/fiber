@@ -82,7 +82,7 @@ return on the first frame. A test sends input only after output the
 terminal already emits once it is ready for that input, such as the
 mode-enable sequences or the end of the first frame, never after a grid
 match alone. That signal is existing output: the shipped binary gets no
-test-only switch (`docs/testing.md`, "Levels").
+test-only switch (`docs/testing.md`, "Levels"). A pointer event follows the session-event rule below.
 
 A test reads the grid outside a wait only when the frame is settled: the wait just before it checked every cell property the read asserts, with no input in between, or the test has seen the last output that can change those cells and the grid shows its effect. A text-only wait, a poll, a sleep or a raw-byte marker does not settle a frame. Each such read names its signal in a `// settled:` comment.
 
