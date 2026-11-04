@@ -31,6 +31,8 @@ pub enum HubEventKind {
     Unknown(String),
 }
 
+// debt: eight name pairs in two matches, unify name() and From<String>
+// into one row-per-kind table when a ninth hub kind lands.
 impl HubEventKind {
     /// Returns the original hub line name for this kind
     /// (`docs/events.md`, "The envelope").
