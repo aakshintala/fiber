@@ -27,9 +27,10 @@ pub(crate) struct TestRef {
     pub(crate) unit: bool,
 }
 
-/// A test selection is either the changed functions in a source file or,
-/// for a shared helper with no test functions, every test binary that
-/// compiles that source.
+/// A test selection is the changed functions in a source file. A file
+/// with no test functions contributes nothing: a changed file under
+/// `tests/` with no test function selects nothing and skips the run
+/// (`docs/ci.md`, "On every pull request that changes code").
 enum FileTests {
     Functions(Vec<(TestFn, TestRef)>),
 }
@@ -764,7 +765,6 @@ pub(crate) fn tests_in_files(
         let Some(member) = members.get(package) else {
             continue;
         };
-        let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
         if member.unrun_tests.iter().any(|unrun| unrun == path) {
             continue;
         }
@@ -772,15 +772,14 @@ pub(crate) fn tests_in_files(
             continue;
         };
         let functions = test_fns(&source.source).map_err(|()| format!("{path}: cannot parse"))?;
-        if functions.is_empty() && !rel.starts_with("tests/") {
+        if functions.is_empty() {
             continue;
         }
         for binary in index.binaries_for(path) {
             for test in &binary.tests {
-                if (functions.is_empty()
-                    || functions
-                        .iter()
-                        .any(|function| test_name_matches(&test.name, &function.name)))
+                if functions
+                    .iter()
+                    .any(|function| test_name_matches(&test.name, &function.name))
                     && !out.contains(test)
                 {
                     out.push(test.clone());
