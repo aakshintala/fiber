@@ -189,6 +189,45 @@ fn start_run(setup: &Setup) -> Run {
     run
 }
 
+/// Whether the session log holds the parent turn's completion after its
+/// "Done." text: the turn is durably done, so the panel rows it drew are
+/// final until the test's own click expands them. The finished title
+/// never emits while an item is held, so no byte wait can read it; the
+/// log's `turn_completed` is the readiness signal instead.
+fn turn_completed_after_done(sessions: &std::path::Path) -> bool {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        };
+        let events = support::complete_lines(&text);
+        let Some(done) = events.iter().position(|event| {
+            event["kind"] == "text_completed" && event["payload"]["text"] == "Done."
+        }) else {
+            continue;
+        };
+        let Some(turn_id) = events[done]["turn_id"].as_str() else {
+            continue;
+        };
+        if events
+            .iter()
+            .skip(done + 1)
+            .any(|event| event["kind"] == "turn_completed" && event["turn_id"] == turn_id)
+        {
+            return true;
+        }
+    }
+    false
+}
+
 /// The job row, wherever the panel lays it out, or none before it draws.
 fn job_row_index(rows: &[String], command: &str) -> Option<usize> {
     rows.iter().position(|row| row.contains(command))
@@ -262,23 +301,19 @@ fn assert_dim(grid: &Grid, y: u16, needle: &str) {
     }
 }
 
-/// Clicks the cell at `(x, y)`: an SGR press then its release on the
-/// same cell.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
-}
-
 /// Opens the panel row holding `needle`: clicks its text, then waits
 /// for the item view's top row. The caller waits for the turn's
-/// completion first, so the row's position is final: the parent's turn
-/// is done and the one held item parks on the test-held FIFO, so later
-/// folds only tick in place.
+/// `turn_completed` session-log event first, so the row's position is
+/// final: the parent's turn is done and the one held item parks on the
+/// test-held FIFO, so later folds only tick in place.
 fn open_row(run: &mut Run, needle: &str, top: &str) -> Grid {
-    let grid = run.wait_screen("the panel lists the row", |grid| {
+    run.wait_screen("the panel lists the row", |grid| {
         grid.contents.contains(needle)
     });
-    let y = row_with(&grid, needle);
-    click(run, col_at(&grid, y, needle), y);
+    run.click_where("the panel row", |grid| {
+        let y = row_with(grid, needle);
+        Some((col_at(grid, y, needle), y))
+    });
     run.wait_screen("the item view opens", |grid| grid.contents.contains(top))
 }
 
@@ -298,6 +333,10 @@ fn assert_span_tint(grid: &Grid, y: u16, needle: &str, tint: Colour) {
 fn the_delegate_view_matches_the_doc() {
     let (setup, hold) = delegate_setup();
     let mut run = start_run(&setup);
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    fakes::wait_until("the parent turn's completion", setup.deadline, move || {
+        turn_completed_after_done(&sessions)
+    });
     // The parent's turn completes before the click, so the panel row's
     // position is final: the completed footer proves the turn is done,
     // and the delegate parks on the test-held FIFO, so no further
@@ -540,7 +579,11 @@ fn the_job_pty_view_matches_the_doc() {
     // `job_completed` carries `process.exit_code`, `process.signal` and
     // `error.code` in the raw lines.
     let sessions_dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
-    let grid = run.wait_screen_reporting(
+    fakes::wait_until("the parent turn's completion", setup.deadline, {
+        let sessions = sessions_dir.clone();
+        move || turn_completed_after_done(&sessions)
+    });
+    run.wait_screen_reporting(
         "the tty job starts",
         |grid| {
             grid.contents.contains("Jobs")
@@ -549,17 +592,23 @@ fn the_job_pty_view_matches_the_doc() {
         },
         || support::session_logs_tail(&sessions_dir),
     );
-    let title = row_with(&grid, "Jobs");
-    click(&mut run, col_at(&grid, title, "Jobs"), title);
-    let grid = run.wait_screen("the job row draws", |grid| {
+    run.click_where("the Jobs title", |grid| {
+        let title = row_with(grid, "Jobs");
+        Some((col_at(grid, title, "Jobs"), title))
+    });
+    run.wait_screen("the job row draws", |grid| {
         job_row_index(&grid.rows, &command).is_some()
     });
-    let job = job_row_index(&grid.rows, &command).unwrap() as u16;
-    let (width, _) = grid.size();
-    let job_x = (0..width)
-        .find(|x| grid.cell(*x, job).symbol != " ")
-        .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
-    click(&mut run, job_x, job);
+    let clicked = std::cell::Cell::new(0u16);
+    run.click_where("the job row", |grid| {
+        let job = job_row_index(&grid.rows, &command)? as u16;
+        let (width, _) = grid.size();
+        let job_x = (0..width)
+            .find(|x| grid.cell(*x, job).symbol != " ")
+            .unwrap_or_else(|| panic!("the job row in\n{}", grid.contents));
+        clicked.set(job);
+        Some((job_x, job))
+    });
     // The lead reads the last grid the wait saw and names which read it
     // implies; it runs only on expiry.
     let last: std::cell::RefCell<Option<Vec<String>>> = std::cell::RefCell::new(None);
@@ -569,7 +618,13 @@ fn the_job_pty_view_matches_the_doc() {
             *last.borrow_mut() = Some(grid.rows.clone());
             grid.contents.contains("Job  ◆ ")
         },
-        || item_view_open_lead(last.borrow().as_deref().unwrap_or(&[]), &command, job),
+        || {
+            item_view_open_lead(
+                last.borrow().as_deref().unwrap_or(&[]),
+                &command,
+                clicked.get(),
+            )
+        },
     );
     // The status row names the job twice: once in the row, once in the
     // stop target. The row is short enough to draw whole: no `…` cuts

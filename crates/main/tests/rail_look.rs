@@ -276,7 +276,12 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     let c = start_session(&control, &elsewhere, "third");
     let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
     run.ready();
+    let from = run.output().len();
     run.write(b"go\r");
+    // The terminal's session ends at once with no held item, so its
+    // turn completes: the finished title plus the completed paint prove
+    // the Session card's rows are final before Alt+R hides the rail.
+    run.turn_finished(from);
     // The terminal's session is done while the other two wait: the rail
     // shows both waiting cards.
     run.wait_screen("two sessions waiting", |grid| {
@@ -331,7 +336,7 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     }
 
     // A click on the line shows the rail again.
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", at + 1, y + 1, at + 1, y + 1).as_bytes());
+    run.click_where("the waiting line", |grid| grid.text_at("! 2 waiting"));
     run.wait_screen("the rail shown again", |grid| {
         grid.rows.iter().any(|row| row.contains("NEEDS INPUT"))
     });
@@ -350,12 +355,6 @@ fn the_hidden_rail_waiting_line_shows_the_rail() {
     quit(run);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.wait();
-}
-
-/// Clicks the cell at `(x, y)`: an SGR press then its release on the
-/// same cell.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
 }
 
 /// The first session id the hub's feed reports: the test's only live
@@ -423,7 +422,9 @@ fn session_card_rows_hold_still_while_usage_lands() {
     let before = run.wait_screen("the relay down row", |grid| {
         grid.rows.iter().any(|row| row.contains("relay down"))
     });
-    let tools_y_before = find_row(&before.rows, "relay down");
+    let rows_before = &before.rows;
+    let tools_y_before = find_row(rows_before, "relay down");
+    let tools_x_before = locate(&rows_before[usize::from(tools_y_before)], "tools");
     server.release();
     // The release's `usage_recorded` envelope, however many folds come
     // first: each line takes what remains of the test's deadline. The
@@ -436,16 +437,32 @@ fn session_card_rows_hold_still_while_usage_lands() {
         }
     }
     // The frame after the fold: the finished turn proves the terminal
-    // rendered past the usage.
+    // rendered past the usage, and the figures the hello reply streams
+    // prove the fold landed.
     let after = run.wait_screen("the finished turn", |grid| {
         grid.contents.contains("completed")
+            && grid.contents.contains("10 / 3")
+            && grid.contents.contains("40%")
     });
     let tools_y_after = find_row(&after.rows, "relay down");
     assert_eq!(tools_y_before, tools_y_after, "the Tools row keeps its y");
-    // The held frame's coordinates still name the Tools row after usage
-    // lands; clicking them opens the Tools view.
-    let x = locate(&before.rows[tools_y_before as usize], "tools");
-    click(&mut run, x, tools_y_before);
+    // The held frame's point is asserted, not reused: the click finds
+    // the Tools row in the frame it acts on, and the held coordinates
+    // still name the Tools row after usage lands; clicking there opens
+    // the Tools view.
+    run.click_where("the Tools row", |grid| {
+        let row = grid.rows.get(usize::from(tools_y_before))?;
+        if !(row.contains("relay down") || row.contains("tools")) {
+            return None;
+        }
+        let found = (locate(row, "tools"), tools_y_before);
+        assert_eq!(
+            found,
+            (tools_x_before, tools_y_before),
+            "the Tools row keeps its cell"
+        );
+        Some(found)
+    });
     run.wait_screen("the Tools view", |grid| grid.contents.contains("Tools"));
     drop((watch, control));
     quit(run);
