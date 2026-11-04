@@ -558,6 +558,26 @@ with its tag, in an always-run cleanup step; it does not prove the archives,
 which carry stand-in bytes while the release gate proves the real ones. Only
 `main` can run it: the `release` environment deploys only from `main`.
 
+### The nightly update check
+
+The `nightly-update-check` job in `.github/workflows/release.yml` proves the
+nightly a person on the previous nightly installs: it carries the same publish
+gate as the nightly build, installs the previous nightly into a fresh home,
+updates to the new nightly, and fails the run on the update's own failure.
+The previous nightly comes from the job's own tags: the just-published version
+picks its predecessor through `cargo xtask nightly-pair`, and an empty listing
+fails the lookup instead of reading as a skip. Fewer than two nightlies fail
+the same way: the first nightly has no predecessor to install. The deciding
+logic lives in `xtask`, tested like any other code (`docs/testing.md`,
+"Levels"): the strict nightly-tag predicate the pair lookup and the fixture
+prune share, and the deterministic probe, which re-runs the update against a
+nightly-only origin fixture holding only the two captured tags. Unlike the
+journey suite (`docs/ci.md`, "The journey suite"), a failure files a
+`Nightly update check failed` issue and fails the job. After the merge, the
+owner runs the workflow once from `main`
+(`gh workflow run release.yml -R aakshintala/fiber --ref main`); a branch
+cannot dispatch it.
+
 What the artifacts are, how a release is triggered and how it is signed is
 `docs/releasing.md`.
 
