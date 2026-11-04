@@ -2263,32 +2263,28 @@ fn a_list_under_two_rows_with_no_model_draws_a_count_and_its_heading_together_or
         }],
         ..Catalogue::default()
     };
-    let fixture = |height: u16| {
-        let mut app = attached(80, height);
-        app.on_models(Ok(catalogue.clone()));
-        open(&mut app);
-        assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
-        app.on_models(Ok(catalogue.clone()));
-        app
-    };
-    let keep = fixture(16);
-    let cut = fixture(15);
+    let mut app = attached(80, 16);
+    app.on_models(Ok(catalogue.clone()));
+    open(&mut app);
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(catalogue.clone()));
     // The picker draws below the swapped-view header: the conversation
     // area less one row, 10 rows kept and 9 rows cut.
     assert_eq!(
-        keep.conversation_area_height().saturating_sub(1),
+        app.conversation_area_height().saturating_sub(1),
         10,
         "the keep screen leaves ten picker rows"
     );
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(model_fit(&view, 10), 2, "ten picker rows fit two body rows");
+    insta::assert_snapshot!("trim-keep", screen(&app, 80, 16));
+    app.set_size(80, 15);
     assert_eq!(
-        cut.conversation_area_height().saturating_sub(1),
+        app.conversation_area_height().saturating_sub(1),
         9,
         "the cut screen leaves nine picker rows"
     );
-    let view = keep.model_picker_view().expect("open");
-    assert_eq!(model_fit(&view, 10), 2, "ten picker rows fit two body rows");
-    insta::assert_snapshot!("trim-keep", screen(&keep, 80, 16));
-    insta::assert_snapshot!("trim-cut", screen(&cut, 80, 15));
+    insta::assert_snapshot!("trim-cut", screen(&app, 80, 15));
 }
 
 /// A far focus resets to a nonzero window offset (`docs/tui.md:710-714`).
