@@ -27,7 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use fakes::{ProviderServer, Response};
+use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::{Value, json};
 use support::Deadline;
 use support::Setup;
@@ -2528,6 +2528,365 @@ fn install_replay_anthropic_provider(setup: &Setup, server: &ProviderServer) {
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m"}),
+    );
+}
+
+/// Installs the copied `databricks` package with its origin rewritten to
+/// the fake server: the replay half of `install` (`databricks.rs`),
+/// file-local because each test binary owns its helpers. Returns the
+/// fake host the `DATABRICKS_HOST` environment carries.
+fn install_replay_databricks_package(setup: &Setup, server: &ProviderServer) -> String {
+    let to = setup.root.path().join("pkg-databricks");
+    support::package::copy_package("databricks", &to, "https://", "http://");
+    std::fs::write(
+        to.join("thinking.lua"),
+        include_str!("../../../providers/databricks/thinking.lua"),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(to),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    server.url().strip_prefix("http://").unwrap().to_owned()
+}
+
+/// The discovery's two answers, in the order `models()` asks for them:
+/// the scripted half of `discovery` (`databricks.rs`), file-local.
+fn replay_discovery() -> [Response; 2] {
+    [
+        Response::status(
+            200,
+            json!({"model_services": [
+                {"name": "model-services/system.ai.claude-opus-5",
+                 "supported_api_types": ["mlflow/v1/chat/completions"]},
+                {"name": "model-services/system.ai.gpt-6-sol",
+                 "supported_api_types": ["openai/v1/responses", "mlflow/v1/chat/completions"]},
+                {"name": "model-services/system.ai.glm-5.3",
+                 "supported_api_types": ["mlflow/v1/chat/completions"]},
+            ]})
+            .to_string(),
+        ),
+        Response::status(
+            200,
+            json!({"models": [
+                {"model_name": "claude-opus-5", "mode": "chat", "provider_type": "ANTHROPIC",
+                 "context_window": {"max_input": 200000, "max_output": 64000},
+                 "capabilities": {"vision": true},
+                 "base_pricing": {"input_cost_per_million_tokens": 5,
+                                   "output_cost_per_million_tokens": 25,
+                                   "cache_read_input_cost_per_million_tokens": 0.5,
+                                   "cache_creation_input_cost_per_million_tokens": 6.25}},
+                {"model_name": "gpt-6-sol", "mode": "chat", "provider_type": "OPENAI",
+                 "context_window": {"max_input": 400000, "max_output": 160000},
+                 "capabilities": {"vision": false},
+                 "base_pricing": {"input_per_million_tokens": 2,
+                                   "output_per_million_tokens": 8}},
+                {"model_name": "glm-5.3", "mode": "chat", "provider_type": "MICROSOFT_FOUNDRY",
+                 "context_window": {"max_input": 200000, "max_tokens": 32000},
+                 "capabilities": {},
+                 "base_pricing": {"input_cost_per_million_tokens": 0.6,
+                                   "output_cost_per_million_tokens": 2.2,
+                                   "cache_read_input_cost_per_million_tokens": 0.06}},
+            ]})
+            .to_string(),
+        ),
+    ]
+}
+
+/// A scripted `anthropic-messages` text reply with `text`.
+fn replay_text_reply(text: &str) -> Response {
+    let events = [
+        json!({"type": "message_start", "message": {"id": "msg_1"}}),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": text}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 10, "output_tokens": 3}}),
+        json!({"type": "message_stop"}),
+    ];
+    Response::stream(
+        events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// A scripted `anthropic-messages` reply calling built-in tool `name`
+/// with `arguments`.
+fn replay_tool_call(id: &str, name: &str, arguments: &Value) -> Response {
+    let mut all = vec![json!({"type": "message_start", "message": {"id": "msg_1"}})];
+    all.push(
+        json!({"type": "content_block_start", "index": 0, "content_block": {
+            "type": "tool_use", "id": id, "name": name, "input": arguments}}),
+    );
+    all.push(json!({"type": "content_block_stop", "index": 0}));
+    all.push(
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+        "usage": {"input_tokens": 10, "output_tokens": 3}}),
+    );
+    all.push(json!({"type": "message_stop"}));
+    Response::stream(
+        all.iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// User messages decoded from one captured Anthropic Messages request:
+/// each `role: user` message's text parts joined, mirroring
+/// `user_messages` (`handoff_kept.rs`) for the Responses envelope.
+fn replay_user_messages(body: &[u8]) -> Vec<String> {
+    let request: Value = serde_json::from_slice(body).unwrap();
+    request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| {
+            if let Some(text) = message["content"].as_str() {
+                text.to_owned()
+            } else {
+                message["content"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|part| part["text"].as_str())
+                    .collect::<String>()
+            }
+        })
+        .collect()
+}
+
+/// The `seq` of the logged turn whose input contains `text`, mirroring
+/// `turn_started_seq` (`handoff_kept.rs`) over the session's events file.
+fn replay_turn_seq(lines: &[Value], text: &str) -> u64 {
+    lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "turn_started"
+                && line["payload"]["input"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["content"]
+                            .as_array()
+                            .is_some_and(|parts| parts.iter().any(|part| part["text"] == text))
+                    })
+                })
+        })
+        .and_then(|line| line["seq"].as_u64())
+        .expect("turn_started with the requested text and seq")
+}
+
+/// Types `text` as one journey turn and waits for `wait_for` on screen,
+/// allowing every approval prompt on the way: a tool turn's approval
+/// arrives before its reply, so the wait names either.
+fn replay_ask(run: &mut Run, text: &str, wait_for: &str) {
+    let from = run.output().len();
+    run.write(format!("{text}\r").as_bytes());
+    loop {
+        let grid = run.wait_screen("approval or the reply", |grid| {
+            grid.contents.contains("Allow once") || grid.contents.contains(wait_for)
+        });
+        if grid.contents.contains(wait_for) {
+            break;
+        }
+        let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
+        run.wait_bytes(approval, FRAME_END, "the approval frame");
+        run.write(b"\r");
+    }
+    run.turn_finished(from);
+}
+
+/// The recorded #3969 exchange replayed: the person's messages that still
+/// bind survive a handoff on the Databricks Anthropic route. Discovery
+/// answers the two Unity Catalog endpoints once at startup, then the
+/// turns run the scripted pre-handoff replies with the recorded text
+/// reply answering the first post-handoff request; the journey asserts
+/// the labelled pair blocks handoff_kept pins. Evidence for #3969, whose
+/// parent dropped kept messages' replies from the post-handoff request.
+#[test]
+fn replay_databricks_handoff_keeps_labelled_pairs() {
+    run_journey(
+        "replay_databricks_handoff_keeps_labelled_pairs",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let skill_path = setup.workspace().join(".agents/skills/review/SKILL.md");
+            fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+            fs::write(
+                &skill_path,
+                "---\nname: review\ndescription: Review this work.\n---\nUse the current review skill instructions.\n",
+            )
+            .unwrap();
+            let mut script: Vec<Response> = replay_discovery().into_iter().collect();
+            script.push(replay_text_reply("Which color should I use?"));
+            script.push(replay_text_reply("Which number should I use?"));
+            script.push(replay_tool_call(
+                "toolu_1",
+                "skill",
+                &json!({"name": "review"}),
+            ));
+            script.push(replay_text_reply("The skill is loaded."));
+            script.push(replay_tool_call(
+                "toolu_2",
+                "handoff",
+                &json!({"note": "The handoff note."}),
+            ));
+            script.push(Response::stream(
+                include_bytes!("fixtures/provider_replay/3969_post_handoff_text.sse").as_slice(),
+            ));
+            let server = ProviderServer::start(script).unwrap();
+            let host = install_replay_databricks_package(&setup, &server);
+            support::write_json(
+                &setup.workspace().join("r.json"),
+                &json!({"steps": [{"text": "2, 3"}]}),
+            );
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "databricks/databricks-claude-opus-5",
+                    "hub": {"idle_exit_ms": 200},
+                    "reviewer": {"model": "scripted/r.json"}}),
+            );
+            let bin = journey_bin();
+            let token = "dapi-test";
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[
+                    ("DATABRICKS_TOKEN", token),
+                    ("DATABRICKS_HOST", host.as_str()),
+                ],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            replay_ask(&mut run, "Which color?", "Which color should I use?");
+            replay_ask(&mut run, "Blue.", "Which number should I use?");
+            replay_ask(&mut run, "Seven.", "The skill is loaded.");
+            replay_ask(&mut run, "Please hand off now.", "lovely human");
+            // Confirm the reviewer, skill tool and handoff all ran before
+            // inspecting the request bytes, so a broken setup cannot
+            // masquerade as the regression.
+            let sessions = sessions(&setup);
+            assert_eq!(sessions.len(), 1, "one session ran");
+            let events = std::fs::read_to_string(sessions[0].join("events.jsonl")).unwrap();
+            let lines: Vec<Value> = events
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let color_seq = replay_turn_seq(&lines, "Which color?");
+            let blue_seq = replay_turn_seq(&lines, "Blue.");
+            let seven_seq = replay_turn_seq(&lines, "Seven.");
+            let kept = lines
+                .iter()
+                .find(|line| line["kind"] == "reviewer_kept")
+                .expect("the reviewer selected messages");
+            assert_eq!(
+                kept["payload"]["kept"],
+                json!([
+                    {"seq": blue_seq, "item": 0},
+                    {"seq": seven_seq, "item": 0}
+                ]),
+                "the selection keeps the two answers, not the questions"
+            );
+            assert_ne!(color_seq, blue_seq);
+            let loaded = lines
+                .iter()
+                .find(|line| {
+                    line["kind"] == "tool_call_completed"
+                        && line["payload"]["control"]["skill"]["name"] == "review"
+                })
+                .expect("the real skill tool loaded review");
+            assert_eq!(loaded["payload"]["status"], "completed");
+            let resent = lines
+                .iter()
+                .find(|line| line["kind"] == "skills_resent")
+                .expect("the loaded skill was resent after handoff");
+            assert_eq!(resent["payload"]["skills"].as_array().unwrap().len(), 1);
+            let completed = lines
+                .iter()
+                .find(|line| line["kind"] == "handoff_completed")
+                .expect("the handoff completed");
+            assert_eq!(completed["payload"]["outcome"], "completed");
+            let requests = server.requests();
+            assert!(requests.len() >= 8, "{}", requests.len());
+            let post = requests
+                .iter()
+                .rfind(|request| request.path == "/ai-gateway/anthropic/v1/messages")
+                .expect("a model request");
+            assert_eq!(
+                post.header("authorization"),
+                Some(fingerprint("Bearer dapi-test").as_str())
+            );
+            let before: String = requests
+                .iter()
+                .filter(|request| {
+                    request.path == "/ai-gateway/anthropic/v1/messages"
+                        && !std::ptr::eq(*request, post)
+                })
+                .map(|request| replay_user_messages(&request.body).join(""))
+                .collect();
+            assert!(before.contains("Which color?"));
+            assert!(before.contains("Blue."));
+            assert!(before.contains("Seven."));
+            assert!(before.contains("Please hand off now."));
+            assert!(
+                !before.contains("The person's earlier message:")
+                    && !before.contains("The person's new message:")
+                    && !before.contains("Skills reloaded from the previous context:"),
+                "handoff-only framing must not leak into ordinary requests"
+            );
+            let messages = replay_user_messages(&post.body);
+            let flattened = messages.join("");
+            // docs/handoff.md, "What the model sees after a handoff", item 4:
+            // "each in its own labelled block" — two kept answers, two blocks.
+            // The Anthropic envelope carries them in one user message, so
+            // the count and the order below read the flattened text.
+            assert_eq!(
+                flattened.matches("The person's earlier message:").count(),
+                2,
+                "each kept answer has its own block"
+            );
+            let pair_one = "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.";
+            let pair_two = "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.";
+            let current = "The person's new message:\nPlease hand off now.";
+            let note = "The handoff note.";
+            let skill = &resent["payload"]["skills"][0];
+            let skill_block = format!(
+                "Skills reloaded from the previous context:\n{} — {}\n\n{}",
+                skill["name"].as_str().unwrap(),
+                skill["path"].as_str().unwrap(),
+                skill["content"].as_str().unwrap(),
+            );
+            // docs/handoff.md, "What the model sees after a handoff", "In order:":
+            // each block present once, oldest first, then the new message,
+            // the note and the reloaded skill.
+            let positions: Vec<usize> = [pair_one, pair_two, current, note, skill_block.as_str()]
+                .iter()
+                .map(|text| {
+                    flattened
+                        .find(text)
+                        .unwrap_or_else(|| panic!("flattened request lost {text:?}"))
+                })
+                .collect();
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "block positions were {positions:?}"
+            );
+            quit_journey(run);
+        }),
     );
 }
 
