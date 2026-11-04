@@ -218,7 +218,7 @@ fn a_crash_leaves_the_job_to_the_keeper_and_the_resume_delivers_it() {
         .unwrap();
     assert!(
         ended_at < resumed_at,
-        "docs/tools.md: keeper appends the job's end while the session is gone"
+        "docs/tools.md, \"The keeper\": keeper appends the job's end while the session is gone"
     );
     let output = started["payload"]["output_path"].as_str().unwrap();
     assert!(

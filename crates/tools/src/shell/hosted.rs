@@ -1,4 +1,4 @@
-//! Shell runs whose process and pipes belong to the keeper (`docs/tools.md`).
+//! Shell runs whose process and pipes belong to the keeper (`docs/tools.md`, "The keeper").
 
 use std::io;
 use std::os::unix::process::ExitStatusExt as _;

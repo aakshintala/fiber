@@ -125,8 +125,9 @@ discovery in `loop` that `tools` uses for `skill`, `PersonalSourceCheck`,
 the already-read skill check in `loop` that `config` uses for `import`,
 and `TokenFiles`, credential
 files in `config` that `mcp` uses for remote servers' OAuth tokens, and `HostModel`,
-the session's model call in `main` that `extensions` uses for `host.model`, and `HostDelegate`,
-the session's delegate start in `main` that `extensions` uses for `host.delegate`.
+the session's model call in `main` that `extensions` uses for `host.model`, `HostDelegate`,
+the session's delegate start in `main` that `extensions` uses for `host.delegate`, and `CommandHost`,
+the shell host in `main` that `tools` uses for keeper runs.
 
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.

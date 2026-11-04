@@ -73,11 +73,19 @@ fn start(
     (worker.thread().id(), result, output)
 }
 fn line(peer: &UnixStream) -> serde_json::Value {
-    peer.set_read_timeout(Some(Duration::from_secs(10)))
-        .unwrap();
-    let mut text = String::new();
-    BufReader::new(peer).read_line(&mut text).unwrap();
-    serde_json::from_str(&text).unwrap()
+    let mut peer = peer.try_clone().unwrap();
+    let (send, recv) = mpsc::channel();
+    thread::spawn(move || {
+        let mut text = String::new();
+        let parsed = (|| {
+            BufReader::new(&mut peer).read_line(&mut text)?;
+            serde_json::from_str(&text).map_err(io::Error::other)
+        })();
+        let _ = send.send(parsed);
+    });
+    deadline()
+        .recv_or_fail(&recv, "keeper control line")
+        .unwrap()
 }
 fn reply(peer: &mut UnixStream, value: serde_json::Value) {
     serde_json::to_writer(&mut *peer, &value).unwrap();
@@ -273,10 +281,11 @@ fn keeper_demux_preserves_output_then_exit() {
         &mut peer,
         serde_json::json!({"exit":{"id":"live","code":0,"signal":null,"timed_out":false,"output_cap":false}}),
     );
+    let dl = deadline();
     assert!(
-        matches!(deadline().recv(&output).unwrap(), HostEvent::Output { stream: Stream::Out, bytes } if bytes == b"hi")
+        matches!(dl.recv_or_fail(&output, "keeper output"), HostEvent::Output { stream: Stream::Out, bytes } if bytes == b"hi")
     );
     assert!(
-        matches!(deadline().recv(&output).unwrap(), HostEvent::Exit(exit) if exit.code == Some(0))
+        matches!(dl.recv_or_fail(&output, "keeper exit"), HostEvent::Exit(exit) if exit.code == Some(0))
     );
 }
