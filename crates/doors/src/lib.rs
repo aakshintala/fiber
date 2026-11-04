@@ -58,6 +58,7 @@ pub use session_error::SessionError;
 pub use sessions::SessionSockets;
 pub use sessions::session_entries;
 pub use signals::{SHUTDOWN_BOUND, Signals, signal_code};
+pub use socket::bind;
 pub use socket::{SOCKET_PATH_MAX, check_socket_path};
 pub use steer::{Steered, steer};
 pub use watch::{Watched, watch, watch_after};

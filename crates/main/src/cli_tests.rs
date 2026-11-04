@@ -14,6 +14,24 @@ use super::{
 };
 
 #[test]
+fn keeper_is_hidden_and_requires_a_minted_session_id() {
+    assert!(
+        matches!(parse_from(["fiber", "keeper", "--id", "s_0123456789abcdef"]),
+        Invocation::Run(Some(Commands::Keeper { id }), _) if id == "s_0123456789abcdef")
+    );
+    assert!(matches!(
+        parse_from(["fiber", "keeper", "--id", "../bad"]),
+        Invocation::Usage { .. }
+    ));
+    assert!(
+        command()
+            .find_subcommand("keeper")
+            .expect("keeper")
+            .is_hide_set()
+    );
+}
+
+#[test]
 fn hub_list_commands_and_client_flags_parse() {
     for args in [
         vec!["fiber", "hub", "add", "box", "ws://box"],

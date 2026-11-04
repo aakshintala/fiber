@@ -51,6 +51,9 @@ The driver takes a grid snapshot for a wait only when no synchronized
 output block (mode 2026) is open, so a wait sees whole frames and never a
 mix of the old frame and the new one; a stream without mode 2026 snapshots
 after each read.
+
+A test that compares two moments of one run replays the driver's captured output, cut at an offset, through a `vt100` parser of the driver's size; the replay is the driver's grid at that offset. Each cut ends where no synchronized output block is open, and every byte the replay feeds was drawn at the replay's size.
+
 The terminal is 120 by 32 unless a test picks the size its layout needs
 (the look tests use 160 by 48). The driver pins `TERM` to
 `xterm-256color` and answers the binary's capability queries for a fixed
@@ -79,11 +82,11 @@ return on the first frame. A test sends input only after output the
 terminal already emits once it is ready for that input, such as the
 mode-enable sequences or the end of the first frame, never after a grid
 match alone. That signal is existing output: the shipped binary gets no
-test-only switch (`docs/testing.md`, "Levels").
+test-only switch (`docs/testing.md`, "Levels"); whether a pointer target is ready is the session-event rule below, which binds only a row background data can still move
 
 A test reads the grid outside a wait only when the frame is settled: the wait just before it checked every cell property the read asserts, with no input in between, or the test has seen the last output that can change those cells and the grid shows its effect. A text-only wait, a poll, a sleep or a raw-byte marker does not settle a frame. Each such read names its signal in a `// settled:` comment.
 
-The grid-read ratchet counts unmarked grid-read lines per file under `crates/main/tests/`, outside `crates/main/tests/support/`. A source line counts when it holds one of `.screen()`, `.cell(`, `.contents` or `.rows`: acquiring a grid, or reading its cells, text or rows — even inside a string literal or a block comment. A line whose trimmed start begins `//` never counts, and neither does a line inside a `wait_screen` call's span: the wait's own check settles the grid, so its predicate reads are the assertion rather than a read outside a wait. The same holds for a line inside a listed wait helper's call span: a name joins the list only when the helper passes its predicate argument to a `wait_screen` call, so the predicate lines at its call sites are the wait's own check too. `feed` in `look.rs` is the first such helper. The literal text `// settled:` on the read line or the line before it exempts the line, even inside a string literal: the count is a conservative upper bound, so over-counting a read inside a string, or exempting on marker text inside a string, never lets a real unsettled read slip past. A `.screen` field access without the call parens is not a call. Each file holds at most its inline maximum in `scripts/check`; a file missing from that table holds none, and each file's maximum is independent. The rule is deliberately outside-a-wait: a predicate that derives its expected value from the grid it asserts on sits inside the wait, where a line ratchet cannot tell it from the wait's own probe, so that shape stays outside this check. The count covers the lines that read a grid, not the assertions that use one: a helper's reads count once in the file that defines it, and a helper under `crates/main/tests/support/` counts nowhere, so a comparison of grids a helper already produced, such as `assert_eq!(screens[a], screens[b])`, adds nothing to any file's count.
+The grid-read ratchet counts unmarked grid-read lines per file under `crates/main/tests/`, outside `crates/main/tests/support/`. A source line counts when it holds one of `.screen()`, `.cell(`, `.contents` or `.rows`: acquiring a grid, or reading its cells, text or rows — even inside a string literal or a block comment. A line whose trimmed start begins `//` never counts, and neither does a line inside a `wait_screen` call's span: the wait's own check settles the grid, so its predicate reads are the assertion rather than a read outside a wait. The same holds for a line inside a listed wait helper's call span: a name joins the list only when the helper passes its predicate argument to a `wait_screen` call, so the predicate lines at its call sites are the wait's own check too. `feed` in `look.rs` is the first such helper. The literal text `// settled:` on the read line or the line before it exempts the line, even inside a string literal: the count is a conservative upper bound, so over-counting a read inside a string, or exempting on marker text inside a string, never lets a real unsettled read slip past. A `.screen` field access without the call parens is not a call. Each file holds at most its inline maximum in `scripts/check`; a file missing from that table holds none, and each file's maximum is independent. The rule is deliberately outside-a-wait: a predicate that derives its expected value from the grid it asserts on sits inside the wait, where a line ratchet cannot tell it from the wait's own probe, so that shape stays outside this check. The count covers the lines that read a grid, not the assertions that use one: a helper's reads count once in the file that defines it, and a helper under `crates/main/tests/support/` counts nowhere, so a comparison of grids a helper already produced, such as `assert_eq!(screens[a], screens[b])`, adds nothing to any file's count. A `mouse <path> <maximum>` entry in the same table caps that file's mouse-event lines: a source line holding one of `[<0;`, `[<3;`, `[<32;` or `[<35;`, the SGR press, release, drag and motion reports, outside the frame-locked click helpers' call spans. A line whose trimmed start begins `//` never counts, wheel reports stay outside the count, and a file missing from the mouse entries holds none.
 
 A pointer event targets a row whose position the test has made final with a
 signal, not by matching rows drawn so far. A row that background data can
@@ -91,6 +94,14 @@ still move, such as the panel while usage folds in, is clicked only after
 the test has seen the session event that carries the last such data, and
 the grid shows that event's effect. Adding one more "this row is drawn"
 condition to a wait is not a readiness signal.
+
+A test that clicks, drags or hovers sends its reports through the driver's
+frame-locked click helper (`Run::click_where` and `Run::mouse_where` in
+`crates/main/tests/support/pty.rs`) instead of computing coordinates from
+a grid it read earlier. The helper finds the target in the frame it is
+about to act on, and writes only when the published grid still equals that
+frame. When the frame changed between the find and the write, the helper
+finds the target again under the call's one wait.
 
 The driver reads the terminal on a thread from the first frame to end of
 file, and takes the markers it waits for over a channel, as `watch` in

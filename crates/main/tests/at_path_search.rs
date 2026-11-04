@@ -1,5 +1,5 @@
 //! Binary-level tests of the `@` panel's two searches (`docs/tui.md`,
-//! "File search"): in a pty with a temporary `HOME` holding a seeded
+//! "Rules"): in a pty with a temporary `HOME` holding a seeded
 //! tree, `@~/proj/rea` lists the matching file, choosing the `sub`
 //! directory reopens the panel on it, and `@foo` inside a git
 //! repository lists tracked files only (`docs/testing.md`, "Levels").

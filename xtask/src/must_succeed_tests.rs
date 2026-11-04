@@ -134,6 +134,51 @@ fn a_deadline_after_a_name_an_expression_or_a_bound_at_the_floor_is_not_flagged(
     ));
 }
 
+/// `docs/ci.md`, "On every pull request that changes code", promises the
+/// check "reports each site by file path, then line": the exact-output
+/// assertion below pins that path-then-line form for `.within`.
+#[test]
+fn a_deadline_within_a_short_literal_is_flagged() {
+    assert!(flagged("fn a() { root.within(Duration::from_secs(1)); }"));
+    assert!(flagged("fn a() { root.within(Duration::from_secs(5)); }"));
+    assert!(flagged(
+        "fn a() { root.within(Duration::from_millis(1500)); }"
+    ));
+    assert!(flagged(
+        "fn a() { root.within ( Duration::from_secs(5) ); }"
+    ));
+    assert!(flagged(
+        "fn a() { root.within(\n    Duration::from_secs(5)\n); }"
+    ));
+    assert!(flagged("fn a() { self.x.within(Duration::from_secs(5)); }"));
+    assert!(flagged(
+        "fn a() { root.within(std::time::Duration::from_secs(5)); }"
+    ));
+    assert!(flagged(
+        "use std::time::Duration as D; fn a() { root.within(D::from_secs(5)); }"
+    ));
+    assert_eq!(
+        check("fn a() {\n    root.within(Duration::from_secs(3));\n}"),
+        [
+            "crates/x/src/a_tests.rs:2: .within(Duration::from_secs(3)) is below MUST_SUCCEED_WITHIN (10 s)"
+        ]
+    );
+}
+
+#[test]
+fn a_deadline_within_at_the_floor_or_with_a_name_or_two_arguments_is_not_flagged() {
+    assert!(!flagged("fn a() { root.within(Duration::from_secs(10)); }"));
+    assert!(!flagged(
+        "fn a() { root.within(Duration::from_millis(999)); }"
+    ));
+    assert!(!flagged("fn a() { root.within(Duration::from_secs(0)); }"));
+    assert!(!flagged("fn a() { root.within(MUST_SUCCEED_WITHIN); }"));
+    assert!(!flagged("fn a() { within(Duration::from_secs(5)); }"));
+    assert!(!flagged(
+        "fn a() { root.within(base, Duration::from_secs(5)); }"
+    ));
+}
+
 #[test]
 fn a_wait_call_with_a_short_literal_argument_is_flagged() {
     for call in [

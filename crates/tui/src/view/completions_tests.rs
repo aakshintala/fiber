@@ -147,7 +147,7 @@ fn slash_eight_of_long_list() {
     );
     let buf = buffer(&app, 160, 48);
     let bars = barred(&buf);
-    // The first match is focused (`docs/tui.md:1682`).
+    // The first match is focused (`docs/tui.md`, "Rules").
     assert_eq!(bars.len(), 1, "{shown}");
     assert!(row_text(&buf, bars[0]).contains("home"), "{shown}");
 }
@@ -171,8 +171,8 @@ fn slash_exit_alias() {
 #[test]
 fn slash_keys_aliases_render_and_filter_independently() {
     // Each alias, whole or in part, finds exactly the keys row, which
-    // carries both aliases on it (`docs/tui.md:1974,1997`).
-    // The row shows `/keybindings` before `/keymap` (`docs/tui.md:1974,1997`).
+    // carries both aliases on it (`docs/tui.md`, "Slash commands").
+    // The row shows `/keybindings` before `/keymap` (`docs/tui.md`, "Slash commands").
     for query in ["keymap", "keybindings", "keyma", "keybind"] {
         let mut app = attached(160, 48);
         type_text(&mut app, &format!("/{query}"));

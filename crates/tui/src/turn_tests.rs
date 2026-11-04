@@ -1901,6 +1901,33 @@ fn a_failed_login_offers_log_in_on_its_error_line() {
 }
 
 #[test]
+fn only_known_tool_call_kinds_clear_a_pending_retry() {
+    for (kind, clears) in [
+        ("tool_call_requested", true),
+        ("tool_call_arguments_delta", true),
+        ("tool_call_started", true),
+        ("tool_call_completed", true),
+        ("tool_call_delta", true),
+        ("tool_call_future", false),
+        ("future_kind", false),
+        ("step_started", false),
+    ] {
+        let mut app = app();
+        start(&mut app, "go", 0);
+        step(&mut app, 0);
+        started(&mut app);
+        retry(&mut app, 1, 1_000, 4);
+        assert!(app.pages().open_turn().unwrap().pending_retry().is_some());
+        feed(&mut app, kind, Some("a_t"), 0, json!({}));
+        assert_eq!(
+            app.pages().open_turn().unwrap().pending_retry().is_none(),
+            clears,
+            "{kind}"
+        );
+    }
+}
+
+#[test]
 fn a_pending_retry_draws_no_conversation_row() {
     let mut app = app();
     start(&mut app, "go", 0);

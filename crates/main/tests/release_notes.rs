@@ -265,7 +265,7 @@ fn synthetic_long_notes_wrap_and_page_on_a_narrow_pty() {
     std::thread::Builder::new()
         .name("notes-run".to_owned())
         .spawn(move || {
-            let code = tui::run(slave, launch, connect, Box::new(|_| {}), clock, diag)
+            let code = tui::run(slave, launch, connect, Box::new(|_| {}), clock, diag, None)
                 .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
         })

@@ -2,6 +2,7 @@
 //! "Approvals and questions", "A question form").
 
 use contract::Envelope;
+use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandRejected};
 
 use super::{App, Effect, Kind, mint, read, session_command};
@@ -54,14 +55,14 @@ impl App {
     /// accepted decline returns the `cancel` that ends its session's turn
     /// (`docs/tui.md`, "A question form"). Nothing for any other line.
     pub(super) fn reply_ack(&mut self, envelope: &Envelope) -> Vec<String> {
-        let (id, rejection) = match envelope.kind.as_str() {
-            "command_accepted" => {
+        let (id, rejection) = match envelope.kind() {
+            EventKind::CommandAccepted => {
                 let Some(accepted) = read!(envelope, CommandAccepted) else {
                     return Vec::new();
                 };
                 (accepted.command_id.0, None)
             }
-            "command_rejected" => {
+            EventKind::CommandRejected => {
                 let Some((Some(id), code, message)) =
                     read!(envelope, CommandRejected).map(|rejected| {
                         (
@@ -75,7 +76,76 @@ impl App {
                 };
                 (id.0, Some((code, message)))
             }
-            _ => return Vec::new(),
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::Unknown(_) => return Vec::new(),
         };
         if !matches!(self.outbox.pending.get(&id), Some((Kind::Reply, _))) {
             return Vec::new();

@@ -163,10 +163,175 @@ fn reply(app: &mut App, text: &str) {
     }
 }
 
+#[test]
+fn clear_start_and_close_tags_follow_answers_refusals_and_lost_lines() {
+    use crate::app::outbox::Waiting;
+    for ending in ["answer", "refusal", "lost"] {
+        let mut app = homed();
+        app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+        let request = sent(enter(&mut app, "/clear"));
+        let start = start_line(&request);
+        let id = start["id"].as_str().unwrap();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::ClearStart));
+        if ending == "answer" {
+            let out = accept_start(&mut app, &start["id"], NEW);
+            assert_eq!(app.outbox.waiting(id), None);
+            let close = out.iter().find(|line| line["command"] == "close").unwrap();
+            let close_id = close["id"].as_str().unwrap();
+            assert_eq!(app.outbox.waiting(close_id), Some(Waiting::ClearClose));
+            app.on_line(old_line(
+                SESSION,
+                "command_accepted",
+                json!({"command_id":close_id}),
+            ));
+            assert_eq!(app.outbox.waiting(close_id), None);
+            assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+        } else if ending == "refusal" {
+            app.on_line(hub_line(
+                "command_rejected",
+                json!({"command_id":id,"code":"busy","message":"clear refused"}),
+            ));
+            assert_eq!(app.outbox.waiting(id), None);
+            assert_eq!(app.notice(), Some("clear refused"));
+        } else {
+            app.write_failed(&[start.to_string()]);
+            assert_eq!(app.outbox.waiting(id), None);
+            assert_eq!(
+                app.session(),
+                Some(&contract::SessionId(SESSION.to_owned()))
+            );
+        }
+    }
+}
+
+#[test]
+fn a_hooks_retry_of_a_clear_start_keeps_the_clear_tag_on_the_new_id_and_the_accept_closes_the_old_session()
+ {
+    use crate::app::outbox::Waiting;
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let request = sent(enter(&mut app, "/clear"));
+    let start = start_line(&request);
+    let id = start["id"].as_str().unwrap();
+    assert!(app.retry_clear_start(id, "c_retry".to_owned()));
+    assert_eq!(app.outbox.waiting(id), None);
+    assert_eq!(app.outbox.waiting("c_retry"), Some(Waiting::ClearStart));
+    app.outbox.insert(
+        "c_retry".to_owned(),
+        crate::app::Kind::Start,
+        crate::input::Draft::default(),
+    );
+    let out = accept_start(&mut app, &json!("c_retry"), NEW);
+    assert!(
+        out.iter()
+            .any(|line| line["command"] == "close" && line["session_id"] == SESSION)
+    );
+    assert_eq!(app.outbox.waiting("c_retry"), None);
+}
+
+#[test]
+fn a_refused_clear_start_still_reaches_the_home_start_blocker() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let request = sent(enter(&mut app, "/clear"));
+    let id = start_line(&request)["id"].clone();
+    app.on_line(hub_line(
+        "command_rejected",
+        json!({"command_id":id,"code":"busy","message":"clear blocked"}),
+    ));
+    app.leave();
+    assert_eq!(app.home_screen().unwrap().blockers, ["clear blocked"]);
+    assert_eq!(app.notice(), Some("clear blocked"));
+}
+
+#[test]
+fn clear_close_tag_is_gone_after_refusal_and_lost_line() {
+    for refused in [false, true] {
+        let mut app = homed();
+        app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+        let requests = sent(enter(&mut app, "/clear"));
+        let out = accept_start(&mut app, &start_line(&requests)["id"], NEW);
+        let close = out.iter().find(|line| line["command"] == "close").unwrap();
+        let id = close["id"].as_str().unwrap();
+        assert_eq!(
+            app.outbox.waiting(id),
+            Some(crate::app::Waiting::ClearClose)
+        );
+        if refused {
+            app.on_line(old_line(
+                SESSION,
+                "command_rejected",
+                json!({"command_id":id,"code":"busy","message":"close refused"}),
+            ));
+            assert_eq!(app.notice(), Some("close refused"));
+        } else {
+            app.write_failed(&[close.to_string()]);
+            assert_eq!(
+                app.notice(),
+                Some("The link to the old session was lost before its `close` went out.")
+            );
+        }
+        assert_eq!(app.outbox.waiting(id), None);
+        assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+    }
+}
+
+#[test]
+fn a_held_line_registers_at_queue_time() {
+    let mut app = homed();
+    let Line::Session(status) = clear_status(SESSION, "/w", "fake/m", None) else {
+        unreachable!()
+    };
+    let status = serde_json::from_value(Value::Object(status.payload)).unwrap();
+    app.outbox.link = crate::app::Link::Waiting;
+    assert_eq!(
+        app.clear_send(status, contract::SessionId(SESSION.to_owned()), false),
+        Effect::None
+    );
+    let id = app.clear_pending_command_id().unwrap().to_owned();
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(crate::app::Waiting::ClearStart)
+    );
+    let out = app.on_line(crate::app::testkit::hello());
+    assert!(
+        out.iter()
+            .any(|line| serde_json::from_str::<Value>(line).unwrap()["id"] == id)
+    );
+    accept_start(&mut app, &json!(id), NEW);
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+}
+
+#[test]
+fn a_stale_clear_start_id_keeps_the_pending_clear_and_its_tag() {
+    let mut app = homed();
+    app.on_line(clear_status(SESSION, "/w", "fake/m", None));
+    let requests = sent(enter(&mut app, "/clear"));
+    let id = start_line(&requests)["id"].as_str().unwrap();
+    assert!(
+        app.clear_start_accepted("c_stale", contract::SessionId(NEW.to_owned()))
+            .is_none()
+    );
+    assert_eq!(app.clear_pending_command_id(), Some(id));
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::Waiting::ClearStart)
+    );
+    assert!(app.retry_clear_start("c_stale", "c_unrelated_retry".to_owned()));
+    assert_eq!(app.outbox.waiting("c_unrelated_retry"), None);
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::Waiting::ClearStart)
+    );
+    accept_start(&mut app, &json!(id), NEW);
+    assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+}
+
 const NEW: &str = "s_nnnnnnnnnnnnnnnn";
 
 /// The `/clear` start carries the old session's wire state
-/// (`docs/tui.md:2148–2178`, "Clearing").
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_sends_a_start_with_the_old_session_s_wire() {
     let mut app = attached();
@@ -217,7 +382,7 @@ fn clear_without_status_sends_nothing_and_keeps_draft() {
 }
 
 /// A build or switch that names no credential overrides an earlier start
-/// label (`docs/tui.md:2148–2178`, "Clearing").
+/// label (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_does_not_restore_a_start_credential_after_explicit_absence() {
     for event in [
@@ -239,7 +404,7 @@ fn clear_does_not_restore_a_start_credential_after_explicit_absence() {
 }
 
 /// One clear start omits unset values as documented
-/// (`docs/tui.md:2148–2178`, "Clearing").
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_omits_thinking_credential_and_continues_when_unset() {
     let mut app = attached();
@@ -253,7 +418,7 @@ fn clear_omits_thinking_credential_and_continues_when_unset() {
     assert!(start["args"].get("continues").is_none());
 }
 
-/// A clear of a worktree session continues it (`docs/tui.md:2148–2178`).
+/// A clear of a worktree session continues it (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_of_a_worktree_session_continues_it() {
     let mut app = attached();
@@ -294,7 +459,7 @@ fn clear_of_a_worktree_session_continues_it() {
 }
 
 /// Clearing waits for the `start` answer before moving the screen and
-/// closing the old session (`docs/tui.md:2148–2178`).
+/// closing the old session (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_switches_only_on_the_start_answer_then_closes_old() {
     let mut app = attached();
@@ -374,7 +539,7 @@ fn clear_keeps_the_learned_sender_names() {
 const NEW2: &str = "s_mmmmmmmmmmmmmmmm";
 
 /// A second `/clear` cannot replace the still-pending `start`
-/// (`docs/tui.md:2148–2178`).
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_waiting_for_start_answer_does_not_send_a_second_start() {
     let mut app = attached();
@@ -395,7 +560,7 @@ fn clear_waiting_for_start_answer_does_not_send_a_second_start() {
 
 /// Two `/clear`s before any prompt: each `start` uses its session's
 /// `session_status` model, thinking only when present, and keeps the
-/// credential the first `start` named (`docs/tui.md:2148–2178`).
+/// credential the first `start` named (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_twice_before_any_prompt_keeps_the_start_credential() {
     let mut app = connected();
@@ -470,7 +635,7 @@ fn clear_refusal_only_settles_the_matching_start() {
 }
 
 /// A refused clear start leaves the old session in place and sends no
-/// close (`docs/tui.md:2148–2178`).
+/// close (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_start_refused_keeps_the_old_session_with_one_notice() {
     let mut app = homed();
@@ -481,7 +646,7 @@ fn clear_start_refused_keeps_the_old_session_with_one_notice() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // The introducing status queues its project's scoped ask (`docs/tui.md`, "The session list"):
     // assert only its presence, not the outgoing order or count.
     assert!(
         queued
@@ -673,7 +838,7 @@ fn clear_confirmation_without_status_closes_prompt_without_sending_start() {
 }
 
 /// Enter clears a wait only after the clear start answers
-/// (`docs/tui.md:2148–2178`, "Clearing").
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_overlay_enter_sends_the_start_then_closes_with_now() {
     let mut app = homed();
@@ -707,7 +872,7 @@ fn clear_overlay_esc_stays() {
     assert_eq!(app.draft(), "");
 }
 
-/// A refused overlay start sends no close (`docs/tui.md:2148–2178`).
+/// A refused overlay start sends no close (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_overlay_refused_start_closes_with_one_notice() {
     let mut app = homed();
@@ -718,7 +883,7 @@ fn clear_overlay_refused_start_closes_with_one_notice() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // The introducing status queues its project's scoped ask (`docs/tui.md`, "The session list"):
     // assert only its presence, not the outgoing order or count.
     assert!(
         queued
@@ -742,7 +907,7 @@ fn clear_overlay_refused_start_closes_with_one_notice() {
 }
 
 /// The clear choice sends a start and stay sends nothing
-/// (`docs/tui.md:2148–2178`, "Clearing").
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_overlay_clicks_do_what_their_keys_do() {
     use crate::home::{ClearChoice, Spot};
@@ -763,7 +928,7 @@ fn clear_overlay_clicks_do_what_their_keys_do() {
 }
 
 /// A wait arriving after dispatch keeps the close polite
-/// (`docs/tui.md:2148–2178`).
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_late_approval_keeps_the_close_polite() {
     let mut app = homed();

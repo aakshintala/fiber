@@ -595,6 +595,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
                 Box::new(|_| {}),
                 clock,
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -673,6 +674,7 @@ fn run_shows_a_failed_connect_and_still_quits_restored() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -738,6 +740,7 @@ fn run_redraws_on_sigwinch_at_the_new_size() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -799,6 +802,7 @@ fn run_returns_one_when_the_tty_cannot_be_set_up() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             done.send(code).unwrap_or(());
@@ -840,6 +844,7 @@ fn failed_reader_start_returns_io_failed() {
                 },
                 |builder, body| builder.spawn(body),
                 crate::timing::info_diag(),
+                None,
             );
             done.send(result).unwrap_or(());
         })
@@ -886,6 +891,7 @@ fn failed_tick_start_returns_io_failed() {
                 super::Reader::spawn,
                 |_, _| Err(io::Error::other("no thread")),
                 crate::timing::info_diag(),
+                None,
             );
             done.send(result).unwrap_or(());
         })
@@ -2090,9 +2096,9 @@ fn opening_a_row_by_key_calls_on_attach() {
             break line;
         }
     };
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["args"]["project"], "-w");
     // The first session row follows the project heading on row 7: a
     // press then a release on it opens the session.
@@ -2192,9 +2198,9 @@ fn an_exit_sends_its_lines_then_quits() {
             break line;
         }
     };
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["command"], "recent");
-    // `docs/tui.md:268` (scoped recent for the project; `docs/invocation.md:1102`).
+    // `docs/tui.md`, "The session list" (scoped recent for the project; `docs/invocation.md:1102`).
     assert_eq!(scoped["args"]["project"], "-w");
     // The close lines reach the far end, and the step quits with 0.
     assert_eq!(lp.step(Input::Bytes(b"c".to_vec()), &rx), Some(0));
@@ -2284,6 +2290,7 @@ fn spawn_run_with_launch_at_height(
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -3029,6 +3036,7 @@ fn a_cached_read_after_the_first_frame_fills_the_catalogue() {
                 Box::new(|_| {}),
                 fakes::clock::FakeClock::new(),
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -3194,6 +3202,7 @@ fn with_no_model_the_picker_opens_at_start() {
                 Box::new(|_| {}),
                 clock,
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {
@@ -3259,6 +3268,7 @@ fn with_a_model_home_opens_as_before() {
                 Box::new(|_| {}),
                 clock,
                 crate::timing::info_diag(),
+                None,
             )
             .unwrap_or_else(|error| panic!("run: {error}"));
             match done.send(code) {

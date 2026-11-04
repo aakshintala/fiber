@@ -221,6 +221,22 @@ fn parse_line_splits_and_refuses_malformed() {
 }
 
 #[test]
+fn an_unknown_kind_is_not_a_command_answer() {
+    for (kind, expected) in [
+        ("future_kind", false),
+        ("command_accepted", true),
+        ("command_rejected", true),
+    ] {
+        let wire = serde_json::json!({
+            "kind": kind, "session_id": "s_x", "ts": 0,
+            "schema_version": 1, "payload": {"command_id": "c_1"}
+        });
+        let line = serde_json::from_value(wire).unwrap();
+        assert_eq!(answers(&line, "c_1"), expected, "{kind}");
+    }
+}
+
+#[test]
 fn answers_matches_only_its_command() {
     let line = |kind: &str, id: &str| contract::Envelope {
         kind: kind.to_owned(),

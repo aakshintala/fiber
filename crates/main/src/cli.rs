@@ -286,6 +286,13 @@ pub(crate) enum Commands {
         )]
         args: Vec<OsString>,
     },
+    /// The shell process host: hidden and free to change.
+    #[command(hide = true)]
+    Keeper {
+        /// The session whose shell processes this keeper owns.
+        #[arg(long, value_parser = parse_session_id)]
+        id: String,
+    },
     /// The image child behind `read`: hidden and free to change.
     #[command(hide = true, disable_help_flag = true)]
     Image {

@@ -279,7 +279,7 @@ fn a_repeat_status_for_a_known_project_queues_no_scoped_ask() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     // The first status introduces the project: one scoped ask goes out
-    // (`docs/tui.md:268`: one ask in flight per project).
+    // (`docs/tui.md`, "The session list": one ask in flight per project).
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0]["args"]["project"], "-w");
@@ -324,7 +324,7 @@ fn a_fan_out_for_a_new_project_ignores_an_in_flight_ask_for_another_project() {
         page_id,
         json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/other", "-other")]}),
     );
-    // `docs/tui.md:268` (one ask per project; request order is open).
+    // `docs/tui.md`, "The session list" (one ask per project; request order is open).
     assert_eq!(fanout_projects(&lines), ["-other"]);
     // Both projects' rows folded; request order is open, so assert the
     // rows as a set.
@@ -347,9 +347,9 @@ fn more_with_the_link_down_sends_no_scoped_page() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 3}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
-    // `docs/tui.md:268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More counts from the scoped total).
     let key = more_key(&app, "-w").expect("a more row");
     assert_eq!(app.home_text(Spot::More(key)).as_deref(), Some("… 2 more"));
     // The drop keeps the held total: paging now must send nothing. With
@@ -376,7 +376,7 @@ fn a_second_page_while_one_is_in_flight_sends_nothing() {
     );
     let key = more_key(&app, "-w").expect("a more row");
     // The first page goes out past the last loaded row
-    // (`docs/tui.md:268`: opening it pages the project's `recent`).
+    // (`docs/tui.md`, "The session list": opening it pages the project's `recent`).
     let Effect::Send(first) = app.home_click(Spot::More(key)) else {
         panic!("More opens the next scoped page");
     };
@@ -415,7 +415,7 @@ fn page_recent_scopes_to_the_focused_project_not_its_neighbor() {
                 .is_empty()
         );
     }
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
     assert_eq!(stored(&app, "-other"), Some(1));
     // The focused row is `-w`'s last loaded row and `-w` holds more, so
@@ -449,7 +449,7 @@ fn page_recent_from_the_last_row_with_more_held_scopes_the_page() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 2}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(2));
     // One row loaded of two held: the last row pages its project. With
     // `!=` the focused row reads as not-the-last and the page stays
@@ -484,7 +484,7 @@ fn page_recent_off_the_last_row_sends_no_scoped_page() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 3}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
     // The first row is not the project's last loaded row, so no scoped
     // page goes out. With `!=` the row reads as the last one, and with
@@ -513,7 +513,7 @@ fn page_recent_at_the_total_pages_the_unscoped_cursor() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 1}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // Loaded rows meet the held total: the next page stays unscoped past
     // the unscoped cursor. With `||`, `>=` or `==` the met total reads
@@ -546,9 +546,9 @@ fn page_recent_below_the_total_pages_the_unscoped_cursor() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 1}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
+    // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), ["○  a", "○  b"]);
     // The held total fell below the loaded rows: the next page stays
     // unscoped past the unscoped cursor. With `<` the fallen total reads
@@ -582,14 +582,14 @@ fn more_text_at_the_total_copies_nothing() {
         line_id(&fanout[0]),
         json!({"sessions": [], "total": 2}),
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(2));
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
     let mut rows = listed(&app);
     rows.sort_unstable();
     assert_eq!(rows, ["○  a", "○  b"]);
-    // `docs/tui.md:254-255` (More when rows remain) and `268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More when rows remain, More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 2", "row", "row"]);
     // Loaded rows meet the held total: the `More` text is nothing. With
     // `>=` the met total reads as more and copies "… 0 more".

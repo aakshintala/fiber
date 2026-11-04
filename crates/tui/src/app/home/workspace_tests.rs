@@ -1287,7 +1287,7 @@ fn an_empty_choice_clears_the_pick_and_enter_reopens_the_picker() {
     app.choose_workspace(String::new());
     assert_eq!(app.home_workspace(), None);
     // Enter on the prompt with no workspace reopens the picker
-    // (`docs/tui.md`, "The workspace picker") instead of starting.
+    // (`docs/tui.md`, "Home") instead of starting.
     key(&mut app, Key::Enter);
     assert!(picker_open(&app));
 }
@@ -1333,4 +1333,84 @@ fn no_workspace_never_reads_the_working_directory() {
         frames[0].contains("[no workspace]"),
         "the frame is the no-workspace home"
     );
+}
+
+#[test]
+fn directories_answers_register_a_tag_and_settle_it() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/");
+    assert_eq!(sent.len(), 1);
+    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    answer(&mut app, &sent[0].0, &["a1"], "/");
+    assert_eq!(app.outbox.waiting(&sent[0].0), None);
+    assert_eq!(focused(&app), Some("a1".to_owned()));
+}
+
+#[test]
+fn a_directories_refusal_settles_its_tag_with_no_notice() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/");
+    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    app.on_line(refused(&sent[0].0, "nope"));
+    assert_eq!(app.outbox.waiting(&sent[0].0), None);
+    assert!(app.notice().is_none());
+}
+
+#[test]
+fn a_second_directories_answer_changes_nothing() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/");
+    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    answer(&mut app, &sent[0].0, &["a1"], "/");
+    assert_eq!(completions(&app), vec!["a1".to_owned()]);
+    answer(&mut app, &sent[0].0, &["zz"], "/");
+    assert_eq!(app.outbox.waiting(&sent[0].0), None);
+    assert_eq!(completions(&app), vec!["a1".to_owned()]);
+}
+
+#[test]
+fn a_disconnect_forgets_directories_tags() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/");
+    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    app.disconnected();
+    assert_eq!(app.outbox.waiting(&sent[0].0), None);
+    let notice = app.notice().map(str::to_owned);
+    assert!(
+        app.on_line(accepted(
+            &sent[0].0,
+            json!({"directories": ["a1"], "path": "/"})
+        ))
+        .is_empty()
+    );
+    assert_eq!(app.notice(), notice.as_deref());
+}
+
+#[test]
+fn a_closed_picker_leaves_a_stale_directories_tag_that_falls_through() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    open(&mut app);
+    let sent = type_path(&mut app, "/");
+    assert_eq!(key(&mut app, Key::Esc), Effect::None);
+    assert!(!picker_open(&app));
+    // The picker's entry is gone with the picker; its tag stays, and
+    // the late answer falls through with no fold and no notice.
+    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    assert!(
+        app.on_line(accepted(
+            &sent[0].0,
+            json!({"directories": ["a1"], "path": "/"})
+        ))
+        .is_empty()
+    );
+    assert!(app.notice().is_none());
 }

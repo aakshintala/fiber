@@ -139,7 +139,7 @@ fn the_installed_hub_binds_answers_status_and_exits_143_on_sigterm() {
     );
     let client = connect_when_bound(&setup);
     client.send(r#"{"id":"c_status","command":"status"}"#);
-    let answer = recv_reply(&client, "the status answer");
+    let answer = recv_answer(&client, "c_status", "the status answer");
     assert_eq!(answer["kind"], "command_accepted", "{answer}");
     assert_eq!(answer["payload"]["command_id"], "c_status", "{answer}");
     assert_eq!(answer["payload"]["result"]["running"], true, "{answer}");

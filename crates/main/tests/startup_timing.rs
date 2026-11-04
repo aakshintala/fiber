@@ -189,8 +189,8 @@ use std::thread;
 
 use fakes::Watchdog;
 use support::{
-    Deadline, KillGroup, Socket, complete_lines, expired, kinds, session_dir, spawn_watched, until,
-    until_close,
+    Deadline, KillGroup, Socket, complete_lines, expired, kinds, session_dir, spawn_watched,
+    subscribe_direct, until, until_close,
 };
 
 /// Installs a provider `fake` with `m` and `n` on `openai-responses` at
@@ -377,17 +377,6 @@ impl Running {
 }
 
 #[track_caller]
-fn subscribe(client: &Socket) -> Value {
-    client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let sub = until(client, "the subscribe acknowledgement", |line| {
-        line["kind"] == "command_accepted"
-    });
-    assert_eq!(sub.len(), 1);
-    assert_eq!(sub[0]["payload"]["command_id"], "c_sub");
-    sub.into_iter().next().unwrap()
-}
-
-#[track_caller]
 fn prompt(client: &Socket, id: &str, text: &str) {
     client.send(&format!(
         r#"{{"id":"{id}","command":"prompt","args":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
@@ -423,7 +412,7 @@ fn switch_journey(setup: &Setup, id: &str) -> Vec<Value> {
     let running = start_session(setup, id);
     let client = running.connect(&setup.session_socket(id));
     running.wait_for("extensions_loaded");
-    let mut stream = vec![subscribe(&client)];
+    let mut stream = vec![subscribe_direct(&client).ack];
     // A switch admitted while idle applies at once, so the prompt that
     // follows in the same drain starts its turn on the new model.
     model(&client, "c_model", "fake/n");

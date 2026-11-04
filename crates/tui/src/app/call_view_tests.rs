@@ -2609,7 +2609,7 @@ fn wheel_over_a_call_view_with_a_missing_page_sends_artifact_page() {
 
 /// A wheel-up pauses following, a wheel-down before the tail stays
 /// unfollowed, and a wheel-down reaching the tail resumes it, never the
-/// conversation (`docs/tui.md:576`).
+/// conversation (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_up_pauses_and_down_resumes_follow_only_at_the_tail() {
     let mut app = attached(80, 24);
@@ -2645,7 +2645,7 @@ fn wheel_up_pauses_and_down_resumes_follow_only_at_the_tail() {
 }
 
 /// A wheel-down before the tail never refetches the fill, while one
-/// reaching the tail does when it is missing (`docs/tui.md:576`).
+/// reaching the tail does when it is missing (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_down_refetches_a_missing_fill_only_at_the_tail() {
     let mut app = attached(80, 24);
@@ -2695,4 +2695,54 @@ fn wheel_down_refetches_a_missing_fill_only_at_the_tail() {
             "a wheel-down before the tail queues nothing"
         );
     }
+}
+
+// Part of #3696: the call view's `artifact_page` answers route by tag.
+
+#[test]
+fn artifact_page_answer_reaches_its_handler_and_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    app.focus = Some(TargetId::Line(Target::Call(id)));
+    let request = page_request(app.on_key(Key::Enter, now()));
+    let request_id = request["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&request_id), Some(Waiting::ArtifactPage));
+    let text = "one\ntwo\n";
+    assert!(answer_page(&mut app, &request, text, 0).is_empty());
+    assert_eq!(app.outbox.waiting(&request_id), None);
+    assert!(frame_text(&app).join("\n").contains("one"));
+}
+
+#[test]
+fn artifact_page_refusal_settles_its_tag_and_keeps_the_view_open() {
+    use crate::app::Waiting;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    app.focus = Some(TargetId::Line(Target::Call(id)));
+    let request = page_request(app.on_key(Key::Enter, now()));
+    let request_id = request["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&request_id), Some(Waiting::ArtifactPage));
+    app.on_line(rejected(&request, "gone"));
+    assert_eq!(app.outbox.waiting(&request_id), None);
+    assert!(app.call_view_open());
+}
+
+#[test]
+fn link_down_forgets_the_artifact_page_tag() {
+    use crate::app::Waiting;
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    let id = shell_cut(&mut app, ACTION);
+    open_inline(&mut app, id);
+    app.focus = Some(TargetId::Line(Target::Call(id)));
+    let request = page_request(app.on_key(Key::Enter, now()));
+    let request_id = request["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&request_id), Some(Waiting::ArtifactPage));
+    app.disconnected();
+    assert_eq!(app.outbox.waiting(&request_id), None);
 }

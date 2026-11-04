@@ -814,8 +814,8 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     app.on_line(steering_queue(S_A, &[("a", Some("c_1")), ("b", None)]));
     // Two queued entries on the card with the title above, the hint
     // below and an edge row on each side, above the notice's row
-    // (docs/tui.md:1296-1306: card; docs/tui.md:444-447: panel).
-    assert_eq!(app.conversation_height(), 0); // docs/tui.md:1296-1306: card takes its rows.
+    // (docs/tui.md, "Steering": card; docs/tui.md, "The panel": panel).
+    assert_eq!(app.conversation_height(), 0); // docs/tui.md, "Steering": card takes its rows.
     app.set_size(60, 1);
     assert_eq!(app.conversation_height(), 0);
 }

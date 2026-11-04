@@ -1,5 +1,6 @@
 //! Tests for the page index: the cut rule, seq ranges and the window.
 
+use contract::events::EventKind;
 use contract::{ActionId, Seq, SessionId};
 
 use super::{Cut, Index, PAGE_LINES, Page};
@@ -13,7 +14,13 @@ fn session() -> SessionId {
 /// Pushes one line, shown on a card or not.
 fn push(index: &mut Index, seq: u64, kind: &str, action: Option<&str>, shown: bool) -> Cut {
     let action = action.map(|id| ActionId(id.to_owned()));
-    index.push(&session(), Seq(seq), kind, action.as_ref(), shown)
+    index.push(
+        &session(),
+        Seq(seq),
+        &EventKind::from_name(kind),
+        action.as_ref(),
+        shown,
+    )
 }
 
 /// Feeds `kinds` with consecutive seqs from `seq`, each with `action` and
@@ -88,6 +95,33 @@ fn a_step_that_opens_with_text_cuts_at_its_step_started() {
     assert_eq!(
         index.pages(),
         &[page(0, at - 1, PAGE_LINES), page(at, at + 3, 4)]
+    );
+}
+
+#[test]
+fn an_unknown_line_preserves_a_candidate_until_visible_text() {
+    let mut index = Index::default();
+    let mut seq = 0;
+    filler(&mut index, &mut seq, PAGE_LINES);
+    let at = seq;
+    assert_eq!(
+        push(&mut index, at, "step_started", None, true),
+        Cut::Candidate
+    );
+    assert!(index.pending());
+    assert_eq!(
+        push(&mut index, at + 1, "future_kind", None, true),
+        Cut::None
+    );
+    assert!(index.pending());
+    assert_eq!(
+        push(&mut index, at + 2, "text_completed", Some("a_m"), true),
+        Cut::AtCandidate
+    );
+    assert!(!index.pending());
+    assert_eq!(
+        index.pages(),
+        &[page(0, at - 1, PAGE_LINES), page(at, at + 2, 3)]
     );
 }
 
@@ -835,10 +869,10 @@ fn ancestor() -> SessionId {
 /// `turn_started` that cuts the next page.
 fn chunk(index: &mut Index, session: &SessionId, seq: &mut u64) {
     for _ in 0..PAGE_LINES {
-        index.push(session, Seq(*seq), "usage_recorded", None, true);
+        index.push(session, Seq(*seq), &EventKind::UsageRecorded, None, true);
         *seq += 1;
     }
-    index.push(session, Seq(*seq), "turn_started", None, true);
+    index.push(session, Seq(*seq), &EventKind::TurnStarted, None, true);
     *seq += 1;
 }
 
@@ -955,7 +989,7 @@ fn an_empty_open_page_takes_only_a_changed_session() {
         carried + 1,
         "the carried runs land ahead of the empty open page"
     );
-    let cut = index.push(&session(), Seq(0), "usage_recorded", None, true);
+    let cut = index.push(&session(), Seq(0), &EventKind::UsageRecorded, None, true);
     assert_eq!(cut, Cut::None, "nothing folded yet, so nothing cuts");
     assert_eq!(
         index.pages().last().map(|page| page.session.clone()),

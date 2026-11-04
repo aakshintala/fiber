@@ -142,6 +142,7 @@ fn every_operation_serializes_to_its_wire_name() {
         (Op::TuiAttachTail, "tui.attach_tail"),
         (Op::TuiAttachPrepare, "tui.attach_prepare"),
         (Op::TuiAttachDraw, "tui.attach_draw"),
+        (Op::TuiStartup, "tui.startup"),
         (Op::LogAppend, "log.append"),
         (Op::LogFsync, "log.fsync"),
         (Op::ToolPermission, "tool.permission"),

@@ -4,6 +4,7 @@
 //! The driver in the parent module calls the interface below; nothing
 //! here reads `App`.
 
+use contract::events::EventKind;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::FIND_PAUSE;
@@ -545,8 +546,8 @@ impl Find {
             return false;
         };
         matches!(
-            envelope.kind.as_str(),
-            "command_accepted" | "command_rejected"
+            envelope.kind(),
+            EventKind::CommandAccepted | EventKind::CommandRejected
         ) && envelope.session_id == *session
             && envelope
                 .payload

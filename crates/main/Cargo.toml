@@ -13,6 +13,7 @@ alloc-stats = ["log/alloc-stats"]
 dhat-heap = ["dep:dhat"]
 
 [dependencies]
+base64.workspace = true
 clap.workspace = true
 clap_complete.workspace = true
 cli = { path = "../cli" }
@@ -38,7 +39,7 @@ tui = { path = "../tui" }
 worktree = { path = "../worktree" }
 
 [dev-dependencies]
-base64.workspace = true
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 fakes = { path = "../fakes" }
 insta.workspace = true
 vt100 = "0.16.2"

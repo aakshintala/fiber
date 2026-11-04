@@ -6,6 +6,7 @@
 
 mod credential;
 
+use contract::events::EventKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -396,6 +397,7 @@ impl App {
                     id.clone(),
                     (super::Kind::Command, crate::input::Draft::default()),
                 );
+                self.outbox.wait(&id, super::Waiting::Credentials);
                 self.config_views.open = Some(Open::Credential(credential::Picker::open(id)));
                 return Effect::Send(vec![line]);
             }
@@ -475,6 +477,7 @@ impl App {
             return Effect::None;
         };
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
+        self.outbox.wait(&id, super::Waiting::ConfigAsk);
         self.config_views.open = Some(build(id, &ctx));
         Effect::Send(vec![line])
     }
@@ -825,8 +828,9 @@ impl App {
             return Effect::None;
         };
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
-            mcp.sent(server, id, login);
+            mcp.sent(server, id.clone(), login);
         }
+        self.outbox.wait(&id, super::Waiting::ConfigAsk);
         Effect::Send(vec![line])
     }
 
@@ -837,8 +841,9 @@ impl App {
             return Vec::new();
         };
         if let Some(Open::Mcp(mcp)) = &mut self.config_views.open {
-            mcp.expect(id);
+            mcp.expect(id.clone());
         }
+        self.outbox.wait(&id, super::Waiting::ConfigAsk);
         vec![line]
     }
 
@@ -993,9 +998,77 @@ impl App {
     /// it sent, of its result kind, fills it. A follow-up driver answer
     /// and a server event re-query the MCP rows. Every other line, and
     /// any line with another view open, does nothing. Returns the lines
-    /// the fold sends.
-    pub(in crate::app) fn config_views_line(&mut self, envelope: &Envelope) -> Vec<String> {
+    /// the fold sends. The asking and credential answers route by tag;
+    /// every other line folds as before.
+    pub(in crate::app) fn config_views_line(
+        &mut self,
+        envelope: &Envelope,
+        answer: Option<&super::answer::Answer<'_>>,
+    ) -> Vec<String> {
+        match answer.and_then(|answer| answer.waiting.as_ref()) {
+            Some(super::Waiting::ConfigAsk) => {
+                if let Some(answer) = answer {
+                    self.outbox.settled(answer.id);
+                }
+                return self.config_asking_line(envelope, Vec::new());
+            }
+            Some(super::Waiting::Credentials) | Some(super::Waiting::CredentialSwitch) => {
+                if let Some(answer) = answer {
+                    self.outbox.settled(answer.id);
+                }
+                return self.credential_line(envelope);
+            }
+            Some(
+                super::Waiting::Dismiss(_)
+                | super::Waiting::Fork
+                | super::Waiting::RewindHistory
+                | super::Waiting::RewindSend
+                | super::Waiting::ChangeWorkspace(_)
+                | super::Waiting::ClearStart
+                | super::Waiting::ClearClose
+                | super::Waiting::History
+                | super::Waiting::ImageFetch
+                | super::Waiting::ImageDisplay
+                | super::Waiting::Sessions
+                | super::Waiting::Abandoned
+                | super::Waiting::Directories
+                | super::Waiting::Subscribe
+                | super::Waiting::Stop
+                | super::Waiting::Delete
+                | super::Waiting::OfferImport
+                | super::Waiting::DeleteDiscovery
+                | super::Waiting::DeleteStop
+                | super::Waiting::DeleteFinal
+                | super::Waiting::Feed
+                | super::Waiting::Recent
+                | super::Waiting::Close,
+            )
+            | Some(
+                super::Waiting::Figures
+                | super::Waiting::Diff
+                | super::Waiting::Hooks
+                | super::Waiting::Branch
+                | super::Waiting::Quota
+                | super::Waiting::ArtifactPage
+                | super::Waiting::ProposeNotes
+                | super::Waiting::JobStop
+                | super::Waiting::JobInput,
+            )
+            | None => {}
+        }
         let credential_send = self.credential_line(envelope);
+        self.config_asking_line(envelope, credential_send)
+    }
+
+    /// Folds one attached-session envelope into the open asking view, if
+    /// one is open: the tools, skills and MCP rows answer their own
+    /// command's id, and a server event re-queries the MCP rows.
+    /// `credential_send` carries the credential fold's follow-up lines.
+    fn config_asking_line(
+        &mut self,
+        envelope: &Envelope,
+        credential_send: Vec<String>,
+    ) -> Vec<String> {
         if !matches!(
             self.config_views.open,
             Some(Open::Tools(_) | Open::Skills(_) | Open::Mcp(_))
@@ -1008,8 +1081,8 @@ impl App {
         };
         let ctx = self.config_ctx(seam.as_ref(), &workspace);
         let mut send = credential_send;
-        match envelope.kind.as_str() {
-            "command_accepted" => {
+        match envelope.kind() {
+            EventKind::CommandAccepted => {
                 if let Some(accepted) = super::read!(envelope, CommandAccepted) {
                     match &mut self.config_views.open {
                         Some(Open::Tools(tools)) => {
@@ -1051,7 +1124,7 @@ impl App {
                     }
                 }
             }
-            "command_rejected" => {
+            EventKind::CommandRejected => {
                 if let Some(rejected) = super::read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                     && let Some(open) = &mut self.config_views.open
@@ -1061,13 +1134,79 @@ impl App {
             }
             // A server's state changed, or its set did: the open view
             // queries again, unless its last answer is still in flight.
-            "mcp_server_failed" | "mcp_server_ready" | "reloaded" => {
+            EventKind::McpServerFailed | EventKind::McpServerReady | EventKind::Reloaded => {
                 let live = matches!(&self.config_views.open, Some(Open::Mcp(mcp)) if mcp.live());
                 if live {
                     send.extend(self.remcp_query());
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::Unknown(_) => {}
         }
         send
     }

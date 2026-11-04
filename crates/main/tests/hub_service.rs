@@ -275,7 +275,7 @@ fn the_login_service_round_trip() {
     client.send(
         &json!({"id": "c_start", "command": "start", "args": {"workspace": workspace}}).to_string(),
     );
-    let ack = recv_reply(&client, "the start acknowledgement");
+    let ack = recv_answer(&client, "c_start", "the start acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     let session = ack["payload"]["result"]["session_id"]
         .as_str()

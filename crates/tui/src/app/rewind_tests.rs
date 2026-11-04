@@ -239,6 +239,88 @@ fn point(app: &crate::app::App) -> Option<(String, u64)> {
 }
 
 #[test]
+fn rewind_history_answers_and_refusals_settle_their_tags() {
+    use crate::app::Waiting;
+    for accepted in [false, true] {
+        let clock = fakes::clock::FakeClock::new();
+        let mut app = attached();
+        let requests = open(&mut app, &clock);
+        let id = requests[0]["id"].as_str().unwrap();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::RewindHistory));
+        if accepted {
+            let next = accept(&mut app, &requests[0]["id"], segment_a());
+            let next: Value = serde_json::from_str(&next[0]).unwrap();
+            assert_eq!(
+                app.outbox.waiting(next["id"].as_str().unwrap()),
+                Some(Waiting::RewindHistory)
+            );
+            assert!(rows(&app).iter().any(|row| row.contains("before: first")));
+        } else {
+            refuse(&mut app, &requests[0]["id"], "busy");
+            assert_eq!(
+                app.session_view_screen(80).unwrap().below,
+                ["busy happened"]
+            );
+        }
+        assert_eq!(app.outbox.waiting(id), None);
+    }
+}
+
+#[test]
+fn rewind_send_answers_and_refusals_settle_their_tags() {
+    use crate::app::Waiting;
+    for accepted in [false, true] {
+        let clock = fakes::clock::FakeClock::new();
+        let mut app = attached();
+        let first = open(&mut app, &clock);
+        let next = accept(&mut app, &first[0]["id"], segment_a());
+        let next: Value = serde_json::from_str(&next[0]).unwrap();
+        accept(&mut app, &next["id"], segment_b());
+        let request = send_rewind(&mut app, &clock);
+        let id = request[0]["id"].as_str().unwrap();
+        assert_eq!(app.outbox.waiting(id), Some(Waiting::RewindSend));
+        if accepted {
+            app.on_line(session_line(
+                "command_accepted",
+                json!({"command_id":id,"result":{"new_session_id":NEW}}),
+            ));
+            assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+        } else {
+            refuse(&mut app, &request[0]["id"], "busy");
+            assert!(rows(&app).iter().any(|row| row.contains("busy happened")));
+        }
+        assert_eq!(app.outbox.waiting(id), None);
+    }
+}
+
+#[test]
+fn an_untagged_answer_with_the_rewind_view_open_changes_nothing() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let requests = open(&mut app, &clock);
+    let before = rows(&app);
+    accept(&mut app, &json!("c_unknown"), segment_a());
+    assert_eq!(rows(&app), before);
+    accept(&mut app, &requests[0]["id"], segment_a());
+    assert!(rows(&app).iter().any(|row| row.contains("before: first")));
+}
+
+#[test]
+fn an_untagged_refusal_with_the_rewind_view_open_changes_nothing() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let requests = open(&mut app, &clock);
+    let before = rows(&app);
+    refuse(&mut app, &json!("c_unknown"), "busy");
+    assert_eq!(rows(&app), before);
+    refuse(&mut app, &requests[0]["id"], "busy");
+    assert_eq!(
+        app.session_view_screen(80).unwrap().below,
+        ["busy happened"]
+    );
+}
+
+#[test]
 fn rewind_asks_history_on_open() {
     let clock = fakes::clock::FakeClock::new();
     let mut app = attached();
@@ -2685,7 +2767,7 @@ fn wheel_over_rewind_moves_the_list_not_the_conversation() {
 
 /// The wheel that carries focus offscreen moves the selection and follows
 /// it to the new row's rewind target, never the conversation
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_carrying_focus_offscreen_follows_the_new_target() {
     let clock = fakes::clock::FakeClock::new();
@@ -2774,7 +2856,7 @@ fn wheel_carrying_focus_offscreen_follows_the_new_target() {
 
 /// A wheel-down that clamps the selection into the window also moves the
 /// detail's point: the lines under the rows name the new row's turn, never
-/// the conversation (`docs/tui.md:576`).
+/// the conversation (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
     let clock = fakes::clock::FakeClock::new();
@@ -2847,5 +2929,115 @@ fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
             "None of it is undone.",
             "Jobs that stop: none",
         ]
+    );
+}
+
+/// A hub refusal for a fork settles, while any other wait leaves the
+/// send alone: flipping the two returns the wrong settlement.
+#[test]
+fn rewind_hub_refused_tells_fork_from_other_waits() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    assert!(app.rewind_hub_refused("c_fork", "busy", "busy happened", &Waiting::Fork));
+    assert!(!app.rewind_hub_refused("c_other", "busy", "busy happened", &Waiting::History));
+}
+
+/// A long single-session history: `count` plain turns, so the rewind
+/// list holds more rows than its first screenful and scrolling leaves
+/// the top past the first row.
+fn many_turns(count: usize) -> Vec<Envelope> {
+    let mut lines = vec![history_line(
+        SESSION,
+        "session_started",
+        0,
+        None,
+        None,
+        started(None),
+    )];
+    let mut seq = 1;
+    for n in 1..=count {
+        let turn = format!("t_{n}");
+        lines.push(history_line(
+            SESSION,
+            "turn_started",
+            seq,
+            Some(turn.as_str()),
+            None,
+            message_input(format!("turn {n}").as_str()),
+        ));
+        lines.push(history_line(
+            SESSION,
+            "step_started",
+            seq + 1,
+            Some(turn.as_str()),
+            None,
+            json!({}),
+        ));
+        lines.push(history_line(
+            SESSION,
+            "turn_completed",
+            seq + 2,
+            Some(turn.as_str()),
+            None,
+            json!({"outcome": "completed"}),
+        ));
+        seq += 3;
+    }
+    lines
+}
+
+/// Enter on a turn row past the first screenful opens the turn without
+/// overflowing the selection: the rewind view reseats through the
+/// unknown height after it scrolls.
+#[test]
+fn enter_on_a_scrolled_turn_opens_it_without_an_overflow() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let done = accept(&mut app, &lines[0]["id"], many_turns(25));
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
+    assert!(done.is_empty());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(rows(&app).len(), 27);
+    // Up from the latest turn past the first screenful, so the list has scrolled.
+    goto(&mut app, &clock, 20);
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert!(frame.list.top() > 0, "setup scrolled the list");
+    let (at, top) = (frame.list.selected(), frame.list.top());
+    // Enter opens the selected turn: its step boundaries draw under it.
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    let body = rows(&app);
+    assert_eq!(body[at], "before: turn 21");
+    assert_eq!(
+        body[at + 1..at + 4],
+        ["  start of turn", "  after input", "  end of turn"]
+    );
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.selected(), at);
+    assert_eq!(frame.list.top(), top);
+}
+
+/// A fork's accept attaches without a send match, while any other wait
+/// falls through: flipping the two attaches the wrong command.
+#[test]
+fn rewind_send_accepted_tells_fork_from_other_waits() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let accepted = contract::events::CommandAccepted {
+        command_id: contract::CommandId("c_fork".to_owned()),
+        result: Some(contract::events::CommandResult::Rewind {
+            new_session_id: contract::SessionId(NEW.to_owned()),
+        }),
+    };
+    assert!(
+        app.rewind_send_accepted(&accepted, &Waiting::Fork)
+            .is_some(),
+        "a fork attaches without a send match"
+    );
+    assert!(
+        app.rewind_send_accepted(&accepted, &Waiting::History)
+            .is_none(),
+        "any other wait falls through"
     );
 }

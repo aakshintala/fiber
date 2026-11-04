@@ -27,9 +27,10 @@ pub(crate) struct TestRef {
     pub(crate) unit: bool,
 }
 
-/// A test selection is either the changed functions in a source file or,
-/// for a shared helper with no test functions, every test binary that
-/// compiles that source.
+/// A test selection is the changed functions in a source file. A file
+/// with no test functions contributes nothing: a changed file under
+/// `tests/` with no test function selects nothing and skips the run
+/// (`docs/ci.md`, "On every pull request that changes code").
 enum FileTests {
     Functions(Vec<(TestFn, TestRef)>),
 }
@@ -328,6 +329,62 @@ fn resolve(
 
 fn test_name_matches(test: &str, function: &str) -> bool {
     test == function || test.ends_with(&format!("::{function}"))
+}
+
+/// The test ids the linked flake issue names, one per marker line outside
+/// any fenced block, normalised past the binary prefix and de-duplicated
+/// in first-sighting order. A marker line starts with "The test `" and
+/// names the span to the next backtick on that line; every other line,
+/// and every line inside a fence, names nothing.
+pub(crate) fn issue_test_names(bodies: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut fenced = false;
+    for line in bodies.lines() {
+        if line.contains("```") {
+            fenced = !fenced;
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("The test `") else {
+            continue;
+        };
+        let Some(end) = rest.find('`') else {
+            continue;
+        };
+        let id = rest[..end].trim();
+        if id.is_empty() {
+            continue;
+        }
+        let compared = match id.find(' ') {
+            Some(space) => &id[space + 1..],
+            None => id,
+        };
+        if !names.iter().any(|name| name == compared) {
+            names.push(compared.to_owned());
+        }
+    }
+    names
+}
+
+/// The touched tests split into the named ones and the rest, each in diff
+/// order. The names step matches by exact equality between the marker
+/// id's compared name and the test's nextest name.
+pub(crate) fn split_named_tests(
+    touched: &[TestRef],
+    names: &[String],
+) -> (Vec<TestRef>, Vec<TestRef>) {
+    let mut named = Vec::new();
+    let mut rest = Vec::new();
+    for test in touched {
+        if names.iter().any(|name| name == &test.name) {
+            named.push(test.clone());
+        } else {
+            rest.push(test.clone());
+        }
+    }
+    (named, rest)
 }
 
 /// What the open file's hunks have resolved to: no test file, or its
@@ -708,7 +765,6 @@ pub(crate) fn tests_in_files(
         let Some(member) = members.get(package) else {
             continue;
         };
-        let rel = path.get(member.dir.len() + 1..).unwrap_or_default();
         if member.unrun_tests.iter().any(|unrun| unrun == path) {
             continue;
         }
@@ -716,15 +772,14 @@ pub(crate) fn tests_in_files(
             continue;
         };
         let functions = test_fns(&source.source).map_err(|()| format!("{path}: cannot parse"))?;
-        if functions.is_empty() && !rel.starts_with("tests/") {
+        if functions.is_empty() {
             continue;
         }
         for binary in index.binaries_for(path) {
             for test in &binary.tests {
-                if (functions.is_empty()
-                    || functions
-                        .iter()
-                        .any(|function| test_name_matches(&test.name, &function.name)))
+                if functions
+                    .iter()
+                    .any(|function| test_name_matches(&test.name, &function.name))
                     && !out.contains(test)
                 {
                     out.push(test.clone());

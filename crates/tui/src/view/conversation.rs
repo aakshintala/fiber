@@ -79,7 +79,7 @@ fn blank_row(buf: &mut Buffer, area: Rect, y: u16, style: Style) {
 /// that opens something, and over "↓ New messages below" when drawn.
 /// Returns the pinned header for the caller to draw after the marks pass,
 /// so covered-row selection, find and link looks never land on the pin
-/// (`docs/tui.md`, "Pinned call"), with the painted animated items' keys
+/// (`docs/tui.md`, "Tool groups and the ledger"), with the painted animated items' keys
 /// for the frame's single mark: the caller marks them once, so the
 /// schedule advances only painted items.
 // A line target covers one row: the pad splits longer lines into one-row
@@ -126,14 +126,14 @@ fn conversation_rows(
     // The pinned header covers the top row's own line: that line keeps
     // no hit, so the pin is the click and focus target on row 0 and the
     // covered row steps or reveals out from under it (`docs/tui.md`,
-    // "Pinned call").
+    // "Tool groups and the ledger").
     let mut pin = if !app.item_open() && app.top().is_some() && area.height > 0 {
         pin
     } else {
         None
     };
     // On the top row the " Copied " confirmation wins over the pin,
-    // which yields (`docs/tui.md`, "Pinned call").
+    // which yields (`docs/tui.md`, "Tool groups and the ledger").
     if copied_row(app, area) == Some(area.y) {
         pin = None;
     }

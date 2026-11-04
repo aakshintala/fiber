@@ -666,11 +666,11 @@ fn a_status_after_hello_queues_one_scoped_ask() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let lines = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md:1102` (recent command).
     assert_eq!(lines[0]["command"], "recent");
-    // `docs/tui.md:268` (scoped ask carries the project's key).
+    // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
     assert_eq!(lines[0]["args"]["project"], "-w");
     assert!(lines[0]["args"].get("before").is_none());
     assert_eq!(rows(&app), ["✓  fix the parser"]);
@@ -736,9 +736,9 @@ fn session_status_for_the_attached_session_still_reaches_the_conversation() {
     // The status folds into the rows, and passes through to the
     // conversation below, queuing its project's scoped ask beside it.
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(queued.len(), 1);
-    // `docs/tui.md:268` (scoped ask carries the project's key).
+    // `docs/tui.md`, "The session list" (scoped ask carries the project's key).
     assert_eq!(queued[0]["args"]["project"], "-w");
     assert_eq!(listed(&app), ["✓  fix the parser"]);
     turn_started_answered(&mut app, "s_aaaaaaaaaaaaaaaa");
@@ -837,7 +837,7 @@ fn a_left_with_an_unknown_how_changes_nothing() {
 
 /// A live row whose latest status accepted `close` stays on home as a
 /// CLOSING row with no ⌥N, while other live rows keep their start order
-/// and numbers (`docs/tui.md:242–253, 1936–1937`).
+/// and numbers (`docs/tui.md`, "The session list").
 #[test]
 fn a_closing_row_shows_closing_with_no_number() {
     let mut app = home_with(80, 24, launch());
@@ -2305,7 +2305,7 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
     ];
     // The unscoped answer fans out one scoped ask per project.
     let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 3);
     let (_, targets) = drawn_frame(&app);
     let entries: Vec<u64> = targets
@@ -2318,7 +2318,7 @@ fn j_does_not_move_from_a_row_before_the_last_drawn_stop() {
             }
         })
         .collect();
-    // `docs/tui.md:254-255` (up to three exited rows draw).
+    // `docs/tui.md`, "The session list" (up to three exited rows draw).
     assert_eq!(entries.len(), 3, "all three exited rows draw");
     app.drawn(&targets);
     let now = fakes::clock::FakeClock::new().now();
@@ -2989,7 +2989,7 @@ fn a_click_on_more_expands_the_same_project_only() {
     .collect::<Vec<_>>();
     // The unscoped answer fans out one scoped ask per project.
     let fanout = commands(app.on_line(accepted(&recent, json!({"sessions": rows}))));
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(fanout.len(), 2);
     let first_hidden = more_key(&app, "-w").expect("first project has more");
     let second_hidden = more_key(&app, "-other").expect("second project has more");
@@ -5208,17 +5208,17 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
     // An unknown session names no row: no trigger.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
     // A live session's status queues its scoped ask, drained at once
-    // (`docs/tui.md:268`: one ask in flight per project).
+    // (`docs/tui.md`, "The session list": one ask in flight per project).
     let queued = commands(app.on_line(status("s_aaaaaaaaaaaaaaaa")));
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(queued.len(), 1);
     let first = line_id(&queued[0]).to_owned();
     // While in flight, the left marks dirty and sends nothing, keeping
     // the held fallback.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
+    // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), ["○  fix the parser"]);
     // The answer folds the total and sends exactly one follow-up.
     let follow = answer_value(
@@ -5226,9 +5226,9 @@ fn a_left_with_no_ask_in_flight_sends_one_scoped_ask() {
         &first,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "old")], "total": 1}),
     );
-    // `docs/tui.md:268` (one ask per project; request order is open).
+    // `docs/tui.md`, "The session list" (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     let second = line_id(&follow[0]).to_owned();
     assert!(
@@ -5263,7 +5263,7 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(7));
     // The drop and the second hello reset the connection state.
     app.disconnected();
@@ -5293,12 +5293,12 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
         .collect();
     let mut projects = fanout_projects(&scoped);
     projects.sort_unstable();
-    // `docs/tui.md:268` (one ask per project).
+    // `docs/tui.md`, "The session list" (one ask per project).
     assert_eq!(projects, ["-other", "-w"]);
     // Totals are empty but rows stay for the refetch.
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-other"), None);
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
@@ -5313,7 +5313,7 @@ fn a_reconnect_drops_totals_and_refetches_every_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
@@ -5353,22 +5353,22 @@ fn replayed_status_then_left_only_retriggers_without_counting() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // A replayed status for a known section queues nothing and keeps
     // the total.
     assert!(app.on_line(status("s_aaaaaaaaaaaaaaaa")).is_empty());
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // A replayed left retriggers one ask without incrementing.
     let queued = commands(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")));
-    // `docs/tui.md:268` (one ask per project; request order is open).
+    // `docs/tui.md`, "The session list" (one ask per project; request order is open).
     assert_eq!(fanout_projects(&queued), ["-w"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // A second replayed left while in flight only marks dirty.
     assert!(app.on_line(left("s_aaaaaaaaaaaaaaaa", "exited")).is_empty());
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // Only a fresh scoped answer moves the total, sending the one
     // follow-up the dirty replay earned.
@@ -5378,9 +5378,9 @@ fn replayed_status_then_left_only_retriggers_without_counting() {
         &second,
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")], "total": 2}),
     );
-    // `docs/tui.md:268` (one ask per project; request order is open).
+    // `docs/tui.md`, "The session list" (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(2));
     assert!(
         app.on_line(accepted(
@@ -5446,9 +5446,9 @@ fn an_accepted_delete_asks_the_deleted_projects_scoped_page() {
         })
         .cloned()
         .collect();
-    // `docs/tui.md:268` (the delete directly refreshes its project's total).
+    // `docs/tui.md`, "The session list" (the delete directly refreshes its project's total).
     assert_eq!(fanout_projects(&scoped), ["-w"]);
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
+    // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), ["○  other  other"]);
     // The refill returns the already-seen project whose scoped ask was
     // refused. It must not retry it without a new trigger.
@@ -5513,9 +5513,9 @@ fn an_accepted_delete_while_scoped_in_flight_marks_dirty() {
         &own_id,
         json!({"sessions": [exited_in("s_cccccccccccccccc", "new", "/w", "-w")], "total": 1}),
     );
-    // `docs/tui.md:268` (one ask per project; request order is open).
+    // `docs/tui.md`, "The session list" (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
@@ -5532,7 +5532,7 @@ fn a_new_section_status_queues_one_scoped_ask_for_home_outgoing() {
     assert_eq!(app.home_line(&status("s_aaaaaaaaaaaaaaaa")), None);
     // `home_outgoing` drains the queued scoped ask.
     let lines = commands(app.home_outgoing());
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(lines.len(), 1);
     // `docs/invocation.md:1102` (recent command).
     assert_eq!(lines[0]["command"], "recent");
@@ -5619,7 +5619,7 @@ fn home_counts_come_from_the_held_total() {
         app.on_line(accepted(&other_id, json!({"sessions": [], "total": 1})))
             .is_empty()
     );
-    // `docs/tui.md:233-234` (sections order), `254-255` (exited rows and More), and `268` (counts from scoped totals).
+    // `docs/tui.md`, "The session list" (sections order, exited rows and More, counts from scoped totals).
     assert_eq!(
         list_shapes(&app),
         [
@@ -5635,7 +5635,7 @@ fn home_counts_come_from_the_held_total() {
     // `More` carries its section's project through its key.
     let key = more_key(&app, "-w").expect("a more row");
     assert_eq!(row_key(&app, "s_aaaaaaaaaaaaaaaa"), key);
-    // `docs/tui.md:268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More counts from the scoped total).
     assert_eq!(app.home_text(Spot::More(key)).as_deref(), Some("… 6 more"));
 }
 
@@ -5649,9 +5649,9 @@ fn home_draws_no_exited_head_at_total_zero() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
     );
     answer_scoped_empty(&mut app, &fanout, 0);
-    // `docs/tui.md:254-255` (exited rows and More) and `268` (count from the scoped total).
+    // `docs/tui.md`, "The session list" (exited rows and More, count from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "row"]);
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
+    // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), ["○  a"]);
 }
 
@@ -5668,7 +5668,7 @@ fn home_draws_no_more_when_the_total_meets_the_loaded_rows() {
         ]}),
     );
     answer_scoped_empty(&mut app, &fanout, 2);
-    // `docs/tui.md:254-255` (More when rows remain) and `268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More when rows remain, More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 2", "row", "row"]);
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
@@ -5690,13 +5690,13 @@ fn home_more_draws_one_more_at_total_one_above_shown() {
         ]}),
     );
     answer_scoped_empty(&mut app, &fanout, 3);
-    // `docs/tui.md:254-255` (exited rows and More) and `268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (exited rows and More, More counts from the scoped total).
     assert_eq!(
         list_shapes(&app),
         ["section w", "head 3", "row", "row", "more 1"]
     );
     let key = more_key(&app, "-w").expect("a more row");
-    // `docs/tui.md:268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More counts from the scoped total).
     assert_eq!(app.home_text(Spot::More(key)).as_deref(), Some("… 1 more"));
 }
 
@@ -5715,7 +5715,7 @@ fn home_draws_no_more_when_the_total_falls_below_loaded() {
     answer_scoped_empty(&mut app, &fanout, 1);
     // Below loaded rows the count never goes negative and no `More`
     // draws.
-    // `docs/tui.md:254-255` (More when rows remain) and `268` (More counts from the scoped total).
+    // `docs/tui.md`, "The session list" (More when rows remain, More counts from the scoped total).
     assert_eq!(list_shapes(&app), ["section w", "head 1", "row", "row"]);
 }
 
@@ -5733,7 +5733,7 @@ fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
     let Effect::Send(lines) = app.home_click(Spot::More(key)) else {
         panic!("More opens the next scoped page");
     };
-    // `docs/tui.md:268` (opening it pages the project's `recent`).
+    // `docs/tui.md`, "The session list" (opening it pages the project's `recent`).
     assert_eq!(lines.len(), 1);
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
@@ -5747,7 +5747,7 @@ fn enter_on_more_with_more_held_asks_the_next_scoped_page() {
         ))
         .is_empty()
     );
-    // `docs/tui.md:254-255` (exited rows and More) and `268` (counts from the scoped total).
+    // `docs/tui.md`, "The session list" (exited rows and More, counts from the scoped total).
     assert_eq!(
         list_shapes(&app),
         ["section w", "head 3", "row", "row", "more 1"]
@@ -5768,7 +5768,7 @@ fn enter_on_more_at_or_below_the_total_sends_nothing() {
     );
     answer_scoped_empty(&mut app, &fanout, 2);
     // The second row's key still resolves the project, but the held
-    // total says nothing more: no page goes out (`docs/tui.md:268`).
+    // total says nothing more: no page goes out (`docs/tui.md`, "The session list").
     let key = row_key(&app, "s_bbbbbbbbbbbbbbbb");
     assert_eq!(app.home_click(Spot::More(key)), Effect::None);
 }
@@ -5792,7 +5792,7 @@ fn down_on_the_last_row_pages_the_project_while_it_holds_more() {
     let Effect::Send(lines) = app.on_key(Key::Enter, now) else {
         panic!("Enter on More pages the project");
     };
-    // `docs/tui.md:268` (opening it pages the project's `recent`).
+    // `docs/tui.md`, "The session list" (opening it pages the project's `recent`).
     assert_eq!(lines.len(), 1);
     let page: Value = serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("{err}"));
     assert_eq!(page["command"], "recent");
@@ -6450,12 +6450,12 @@ fn an_unscoped_answer_fans_out_one_scoped_ask_per_new_project() {
     );
     let mut projects = fanout_projects(&lines);
     projects.sort_unstable();
-    // `docs/tui.md:268` (one ask per project; request order is open).
+    // `docs/tui.md`, "The session list" (one ask per project; request order is open).
     assert_eq!(projects, ["-other", "-w"]);
     for line in &lines {
         assert!(line["args"].get("before").is_none());
     }
-    // `docs/tui.md:268` (one ask per project): the two new projects'
+    // `docs/tui.md`, "The session list" (one ask per project): the two new projects'
     // asks carry distinct ids; request order is open.
     let mut ids: Vec<&str> = lines.iter().map(line_id).collect();
     ids.sort_unstable();
@@ -6477,9 +6477,9 @@ fn an_unscoped_answer_carrying_a_total_stores_nothing() {
         &recent,
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")], "total": 12}),
     );
-    // `docs/tui.md:268` (one ask per project; request order is open).
+    // `docs/tui.md`, "The session list" (one ask per project; request order is open).
     assert_eq!(fanout_projects(&lines), ["-w"]);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
 }
 
@@ -6515,9 +6515,9 @@ fn scoped_answers_key_rows_and_total_by_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-other"), Some(2));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // `-w` next, with a duplicate and a new row: pages append.
     assert!(
@@ -6530,7 +6530,7 @@ fn scoped_answers_key_rows_and_total_by_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
     // The rows tie on recency, so no `docs/<area>.md` line promises
     // their order: assert the rows as a set.
@@ -6548,7 +6548,7 @@ fn scoped_answers_key_rows_and_total_by_project() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(3));
     // A stale scoped id leaves the rows as they were: same rows,
     // whatever their order, since ties promise none.
@@ -6577,12 +6577,12 @@ fn a_dirty_answer_sends_exactly_one_follow_up() {
         &first,
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")], "total": 5}),
     );
-    // `docs/tui.md:268` (one ask in flight per project).
+    // `docs/tui.md`, "The session list" (one ask in flight per project).
     assert_eq!(follow.len(), 1);
-    // `docs/tui.md:268` (one ask per project; request order is open).
+    // `docs/tui.md`, "The session list" (one ask per project; request order is open).
     assert_eq!(fanout_projects(&follow), ["-w"]);
     assert_ne!(line_id(&follow[0]), first);
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(5));
     // The follow-up answers with no further trigger: nothing more.
     let second = line_id(&follow[0]).to_owned();
@@ -6590,7 +6590,7 @@ fn a_dirty_answer_sends_exactly_one_follow_up() {
         app.on_line(accepted(&second, json!({"sessions": [], "total": 5}),))
             .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(5));
 }
 
@@ -6614,9 +6614,9 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
         line,
         crate::app::NoticeLine::Notice { code, .. } if code == "gone"
     )));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
+    // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), ["○  old"]);
     // Pending and dirty cleared: the same id matches nothing, and no
     // follow-up went out.
@@ -6658,9 +6658,9 @@ fn a_scoped_malformed_answer_keeps_the_total_notices_once_and_sends_nothing() {
         line,
         crate::app::NoticeLine::Notice { code, .. } if code == "malformed"
     )));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(5));
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
+    // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), before);
 }
 
@@ -6705,9 +6705,9 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
             )),
             "{label}"
         );
-        // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+        // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
         assert_eq!(stored(&app, "-w"), Some(5), "{label}");
-        // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
+        // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
         assert_eq!(listed(&app), before, "{label}");
         assert!(
             !app.home.as_ref().unwrap().sessions.is_dirty("-w"),
@@ -6720,7 +6720,7 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
 fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
     // A scoped refusal keeps no total with no retry: ordinary pagination
     // must not retry the already-seen project without a new trigger
-    // (`docs/tui.md:268`, one ask in flight per project).
+    // (`docs/tui.md`, "The session list", one ask in flight per project).
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
     let lines = answer_value(
@@ -6733,7 +6733,7 @@ fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
         app.on_line(hub_refused(&first, "gone", "no recent"))
             .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
     // The older unscoped page holds the same project: no scoped retry.
     focus_last(&mut app);
@@ -6750,7 +6750,7 @@ fn an_unscoped_older_page_after_a_scoped_refusal_sends_nothing() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
     );
     assert!(fanout.is_empty());
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
 }
 
@@ -6771,7 +6771,7 @@ fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
         ))
         .is_empty()
     );
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
     // The project's loaded rows already match its total, so the next
     // page stays unscoped.
@@ -6788,9 +6788,9 @@ fn unknown_before_on_an_unscoped_page_leaves_totals_alone() {
             .is_empty()
     );
     assert_eq!(app.notice(), Some("too old"));
-    // `docs/invocation.md:1102` (recent total) and `docs/tui.md:268` (counts from total).
+    // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(1));
-    // `docs/tui.md:254-255` (newest first) and `docs/tui.md:233-234` (sections order).
+    // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
     assert_eq!(listed(&app), ["○  old"]);
 }
 
@@ -6860,8 +6860,7 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
 
 /// The wheel over the open key map on home is the map's: the home
 /// session list keeps its scroll, while the same wheel with the map
-/// closed scrolls the list three rows (`docs/tui.md`, "Key map"; see
-/// #3578).
+/// closed scrolls the list three rows (`docs/tui.md`, "The session list"; see #3578).
 #[test]
 fn wheel_over_keymap_on_home_leaves_the_session_list() {
     let mut app = home_with(80, 24, launch());
@@ -6892,4 +6891,198 @@ fn wheel_over_keymap_on_home_leaves_the_session_list() {
         "the wheel left the home session list"
     );
     assert!(app.keymap_top().is_some(), "the key map stays open");
+}
+
+#[test]
+fn feed_and_recent_register_tags_settled_by_their_answers() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let lines = commands(app.on_line(hello()));
+    let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
+    let recent = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"));
+    assert_eq!(app.outbox.waiting(feed), Some(Waiting::Feed));
+    assert_eq!(app.outbox.waiting(recent), Some(Waiting::Recent));
+    app.on_line(accepted(feed, json!({"sessions": []})));
+    assert_eq!(app.outbox.waiting(feed), None);
+    assert!(rows(&app).is_empty());
+    app.on_line(accepted(recent, json!({"sessions": []})));
+    assert_eq!(app.outbox.waiting(recent), None);
+}
+
+#[test]
+fn feed_and_recent_refusals_settle_their_tags() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let lines = commands(app.on_line(hello()));
+    let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
+    let recent = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"));
+    assert_eq!(app.outbox.waiting(feed), Some(Waiting::Feed));
+    assert_eq!(app.outbox.waiting(recent), Some(Waiting::Recent));
+    assert!(app.on_line(refused(feed, "no feed")).is_empty());
+    assert_eq!(app.outbox.waiting(feed), None);
+    assert!(app.on_line(refused(recent, "no recent")).is_empty());
+    assert_eq!(app.outbox.waiting(recent), None);
+    assert!(app.notice().is_some());
+    assert!(rows(&app).is_empty());
+}
+
+#[test]
+fn a_second_recent_answer_changes_nothing() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [{
+            "session_id": "s_aaaaaaaaaaaaaaaa",
+            "ts": 0,
+            "project": "-w",
+            "workspace": "/w",
+            "name": "old work",
+            "how": "exited",
+        }]}),
+    ));
+    assert_eq!(app.outbox.waiting(&recent), None);
+    assert_eq!(rows(&app), ["○  old work"]);
+    app.on_line(accepted(&recent, json!({"sessions": []})));
+    assert_eq!(rows(&app), ["○  old work"]);
+}
+
+#[test]
+fn a_feed_id_answered_by_a_recent_payload_changes_no_row() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let (feed, recent) = linked(&mut app);
+    // The tag names the entry, never the payload's shape: a feed id
+    // folds as the feed even with recent rows in its result.
+    app.on_line(accepted(
+        &feed,
+        json!({"sessions": [{
+            "session_id": "s_aaaaaaaaaaaaaaaa",
+            "ts": 0,
+            "project": "-w",
+            "workspace": "/w",
+            "name": "old work",
+            "how": "exited",
+        }]}),
+    ));
+    assert_eq!(app.outbox.waiting(&feed), None);
+    assert!(rows(&app).is_empty());
+    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+}
+
+#[test]
+fn an_unscoped_recent_id_answered_by_a_scoped_payload_folds_unscoped() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    // The unscoped total is never stored: even with a total in its
+    // payload, the new project still fans out its scoped ask.
+    let out = commands(app.on_line(accepted(
+        &recent,
+        json!({"sessions": [{
+            "session_id": "s_aaaaaaaaaaaaaaaa",
+            "ts": 0,
+            "project": "-w",
+            "workspace": "/w",
+            "name": "old work",
+            "how": "exited",
+        }], "total": 5}),
+    )));
+    assert_eq!(app.outbox.waiting(&recent), None);
+    assert_eq!(rows(&app), ["○  old work"]);
+    assert!(
+        out.iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn an_early_import_registers_its_tag_at_queue_time() {
+    use crate::app::Waiting;
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    // The link is down: the press queues the import instead of
+    // dropping it, and the offer stays open for its answer.
+    let now = fakes::clock::FakeClock::new().now();
+    assert!(matches!(app.on_key(Key::Char('1'), now), Effect::None));
+    let held: Vec<Value> = app
+        .outbox
+        .held
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{err}")))
+        .collect();
+    let import = held
+        .iter()
+        .find(|line| line["command"] == "import")
+        .unwrap_or_else(|| panic!("the held import"));
+    let id = import["id"].as_str().unwrap_or_else(|| panic!("import id"));
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::OfferImport));
+    let lines: Vec<Value> = commands(app.on_line(hello()));
+    let import = lines
+        .iter()
+        .find(|line| line["command"] == "import")
+        .unwrap_or_else(|| panic!("the held import goes out on hello"));
+    assert_eq!(import["id"], id);
+    assert!(app.on_line(hub_accepted(id, import_result())).is_empty());
+    assert_eq!(app.outbox.waiting(id), None);
+    assert!(app.import_report().is_some());
+}
+
+#[test]
+fn a_gated_opening_session_still_hands_an_import_answer_to_its_handler() {
+    use crate::app::Waiting;
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let line = press(&mut app, Key::Char('1'));
+    let id = line["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("import id"))
+        .to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::OfferImport));
+    // The session opens and its gate holds while the import waits.
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    app.open_session(session.clone(), None, None, false);
+    assert!(app.gated(&session));
+    // The import's answer arrives on the opening session's stream
+    // while gated: the ask consumes it, opening no report here, and
+    // the gate still holds for the subscribe's own answer.
+    let answer = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: session.clone(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"command_id": id, "result": import_result()})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    app.on_line(answer);
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.import_report().is_none());
+    assert!(app.gated(&session));
+    // The taken ask is gone, so the offer sends again for a retry once
+    // the terminal is back home.
+    app.go_home();
+    let retry = press(&mut app, Key::Char('1'));
+    assert_ne!(retry["id"], line["id"]);
 }

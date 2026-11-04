@@ -23,7 +23,7 @@ use support::journey::{
     dismiss_cache_rebuild, grid_text, install_picker_provider, only_session, provider_full,
     provider_heading, reply, shows, shows_row, stalled, tui_off, working_elapsed,
 };
-use support::pty::{Grid, KITTY_PUSH, MOTION, Run, WAITING_TITLE, until_hub_exits};
+use support::pty::{Grid, KITTY_PUSH, MOTION, Run, WAITING_TITLE, drag_bytes, until_hub_exits};
 use support::{PIXEL, PIXEL_BASE64, Setup, TRUECOLOUR, write_json};
 
 /// `grid_text` over one row, without its cursor line.
@@ -884,14 +884,6 @@ fn find_cell(screen: &Grid, needle: &str) -> (u16, u16) {
     panic!("{needle:?} in\n{}", screen.contents);
 }
 
-/// Drags from `from` to `to`, 0-based cells: a press, one drag report,
-/// and the release whose copy the caller reads.
-fn drag(run: &mut Run, from: (u16, u16), to: (u16, u16)) {
-    run.write(format!("\x1b[<0;{};{}M", from.0 + 1, from.1 + 1).as_bytes());
-    run.write(format!("\x1b[<32;{};{}M", to.0 + 1, to.1 + 1).as_bytes());
-    run.write(format!("\x1b[<0;{};{}m", to.0 + 1, to.1 + 1).as_bytes());
-}
-
 /// Standard-base64 decode for OSC 52 payloads, which the clipboard
 /// always pads to a multiple of four (`docs/dependencies.md`: the
 /// `base64` crate covers the terminal's copy through OSC 52).
@@ -950,10 +942,13 @@ fn journey_drag_input_box_copies_its_text() {
     // before the pointer goes out (`docs/testing/screens.md`,
     // "Screens").
     run.wait_bytes(typed, b"hello", "the typed draft drew");
-    let screen = run.wait_screen("the typed draft", |screen| shows(screen, "hello"));
-    let (x, y) = find_cell(&screen, "hello");
+    run.wait_screen("the typed draft", |screen| shows(screen, "hello"));
     let from = run.output().len();
-    drag(&mut run, (x, y), (x + 5, y));
+    run.mouse_where(
+        "the input draft",
+        |grid| grid.text_at("hello"),
+        |from| drag_bytes(from, (from.0 + 5, from.1)),
+    );
     assert_eq!(osc52_copy(&mut run, from), "hello");
 }
 
@@ -1028,7 +1023,11 @@ fn journey_drag_notice_copies_its_text() {
     );
 
     let copy_from = run.output().len();
-    drag(&mut run, (x, y), (x + 14, y));
+    run.mouse_where(
+        "the resized notice",
+        |grid| grid.text_at("switch_pending"),
+        |from| drag_bytes(from, (from.0 + 14, from.1)),
+    );
     assert_eq!(osc52_copy(&mut run, copy_from), "switch_pending");
     run.wait_screen("the switch_pending notice after copy", |screen| {
         shows(screen, "switch_pending")
@@ -1077,38 +1076,22 @@ fn journey_drag_panel_card_copies_its_text() {
     run.turn_finished(from);
     // Coordinates come from a grid settled after the turn: the turn's
     // end moves rows, so an earlier grid points at the wrong cells.
-    let card = run.wait_screen("the session card name", |screen| {
+    run.wait_screen("the session card name", |screen| {
         screen
             .rows
             .iter()
             .any(|row| row.get(100..).is_some_and(|side| side.contains("say hi")))
     });
-    // The card sits on the screen's right side: only its own cells
-    // match, never the conversation's.
-    let (cols, rows) = card.size();
-    let (mut found, mut done) = ((0, 0), false);
-    for y in 0..rows {
-        for x in 100..cols {
-            if card.cell(x, y).symbol == "s"
-                && (0..6).all(|dx| {
-                    x + dx < cols
-                        && card.cell(x + dx, y).symbol
-                            == ["s", "a", "y", " ", "h", "i"][dx as usize]
-                })
-            {
-                found = (x, y);
-                done = true;
-                break;
-            }
-        }
-        if done {
-            break;
-        }
-    }
-    assert!(done, "the card name shows");
-    let (x, y) = found;
     let from = run.output().len();
-    drag(&mut run, (x, y), (x + 6, y));
+    run.mouse_where(
+        "the session card name",
+        |grid| {
+            let point = grid.text_at("say hi")?;
+            assert!(point.0 >= 100, "the card name sits on the session card");
+            Some(point)
+        },
+        |from| drag_bytes(from, (from.0 + 6, from.1)),
+    );
     assert_eq!(osc52_copy(&mut run, from), "say hi");
 }
 
@@ -1141,12 +1124,15 @@ fn journey_drag_overlay_copies_its_text() {
     // goes out (`docs/testing/screens.md`, "Screens"): the finished
     // turn sends nothing more, so nothing moves them after this frame.
     run.wait_bytes(opened, b"alpha-1", "the open picker drew");
-    let open = run.wait_screen("the open picker", |screen| {
+    run.wait_screen("the open picker", |screen| {
         shows(screen, "Type to search") && shows(screen, "alpha-1")
     });
-    let (x, y) = find_cell(&open, "alpha-1");
     let from = run.output().len();
-    drag(&mut run, (x, y), (x + 7, y));
+    run.mouse_where(
+        "the picker row",
+        |grid| grid.text_at("alpha-1"),
+        |from| drag_bytes(from, (from.0 + 7, from.1)),
+    );
     assert_eq!(osc52_copy(&mut run, from), "alpha-1");
 }
 
@@ -1207,11 +1193,14 @@ fn journey_drag_approval_copies_its_text() {
     // pointer goes out (`docs/testing/screens.md`, "Screens"): nothing
     // streams while it waits, so the panel's rows hold still.
     run.wait_bytes(asking, WAITING_TITLE, "the waiting turn");
-    let panel = run.wait_screen("the approval panel", |grid| {
+    run.wait_screen("the approval panel", |grid| {
         grid.contents.contains("Approval 1 of 1 · run it")
     });
-    let (x, y) = find_cell(&panel, "run it");
     let from = run.output().len();
-    drag(&mut run, (x, y), (x + 6, y));
+    run.mouse_where(
+        "the approval row",
+        |grid| grid.text_at("run it"),
+        |from| drag_bytes(from, (from.0 + 6, from.1)),
+    );
     assert_eq!(osc52_copy(&mut run, from), "run it");
 }

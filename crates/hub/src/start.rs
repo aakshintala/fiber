@@ -132,7 +132,9 @@ pub(crate) fn run(
         }
     };
     let socket = hub.home.join("run").join(&id.0);
-    let stream = match await_bind(hub, &socket, started.as_ref()) {
+    let stream = match await_bind(hub, &socket, started.as_ref(), &|| {
+        log::find_session(&hub.home, &id).is_some_and(|(_, dir)| crate::resume::keeper_holds(&dir))
+    }) {
         Bind::Connected(stream) => {
             // The session's socket accepts here: the content handshake
             // after this is its own wait, not this start's.
@@ -205,13 +207,18 @@ pub(crate) enum Bind {
 /// Waits for the process `started` to bind `socket`, retrying every
 /// [`START_POLL`] on the injected clock until [`START_DEADLINE`]: shared by
 /// `start` and the resume a relayed command makes.
-pub(crate) fn await_bind(hub: &Hub, socket: &Path, started: &dyn crate::Started) -> Bind {
+pub(crate) fn await_bind(
+    hub: &Hub,
+    socket: &Path,
+    started: &dyn crate::Started,
+    kept: &dyn Fn() -> bool,
+) -> Bind {
     let deadline = hub.clock.now() + START_DEADLINE;
     loop {
         if started.exited().is_some() {
             return Bind::Exited;
         }
-        match UnixStream::connect(socket) {
+        match crate::resume::guarded_connect(socket, kept) {
             Ok(stream) => return Bind::Connected(stream),
             Err(error)
                 if matches!(

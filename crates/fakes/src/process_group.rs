@@ -210,8 +210,15 @@ pub(crate) const MATCHING_PATTERN_VAR: &str = "FIBER_WATCHDOG_PATTERN";
 /// line from stdin means the run finished; EOF means the test process died,
 /// so the script kills every process whose command line matches, and its
 /// process group. An empty pattern, which matches every process, exits with
-/// status 2 before `pgrep` can run.
-pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || for p in $(pgrep -f -- "$FIBER_WATCHDOG_PATTERN"); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done"#;
+/// status 2 before `pgrep` can run. The `pgrep` runs in the background
+/// against a scratch file under `${TMPDIR:-/tmp}`, bounded by
+/// [`WATCHDOG_LOOKUP_WITHIN`]: a hung lookup is killed and whatever it
+/// listed is still killed, so the script always exits. The bound waits in
+/// the background beside the lookup, so a fast lookup returns at once
+/// without waiting out the sleep. All of `&`, `wait`, `sleep`, `kill`,
+/// `$$`, redirection and `:-` are POSIX shell, so the script runs on macOS
+/// too, where `timeout(1)` is unavailable.
+pub(crate) const MATCHING_WATCHDOG_SCRIPT: &str = r#"[ -n "$FIBER_WATCHDOG_PATTERN" ] || exit 2; read -r line || { out="${TMPDIR:-/tmp}/fiber-watchdog-$$"; pgrep -f -- "$FIBER_WATCHDOG_PATTERN" > "$out" 2>/dev/null & lookup=$!; (sleep 3; kill -9 "$lookup" 2>/dev/null) & killer=$!; wait "$lookup" 2>/dev/null; kill -9 "$killer" 2>/dev/null; wait "$killer" 2>/dev/null; wait "$lookup" 2>/dev/null; for p in $(cat "$out" 2>/dev/null); do [ "$p" -gt 1 ] || continue; kill -s KILL -- "-$p"; kill -s KILL "$p"; done; rm -f "$out"; } # lookup bound: WATCHDOG_LOOKUP_WITHIN"#;
 
 /// `text` as an extended regular expression matching itself, for `pgrep -f`.
 /// A leading plain character becomes a bracket expression (`/tmp/x` is
@@ -258,6 +265,31 @@ pub(crate) fn pattern(text: &str) -> String {
 /// interval per holder, so this is the one short bound here, best-effort.
 const COMMAND_LINE_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The first listing's own budget: half the must-succeed bound, so it
+/// expires inside a caller's wait of that bound, and independent of the
+/// caller's deadline, so a spent budget still names the holders.
+const LISTING_WITHIN: Duration = Duration::from_secs(MUST_SUCCEED_WITHIN.as_secs() / 2);
+
+/// A listing `pgrep`'s own budget: half the listing budget, so a stalled
+/// `pgrep` expires inside the listing that waits for it and the failure
+/// names the step.
+const PGREP_WITHIN: Duration = Duration::from_millis(LISTING_WITHIN.as_secs() * 1000 / 2);
+
+/// How long a matching watchdog's lookup may run before the script kills
+/// it and kills whatever it listed: far above a healthy `pgrep`
+/// (hundredths of a second), far below the must-succeed bound the
+/// test-side exit wait carries, so a hung lookup never strands a holder
+/// past the test-side timeout. The script carries this bound as its own
+/// `sleep`, pinned to this const by
+/// `the_matching_watchdog_script_bounds_its_lookup`, so the two cannot
+/// drift. This bounds only the watcher; [`PGREP_WITHIN`] still bounds
+/// only the test-side per-`pgrep` budget.
+#[allow(
+    dead_code,
+    reason = "the watchdog script carries the bound as its own sleep; tests pin the const to the text"
+)]
+pub(crate) const WATCHDOG_LOOKUP_WITHIN: Duration = Duration::from_secs(3);
+
 /// The pids of the processes whose command line contains `text`.
 ///
 /// # Errors
@@ -269,6 +301,21 @@ const COMMAND_LINE_DIAGNOSTIC_TIMEOUT: Duration = Duration::from_secs(5);
 ///
 /// When `text` is empty, before running anything.
 pub fn matching(text: &str) -> io::Result<Vec<u32>> {
+    matching_within(text, MUST_SUCCEED_WITHIN)
+}
+
+/// [`matching`] with the caller's own `pgrep` budget, so a listing nested
+/// in a deadlined wait expires inside it and the failure names the step.
+///
+/// # Errors
+///
+/// When `pgrep` cannot be run or fails, or has not exited within `bound`
+/// (`TimedOut`; the `pgrep` is killed).
+///
+/// # Panics
+///
+/// When `text` is empty, before running anything.
+fn matching_within(text: &str, bound: Duration) -> io::Result<Vec<u32>> {
     let pattern = pattern(text);
     // Checked again on the result: an empty pattern matches every process.
     assert!(
@@ -281,7 +328,7 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?;
-    let (status, stdout) = bounded(pgrep, "pgrep", MUST_SUCCEED_WITHIN)?;
+    let (status, stdout) = bounded(pgrep, "pgrep", bound)?;
     // 1 is "no process matched".
     match status.code() {
         Some(0 | 1) => {}
@@ -547,10 +594,11 @@ fn listed_exit(
     list: impl FnMut() -> io::Result<Vec<u32>> + Send + 'static,
     deadline: Duration,
 ) -> io::Result<()> {
-    // The first listing runs on a spawned thread with its own budget:
-    // a spent exit budget still leaves the holder-listing budget, so the
-    // expiry names the holders; a listing that never answers expires with
-    // the listing budget.
+    // The first listing runs on a spawned thread with its own budget of
+    // half the must-succeed bound: it is nested in a caller's wait of that
+    // bound, so it expires first and the failure names the listing step,
+    // and it is independent of the caller's deadline, so a spent exit
+    // budget still names the holders.
     let caller = Deadline::after(deadline);
     let (listed, listing) = mpsc::channel();
     thread::spawn(move || {
@@ -565,7 +613,7 @@ fn listed_exit(
     // The latest listing, published after each one: the deadline's read
     // names the holders even while the wait still runs.
     let outstanding = Arc::new(Mutex::new(Vec::<u32>::new()));
-    let (mut list, mut pids) = match Deadline::after(MUST_SUCCEED_WITHIN).recv(&listing) {
+    let (mut list, mut pids) = match Deadline::after(LISTING_WITHIN).recv(&listing) {
         Ok((list, result)) => match result {
             Ok(pids) => {
                 // Published before the wait starts, so a spent exit
@@ -577,7 +625,12 @@ fn listed_exit(
                 return Err(io::Error::other(format!("first pgrep failed: {err}")));
             }
         },
-        Err(_) => return Err(expiry_error(&[])),
+        Err(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "first listing: deadline expired waiting for exit",
+            ));
+        }
     };
     let published = Arc::clone(&outstanding);
     thread::spawn(move || {
@@ -624,9 +677,9 @@ fn listed_exit(
 /// line contains `text` to exit: one `pgrep` lists the matches, the probes
 /// wait for each listed pid, and `pgrep` lists again after every wait until
 /// nothing matches. The first listing runs on a spawned thread with its
-/// own budget; one thread then waits under what remains of the deadline.
-/// A process that starts after an earlier listing is waited on like every
-/// earlier match.
+/// own budget of half the must-succeed bound; one thread then waits under
+/// what remains of the deadline. A process that starts after an earlier
+/// listing is waited on like every earlier match.
 ///
 /// # Errors
 ///
@@ -635,7 +688,7 @@ fn listed_exit(
 pub fn try_matching_exits(text: &str, deadline: Deadline) -> io::Result<()> {
     let within = deadline.left();
     let text = text.to_owned();
-    listed_exit(move || matching(&text), within)
+    listed_exit(move || matching_within(&text, PGREP_WITHIN), within)
 }
 
 /// [`try_matching_exits`] as a boolean: `false` on any failure path.

@@ -3,6 +3,7 @@
 //! into the conversation area and takes all of it. Esc returns to the
 //! conversation.").
 
+use contract::events::EventKind;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
@@ -523,6 +524,7 @@ impl App {
             Some(serde_json::json!({"job_id": job_id.0})),
         )
         .to_string();
+        self.outbox.wait(&id, super::Waiting::JobStop);
         self.outbox
             .pending
             .insert(id, (Kind::Command, crate::input::Draft::default()));
@@ -579,6 +581,7 @@ impl App {
             Some(serde_json::json!({"job_id": job_id.0, "text": text})),
         )
         .to_string();
+        self.outbox.wait(&id, super::Waiting::JobInput);
         self.outbox
             .pending
             .insert(id, (Kind::Command, crate::input::Draft::default()));
@@ -633,8 +636,8 @@ impl App {
     /// takes the next serial, `delegate_started` keeps the run's start,
     /// and `job_completed` keeps the outcome frozen at its `ts`.
     pub(super) fn items_line(&mut self, envelope: &Envelope) {
-        match envelope.kind.as_str() {
-            "job_started" => {
+        match envelope.kind() {
+            EventKind::JobStarted => {
                 if let Some(started) = super::read!(envelope, contract::events::JobStarted) {
                     let record = self.items.record(&started.job_id);
                     record.description = started.description;
@@ -662,7 +665,7 @@ impl App {
                     }
                 }
             }
-            "delegate_started" => {
+            EventKind::DelegateStarted => {
                 if let Some(started) = super::read!(envelope, contract::events::DelegateStarted) {
                     let record = self.items.record(&started.job_id);
                     record.delegate = Some(DelegateRun {
@@ -674,7 +677,7 @@ impl App {
                     });
                 }
             }
-            "job_completed" => {
+            EventKind::JobCompleted => {
                 if let Some(done) = super::read!(envelope, contract::events::JobCompleted) {
                     let word = match done.status {
                         contract::events::Outcome::Completed => "completed",
@@ -696,7 +699,75 @@ impl App {
                     }
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
         }
     }
 
@@ -707,7 +778,7 @@ impl App {
         if !self.is_item_session(&envelope.session_id) {
             return false;
         }
-        if envelope.kind == "tool_call_completed"
+        if envelope.kind() == EventKind::ToolCallCompleted
             && let Some(open) = self.items.open.as_ref()
             && let Some(record) = self.items.jobs.get_mut(&open.job_id)
             && let Some(delegate) = record.delegate.as_mut()
@@ -719,7 +790,7 @@ impl App {
         // attached busy flag.
         self.record_extensions(envelope);
         let applied = self.screen.pages_mut().apply(envelope);
-        if applied.changed || envelope.kind == "extensions_loaded" {
+        if applied.changed || envelope.kind() == EventKind::ExtensionsLoaded {
             self.screen.changed();
         }
         true

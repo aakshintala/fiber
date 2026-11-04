@@ -5,6 +5,7 @@
 //! screen).
 
 use contract::Envelope;
+use contract::events::EventKind;
 use serde_json::Value;
 
 use super::super::App;
@@ -17,8 +18,8 @@ impl App {
     /// that job's output in order, and `job_completed` drops it unless
     /// that job's view is open.
     pub(in crate::app) fn output_line(&mut self, envelope: &Envelope) {
-        match envelope.kind.as_str() {
-            "tool_call_requested" => {
+        match envelope.kind() {
+            EventKind::ToolCallRequested => {
                 if let Some(requested) =
                     super::super::read!(envelope, contract::events::ToolCallRequested)
                     && requested.name == "shell"
@@ -33,7 +34,7 @@ impl App {
                     }
                 }
             }
-            "tool_call_started" => {
+            EventKind::ToolCallStarted => {
                 if let Some(started) =
                     super::super::read!(envelope, contract::events::ToolCallStarted)
                     && let Some(action) = envelope.action_id.clone()
@@ -43,7 +44,7 @@ impl App {
                     self.items.tty_marks.insert(action);
                 }
             }
-            "job_started" => {
+            EventKind::JobStarted => {
                 if let Some(started) = super::super::read!(envelope, contract::events::JobStarted) {
                     let tty = envelope
                         .action_id
@@ -55,7 +56,7 @@ impl App {
                     }
                 }
             }
-            "job_delta" => {
+            EventKind::JobDelta => {
                 if let Some(delta) = super::super::read!(envelope, contract::events::JobDelta)
                     && let Some(text) = delta.progress.text.as_deref()
                     && let Some(record) = self.items.jobs.get_mut(&delta.job_id)
@@ -64,7 +65,7 @@ impl App {
                     output.feed(text);
                 }
             }
-            "job_completed" => {
+            EventKind::JobCompleted => {
                 if let Some(done) = super::super::read!(envelope, contract::events::JobCompleted) {
                     let open = self.items.open.as_ref().map(|open| open.job_id.clone());
                     if let Some(record) = self.items.jobs.get_mut(&done.job_id)
@@ -74,7 +75,73 @@ impl App {
                     }
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::DelegateStarted
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
         }
     }
 

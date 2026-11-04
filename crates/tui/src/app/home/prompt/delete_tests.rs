@@ -1517,6 +1517,10 @@ fn a_stale_row_delete_reprompt_replaces_and_cancels_the_slash_question() {
         "stale-row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(A.to_owned())),
     );
+    // A sent row delete carries its tag beside its ask, as `send_delete`
+    // registers; the fixture inserts both halves of that production state.
+    app.outbox
+        .wait("stale-row-delete", crate::app::Waiting::Delete);
 
     app.on_line(rejected(
         "stale-row-delete",
@@ -1582,6 +1586,9 @@ fn same_target_row_delete_answer_does_not_settle_slash_delete() {
         "row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(A.to_owned())),
     );
+    // A sent row delete carries its tag beside its ask, as `send_delete`
+    // registers; the fixture inserts both halves of that production state.
+    app.outbox.wait("row-delete", crate::app::Waiting::Delete);
 
     app.on_line(accepted("row-delete", json!({})));
     assert!(matches!(
@@ -1681,6 +1688,10 @@ fn a_stale_same_target_row_delete_answer_cancels_the_open_slash_question() {
         "stale-row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(A.to_owned())),
     );
+    // A sent row delete carries its tag beside its ask, as `send_delete`
+    // registers; the fixture inserts both halves of that production state.
+    app.outbox
+        .wait("stale-row-delete", crate::app::Waiting::Delete);
 
     app.on_line(accepted("stale-row-delete", json!({})));
     assert!(!open(&app));
@@ -1828,6 +1839,9 @@ fn an_unrelated_accepted_row_delete_leaves_the_slash_question_running() {
         "row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(D.to_owned())),
     );
+    // A sent row delete carries its tag beside its ask, as `send_delete`
+    // registers; the fixture inserts both halves of that production state.
+    app.outbox.wait("row-delete", crate::app::Waiting::Delete);
     let _lines: Vec<String> = app.on_line(accepted("row-delete", json!({})));
     assert!(open(&app));
     assert!(frame(&app).contains("Delete old work"));
@@ -2035,6 +2049,9 @@ fn unsent_delete_command_id_settles_indeterminate_exactly_once() {
         "row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(D.to_owned())),
     );
+    // A sent row delete carries its tag beside its ask, as `send_delete`
+    // registers; the fixture inserts both halves of that production state.
+    app.outbox.wait("row-delete", crate::app::Waiting::Delete);
     let other = json!({"id": "other", "command": "delete", "args": {}}).to_string();
     app.home_unsent(&[other]);
     assert!(
@@ -2172,4 +2189,91 @@ fn refusal_without_usable_held_keeps_the_name_captured_at_the_question() {
         app.notice(),
         Some("Not deleted: old work is running again. Nothing was deleted.")
     );
+}
+
+#[test]
+fn discovery_answers_register_a_tag_and_settle_it() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let command = discovery(&mut app);
+    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    answer_discovery(&mut app, &command, &[A], &[]);
+    assert_eq!(app.outbox.waiting(&command), None);
+    assert!(open(&app));
+}
+
+#[test]
+fn a_refused_discovery_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let command = discovery(&mut app);
+    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    app.on_line(rejected(&command, "stale_request", "Stale."));
+    assert_eq!(app.outbox.waiting(&command), None);
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Idle
+    ));
+    assert!(!open(&app));
+}
+
+#[test]
+fn a_delete_discovery_answer_after_the_target_left_finishes_without_a_question() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let command = discovery(&mut app);
+    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    app.on_line(left(A, "exited"));
+    app.go_home();
+    answer_discovery(&mut app, &command, &[A], &[]);
+    assert_eq!(app.outbox.waiting(&command), None);
+    assert!(!open(&app));
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Idle
+    ));
+    assert!(app.notice().is_none());
+}
+
+#[test]
+fn delete_stop_answers_settle_their_tags() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let command = discovery(&mut app);
+    answer_discovery(&mut app, &command, &[A], &[A]);
+    assert!(open(&app));
+    let raw = confirm(&mut app);
+    let parsed: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let close = closes(&parsed);
+    assert_eq!(close.len(), 1);
+    let close_id = close[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&close_id), Some(Waiting::DeleteStop));
+    assert!(app.on_line(accepted(&close_id, json!({}))).is_empty());
+    assert_eq!(app.outbox.waiting(&close_id), None);
+    // The stop still waits on the feed's `session_left`; the delete
+    // goes out once it reports the exit.
+    let deletion = deletes(&fold_lines(&mut app, left(A, "exited")));
+    assert_eq!(deletion.len(), 1);
+    let delete_id = deletion[0]["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&delete_id), Some(Waiting::DeleteFinal));
+}
+
+#[test]
+fn delete_final_answer_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let raw = asked(&mut app, &[A], &[]);
+    let deletion: Value = serde_json::from_str(&raw[0]).unwrap_or_else(|err| panic!("{err}"));
+    let id = deletion["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::DeleteFinal));
+    let refresh = fold_lines(&mut app, accepted(&id, json!({})));
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(refresh.iter().any(|line| line["command"] == "recent"));
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Idle
+    ));
 }

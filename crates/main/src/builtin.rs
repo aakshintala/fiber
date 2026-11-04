@@ -87,6 +87,7 @@ pub(crate) fn builtin(
         sandbox,
         None,
         std::collections::BTreeMap::new(),
+        None,
     )
 }
 
@@ -131,6 +132,7 @@ pub(crate) fn builtin_timed(
     sandbox: crate::settings::SandboxHandle,
     protection: Option<Arc<tools::ProtectedPaths>>,
     seen: std::collections::BTreeMap<PathBuf, u64>,
+    host: Option<Arc<dyn contract::keeper::CommandHost>>,
 ) -> Result<SessionTools, Failure> {
     let mut files =
         tools::Files::with_locks(workspace.to_path_buf(), Arc::clone(locks)).with_seen(seen);
@@ -162,6 +164,9 @@ pub(crate) fn builtin_timed(
         .with_sandbox(sandbox)
         .with_detached(home.join("detached"))
         .non_interactive();
+    if let Some(host) = &host {
+        shell = shell.with_host(Arc::clone(host));
+    }
     // Confined Linux spawns take their end-of-call guard from the session's
     // shared handle; the driver shell below never runs confined, so it
     // takes none.
@@ -174,11 +179,13 @@ pub(crate) fn builtin_timed(
     if let Some(timing) = shell_timing {
         shell = shell.with_timing(timing);
     }
-    let driver = Arc::new(
-        tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
-            .with_search(fiber)
-            .with_artifacts(artifacts.to_path_buf()),
-    );
+    let mut driver = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
+        .with_search(fiber)
+        .with_artifacts(artifacts.to_path_buf());
+    if let Some(host) = host {
+        driver = driver.with_host(host);
+    }
+    let driver = Arc::new(driver);
     // One socket client for both session tools: each call connects afresh.
     let sessions: Arc<dyn contract::sessions::Sessions> =
         Arc::new(doors::SessionSockets::new(home, Arc::clone(clock)));

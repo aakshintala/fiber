@@ -51,6 +51,7 @@ pub fn session_entries(home: &Path) -> io::Result<Vec<SessionId>> {
 
 /// The account's session sockets, queried afresh on each call.
 pub struct SessionSockets {
+    home: PathBuf,
     run: PathBuf,
     clock: Arc<dyn Clock>,
 }
@@ -59,6 +60,7 @@ impl SessionSockets {
     /// Uses Fiber home's run directory and the supplied deadline clock.
     pub fn new(home: &Path, clock: Arc<dyn Clock>) -> Self {
         Self {
+            home: home.to_owned(),
             run: config::run_dir(home),
             clock,
         }
@@ -116,15 +118,16 @@ impl SessionSockets {
             if self.clock.now() >= cutoff {
                 break;
             }
+            let dir = log::find_session(&self.home, &SessionId(name.clone())).map(|(_, dir)| dir);
             let path = self.run.join(&name);
-            let fd = crate::hub::nonblocking_socket().map_err(|e| io_error(&path, e))?;
-            let Ok(address) = rustix::net::SocketAddrUnix::new(&path) else {
+            let Ok(mut stream) = guarded_connect(dir.as_deref(), || {
+                let fd = crate::hub::nonblocking_socket()?;
+                let address = rustix::net::SocketAddrUnix::new(&path)?;
+                rustix::net::connect(&fd, &address)?;
+                Ok(UnixStream::from(fd))
+            }) else {
                 continue;
             };
-            if rustix::net::connect(&fd, &address).is_err() {
-                continue;
-            }
-            let mut stream = UnixStream::from(fd);
             let id = SessionId(name);
             let command = crate::mint("c_");
             let sent = crate::attach::send(
@@ -271,6 +274,26 @@ impl SessionSockets {
     }
 }
 
+/// Recheck after connect: a keeper may publish its lock between the probe
+/// and the syscall. No subscribe or message bytes cross that gap.
+fn guarded_connect(
+    dir: Option<&Path>,
+    connect: impl FnOnce() -> io::Result<UnixStream>,
+) -> io::Result<UnixStream> {
+    let keeper_holds = || {
+        dir.and_then(log::lock_label)
+            .is_some_and(|label| label.starts_with("keeper "))
+    };
+    if keeper_holds() {
+        return Err(io::ErrorKind::ConnectionRefused.into());
+    }
+    let stream = connect()?;
+    if keeper_holds() {
+        return Err(io::ErrorKind::ConnectionRefused.into());
+    }
+    Ok(stream)
+}
+
 impl Sessions for SessionSockets {
     fn scope(&self) -> PathBuf {
         self.run.join("")
@@ -298,16 +321,14 @@ impl Sessions for SessionSockets {
             return Err(MessageError::Cancelled);
         }
         let path = self.run.join(&to.0);
-        let fd = crate::hub::nonblocking_socket().map_err(|e| message_io(&path, e))?;
-        let Ok(address) = rustix::net::SocketAddrUnix::new(&path) else {
-            return Err(MessageError::Unreachable);
-        };
-        // A refused connect, a stale socket or a full backlog means no
-        // running session has this id; the socket is dropped here.
-        if rustix::net::connect(&fd, &address).is_err() {
-            return Err(MessageError::Unreachable);
-        }
-        let stream = UnixStream::from(fd);
+        let dir = log::find_session(&self.home, to).map(|(_, dir)| dir);
+        let stream = guarded_connect(dir.as_deref(), || {
+            let fd = crate::hub::nonblocking_socket()?;
+            let address = rustix::net::SocketAddrUnix::new(&path)?;
+            rustix::net::connect(&fd, &address)?;
+            Ok(UnixStream::from(fd))
+        })
+        .map_err(|_| MessageError::Unreachable)?;
         self.message_exchange(
             &path,
             stream,

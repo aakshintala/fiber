@@ -2043,7 +2043,7 @@ fn credential_overlays_and_rebound_session_only_route_to_the_picker() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // The introducing status queues its project's scoped ask (`docs/tui.md`, "The session list"):
     // assert only its presence, not the outgoing order or count.
     assert!(
         queued

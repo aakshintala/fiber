@@ -30,7 +30,7 @@ fn poll_live(client: &Socket, session: &str, what: &str, ids: &mut u32) {
             "{{\"id\":\"c_poll{}\",\"command\":\"sessions\"}}",
             *ids
         ));
-        let ack = recv_reply(client, what);
+        let ack = recv_answer(client, &format!("c_poll{}", *ids), what);
         assert_eq!(ack["kind"], "command_accepted", "{ack}");
         let live = ack["payload"]["result"]["live"].as_array().unwrap();
         if live
@@ -75,18 +75,11 @@ fn a_restarted_hub_lists_the_session_the_first_hub_followed() {
         &mut ids,
     );
     fresh.send(&json!({"id": "c_feed", "command": "feed"}).to_string());
-    let ack = recv_reply(&fresh, "the feed acknowledgement");
+    let ack = recv_answer(&fresh, "c_feed", "the feed acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    let mut seen: Vec<Value> = Vec::new();
-    loop {
-        let line = recv_reply(&fresh, "the feed snapshot to list the session");
-        let listed = line["kind"] == "session_status"
-            && line["session_id"].as_str() == Some(session.as_str());
-        seen.push(line);
-        if listed {
-            break;
-        }
-    }
+    let mut seen: Vec<Value> = until(&fresh, "the feed snapshot to list the session", |line| {
+        line["kind"] == "session_status" && line["session_id"].as_str() == Some(session.as_str())
+    });
     let direct = Socket::connect(setup.deadline, &setup.session_socket(&session));
     close_session(&direct);
     drop(direct);

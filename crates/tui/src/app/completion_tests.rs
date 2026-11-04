@@ -31,7 +31,7 @@ fn typing_filters_prefix_matches_first() {
     answer_commands(&mut app, &["tdd", "areview"]);
     type_text(&mut app, "/re");
     // Prefix matches first, each group in the `/` list's drawn order
-    // (`docs/tui.md:1971`): resume, release-notes, reviewer-setup,
+    // (`docs/tui.md`, "Slash commands"): resume, release-notes, reviewer-setup,
     // rewind, name by its `rename` alias, and reload; then the
     // contains matches, credential and the `areview` skill.
     assert_eq!(

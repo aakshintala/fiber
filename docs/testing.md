@@ -54,6 +54,8 @@ step runs in order, a retry or a cache check included. Logic that wiring
 calls, anything that parses, computes or decides from data a test could
 supply, lives in `xtask` or a crate, and is tested there like any other code.
 
+The one exception is logic the gate must run before a build, or after a build has died: it stays in a script, because a check of whether the machine can build cannot need a build. A Rust test in `xtask` runs that script on supplied inputs, such as a fixed `df` output or a recorded build log, and asserts its exit code and output.
+
 A binary-level test needs no test-only switch in the shipped binary. It sets
 `FIBER_HOME` to its own temporary directory, which holds an ordinary provider
 definition whose base URL points at a local fake server, or it names the
@@ -340,7 +342,9 @@ A journey is a screen test that walks one path a person walks, from start to
 finish, through the release binary, and asserts what the screen shows at every
 step. Journeys live in their own test binary and run after merge (`docs/ci.md`,
 "The journey suite"), not in the gate. A bug a person finds gets a journey,
-unless its fix PR names the journey that already covers the path.
+unless its fix PR names the journey that already covers the path. A provider
+bug a person finds adds its recorded gateway transcript, and its journey
+replays that transcript.
 
 The gate runs the screen journeys in `crates/main/tests/terminal.rs`,
 `crates/main/tests/journeys.rs` and `crates/main/tests/inline_images.rs`; the

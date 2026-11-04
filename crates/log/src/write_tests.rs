@@ -10,8 +10,83 @@ use contract::events::{
     SessionStatus, TextDelta,
 };
 use contract::shapes::{Tokens, Usage};
-use fakes::Deadline;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 const DEADLINE: Duration = Duration::from_secs(10);
+
+fn check_holder(work: impl FnOnce() + Send + 'static) {
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        work();
+        done.send(()).unwrap();
+    });
+    Deadline::after(MUST_SUCCEED_WITHIN).recv_or_fail(&result, "holder query");
+}
+
+#[test]
+fn a_keeper_label_names_only_a_live_holder() {
+    check_holder(|| {
+        let sessions = fakes::TempDir::new("log-keeper-holder");
+        let id = SessionId("s_keeper".into());
+        let clock = fakes::clock::FakeClock::new();
+        let log = Log::create(sessions.path(), id.clone(), clock.clone()).unwrap();
+        let dir = log.dir().to_path_buf();
+        assert_eq!(
+            fs::read_to_string(dir.join(LOCK)).unwrap(),
+            format!("{}\n", std::process::id())
+        );
+        assert_eq!(lock_label(&dir), Some(std::process::id().to_string()));
+        drop(log);
+        let keeper = Log::open_as(sessions.path(), id, clock, "keeper 4242").unwrap();
+        assert_eq!(fs::read_to_string(dir.join(LOCK)).unwrap(), "keeper 4242\n");
+        assert_eq!(lock_label(&dir).as_deref(), Some("keeper 4242"));
+        drop(keeper);
+        assert_eq!(lock_label(&dir), None);
+    });
+}
+
+#[test]
+fn a_stale_keeper_label_reads_until_the_next_open_relabels_it() {
+    check_holder(|| {
+        let sessions = fakes::TempDir::new("log-stale-keeper-holder");
+        let id = SessionId("s_keeper".into());
+        let clock = fakes::clock::FakeClock::new();
+        let log = Log::create(sessions.path(), id.clone(), clock.clone()).unwrap();
+        let dir = log.dir().to_path_buf();
+        drop(log);
+        fs::write(dir.join(LOCK), "keeper 4242\n").unwrap();
+        assert_eq!(lock_label(&dir).as_deref(), Some("keeper 4242"));
+        assert_eq!(fs::read_to_string(dir.join(LOCK)).unwrap(), "keeper 4242\n");
+        let _log = Log::open(sessions.path(), id, clock).unwrap();
+        assert_eq!(
+            fs::read_to_string(dir.join(LOCK)).unwrap(),
+            format!("{}\n", std::process::id())
+        );
+    });
+}
+
+#[test]
+fn an_empty_or_partial_lock_label_is_read_without_retry_or_locking() {
+    let dir = fakes::TempDir::new("log-relabel-reader");
+    let path = dir.path().join(LOCK);
+    fs::write(&path, "").unwrap();
+    assert_eq!(lock_label(dir.path()), None);
+    fs::write(&path, " \n").unwrap();
+    assert_eq!(lock_label(dir.path()), None);
+    // RULING-3890-30 (surveyor, 6621245142): this is text, not liveness.
+    // An unlocked partial write must be returned without acquiring a flock.
+    fs::write(&path, "keeper ").unwrap();
+    assert_eq!(lock_label(dir.path()).as_deref(), Some("keeper"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), "keeper ");
+}
+
+#[test]
+fn a_holder_probe_leaves_a_missing_lock_missing() {
+    check_holder(|| {
+        let dir = fakes::TempDir::new("log-missing-holder");
+        assert_eq!(lock_label(dir.path()), None);
+        assert!(!dir.path().join(LOCK).exists());
+    });
+}
 
 fn offer_event(id: &str) -> Event {
     Event::RepositoryCodeOffered(contract::events::RepositoryCodeOffered {

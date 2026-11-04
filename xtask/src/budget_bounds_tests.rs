@@ -207,7 +207,12 @@ fn suffixed_decimal_bounds_are_read() {
 
 #[test]
 fn a_shared_bound_name_passes() {
-    for after in ["fakes::deadline::WAIT", "::fakes::deadline::WAIT"] {
+    for after in [
+        "fakes::deadline::WAIT",
+        "::fakes::deadline::WAIT",
+        "DEADLINE",
+        "fakes::DEADLINE",
+    ] {
         let source = format!("fn a() {{ Deadline::after({after}); }}");
         assert!(
             check("crates/x/tests/a.rs", "tests/a.rs", &source, &[1]).is_empty(),
@@ -254,6 +259,7 @@ fn a_long_named_bound_fails() {
 fn an_unshown_after_fails_closed() {
     for (after, case) in [
         ("SPAN", "a bare name"),
+        ("fakes::SPAN", "an unreadable qualified name"),
         ("Duration::from_secs(30 + 30)", "a computed literal"),
         ("Duration::from_secs(SIXTY)", "a named literal"),
         ("WAIT * 100", "a compound symbolic bound"),
@@ -266,6 +272,12 @@ fn an_unshown_after_fails_closed() {
                 && failures[0].ends_with("is not shown below 60 s"),
             "{case}: {failures:?}"
         );
+        for readable in ["WAIT", "DEADLINE", "MUST_SUCCEED_WITHIN", "Duration::ZERO"] {
+            assert!(
+                failures[0].contains(readable),
+                "{case} names {readable}: {failures:?}"
+            );
+        }
     }
 }
 

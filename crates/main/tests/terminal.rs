@@ -2269,31 +2269,36 @@ fn resume_with_an_unknown_credential_on_an_exited_session_stays_home() {
     // the labels the provider has: the row carries the code, and a
     // click opens the whole text in the overlay (`docs/tui.md`,
     // "Notices").
-    let grid = run.wait_screen("the refusal notice", |grid| {
+    run.wait_screen("the refusal notice", |grid| {
         grid.rows.iter().any(|row| {
             row.contains("credential_missing") && row.contains("has no credential label")
         })
     });
-    let row = u16::try_from(
-        grid.rows
-            .iter()
-            .position(|row| row.contains("credential_missing"))
-            .expect("the notice row"),
-    )
-    .expect("the notice row fits in u16");
     // Home draws notice rows directly above the bottom input box. The
     // box's all-▄ top edge gives the row the click must hit.
-    let box_top = grid
-        .rows
-        .iter()
-        .position(|line| !line.is_empty() && line.chars().all(|ch| ch == '▄'))
-        .expect("the input box top edge");
-    assert_eq!(
-        usize::from(row) + 1,
-        box_top,
-        "the notice stays directly above the input box"
-    );
-    run.write(format!("\x1b[<0;3;{}M\x1b[<0;3;{}m", row + 1, row + 1).as_bytes());
+    // ready: nothing can move the notice row after its wait. The refused
+    // resume sends no request and appends nothing to the log, raises no
+    // attention line, and leaves no session attached — so no bell, title
+    // emission, or session event follows the notice, and the row assert
+    // below pins it directly above the input box.
+    run.click_where("the refusal notice", |grid| {
+        let row = grid
+            .rows
+            .iter()
+            .position(|row| row.contains("credential_missing"))
+            .expect("the notice row");
+        let box_top = grid
+            .rows
+            .iter()
+            .position(|line| !line.is_empty() && line.chars().all(|ch| ch == '▄'))
+            .expect("the input box top edge");
+        assert_eq!(
+            row + 1,
+            box_top,
+            "the notice stays directly above the input box"
+        );
+        Some((2, u16::try_from(row).expect("the notice row fits in u16")))
+    });
     run.wait_screen("the notice overlay", |grid| {
         // The overlay wraps at the width, so each fragment fits on
         // one of its rows: the message's start and its credential

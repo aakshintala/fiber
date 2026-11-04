@@ -1,6 +1,7 @@
 //! Hub lines out and in: command lines written one per line, and the
 //! reader that splits hub lines from session envelopes.
 
+use contract::events::EventKind;
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{SendError, Sender};
@@ -34,12 +35,14 @@ pub(crate) fn parse_line(text: &str) -> Option<Line> {
 /// Whether `line` answers command `id`: the accepted or rejected answer
 /// carrying its id.
 pub(crate) fn answers(line: &Envelope, id: &str) -> bool {
-    matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
-        && line
-            .payload
-            .get("command_id")
-            .and_then(serde_json::Value::as_str)
-            == Some(id)
+    matches!(
+        line.kind(),
+        EventKind::CommandAccepted | EventKind::CommandRejected
+    ) && line
+        .payload
+        .get("command_id")
+        .and_then(serde_json::Value::as_str)
+        == Some(id)
 }
 
 /// Reads a `history` answer: its durable lines on `command_accepted`,
@@ -47,7 +50,7 @@ pub(crate) fn answers(line: &Envelope, id: &str) -> bool {
 /// The loop and the search both read answers through it, so the two
 /// cannot read one differently (`docs/tui.md`, "History and paging").
 pub(crate) fn history_answer(line: &Envelope) -> Result<Vec<Envelope>, String> {
-    if line.kind != "command_accepted" {
+    if line.kind() != EventKind::CommandAccepted {
         return Err(line
             .payload
             .get("message")

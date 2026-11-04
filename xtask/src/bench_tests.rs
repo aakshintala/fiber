@@ -24,7 +24,7 @@ const DOC: &str = concat!(
     "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
-    "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 32 ms | 34 ms | 41 ms | 21 % | 13 % |\n",
+    "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 72 ms | 34 ms | 109 ms | 82 % | 74 % |\n",
     "| `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |\n",
     "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | — | — | — | — | — |\n",
     "| `paging` jig, its session at scale 1 and 160 by 48 | 21,224 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
@@ -3798,11 +3798,11 @@ const SCALAR_ROWS: [(&str, &str, f64, f64, f64, f64, f64); 11] = [
     (
         "Listing 1,000 sessions",
         "sessions_list_ms",
-        32.0,
+        72.0,
         34.0,
-        41.0,
-        21.0,
-        13.0,
+        109.0,
+        82.0,
+        74.0,
     ),
     (
         "`session_list`, waiting for every running session's status",
@@ -5633,6 +5633,91 @@ fn session_list_ceiling_covers_every_stored_sample_and_tolerance_the_medians() {
         recorded, 1.0,
         "the recorded session_list ceiling stays 1 ms"
     );
+}
+
+// --- #4057 the listing class cells are the maximum stored sample ---
+
+/// Every stored 9V45 file's listing samples, with the head's cpu per file.
+const SESSIONS_LIST_FAST_DATA: &str = include_str!("../tests/class_data/9v45-sessions-list.json");
+/// Every stored slow-class file's listing samples, with the head's cpu per file.
+const SESSIONS_LIST_SLOW_DATA: &str = include_str!("../tests/class_data/slow-sessions-list.json");
+
+/// The slow-listing pin: the ceiling covers every slow-file sample, while the
+/// tolerance uses only the 7763-cpu medians, so the advisory 9V74 never widens
+/// it. A per-file median under the 1 ms quantum counts as 1 ms. The slow class
+/// gates only with at least 5 stored 7763 files carrying the metric.
+fn pinned_slow_listing_gate(data: &str, prefix: &str) {
+    let files: Vec<Value> = serde_json::from_str(data).unwrap();
+    let mut all_samples: Vec<f64> = Vec::new();
+    let mut slow_medians: Vec<f64> = Vec::new();
+    for f in &files {
+        let samples: Vec<f64> = f["samples"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_f64().unwrap())
+            .collect();
+        for s in &samples {
+            assert!(
+                s.is_finite() && *s >= 0.0,
+                "slow listing pin_samples_are_finite_and_non_negative: {} holds {s}",
+                f["file"]
+            );
+            all_samples.push(*s);
+        }
+        if f["cpu"]
+            .as_str()
+            .unwrap_or("")
+            .eq_ignore_ascii_case(SLOW_MODEL)
+        {
+            let m = median_of(&samples);
+            slow_medians.push(if m < 1.0 { 1.0 } else { m });
+        }
+    }
+    assert!(
+        slow_medians.len() >= 5,
+        "the slow class gates only with 5 stored 7763 files"
+    );
+    let max_sample = all_samples.iter().copied().fold(0.0, f64::max);
+    let max_median = slow_medians.iter().copied().fold(0.0, f64::max);
+    let min_median = slow_medians.iter().copied().fold(f64::MAX, f64::min);
+    let line = PERFORMANCE_DOC
+        .lines()
+        .find(|l| l.starts_with(prefix))
+        .unwrap_or_else(|| panic!("no performance row starting with {prefix:?}"));
+    let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+    let number = |cell: &str| -> f64 {
+        cell.split_whitespace()
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no number in {cell:?}"))
+    };
+    let (ceiling, tolerance) = (number(cells[7]), number(cells[9]));
+    assert!(
+        ceiling >= max_sample,
+        "slow listing ceiling {ceiling} ms sits below stored sample {max_sample} ms"
+    );
+    assert_eq!(
+        ceiling,
+        max_sample.ceil(),
+        "ceiling is the max sample rounded up"
+    );
+    let want = (100.0 * (max_median / min_median - 1.0)).ceil();
+    assert_eq!(
+        tolerance, want,
+        "slow listing tolerance for the stored 7763 medians"
+    );
+}
+
+#[test]
+fn listing_cells_cover_every_stored_sample_and_tolerance_the_medians() {
+    pinned_gate(
+        SESSIONS_LIST_FAST_DATA,
+        "| Listing 1,000 sessions",
+        "fast listing",
+        true,
+    );
+    pinned_slow_listing_gate(SESSIONS_LIST_SLOW_DATA, "| Listing 1,000 sessions");
 }
 
 // --- #3503 the 1 ms quantum: one tick of runner jitter passes ---

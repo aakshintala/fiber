@@ -47,6 +47,8 @@ impl App {
             let (id, line) = subscribe_line(&session, *level, credential.take());
             if let Some(home) = self.home.as_mut() {
                 home.subs.sent(id.clone(), session.clone(), *level);
+                self.outbox
+                    .wait(&id, super::super::outbox::Waiting::Subscribe);
             }
             ack = Some(id);
             lines.push(line);

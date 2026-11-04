@@ -103,6 +103,16 @@ impl App {
             self.delete_command_delete_unknown();
             return;
         }
+        let discovering =
+            self.home
+                .as_ref()
+                .and_then(|home| match &home.questions.delete_command.state {
+                    State::Discovering { command, .. } => Some(command.clone()),
+                    State::Idle
+                    | State::Asked { .. }
+                    | State::Stopping { .. }
+                    | State::Deleting { .. } => None,
+                });
         if let Some(home) = self.home.as_mut()
             && matches!(
                 home.questions.delete_command.state,
@@ -110,6 +120,9 @@ impl App {
             )
         {
             home.questions.delete_command.state = State::Idle;
+        }
+        if let Some(command) = discovering {
+            self.outbox.settled(&command);
         }
     }
 
@@ -130,6 +143,7 @@ impl App {
         let Some((waiting, fallback)) = waiting else {
             return;
         };
+        self.outbox.forget(&crate::app::Waiting::DeleteStop);
         let display = waiting
             .first()
             .and_then(|id| {

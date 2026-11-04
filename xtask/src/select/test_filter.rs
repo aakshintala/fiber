@@ -74,6 +74,23 @@ pub(crate) fn test_filter(
         }
         let selected = super::tests_in_files(std::slice::from_ref(&path), members, sources, index)?;
         if selected.is_empty() {
+            // A file whose source declares no test function, as with a
+            // helper shared by test binaries, contributes no filter term
+            // (`docs/ci.md`, "On every pull request that changes code").
+            // A file that declares test functions but maps to no indexed
+            // tests is still a selector miss.
+            let helper = sources
+                .iter()
+                .find(|source| source.path == *path)
+                .is_some_and(|source| {
+                    matches!(
+                        super::changed_tests::has_test_functions(&source.source),
+                        Ok(false)
+                    )
+                });
+            if helper {
+                continue;
+            }
             return Err(format!("{path}: compiler index maps this file to no tests"));
         }
         for test in selected {

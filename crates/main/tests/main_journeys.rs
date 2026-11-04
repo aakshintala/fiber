@@ -27,7 +27,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use fakes::ProviderServer;
+use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::{Value, json};
 use support::Deadline;
 use support::Setup;
@@ -1042,7 +1042,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             run.write(b"second\r");
             let shown = run.wait_screen("the second turn's quota notice", |grid| {
                 grid.contents.contains("Fiber")
-                    && grid.contents.contains("used 90%")
+                    && grid.contents.matches("used 90%").count() == 1
                     && grid.contents.contains("second")
             });
             // Exactly one quota entry: the count the notice gives, never
@@ -1096,7 +1096,7 @@ fn quota_notice_then_next_prompt_drawn_as_person() {
             // The second answer drew beside the first: two turns, two
             // answers on the grid.
             let done = run.wait_screen("the second answer", |grid| {
-                grid.contents.matches("Hello.").count() >= 2
+                grid.contents.matches("Hello.").count() == 2
             });
             assert_eq!(
                 done.contents.matches("Hello.").count(),
@@ -1522,7 +1522,7 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
                     .is_some()
             });
             let (mark_row, mark_text) = mark.expect("the marker row");
-            // `docs/tui.md:710-714` keeps the session model and heading
+            // `docs/tui.md`, "The model picker" keeps the session model and heading
             // visible on open; the focused model and heading stay visible
             // after scrolling. Place the wheel in the compact list using
             // fixture-derived row arithmetic; SGR coordinates add one.
@@ -1712,13 +1712,6 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
     );
 }
 
-/// The first row containing `needle`.
-fn find_row(rows: &[String], needle: &str) -> Option<u16> {
-    rows.iter()
-        .position(|row| row.contains(needle))
-        .map(|y| u16::try_from(y).expect("the screen fits in a u16"))
-}
-
 /// A solid-colour 120 by 80 PNG fixture.
 const PNG: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -1737,23 +1730,6 @@ const PNG: &[u8] = &[
     0xa2, 0x45, 0x23, 0x5a, 0x34, 0xa2, 0xff, 0x58, 0xd9, 0xb8, 0x78, 0xc2, 0xab, 0x96, 0xaa, 0xe8,
     0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
 ];
-
-/// A click at cell (`x`, `y`).
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
-}
-
-/// Clicks the first cell of `text` on `grid`.
-fn click_text(run: &mut Run, grid: &Grid, text: &str) {
-    let row = find_row(&grid.rows, text).expect("the text row");
-    let col = u16::try_from(
-        grid.rows[usize::from(row)]
-            .find(text)
-            .expect("the text column"),
-    )
-    .expect("the row fits in a u16");
-    click(run, col, row);
-}
 
 const FRAME_END: &[u8] = b"\x1b[?2026l";
 
@@ -2028,17 +2004,17 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
             // group row together with the completed paint has nothing left to
             // render: the group row's position in that grid is final
             // (`docs/testing/screens.md`, "Screens").
-            let grid = run.wait_screen("the settled reads group", |grid| {
+            run.wait_screen("the settled reads group", |grid| {
                 grid.contents.contains("completed")
                     && grid.rows.iter().any(|row| row.contains("Read 255 files"))
             });
             let from = run.output().len();
-            click_text(&mut run, &grid, "Read 255 files");
+            run.click_where("the reads group row", |grid| grid.text_at("Read 255 files"));
             run.wait_bytes(from, FRAME_END, "the opened group frame");
             // The opened group settles the same way: the past-range caption
             // together with the completed paint proves every call row drew and
-            // the caption row's position is final. The click uses this wait's
-            // grid, never a fresh read.
+            // the caption row's position is final. The helper finds the
+            // caption in the frame it clicks, never on a grid read earlier.
             let grid = run.wait_screen("the settled past-range caption", |grid| {
                 grid.contents.contains("completed")
                     && grid.rows.iter().any(|row| row.contains(&caption))
@@ -2047,7 +2023,7 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
             // transmit may follow it for the past-range image.
             // The viewer open is the click's signal, so the test waits for
             // the marker next.
-            click_text(&mut run, &grid, &caption);
+            run.click_where("the past-range caption", |grid| grid.text_at(&caption));
 
             // The click opens the viewer on the private copy, as for an
             // in-range image: the past-range target resolves.
@@ -2097,6 +2073,1000 @@ fn images_past_the_placeholder_range_keep_a_unique_viewer_target() {
             });
             let output = run.wait();
             assert_eq!(output.status.code(), Some(0));
+        }),
+    );
+}
+
+/// One terminal's recorded or documented-default bytes per #4097 row,
+/// each loaded from `fixtures/terminal_bytes/` at compile time. A new
+/// terminal is a new entry, never a branch on the terminal name; a new
+/// row is a new field on every entry.
+struct TerminalBytes {
+    /// The terminal the bytes were recorded or documented for.
+    terminal: &'static str,
+    /// Where the bytes come from; see `fixtures/terminal_bytes/PROVENANCE.md`.
+    provenance: &'static str,
+    /// The bytes that move to the start of the cursor's line.
+    line_start: &'static [u8],
+    /// The bytes that move to the end of the cursor's line.
+    line_end: &'static [u8],
+    /// The bytes that delete to the start of the line.
+    delete_to_line_start: &'static [u8],
+    /// The bytes that delete one word back, when the terminal has a
+    /// default; `None` when it has none (Ghostty).
+    delete_word: Option<&'static [u8]>,
+}
+
+/// Ghostty's #3751/#3754 bytes: Super+Left/Right arrive as Ctrl+A/Ctrl+E
+/// and Super+Backspace as Ctrl+U. No `delete_word` default: Option+Backspace
+/// is plain `0x7f` since 1.2 (PR #7320, discussion #9560) and `ESC 0x7f` is
+/// a user keybind (1.2 removed the builtin, discussion #8677). The bug
+/// reports state no Ghostty version.
+const GHOSTTY_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "Ghostty",
+    provenance: "bug reports #3751 and #3754; versions unknown (reports state none)",
+    line_start: include_bytes!("fixtures/terminal_bytes/ghostty_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/ghostty_line_end.bin"),
+    delete_to_line_start: include_bytes!(
+        "fixtures/terminal_bytes/ghostty_delete_to_line_start.bin"
+    ),
+    delete_word: None,
+};
+
+/// iTerm2's factory default bytes: with no profile key mapping for
+/// plain Ctrl+letter keys they pass through as C0 bytes, and the factory
+/// option keys send no `ESC`-prefixed Alt bytes (`+Esc` is opt-in), so the
+/// word key is Ctrl+W. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`; the docs state no version.
+const ITERM2_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "iTerm2",
+    provenance: "factory key handling (no Ctrl+letter remaps; +Esc opt-in); C0 per man ascii(7); versions unknown",
+    line_start: include_bytes!("fixtures/terminal_bytes/iterm2_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/iterm2_line_end.bin"),
+    delete_to_line_start: include_bytes!("fixtures/terminal_bytes/iterm2_delete_to_line_start.bin"),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/iterm2_delete_word.bin"
+    )),
+};
+
+/// Terminal.app's default bytes: it declares `xterm-256color` and forwards
+/// unmapped control keys as C0 bytes, with "Use Option as Meta key" off, so
+/// the word key is Ctrl+W. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`; Apple states no single version.
+const TERMINAL_APP_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "Terminal.app",
+    provenance: "xterm-256color declaration; Apple Control-U guide; C0 per man ascii(7); versions unknown",
+    line_start: include_bytes!("fixtures/terminal_bytes/terminal_app_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/terminal_app_line_end.bin"),
+    delete_to_line_start: include_bytes!(
+        "fixtures/terminal_bytes/terminal_app_delete_to_line_start.bin"
+    ),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/terminal_app_delete_word.bin"
+    )),
+};
+
+/// Linux terminals' default bytes (xterm, the reference X terminal): 7-bit
+/// C0 controls for Ctrl+letter. Sources in
+/// `fixtures/terminal_bytes/PROVENANCE.md`.
+const LINUX_BYTES: TerminalBytes = TerminalBytes {
+    terminal: "Linux",
+    provenance: "readline C-a/C-e/C-u/C-w defaults; C0 per man ascii(7) (man-pages 6.19)",
+    line_start: include_bytes!("fixtures/terminal_bytes/linux_line_start.bin"),
+    line_end: include_bytes!("fixtures/terminal_bytes/linux_line_end.bin"),
+    delete_to_line_start: include_bytes!("fixtures/terminal_bytes/linux_delete_to_line_start.bin"),
+    delete_word: Some(include_bytes!(
+        "fixtures/terminal_bytes/linux_delete_word.bin"
+    )),
+};
+
+/// Every tabled terminal: one entry per terminal the ticket names. New
+/// terminals join this table; no test branches on a terminal name.
+const TERMINAL_TABLE: &[TerminalBytes] =
+    &[GHOSTTY_BYTES, ITERM2_BYTES, TERMINAL_APP_BYTES, LINUX_BYTES];
+
+/// The scripted `ask_user` step the byte journeys answer through: one
+/// call with three questions, the third answered as free text on its
+/// words row. Same surface as the `journeys.rs` question-form journey.
+fn byte_form_step() -> Value {
+    json!({"tool_calls": [{"name": "ask_user", "arguments": {"questions": [
+        {"header": "Scope", "question": "Which crates should the change touch?",
+         "multiSelect": true, "options": [
+            {"label": "hub", "description": "the session host"},
+            {"label": "tui", "description": "the terminal"}]},
+        {"header": "Tests", "question": "Which tests cover it?",
+         "options": [{"label": "unit"}, {"label": "pty"}]},
+        {"header": "Docs", "question": "Which docs change?"},
+    ]}}]})
+}
+
+/// Whether the grid draws the three-question form's title and first
+/// question after the `run it` turn reaches the scripted step.
+fn byte_form_drawn(grid: &Grid) -> bool {
+    shows(
+        grid,
+        "Question from run it · 3 questions, any can be skipped",
+    ) && shows(grid, "Which crates should the change touch?")
+}
+
+/// A TUI journey's terminal: ready, kitty flags pushed, the unseeded
+/// home's first-run import offer declined, so regression bytes go out
+/// only once the binary is ready for input.
+fn start_byte_journey(setup: &Setup, bin: &Path) -> Run {
+    let mut run = Run::spawn_journey(setup, 160, 48, bin, &[], &support::TRUECOLOUR);
+    run.ready();
+    run.wait_bytes(0, support::pty::KITTY_PUSH, "kitty keyboard flags pushed");
+    dismiss_first_run_offer(&mut run);
+    run
+}
+
+/// The question form open on its free-text words row: the `run it` turn
+/// asked, the first question's option toggled, then Right and Tab across
+/// to the Docs words row, exactly like the `journeys.rs` form journey.
+fn open_words_row(run: &mut Run) {
+    run.write(b"run it\r");
+    run.wait_screen("the question form", byte_form_drawn);
+    run.write(b"2");
+    run.wait_screen("the toggled option", |grid| shows(grid, "2 [x] tui"));
+    run.write(b"\x1b[C");
+    run.wait_screen("the Tests tab", |grid| shows(grid, "Which tests cover it?"));
+    run.write(b"\t");
+    run.wait_screen("the Docs words row", |grid| {
+        shows(grid, "Which docs change?") && shows(grid, "Type an answer")
+    });
+}
+
+/// The declined form, then the person-visible exit: Esc declines the
+/// open form, and the usual sequence quits from the declined turn.
+fn decline_and_quit(mut run: Run) {
+    run.write(b"\x1b[27u");
+    run.wait_screen("the declined form", |grid| {
+        shows(grid, "declined") && !shows(grid, "Question from")
+    });
+    quit_journey(run);
+}
+
+/// The line start and end bytes through the real decoder (#3751): a
+/// two-line input-box draft, then the entry's bytes move on the
+/// cursor's line exactly like the `line_start_end.rs` journey, asserting
+/// only inside wait predicates.
+fn line_start_end_bytes_journey(entry: &TerminalBytes) {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [{"text": ["Complete."]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
+            "tui": support::journey::tui_off()}),
+    );
+    let bin = journey_bin();
+    let mut run = start_byte_journey(&setup, &bin);
+    // A two-line draft with the cursor at its end.
+    run.write(b"qx\x0ajz");
+    run.wait_screen("the two-line draft", |grid| {
+        shows(grid, "qx") && shows(grid, "jz")
+    });
+    // The entry's bytes move to the start of the cursor's line: typing
+    // lands before it, not at the draft's start.
+    let mut start = entry.line_start.to_vec();
+    start.push(b'X');
+    run.write(&start);
+    run.wait_screen("the line-start edit", |grid| {
+        shows(grid, "Xjz") && !shows(grid, "Xqx")
+    });
+    // The entry's bytes move to the end of the cursor's line.
+    let mut end = entry.line_end.to_vec();
+    end.push(b'Y');
+    run.write(&end);
+    run.wait_screen("the line-end edit", |grid| shows(grid, "XjzY"));
+    // From the first line, the end bytes stay on it instead of jumping
+    // to the draft's end.
+    let mut first = b"\x1b[A".to_vec();
+    first.extend_from_slice(entry.line_end);
+    first.push(b'Q');
+    run.write(&first);
+    run.wait_screen("the first line's end", |grid| {
+        shows(grid, "qxQ")
+            && !grid
+                .rows
+                .iter()
+                .map(|row| row.replace('█', ""))
+                .any(|row| row.contains("YQ"))
+    });
+    // One Ctrl+C clears the draft, and the usual sequence quits from
+    // the empty box.
+    run.write(b"\x03");
+    run.wait_screen("the cleared draft", |grid| !shows(grid, "XjzY"));
+    run.write(b"\x03\x03\r");
+    run.wait_screen("the restored terminal", |grid| {
+        !grid.alternate_screen && !grid.hide_cursor
+    });
+    assert_eq!(run.wait().status.code(), Some(0));
+}
+
+/// The delete-to-line-start bytes on a question form's words row
+/// (#3754): "one two three" typed, the entry's bytes empty the row.
+fn delete_to_line_start_bytes_journey(entry: &TerminalBytes) {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [byte_form_step(), {"text": ["Thanks."]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
+            "tui": support::journey::tui_off()}),
+    );
+    let bin = journey_bin();
+    let mut run = start_byte_journey(&setup, &bin);
+    open_words_row(&mut run);
+    run.write(b"one two three");
+    run.wait_screen("the typed words row", |grid| shows(grid, "✎ one two three"));
+    run.write(entry.delete_to_line_start);
+    run.wait_screen("the emptied words row", |grid| {
+        shows(grid, "Type an answer") && !shows(grid, "one two three")
+    });
+    decline_and_quit(run);
+}
+
+/// The delete-word bytes on a question form's words row (#3754): "one
+/// two" typed, the entry's bytes cut "two" while "one" stays. The entry
+/// must have a word-delete byte; Ghostty has none, so it has no test.
+fn delete_word_bytes_journey(entry: &TerminalBytes) {
+    let setup = Setup::new();
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [byte_form_step(), {"text": ["Thanks."]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200},
+            "tui": support::journey::tui_off()}),
+    );
+    let bin = journey_bin();
+    let mut run = start_byte_journey(&setup, &bin);
+    open_words_row(&mut run);
+    run.write(b"one two");
+    run.wait_screen("the typed words row", |grid| shows(grid, "✎ one two"));
+    let delete_word = entry
+        .delete_word
+        .expect("tabled terminal has a word-delete byte");
+    run.write(delete_word);
+    run.wait_screen("the cut words row", |grid| {
+        shows(grid, "✎ one") && !shows(grid, "one two")
+    });
+    decline_and_quit(run);
+}
+
+/// The closed terminal table: every entry names its terminal and cites
+/// its bytes' source, so a new terminal joins the table with its
+/// provenance instead of a branch.
+#[test]
+fn terminal_bytes_table_names_each_terminal_source() {
+    for entry in TERMINAL_TABLE {
+        assert!(!entry.terminal.is_empty(), "each entry names its terminal");
+        assert!(
+            !entry.provenance.is_empty(),
+            "each entry cites its bytes' source"
+        );
+    }
+    assert_eq!(
+        TERMINAL_TABLE.len(),
+        4,
+        "one entry per tabled terminal: Ghostty, iTerm2, Terminal.app, Linux"
+    );
+}
+
+/// Ghostty's #3751 bytes through the decoder: Super+Left/Right arrive
+/// as Ctrl+A/Ctrl+E and move on the cursor's line.
+#[test]
+fn terminal_bytes_ghostty_line_start_end() {
+    run_journey(
+        "terminal_bytes_ghostty_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&GHOSTTY_BYTES)),
+    );
+}
+
+/// Ghostty's #3754 line bytes through the decoder: Super+Backspace
+/// arrives as Ctrl+U and empties the words row.
+#[test]
+fn terminal_bytes_ghostty_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_ghostty_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&GHOSTTY_BYTES)),
+    );
+}
+
+// Ghostty has no `delete_word` default to feed: Option+Backspace is plain
+// `0x7f` since 1.2 and `ESC 0x7f` is a user keybind, so the word row is
+// covered for iTerm2, Terminal.app and Linux only.
+
+/// iTerm2's factory line bytes through the decoder: Ctrl+A/Ctrl+E pass
+/// through unmapped and move on the cursor's line.
+#[test]
+fn terminal_bytes_iterm2_line_start_end() {
+    run_journey(
+        "terminal_bytes_iterm2_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// iTerm2's factory line bytes through the decoder: Ctrl+U passes through
+/// unmapped and empties the words row.
+#[test]
+fn terminal_bytes_iterm2_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_iterm2_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// iTerm2's factory word bytes through the decoder: Ctrl+W passes through
+/// unmapped and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_iterm2_delete_word() {
+    run_journey(
+        "terminal_bytes_iterm2_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&ITERM2_BYTES)),
+    );
+}
+
+/// Terminal.app's line bytes through the decoder: Ctrl+A/Ctrl+E are
+/// forwarded as C0 bytes and move on the cursor's line.
+#[test]
+fn terminal_bytes_terminal_app_line_start_end() {
+    run_journey(
+        "terminal_bytes_terminal_app_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Terminal.app's line bytes through the decoder: Ctrl+U is forwarded as
+/// a C0 byte and empties the words row.
+#[test]
+fn terminal_bytes_terminal_app_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_terminal_app_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Terminal.app's word bytes through the decoder: Ctrl+W is forwarded as
+/// a C0 byte and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_terminal_app_delete_word() {
+    run_journey(
+        "terminal_bytes_terminal_app_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&TERMINAL_APP_BYTES)),
+    );
+}
+
+/// Linux terminals' line bytes through the decoder: Ctrl+A/Ctrl+E arrive
+/// as C0 bytes and move on the cursor's line.
+#[test]
+fn terminal_bytes_linux_line_start_end() {
+    run_journey(
+        "terminal_bytes_linux_line_start_end",
+        std::panic::AssertUnwindSafe(|| line_start_end_bytes_journey(&LINUX_BYTES)),
+    );
+}
+
+/// Linux terminals' line bytes through the decoder: Ctrl+U arrives as a
+/// C0 byte and empties the words row.
+#[test]
+fn terminal_bytes_linux_delete_to_line_start() {
+    run_journey(
+        "terminal_bytes_linux_delete_to_line_start",
+        std::panic::AssertUnwindSafe(|| delete_to_line_start_bytes_journey(&LINUX_BYTES)),
+    );
+}
+
+/// Linux terminals' word bytes through the decoder: Ctrl+W arrives as a
+/// C0 byte and cuts the words row back to "one".
+#[test]
+fn terminal_bytes_linux_delete_word() {
+    run_journey(
+        "terminal_bytes_linux_delete_word",
+        std::panic::AssertUnwindSafe(|| delete_word_bytes_journey(&LINUX_BYTES)),
+    );
+}
+
+/// Installs a provider `fake` with model `m` on `anthropic-messages` at
+/// the fake server, and makes `fake/m` the configured model: the replay
+/// half of `Setup::provider_on` (`failed_tool_result_text.rs`),
+/// file-local because each test binary owns its helpers.
+fn install_replay_anthropic_provider(setup: &Setup, server: &ProviderServer) {
+    let source = setup.root.path().join("src");
+    support::write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+    );
+    support::write_json(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [{"id": "m", "protocol": "anthropic-messages", "base_url": format!("{}/v1", server.url()), "context_window": 100000, "input": ["text", "image"]}]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m"}),
+    );
+}
+
+/// Installs the copied `databricks` package with its origin rewritten to
+/// the fake server: the replay half of `install` (`databricks.rs`),
+/// file-local because each test binary owns its helpers. Returns the
+/// fake host the `DATABRICKS_HOST` environment carries.
+fn install_replay_databricks_package(setup: &Setup, server: &ProviderServer) -> String {
+    let to = setup.root.path().join("pkg-databricks");
+    support::package::copy_package("databricks", &to, "https://", "http://");
+    std::fs::write(
+        to.join("thinking.lua"),
+        include_str!("../../../providers/databricks/thinking.lua"),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(to),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    server.url().strip_prefix("http://").unwrap().to_owned()
+}
+
+/// The discovery's two answers, in the order `models()` asks for them:
+/// only the Claude entries this journey needs (`databricks.rs` serves
+/// three services with full metadata), file-local. The row keeps what
+/// `entry_for` reads: the chat mode and name match, the ANTHROPIC type
+/// for the bearer route, and the window a model needs to count.
+fn replay_discovery() -> [Response; 2] {
+    [
+        Response::status(
+            200,
+            json!({"model_services": [
+                {"name": "model-services/system.ai.claude-opus-5",
+                 "supported_api_types": ["mlflow/v1/chat/completions"]},
+            ]})
+            .to_string(),
+        ),
+        Response::status(
+            200,
+            json!({"models": [
+                {"model_name": "claude-opus-5", "mode": "chat", "provider_type": "ANTHROPIC",
+                 "context_window": {"max_input": 200000, "max_output": 64000}},
+            ]})
+            .to_string(),
+        ),
+    ]
+}
+
+/// A scripted `anthropic-messages` text reply with `text`.
+fn replay_text_reply(text: &str) -> Response {
+    let events = [
+        json!({"type": "message_start", "message": {"id": "msg_1"}}),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": text}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+            "usage": {"input_tokens": 10, "output_tokens": 3}}),
+        json!({"type": "message_stop"}),
+    ];
+    Response::stream(
+        events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// A scripted `anthropic-messages` reply calling built-in tool `name`
+/// with `arguments`.
+fn replay_tool_call(id: &str, name: &str, arguments: &Value) -> Response {
+    let mut all = vec![json!({"type": "message_start", "message": {"id": "msg_1"}})];
+    all.push(
+        json!({"type": "content_block_start", "index": 0, "content_block": {
+            "type": "tool_use", "id": id, "name": name, "input": arguments}}),
+    );
+    all.push(json!({"type": "content_block_stop", "index": 0}));
+    all.push(
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+        "usage": {"input_tokens": 10, "output_tokens": 3}}),
+    );
+    all.push(json!({"type": "message_stop"}));
+    Response::stream(
+        all.iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// User messages decoded from one captured Anthropic Messages request:
+/// each `role: user` message's text parts joined, mirroring
+/// `user_messages` (`handoff_kept.rs`) for the Responses envelope.
+fn replay_user_messages(body: &[u8]) -> Vec<String> {
+    let request: Value = serde_json::from_slice(body).unwrap();
+    request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "user")
+        .map(|message| {
+            if let Some(text) = message["content"].as_str() {
+                text.to_owned()
+            } else {
+                message["content"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(|part| part["text"].as_str())
+                    .collect::<String>()
+            }
+        })
+        .collect()
+}
+
+/// The `seq` of the logged turn whose input contains `text`, mirroring
+/// `turn_started_seq` (`handoff_kept.rs`) over the session's events file.
+fn replay_turn_seq(lines: &[Value], text: &str) -> u64 {
+    lines
+        .iter()
+        .find(|line| {
+            line["kind"] == "turn_started"
+                && line["payload"]["input"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        item["content"]
+                            .as_array()
+                            .is_some_and(|parts| parts.iter().any(|part| part["text"] == text))
+                    })
+                })
+        })
+        .and_then(|line| line["seq"].as_u64())
+        .expect("turn_started with the requested text and seq")
+}
+
+/// Types `text` as one journey turn and waits for `wait_for` on screen,
+/// allowing every approval prompt on the way: a tool turn's approval
+/// arrives before its reply, so the wait names either.
+fn replay_ask(run: &mut Run, text: &str, wait_for: &str) {
+    let from = run.output().len();
+    run.write(format!("{text}\r").as_bytes());
+    loop {
+        let grid = run.wait_screen("approval or the reply", |grid| {
+            grid.contents.contains("Allow once") || grid.contents.contains(wait_for)
+        });
+        // settled: the approval-or-reply wait returned this grid, with no input since.
+        if grid.contents.contains(wait_for) {
+            break;
+        }
+        let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
+        run.wait_bytes(approval, FRAME_END, "the approval frame");
+        run.write(b"\r");
+    }
+    run.turn_finished(from);
+}
+
+/// The recorded #3969 exchange replayed: the person's messages that still
+/// bind survive a handoff on the Databricks Anthropic route. Discovery
+/// answers the two Unity Catalog endpoints once at startup, then the
+/// turns run the scripted pre-handoff replies with the recorded text
+/// reply answering the first post-handoff request; the journey asserts
+/// the labelled pair blocks handoff_kept pins. Evidence for #3969, whose
+/// parent dropped kept messages' replies from the post-handoff request.
+#[test]
+fn replay_databricks_handoff_keeps_labelled_pairs() {
+    run_journey(
+        "replay_databricks_handoff_keeps_labelled_pairs",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let skill_path = setup.workspace().join(".agents/skills/review/SKILL.md");
+            fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
+            fs::write(
+                &skill_path,
+                "---\nname: review\ndescription: Review this work.\n---\nUse the current review skill instructions.\n",
+            )
+            .unwrap();
+            let mut script: Vec<Response> = replay_discovery().into_iter().collect();
+            script.push(replay_text_reply("Which color should I use?"));
+            script.push(replay_text_reply("Which number should I use?"));
+            script.push(replay_tool_call(
+                "toolu_1",
+                "skill",
+                &json!({"name": "review"}),
+            ));
+            script.push(replay_text_reply("The skill is loaded."));
+            script.push(replay_tool_call(
+                "toolu_2",
+                "handoff",
+                &json!({"note": "The handoff note."}),
+            ));
+            script.push(Response::stream(
+                include_bytes!("fixtures/provider_replay/3969_post_handoff_text.sse").as_slice(),
+            ));
+            let server = ProviderServer::start(script).unwrap();
+            let host = install_replay_databricks_package(&setup, &server);
+            support::write_json(
+                &setup.workspace().join("r.json"),
+                &json!({"steps": [{"text": "2, 3"}]}),
+            );
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "databricks/databricks-claude-opus-5",
+                    "hub": {"idle_exit_ms": 200},
+                    "reviewer": {"model": "scripted/r.json"}}),
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[
+                    ("DATABRICKS_TOKEN", "dapi-test"),
+                    ("DATABRICKS_HOST", host.as_str()),
+                ],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            replay_ask(&mut run, "Which color?", "Which color should I use?");
+            replay_ask(&mut run, "Blue.", "Which number should I use?");
+            replay_ask(&mut run, "Seven.", "The skill is loaded.");
+            replay_ask(&mut run, "Please hand off now.", "lovely human");
+            // Confirm the reviewer, skill tool and handoff all ran before
+            // inspecting the request bytes, so a broken setup cannot
+            // masquerade as the regression.
+            let sessions = sessions(&setup);
+            assert_eq!(sessions.len(), 1, "one session ran");
+            let events = std::fs::read_to_string(sessions[0].join("events.jsonl")).unwrap();
+            let lines: Vec<Value> = events
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let color_seq = replay_turn_seq(&lines, "Which color?");
+            let blue_seq = replay_turn_seq(&lines, "Blue.");
+            let seven_seq = replay_turn_seq(&lines, "Seven.");
+            let kept = lines
+                .iter()
+                .find(|line| line["kind"] == "reviewer_kept")
+                .expect("the reviewer selected messages");
+            assert_eq!(
+                kept["payload"]["kept"],
+                json!([
+                    {"seq": blue_seq, "item": 0},
+                    {"seq": seven_seq, "item": 0}
+                ]),
+                "the selection keeps the two answers, not the questions"
+            );
+            assert_ne!(color_seq, blue_seq);
+            let loaded = lines
+                .iter()
+                .find(|line| {
+                    line["kind"] == "tool_call_completed"
+                        && line["payload"]["control"]["skill"]["name"] == "review"
+                })
+                .expect("the real skill tool loaded review");
+            assert_eq!(loaded["payload"]["status"], "completed");
+            let resent = lines
+                .iter()
+                .find(|line| line["kind"] == "skills_resent")
+                .expect("the loaded skill was resent after handoff");
+            assert_eq!(resent["payload"]["skills"].as_array().unwrap().len(), 1);
+            let completed = lines
+                .iter()
+                .find(|line| line["kind"] == "handoff_completed")
+                .expect("the handoff completed");
+            assert_eq!(completed["payload"]["outcome"], "completed");
+            let requests = server.requests();
+            assert!(requests.len() >= 8, "{}", requests.len());
+            let post = requests
+                .iter()
+                .rfind(|request| request.path == "/ai-gateway/anthropic/v1/messages")
+                .expect("a model request");
+            assert_eq!(
+                post.header("authorization"),
+                Some(fingerprint("Bearer dapi-test").as_str())
+            );
+            let before: String = requests
+                .iter()
+                .filter(|request| {
+                    request.path == "/ai-gateway/anthropic/v1/messages"
+                        && !std::ptr::eq(*request, post)
+                })
+                .map(|request| replay_user_messages(&request.body).join(""))
+                .collect();
+            assert!(before.contains("Which color?"));
+            assert!(before.contains("Blue."));
+            assert!(before.contains("Seven."));
+            assert!(before.contains("Please hand off now."));
+            assert!(
+                !before.contains("The person's earlier message:")
+                    && !before.contains("The person's new message:")
+                    && !before.contains("Skills reloaded from the previous context:"),
+                "handoff-only framing must not leak into ordinary requests"
+            );
+            let messages = replay_user_messages(&post.body);
+            let flattened = messages.join("");
+            // docs/handoff.md, "What the model sees after a handoff", item 4:
+            // "each in its own labelled block" — two kept answers, two blocks.
+            // The Anthropic envelope carries them in one user message, so
+            // the count and the order below read the flattened text.
+            assert_eq!(
+                flattened.matches("The person's earlier message:").count(),
+                2,
+                "each kept answer has its own block"
+            );
+            let pair_one = "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.";
+            let pair_two = "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.";
+            let current = "The person's new message:\nPlease hand off now.";
+            let note = "The handoff note.";
+            let skill = &resent["payload"]["skills"][0];
+            let skill_block = format!(
+                "Skills reloaded from the previous context:\n{} — {}\n\n{}",
+                skill["name"].as_str().unwrap(),
+                skill["path"].as_str().unwrap(),
+                skill["content"].as_str().unwrap(),
+            );
+            // docs/handoff.md, "What the model sees after a handoff", "In order:":
+            // each block present once, oldest first, then the new message,
+            // the note and the reloaded skill.
+            let positions: Vec<usize> = [pair_one, pair_two, current, note, skill_block.as_str()]
+                .iter()
+                .map(|text| {
+                    flattened
+                        .find(text)
+                        .unwrap_or_else(|| panic!("flattened request lost {text:?}"))
+                })
+                .collect();
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "block positions were {positions:?}"
+            );
+            quit_journey(run);
+        }),
+    );
+}
+
+/// Installs the copied `bedrock` package with its endpoint rewritten to
+/// the fake server: the replay half of `bedrock_answering` (`bedrock.rs`),
+/// file-local because each test binary owns its helpers. Serves the
+/// recorded Converse text-turn bytes with the eventstream content type,
+/// never `Response::stream`. Returns the fake region host the `AWS_REGION`
+/// environment carries.
+fn install_replay_bedrock_package(setup: &Setup) -> (ProviderServer, String) {
+    let server = ProviderServer::start([Response {
+        status: 200,
+        headers: vec![(
+            "content-type".to_owned(),
+            "application/vnd.amazon.eventstream".to_owned(),
+        )],
+        body: include_bytes!("fixtures/provider_replay/bedrock_converse_text.eventstream").to_vec(),
+        drop_connection: false,
+        stall: false,
+    }])
+    .unwrap();
+    let to = setup.root.path().join("pkg-bedrock");
+    support::package::copy_package(
+        "bedrock",
+        &to,
+        "https://bedrock-runtime.{region}.amazonaws.com",
+        "http://{region}",
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(to),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    // The region setting is the per-account host, read from `AWS_REGION`.
+    let host = server.url().strip_prefix("http://").unwrap().to_owned();
+    (server, host)
+}
+
+/// The recorded Bedrock Converse shape replayed: one text turn on the
+/// copied `bedrock` package against the fake server answers from the
+/// recorded eventstream bytes, and the screen shows the reply. It claims
+/// no pre-fix failure: no Bedrock bug stands behind it.
+#[test]
+fn replay_bedrock_converse_text_turn() {
+    run_journey(
+        "replay_bedrock_converse_text_turn",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let (server, host) = install_replay_bedrock_package(&setup);
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "bedrock/mistral.ministral-3-8b-instruct",
+                    "hub": {"idle_exit_ms": 200}}),
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[
+                    ("AWS_BEARER_TOKEN_BEDROCK", "bedrock-test-key"),
+                    ("AWS_REGION", host.as_str()),
+                ],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            let from = run.output().len();
+            run.write(b"hi\r");
+            run.wait_screen("the answered turn", |grid| shows(grid, "goin"));
+            run.turn_finished(from);
+            let requests = server.requests();
+            assert_eq!(requests.len(), 1, "{requests:?}");
+            let sent = &requests[0];
+            assert_eq!(
+                sent.path,
+                "/model/mistral.ministral-3-8b-instruct/converse-stream"
+            );
+            assert_eq!(
+                sent.header("authorization"),
+                Some(fingerprint("Bearer bedrock-test-key").as_str())
+            );
+            quit_journey(run);
+        }),
+    );
+}
+
+/// The recorded #3841 exchange replayed: a hanging MCP call's timeout
+/// reaches the provider as the tool result's text. The fake answers the
+/// first request with the scripted hang call, an empty `is_error` result
+/// with the recorded gateway 400, and any other result with the recorded
+/// text reply; the journey asserts the recorded result carries the
+/// timeout message. Evidence for #3841, whose parent sent the timed-out
+/// result empty, which the gateway rejects with that 400.
+#[test]
+fn replay_empty_failed_tool_result_carries_timeout_text() {
+    run_journey(
+        "replay_empty_failed_tool_result_carries_timeout_text",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new_with_mcp_fixture();
+            let dir = setup.root.path().join("fx");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("tools.json"),
+                json!([{"name": "hang", "annotations": {"readOnlyHint": true, "openWorldHint": false}}])
+                    .to_string(),
+            )
+            .unwrap();
+            std::fs::write(dir.join("call-hang.json"), "hang").unwrap();
+            let server = ProviderServer::start_responding(|request| {
+                let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+                let result = body["messages"]
+                    .as_array()
+                    .into_iter()
+                    .flat_map(|messages| messages.iter())
+                    .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+                    .find(|block| block["type"] == "tool_result");
+                match result {
+                    // The wire the recorded `stream tool use` exchange
+                    // cannot serve, since bare `get_weather` never invokes
+                    // the hanging fixture.
+                    None => replay_tool_call("toolu_1", "mcp__fx__hang", &json!({})),
+                    Some(block)
+                        if block["is_error"] == json!(true)
+                            && (block["content"] == json!("") || block["content"] == json!([])) =>
+                    {
+                        Response::status(
+                            400,
+                            include_bytes!("fixtures/provider_replay/3841_gateway_400.json")
+                                .as_slice(),
+                        )
+                    }
+                    Some(_) => Response::stream(
+                        include_bytes!("fixtures/provider_replay/3841_text.sse").as_slice(),
+                    ),
+                }
+            })
+            .unwrap();
+            install_replay_anthropic_provider(&setup, &server);
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}, "mcp": {"servers": {"fx": {
+                    "command": "/bin/bash",
+                    "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+                    "startup_timeout_ms": 600000,
+                    "timeout_ms": 200,
+                }}}}),
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            let from = run.output().len();
+            run.write(b"hang\r");
+            // The turn's end paint, whatever its outcome: the failed turn
+            // paints its failed card, so waiting for the completed paint
+            // alone would stall past the failure the replay exists to show.
+            loop {
+                let grid = run.wait_screen("approval or the turn's end", |grid| {
+                    grid.contents.contains("Allow once")
+                        || grid.contents.contains("▣ completed")
+                        || grid.contents.contains("▣ failed")
+                });
+                // settled: the approval-or-end wait returned this grid, with no input since.
+                if grid.contents.contains("▣ completed") || grid.contents.contains("▣ failed") {
+                    break;
+                }
+                let approval = run.wait_bytes(from, b"Allow once", "the approval prompt");
+                run.wait_bytes(approval, FRAME_END, "the approval frame");
+                run.write(b"\r");
+            }
+            // The hub announces the turn's end by its title on every
+            // outcome; the grid paint above already told which one.
+            run.wait_bytes(from, support::pty::FINISHED_TITLE, "the finished title");
+            let results: Vec<Value> = server
+                .requests()
+                .iter()
+                .filter_map(|request| {
+                    let body: Value = serde_json::from_slice(&request.body).ok()?;
+                    body["messages"]
+                        .as_array()?
+                        .iter()
+                        .flat_map(|message| {
+                            message["content"].as_array().cloned().unwrap_or_default()
+                        })
+                        .find(|block| block["type"] == "tool_result")
+                })
+                .collect();
+            let result = results
+                .into_iter()
+                .find(|block| block["is_error"] == json!(true))
+                .expect("the timed-out result reached the provider");
+            assert_eq!(result["is_error"], json!(true));
+            let content = result["content"].as_str().unwrap();
+            assert!(
+                !content.is_empty(),
+                "the timed-out result reached the provider empty: 400 messages.164.content.0.tool_result: content cannot be empty if is_error is true"
+            );
+            assert!(
+                content.contains("did not answer"),
+                "the timed-out result carries the timeout message, got: {content}"
+            );
+            run.wait_screen("the answered turn", |grid| shows(grid, "lovely human"));
+            quit_journey(run);
         }),
     );
 }

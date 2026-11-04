@@ -6,6 +6,7 @@ use crate::configure::{
     RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists,
     ToolSwitches, WriteScope,
 };
+use contract::HubEventKind;
 use contract::{ErrorCode, HubLine};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ pub(super) fn io_error(operation: &str) -> ConfigureError {
     }
 }
 pub(super) fn result(line: &HubLine, operation: &str) -> Result<Value, ConfigureError> {
-    if line.kind == "command_rejected" {
+    if line.kind() == HubEventKind::CommandRejected {
         return Err(ConfigureError {
             code: line
                 .payload
@@ -33,7 +34,7 @@ pub(super) fn result(line: &HubLine, operation: &str) -> Result<Value, Configure
                 .into(),
         });
     }
-    if line.kind != "command_accepted" {
+    if line.kind() != HubEventKind::CommandAccepted {
         return Err(io_error(operation));
     }
     Ok(line.payload.get("result").cloned().unwrap_or(Value::Null))

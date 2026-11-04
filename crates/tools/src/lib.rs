@@ -41,6 +41,7 @@ pub use session_list::SessionList;
 pub use session_message::SessionMessage;
 pub use session_search::SessionSearch;
 pub use shell::Shell;
+pub use shell::hosted::{keeper_spawn, kept_end};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use shell::sandbox::Prepared;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

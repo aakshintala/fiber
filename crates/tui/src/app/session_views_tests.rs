@@ -1018,7 +1018,7 @@ fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1272,7 +1272,7 @@ fn a_panel_file_rank_past_the_end_opens_the_list_sending_only_the_numstat_comman
     let Effect::Send(lines) = effect else {
         panic!("a rank past the end sends only the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1304,7 +1304,7 @@ fn the_narrow_changed_files_segment_opens_the_file_list() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -2547,7 +2547,7 @@ fn open_figures(app: &mut App, width: u16, height: u16) -> String {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    assert_eq!(lines.len(), 1, "one numstat command"); // docs/tui.md:830, run when the view opens.
+    assert_eq!(lines.len(), 1, "one numstat command"); // docs/tui.md, "Swapped views", run when the view opens.
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     request["id"].as_str().unwrap_or_default().to_owned()
@@ -3031,7 +3031,7 @@ fn returning_the_remote_copy_stores_it_and_rereads() {
     accept_hub_line(&script, &asked, json!({}));
     let (lines, mut app) = collect(rx, "the workspace write");
     handle.join().unwrap();
-    // `docs/tui.md`, "Changed files": the view reads the file's diff and
+    // `docs/tui.md`, "Swapped views": the view reads the file's diff and
     // numstat again. That promises both requests, in no promised order.
     assert_eq!(lines.len(), 2);
     let mut got: Vec<String> = shell_requests(&lines)
@@ -3075,7 +3075,7 @@ fn a_hub_side_edit_leaves_the_remote_copy_unwritten_with_the_notice_but_still_re
         app.notices.newest(),
         Some("/w/src/file-0.rs changed since it was read.")
     );
-    // `docs/tui.md`, "Changed files": the view still reads the diff and
+    // `docs/tui.md`, "Swapped views": the view still reads the diff and
     // numstat again. That promises both requests, in no promised order.
     assert_eq!(lines.len(), 2);
     let mut got: Vec<String> = shell_requests(&lines)
@@ -3271,4 +3271,146 @@ fn returning_for_an_undecodable_path_sends_nothing() {
     let path = PathBuf::from("/w").join(std::ffi::OsStr::from_bytes(b"\xff.txt"));
     assert!(app.changed_file_closed(&path, Ok(())).is_empty());
     assert_eq!(app.notices.newest(), None);
+}
+
+// Part of #3696: the figures, diff and hooks answers route by tag.
+
+#[test]
+fn figures_answer_reaches_its_handler_and_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let id = open_figures(&mut app, 120, 35);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Figures));
+    app.on_line(accepted_figures(
+        &id,
+        "5\t0\tsrc/file-0.rs\n0\t3\tsrc/file-1.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+}
+
+#[test]
+fn figures_refusal_settles_its_tag_and_keeps_the_card_figures() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    let id = open_figures(&mut app, 120, 35);
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Figures));
+    app.on_line(rejected_diff(SESSION, &id, "hub refused"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +1 −0"), "{shown}");
+}
+
+#[test]
+fn a_second_figures_answer_after_settle_changes_nothing() {
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 2);
+    let id = open_figures(&mut app, 120, 35);
+    app.on_line(accepted_figures(
+        &id,
+        "5\t0\tsrc/file-0.rs\n0\t3\tsrc/file-1.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    app.on_line(accepted_figures(
+        &id,
+        "9\t9\tsrc/file-0.rs\n9\t9\tsrc/file-1.rs\nExit code 0.\n",
+        0,
+        None,
+        false,
+    ));
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("src/file-0.rs · +5 −0"), "{shown}");
+    assert!(shown.contains("src/file-1.rs · +0 −3"), "{shown}");
+}
+
+#[test]
+fn diff_answer_reaches_its_handler_and_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    let id = request["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Diff));
+    let before = app.lines();
+    app.on_line(accepted_diff(&id, "diff line\n"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("diff line"), "{shown}");
+    assert_eq!(app.lines(), before);
+}
+
+#[test]
+fn diff_refusal_settles_its_tag_and_shows_its_message() {
+    use crate::app::Waiting;
+    let mut app = files_attached(120, 35);
+    many_changes(&mut app, 1);
+    open_files_from_totals(&mut app, 120, 35);
+    let request = command(app.on_key(Key::Enter, now()));
+    let id = request["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Diff));
+    app.on_line(rejected_diff(SESSION, &id, "session refused"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 120, 35).0;
+    assert!(shown.contains("session refused"), "{shown}");
+}
+
+#[test]
+fn hooks_answer_reaches_its_handler_and_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Hooks));
+    app.on_line(accepted_hooks(
+        &id,
+        json!([
+            {"kind": "hook", "extension": "ext", "point": "before_tool", "on_failure": "blocking"},
+        ]),
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("ext"), "{shown}");
+}
+
+#[test]
+fn hooks_refusal_settles_its_tag_and_keeps_no_rows() {
+    use crate::app::Waiting;
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Hooks));
+    app.on_line(rejected_diff(SESSION, &id, "gone"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("No hooks"), "{shown}");
+}
+
+#[test]
+fn a_hub_rejection_for_hooks_drops_its_request_and_its_tag() {
+    use crate::app::Waiting;
+    let mut app = files_attached(80, 24);
+    let first = open_hooks(&mut app);
+    let id = first["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::Hooks));
+    app.on_line(hub_rejected(&id, "hub refused"));
+    assert_eq!(app.outbox.waiting(&id), None);
+    // A late session answer finds no hooks request and folds nowhere:
+    // the view keeps showing that it holds no rows.
+    app.on_line(accepted_hooks(
+        &id,
+        json!([{"kind": "hook", "extension": "ext", "point": "before_tool", "on_failure": "blocking"}]),
+    ));
+    let shown = screen(&app, 80, 24).0;
+    assert!(shown.contains("No hooks"), "{shown}");
+    assert!(!shown.contains("ext"), "{shown}");
 }

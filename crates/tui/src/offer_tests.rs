@@ -1210,7 +1210,7 @@ fn the_footer_rows_draw_dim_on_the_buffer() {
 }
 
 /// A wheel with no height, or over a closed offer, moves nothing and keeps
-/// the cursor and the choices (`docs/tui.md:576`).
+/// the cursor and the choices (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_with_no_height_or_closed_keeps_everything() {
     let mut offer = holding(10);
@@ -1219,7 +1219,7 @@ fn wheel_with_no_height_or_closed_keeps_everything() {
         (held.top, held.cursor, held.decisions.clone())
     };
     // Each direction asserts alone: a down-then-up pair would cancel a
-    // mutant step and hide it (`docs/tui.md:576`).
+    // mutant step and hide it (`docs/tui.md`, "Swapped views").
     offer.wheel(false, 80, 0);
     {
         let held = offer.held.as_ref().expect("open");
@@ -1248,7 +1248,7 @@ fn wheel_with_no_height_or_closed_keeps_everything() {
 
 /// A wheel that carries the cursor above the window clamps to the first
 /// position ending past the top, excluding one ending exactly there, and
-/// never changes the choices (`docs/tui.md:576`).
+/// never changes the choices (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_from_above_clamps_past_an_exact_top_edge() {
     let mut offer = holding(10);
@@ -1273,7 +1273,7 @@ fn wheel_from_above_clamps_past_an_exact_top_edge() {
 
 /// A wheel that carries the cursor below the window clamps to the last
 /// position starting before the bottom, excluding one starting exactly
-/// there, and never changes the choices (`docs/tui.md:576`).
+/// there, and never changes the choices (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_from_below_clamps_before_an_exact_bottom_edge() {
     let mut offer = holding(10);

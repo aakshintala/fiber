@@ -6,6 +6,7 @@
 //! so it places the band in a card.
 
 use contract::Envelope;
+use contract::events::EventKind;
 use contract::events::{
     ContextNudged, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome, PreambleBuilt,
     UsageRecorded,
@@ -413,14 +414,14 @@ impl Turn {
 /// Folds `preamble_built`, `handoff_started`, `handoff_completed` and
 /// `context_nudged`; false when no card changed.
 pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> bool {
-    match envelope.kind.as_str() {
-        "preamble_built" => {
+    match envelope.kind() {
+        EventKind::PreambleBuilt => {
             if let Some(built) = read!(envelope, PreambleBuilt) {
                 fold.trigger_at = built.trigger_at;
             }
             false
         }
-        "handoff_started" => read!(envelope, HandoffStarted).is_some_and(|started| {
+        EventKind::HandoffStarted => read!(envelope, HandoffStarted).is_some_and(|started| {
             let trigger = trigger(started.trigger, fold.trigger_at);
             let id = fold.id();
             let ts = envelope.ts;
@@ -429,7 +430,7 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
                 true
             })
         }),
-        "handoff_completed" => read!(envelope, HandoffCompleted).is_some_and(|done| {
+        EventKind::HandoffCompleted => read!(envelope, HandoffCompleted).is_some_and(|done| {
             let id = fold.id();
             let ts = envelope.ts;
             open(turns).is_some_and(|turn| {
@@ -452,7 +453,7 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
                 true
             })
         }),
-        "context_nudged" => read!(envelope, ContextNudged).is_some_and(|nudged| {
+        EventKind::ContextNudged => read!(envelope, ContextNudged).is_some_and(|nudged| {
             let line = format::dim(format!(
                 "◔ Context at {}, two thirds of the way to the {} handoff. The model was told \
                  a handoff keeps the work going.",
@@ -462,7 +463,74 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             crash::place(turns, fold, Aside::Line(line));
             true
         }),
-        _ => false,
+        EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::SkillsResent
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => false,
     }
 }
 

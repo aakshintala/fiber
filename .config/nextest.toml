@@ -42,3 +42,12 @@ success-output = "immediate"
 [[profile.default.overrides]]
 filter = 'package(main) & binary(=main_journeys)'
 slow-timeout = { period = "30s", terminate-after = 9 }
+
+# docs/testing.md, "Waits and timeouts": the frame-locked click proofs'
+# kill bound is twice the longest single deadline plus run time; the proofs
+# carry only slow-timeout, so a hang fails under this override instead of
+# the default profile. Longest deadline 80 s, proofs ~ms local run:
+# 2×80 + ms rounds to 9 periods (270 s).
+[[profile.default.overrides]]
+filter = 'package(main) & test(/^support::pty::tests::/)'
+slow-timeout = { period = "30s", terminate-after = 9 }

@@ -677,10 +677,12 @@ fn a_session_hooks_run_reaches_the_inbox_deliver_to_gave() {
 /// is the run's end signal, and nothing may arrive before it.
 #[test]
 fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
+    use std::io::Write as _;
     let setup = Setup::new();
     let dir = setup.workspace();
     let started = read_fifo(timer_fifo(&dir, "started.fifo"));
     let release = timer_fifo(&dir, "release.fifo");
+    let mut hold = fakes::Hold::on(&release, &release.display().to_string());
     let init = format!(
         "local dir = '{}'\n\
          host.after(0, function()\n\
@@ -716,16 +718,9 @@ fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
     );
     assert_eq!(Arc::strong_count(&ext), 1, "the test holds the last handle");
     drop(ext);
-    fakes::within(
-        "File::create",
-        Deadline::after(MUST_SUCCEED_WITHIN),
-        move || {
-            use std::io::Write as _;
-            std::fs::File::create(&release)
-                .and_then(|mut released| released.write_all(b"x\n"))
-                .is_ok()
-        },
-    );
+    hold.release()
+        .write_all(b"x\n")
+        .expect("the release reaches the parked holder");
     match Deadline::after(MUST_SUCCEED_WITHIN).recv(&inbox) {
         Err(mpsc::RecvTimeoutError::Disconnected) => {}
         Ok(delivery) => panic!("a run ending after the drop was logged: {delivery:?}"),
@@ -733,6 +728,7 @@ fn a_run_ending_after_the_extension_is_dropped_is_not_logged() {
             panic!("waited {MUST_SUCCEED_WITHIN:?} for the run to end and release the inbox")
         }
     }
+    hold.stand_down(Deadline::after(MUST_SUCCEED_WITHIN).cleanup_phase());
 }
 
 // Timers (`docs/extensions.md`, "Host calls"): `host.after` and `host.every`

@@ -672,6 +672,8 @@ Ctrl+L opens it, as `/model` does. It draws from the cached
 model lists at once and refreshes stale ones in the background; its refresh
 button refreshes every list (`docs/model-routing.md`, "Model discovery").
 
+The mouse wheel over the list scrolls it 3 displayed rows a step, counting headings, count rows and blank rows. A step that scrolls the focused row out of view moves the focus to the nearest focusable row still in view, the upper one on a tie; with no focusable row in view, the focus stays where it is. On a screen too short for two list rows, when there is no model for the list to keep, the list drops a provider's left-out count row together with its heading and separator, so a count never shows without its provider.
+
 Under the view's top row the picker is an overlay ("Look", "Overlays").
 Its first row is the filter: "Type to search" dim until something is
 typed, then "›" dim and the query bold, with the cursor ("The input box") either
@@ -1808,6 +1810,7 @@ copies the URL and shows "Copied". A link is in the accent colour,
 underlined. A focused link sits on the `surface_raised` tint, with "Enter opens
 · y copies" dim under it when the window has a row under it, and opens with Enter and copies with `y`. A hovered
 link takes the `hover` tint.
+A focused link keeps the `surface_raised` tint under hover, whether the pointer is on the link itself or on a wider target that covers its cells.
 
 A copy, link or image command still running after 10 seconds is stopped;
 what it started keeps running. Large images go to the terminal in chunks (Images).
@@ -3438,6 +3441,10 @@ CPU and time to first frame. The design keeps to them this way:
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**
 - **Each frame is written inside synchronized output, mode 2026.** The first frame and frames drawn on resize are included; a terminal without support ignores the sequences.
+
+### Wide variation-selector cells
+
+A cell holding a variation selector (for example `⚠️`) that measures two columns is written with its trailing cell first, then the cell itself. `ratatui-crossterm` moves the cursor whenever a cell is not at the last column plus one on the same row, so the reordered pair still moves before each cell and draws the frame on terminals giving the emoji one cell and on those giving it two alike. Cells that are not such a pair keep their order.
 
 
 ## Configuration

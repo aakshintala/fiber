@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# Regenerates the session_list class data pinned by
-# xtask/tests/class_data/9v45-session-list.json from the benchmarks-<sha>
+# Regenerates the session_list and listing class data pinned by
+# xtask/tests/class_data/9v45-session-list.json and
+# xtask/tests/class_data/9v45-sessions-list.json plus
+# xtask/tests/class_data/slow-sessions-list.json from the benchmarks-<sha>
 # artifacts of main runs, through the same Actions artifact listing
 # scripts/stored-results uses. It keeps the artifacts whose CPU model is
 # in the named class (docs/performance.md, "The class columns") and writes
-# the class JSON to stdout: [{"file": "main <short sha>", "samples":
-# [...]}], ordered by file, one object per line. Entries whose artifacts
-# have expired, and entries from non-main runs, stay in the committed file
-# as the record; the script emits only what the listing still holds.
+# the class JSON to stdout: [{"file": "main <short sha>", "cpu": "<raw cpu>",
+# "samples": [...]}], ordered by file, one object per line. Entries whose
+# artifacts have expired, and entries from non-main runs, stay in the
+# committed file as the record; the script emits only what the listing
+# still holds.
 #
 # Usage: scripts/class-data <class> <row> <fixture> [<dir>]
 #
 #   class    fast, middle or slow, as docs/performance.md names them.
-#   row      the benchmark row, as docs/performance.md names it; only
+#   row      the benchmark row, as docs/performance.md names it; either
 #            "`session_list`, waiting for every running session's status"
-#            (read from the session_list_ms metric) is supported.
+#            (read from the session_list_ms metric) or
+#            "Listing 1,000 sessions in one project, warm cache"
+#            (read from the sessions_list_ms metric) is supported.
 #   fixture  the row's fixture, as docs/performance.md names it; only
-#            "none" (session_list has no fixture) is supported.
+#            "none" (neither row has a fixture) is supported.
 #   dir      a directory holding listing.json (the artifact listing as the
 #            API returns it) and one benchmarks-<sha>/head.json per
 #            artifact. With no dir, the script reads the live API.
@@ -25,7 +30,7 @@
 set -euo pipefail
 
 usage() {
-  echo "usage: scripts/class-data <class: fast|middle|slow> <row: \`session_list\`, waiting for every running session's status> <fixture: none> [<dir>]" >&2
+  echo "usage: scripts/class-data <class: fast|middle|slow> <row: \`session_list\`, waiting for every running session's status|Listing 1,000 sessions in one project, warm cache> <fixture: none> [<dir>]" >&2
 }
 
 if [ $# -ne 3 ] && [ $# -ne 4 ]; then
@@ -53,9 +58,11 @@ case $class in
 esac
 
 # The supported rows as entries: name|metric|fixture|second slow-class CPU.
-# session_list reads plain-number samples.
+# session_list reads plain-number samples; the listing row reads
+# full-precision samples so the ceiling still covers every stored sample.
 rows=(
   "\`session_list\`, waiting for every running session's status|session_list_ms|none|$slow_second_model"
+  "Listing 1,000 sessions in one project, warm cache|sessions_list_ms|none|$slow_second_model"
 )
 metric=""
 want_fixture=""
@@ -83,12 +90,13 @@ second=$model
 if [ "$class" = "slow" ] && [ -n "$row_second" ]; then
   second=$row_second
 fi
-# The extraction filter: plain numbers for session_list_ms.
+# The extraction filter: plain numbers for session_list_ms, full precision
+# for sessions_list_ms so a stored 32.0004 stays 32.0004.
 # shellcheck disable=SC2016 # $id expands in jq, not the shell.
 extract='(.metrics[$id] // []) as $vals
   | if ($vals | type) != "array" then error("\($id): not an array")
     elif ([$vals[] | select(type != "number" or isnan or ((isfinite | not)) or . < 0)] | length) > 0 then error("\($id): not a finite number at or above zero")
-    else [$vals[] | ((. * 1000 | round) / 1000 | tostring)] | join(", ")
+    else [$vals[] | (if $id == "session_list_ms" then (. * 1000 | round) / 1000 else . end | tostring)] | join(", ")
     end'
 
 lines=$(mktemp)
@@ -102,9 +110,9 @@ trap cleanup EXIT
 # Prints the class line for one artifact: $1 is the artifact name, $2 its
 # head.json. Skips what is not this class's data: a foreign name, a CPU
 # outside the admitted set, or no samples for the row. A head.json that
-# cannot be read is a read failure. A session_list_ms sample that is not
-# a plain finite number at or above zero fails the run instead of
-# emitting; the extraction filter above already encodes that.
+# cannot be read is a read failure. A session_list_ms or sessions_list_ms
+# sample that is not a plain finite number at or above zero fails the run
+# instead of emitting; the extraction filter above already encodes that.
 emit() {
   local name=$1 head=$2
   case $name in
@@ -118,12 +126,14 @@ emit() {
   if [ "$cpu" != "$model" ] && [ "$cpu" != "$second" ]; then
     return 0
   fi
+  local raw_cpu
+  raw_cpu=$(jq -r '.cpu // ""' "$head") || return 1
   local samples
   samples=$(jq -r --arg id "$metric" --arg fixture "$fixture" "$extract" "$head") || return 1
   if [ -z "$samples" ]; then
     return 0
   fi
-  printf '  {"file": "main %s", "samples": [%s]}\n' "$short" "$samples" >>"$lines"
+  printf '  {"file": "main %s", "cpu": "%s", "samples": [%s]}\n' "$short" "$raw_cpu" "$samples" >>"$lines"
 }
 
 if [ -n "$dir" ]; then

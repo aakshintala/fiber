@@ -1918,7 +1918,7 @@ fn wheel_offsets_count_headings_and_blank_rows_as_displayed_rows() {
     let (top, _) = picker_wheel_window(&view, false, height);
     assert_eq!(
         top,
-        3, // `docs/tui.md:589`
+        3, // (`docs/tui.md`, "The model picker")
         "heading, count and model rows each consume an offset"
     );
     app.model_picker_wheel(false);
@@ -2213,7 +2213,8 @@ fn chips_need_a_spaceless_middle() {
     assert!(!super::is_chip("]"));
 }
 
-/// A headed model never trims with its heading, while a headed count does.
+/// A headed model never trims with its heading, while a headed count does
+/// (`docs/tui.md`, "The model picker").
 #[test]
 fn trim_count_only_for_headed_counts() {
     let app = choosing(160, 48);
@@ -2243,6 +2244,49 @@ fn trim_count_only_for_headed_counts() {
     );
 }
 
+/// A list under two rows with no model draws a count and its heading
+/// together or not at all (`docs/tui.md`, "The model picker").
+#[test]
+fn a_list_under_two_rows_with_no_model_draws_a_count_and_its_heading_together_or_not_at_all() {
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
+    let catalogue = Catalogue {
+        left_out: vec![LeftOutGroup {
+            provider: "opencode".to_owned(),
+            extension: "github.com/aakshintala/fiber/providers/opencode".to_owned(),
+            file: "config/opencode.json".to_owned(),
+            setting: "workspace".to_owned(),
+            login: true,
+            models: vec![LeftOutModel {
+                id: "o1".to_owned(),
+                name: None,
+            }],
+        }],
+        ..Catalogue::default()
+    };
+    let mut app = attached(80, 16);
+    app.on_models(Ok(catalogue.clone()));
+    open(&mut app);
+    assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+    app.on_models(Ok(catalogue.clone()));
+    // The picker draws below the swapped-view header: the conversation
+    // area less one row, 10 rows kept and 9 rows cut.
+    assert_eq!(
+        app.conversation_area_height().saturating_sub(1),
+        10,
+        "the keep screen leaves ten picker rows"
+    );
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(model_fit(&view, 10), 2, "ten picker rows fit two body rows");
+    insta::assert_snapshot!("trim-keep", screen(&app, 80, 16));
+    app.set_size(80, 15);
+    assert_eq!(
+        app.conversation_area_height().saturating_sub(1),
+        9,
+        "the cut screen leaves nine picker rows"
+    );
+    insta::assert_snapshot!("trim-cut", screen(&app, 80, 15));
+}
+
 /// A far focus resets to a nonzero window offset (`docs/tui.md:710-714`).
 #[test]
 fn focus_window_top_is_nonzero_for_a_far_focus() {
@@ -2259,7 +2303,7 @@ fn focus_window_top_is_nonzero_for_a_far_focus() {
 
 /// An up wheel that lands the focus exactly on the new exclusive bottom
 /// keeps it offscreen and clamps to the nearest visible row, never the
-/// row at the edge.
+/// row at the edge (`docs/tui.md`, "The model picker").
 #[test]
 fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
     let mut app = attached(160, 11);
@@ -2300,7 +2344,7 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
     let effective = keep_focus_visible_top(&view, height);
     assert_eq!(effective, target, "an above focus pulls the window to it");
     let (top, focus) = picker_wheel_window(&view, true, height);
-    assert_eq!(top, target.saturating_sub(3), "one step up moves three"); // `docs/tui.md:589`
+    assert_eq!(top, target.saturating_sub(3), "one step up moves three"); // (`docs/tui.md`, "The model picker")
     let end = top.saturating_add(fit);
     let current = display
         .rows
@@ -2353,7 +2397,8 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
 
 /// An up wheel that resets the window to the start while the focus sits
 /// just past the new end clamps to the nearest visible row: row zero can
-/// never stand in for the focus, since only an exact focus match counts.
+/// never stand in for the focus, since only an exact focus match counts
+/// (`docs/tui.md`, "The model picker").
 #[test]
 fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
     let mut app = attached(160, 11);
@@ -2395,7 +2440,7 @@ fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
     let effective = keep_focus_visible_top(&view, height);
     assert_eq!(effective, 3, "the stored window already shows the focus");
     let (top, focus) = picker_wheel_window(&view, true, height);
-    assert_eq!(top, 0, "one step up resets the window to zero"); // `docs/tui.md:589`
+    assert_eq!(top, 0, "one step up resets the window to zero"); // (`docs/tui.md`, "The model picker")
     let end = top.saturating_add(fit);
     // Row zero never matches the focus, so it must not count as found:
     // the clamp is the nearest visible focusable row, row 1.
@@ -2411,6 +2456,89 @@ fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
     assert!(
         nearest_row >= top && nearest_row < end,
         "the clamp lands inside the new window"
+    );
+}
+
+/// A wheel step whose window holds no focusable row leaves the focus
+/// (`docs/tui.md`, "The model picker").
+#[test]
+fn a_wheel_step_whose_window_holds_no_focusable_row_leaves_the_focus() {
+    let mut app = choosing(160, 16);
+    let now = fakes::clock::FakeClock::new().now();
+    // The picker draws below the swapped-view header: the conversation
+    // area less one row, ten picker rows fitting two body rows.
+    assert_eq!(
+        app.conversation_area_height().saturating_sub(1),
+        10,
+        "the screen leaves ten picker rows"
+    );
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(model_fit(&view, 10), 2, "ten picker rows fit two body rows");
+    // Three Downs walk past acme's models onto zeta's last model: m2 is
+    // the second model of the first provider, z1 the first row of the
+    // next provider past the blank.
+    for _ in 0..3 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let view = app.model_picker_view().expect("open");
+    let display = display_rows(&view, false);
+    assert_eq!(view.focused, Some(7), "three Downs focus zeta z2");
+    assert_eq!(view.top, 8, "three Downs park the window on zeta z2");
+    assert_eq!(
+        display.rows[3].focus,
+        Some(4),
+        "m2 is the second model of the first provider"
+    );
+    assert_eq!(
+        display.rows[7].focus,
+        Some(6),
+        "z1 is the first row of the next provider"
+    );
+    assert!(
+        display.rows[5].row.spans.is_empty(),
+        "a blank separates acme's last model from zeta"
+    );
+    assert!(
+        display.rows[6]
+            .row
+            .spans
+            .iter()
+            .any(|span| span.content.as_ref() == "zeta"),
+        "zeta heads the section past the blank"
+    );
+    // One step up from the z2 window lands on the blank and zeta's
+    // heading: no focusable row, so the pure window keeps no focus ...
+    assert_eq!(
+        picker_wheel_window(&view, true, 10),
+        (5, None),
+        "the up step lands past every focusable row"
+    );
+    assert_eq!(app.model_picker_wheel(true), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.top, 5, "one wheel-up step moves three rows");
+    assert_eq!(
+        view.focused,
+        Some(7),
+        "a window with no focusable row leaves the focus on z2"
+    );
+    // ... and one step up from z1 reaches m2 with its detail row, moving
+    // the focus to the nearest focusable row in the new window.
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.focused, Some(6), "one Up focuses zeta z1");
+    assert_eq!(view.top, 6, "one Up parks the window above zeta z1");
+    assert_eq!(
+        picker_wheel_window(&view, true, 10),
+        (3, Some(4)),
+        "the next up step reaches acme's last model"
+    );
+    assert_eq!(app.model_picker_wheel(true), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.top, 3, "the second wheel-up step moves three rows");
+    assert_eq!(
+        view.focused,
+        Some(4),
+        "a window holding m2 focuses acme's last model"
     );
 }
 

@@ -365,7 +365,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     let on_attach: tui::OnAttach = Box::new(|_: &contract::SessionId| {});
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
-        let code = tui::run(tty, launch, connect, on_attach, clock, diag);
+        let code = tui::run(tty, launch, connect, on_attach, clock, diag, None);
         done.send(code).unwrap();
     });
     // The end of the first frame proves the input reader runs before
