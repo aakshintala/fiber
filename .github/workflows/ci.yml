@@ -262,7 +262,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           df -h
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/share/swift /opt/az /usr/share/miniconda
           df -Pk
           df -h
           sudo du -sx /opt/* /usr/share/* /usr/local/* 2>/dev/null | sort -n | tail -n 40
