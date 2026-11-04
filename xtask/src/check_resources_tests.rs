@@ -67,6 +67,7 @@ fn preflight_refuses_when_df_reports_too_little_space() {
         &["preflight"],
         &[
             ("PATH", path.as_str()),
+            ("GITHUB_ACTIONS", ""),
             ("CHECK_RESOURCES_DF_AVAIL_KIB", "0"),
             ("TMPDIR", scratch.to_str().expect("scratch path is UTF-8")),
             (
@@ -137,6 +138,121 @@ fn preflight_passes_when_df_reports_generous_space() {
         "generous preflight failed: {} {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preflight_ci_floor_passes_at_proven_small_shape_free() {
+    let dir = TempDir::new("xtask-check-resources");
+    let (scratch, target) = scratch_and_target(&dir);
+    let path = df_path();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = run_check_resources(
+        &["preflight"],
+        &[
+            ("PATH", path.as_str()),
+            ("GITHUB_ACTIONS", "true"),
+            ("CHECK_RESOURCES_DF_AVAIL_KIB", "33554432"),
+            ("TMPDIR", scratch.to_str().expect("scratch path is UTF-8")),
+            (
+                "CARGO_TARGET_DIR",
+                target.to_str().expect("target path is UTF-8"),
+            ),
+        ],
+        "preflight CI floor with small-shape free space",
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "CI-floor preflight refused: {} {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("share a filesystem"),
+        "CI-floor pass names no shared filesystem: {stdout}"
+    );
+    assert!(
+        stdout.contains("32161 MiB"),
+        "CI-floor pass names no 32161 MiB floor: {stdout}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn preflight_ci_floor_refuses_weak_tmpdir_on_own_filesystem() {
+    let dir = TempDir::new("xtask-check-resources");
+    let (scratch, target) = scratch_and_target(&dir);
+    let path = df_path();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = run_check_resources(
+        &["preflight"],
+        &[
+            ("PATH", path.as_str()),
+            ("GITHUB_ACTIONS", "true"),
+            ("CHECK_RESOURCES_DF_AVAIL_KIB", "0"),
+            ("CHECK_RESOURCES_DF_AVAIL_KIB_SCRATCH", "2109440"),
+            ("CHECK_RESOURCES_DF_AVAIL_KIB_TARGET", "100000000"),
+            ("TMPDIR", scratch.to_str().expect("scratch path is UTF-8")),
+            (
+                "CARGO_TARGET_DIR",
+                target.to_str().expect("target path is UTF-8"),
+            ),
+        ],
+        "preflight CI floor with weak scratch on its own filesystem",
+    );
+    assert_eq!(output.status.code(), Some(75));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("not started:"),
+        "CI-floor refusal names no start: {stdout}"
+    );
+    assert!(
+        !stdout.contains("share a filesystem"),
+        "CI-floor refusal names a shared filesystem: {stdout}"
+    );
+    assert!(
+        stdout.contains("2060 MiB free"),
+        "CI-floor refusal names no scratch free value: {stdout}"
+    );
+    assert!(
+        stdout.contains("2061 MiB"),
+        "CI-floor refusal names no 2061 MiB TMPDIR floor: {stdout}"
+    );
+    assert!(
+        stdout.contains("(PREFLIGHT_TMPDIR_MIN_MIB)"),
+        "CI-floor refusal names no TMPDIR constant: {stdout}"
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn preflight_ci_floor_keeps_darwin_values() {
+    let dir = TempDir::new("xtask-check-resources");
+    let (scratch, target) = scratch_and_target(&dir);
+    let path = df_path();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = run_check_resources(
+        &["preflight"],
+        &[
+            ("PATH", path.as_str()),
+            ("GITHUB_ACTIONS", "true"),
+            ("CHECK_RESOURCES_DF_AVAIL_KIB", "0"),
+            ("TMPDIR", scratch.to_str().expect("scratch path is UTF-8")),
+            (
+                "CARGO_TARGET_DIR",
+                target.to_str().expect("target path is UTF-8"),
+            ),
+        ],
+        "preflight Darwin floor under CI",
+    );
+    assert_eq!(output.status.code(), Some(75));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("58472 MiB"),
+        "Darwin refusal names no 58472 MiB floor: {stdout}"
     );
 }
 

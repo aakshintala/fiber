@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
-# Checked-in `df` stub for `check_resources_tests`: prints one fixed `df -Pk`
+# Checked-in `df` stub for `check_resources_tests`: prints a fixed `df -Pk`
 # table whose free-space field comes from CHECK_RESOURCES_DF_AVAIL_KIB, which
-# each preflight test sets. Arguments (the measured path) are ignored: every
-# path reports the same filesystem, so scratch and target share it.
+# each preflight test sets. When CHECK_RESOURCES_DF_AVAIL_KIB_TARGET is set,
+# scratch and target report distinct filesystems with per-path free space from
+# CHECK_RESOURCES_DF_AVAIL_KIB_SCRATCH and CHECK_RESOURCES_DF_AVAIL_KIB_TARGET;
+# otherwise every path reports the same filesystem, so scratch and target
+# share it.
 set -euo pipefail
 printf 'Filesystem  1024-blocks  Used Available Capacity Mounted on\n'
-printf 'testfs  200000000  100000000  %s  50%%  /testmnt\n' "${CHECK_RESOURCES_DF_AVAIL_KIB:-0}"
+if [ -n "${CHECK_RESOURCES_DF_AVAIL_KIB_TARGET-}" ]; then
+  scratch_avail="${CHECK_RESOURCES_DF_AVAIL_KIB_SCRATCH:-${CHECK_RESOURCES_DF_AVAIL_KIB:-0}}"
+  target_avail="${CHECK_RESOURCES_DF_AVAIL_KIB_TARGET:-${CHECK_RESOURCES_DF_AVAIL_KIB:-0}}"
+  case "$*" in
+  *scratch*)
+    printf 'scratchfs  200000000  100000000  %s  50%%  /scratchmnt\n' "$scratch_avail"
+    ;;
+  *)
+    printf 'targetfs  200000000  100000000  %s  50%%  /targetmnt\n' "$target_avail"
+    ;;
+  esac
+else
+  printf 'testfs  200000000  100000000  %s  50%%  /testmnt\n' "${CHECK_RESOURCES_DF_AVAIL_KIB:-0}"
+fi
