@@ -2942,6 +2942,82 @@ fn rewind_hub_refused_tells_fork_from_other_waits() {
     assert!(!app.rewind_hub_refused("c_other", "busy", "busy happened", &Waiting::History));
 }
 
+/// A long single-session history: `count` plain turns, so the rewind
+/// list holds more rows than its first screenful and scrolling leaves
+/// the top past the first row.
+fn many_turns(count: usize) -> Vec<Envelope> {
+    let mut lines = vec![history_line(
+        SESSION,
+        "session_started",
+        0,
+        None,
+        None,
+        started(None),
+    )];
+    let mut seq = 1;
+    for n in 1..=count {
+        let turn = format!("t_{n}");
+        lines.push(history_line(
+            SESSION,
+            "turn_started",
+            seq,
+            Some(turn.as_str()),
+            None,
+            message_input(format!("turn {n}").as_str()),
+        ));
+        lines.push(history_line(
+            SESSION,
+            "step_started",
+            seq + 1,
+            Some(turn.as_str()),
+            None,
+            json!({}),
+        ));
+        lines.push(history_line(
+            SESSION,
+            "turn_completed",
+            seq + 2,
+            Some(turn.as_str()),
+            None,
+            json!({"outcome": "completed"}),
+        ));
+        seq += 3;
+    }
+    lines
+}
+
+/// Enter on a turn row past the first screenful opens the turn without
+/// overflowing the selection: the rewind view reseats through the
+/// unknown height after it scrolls.
+#[test]
+fn enter_on_a_scrolled_turn_opens_it_without_an_overflow() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let done = accept(&mut app, &lines[0]["id"], many_turns(25));
+    // The chain pages as one history, one request on the wire (`docs/tui.md`, "History and paging").
+    assert!(done.is_empty());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(rows(&app).len(), 27);
+    // Up from the latest turn past the first screenful, so the list has scrolled.
+    goto(&mut app, &clock, 20);
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert!(frame.list.top() > 0, "setup scrolled the list");
+    let (at, top) = (frame.list.selected(), frame.list.top());
+    // Enter opens the selected turn: its step boundaries draw under it.
+    app.on_key(crate::keys::Key::Enter, clock.now());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    let body = rows(&app);
+    assert_eq!(body[at], "before: turn 21");
+    assert_eq!(
+        body[at + 1..at + 4],
+        ["  start of turn", "  after input", "  end of turn"]
+    );
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert_eq!(frame.list.selected(), at);
+    assert_eq!(frame.list.top(), top);
+}
+
 /// A fork's accept attaches without a send match, while any other wait
 /// falls through: flipping the two attaches the wrong command.
 #[test]
