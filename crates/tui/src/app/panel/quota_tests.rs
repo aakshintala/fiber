@@ -148,7 +148,7 @@ fn a_turn_end_shares_the_branch_edge_and_is_not_held_during_a_flight() {
     let mut app = attached();
     let lines = commands(app.on_line(live(SESSION, json!({"state": "idle"}))));
     // The introducing status queues its project's scoped ask beside the
-    // turn's own lines (`docs/tui.md:268`): assert only presence, not the
+    // turn's own lines (`docs/tui.md`, "The session list"): assert only presence, not the
     // outgoing order or count.
     assert!(lines.iter().any(|v| v["command"] == "shell"));
     assert!(lines.iter().any(|v| v["command"] == "quota"));

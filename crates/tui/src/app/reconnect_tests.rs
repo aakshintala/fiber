@@ -831,7 +831,7 @@ fn a_stop_ask_is_resent_and_its_refusal_notes_the_row() {
     for want in ["subscribe", "close", "feed", "recent", "sessions"] {
         assert!(got.iter().any(|g| g == want), "missing {want}: {got:?}");
     }
-    // The scoped refetch covers the project (`docs/tui.md:268`).
+    // The scoped refetch covers the project (`docs/tui.md`, "The session list").
     assert!(
         lines
             .iter()
@@ -873,7 +873,7 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
     for want in ["feed", "recent", "sessions"] {
         assert!(got.iter().any(|g| g == want), "missing {want}: {got:?}");
     }
-    // The scoped refetch covers the project (`docs/tui.md:268`).
+    // The scoped refetch covers the project (`docs/tui.md`, "The session list").
     assert!(
         lines
             .iter()

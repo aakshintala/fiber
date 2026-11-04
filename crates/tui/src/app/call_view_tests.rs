@@ -2609,7 +2609,7 @@ fn wheel_over_a_call_view_with_a_missing_page_sends_artifact_page() {
 
 /// A wheel-up pauses following, a wheel-down before the tail stays
 /// unfollowed, and a wheel-down reaching the tail resumes it, never the
-/// conversation (`docs/tui.md:576`).
+/// conversation (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_up_pauses_and_down_resumes_follow_only_at_the_tail() {
     let mut app = attached(80, 24);
@@ -2645,7 +2645,7 @@ fn wheel_up_pauses_and_down_resumes_follow_only_at_the_tail() {
 }
 
 /// A wheel-down before the tail never refetches the fill, while one
-/// reaching the tail does when it is missing (`docs/tui.md:576`).
+/// reaching the tail does when it is missing (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_down_refetches_a_missing_fill_only_at_the_tail() {
     let mut app = attached(80, 24);

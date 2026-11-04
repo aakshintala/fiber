@@ -438,85 +438,20 @@ crates/tools/tests/shell.rs	1	docs/sandbox.md:100-102
 crates/tools/tests/shell.rs	2	docs/sandbox.md:64-73
 crates/tui/src/app.rs	1	docs/invocation.md`, "Sessions"
 crates/tui/src/app.rs	1	docs/testing.md`, "a test of how much work something does counts\n/// the work"
-crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1974,1997
-crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1991,1997
-crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:1993,1997
-crates/tui/src/app/aliases_tests.rs	7	docs/tui.md:1997
-crates/tui/src/app/aliases_tests.rs	7	docs/tui.md:2006
-crates/tui/src/app/aliases_tests.rs	1	docs/tui.md:604
-crates/tui/src/app/call_view_tests.rs	2	docs/tui.md:576
-crates/tui/src/app/clear_tests.rs	12	docs/tui.md:2148
-crates/tui/src/app/clear_tests.rs	2	docs/tui.md:268
-crates/tui/src/app/commands_tests.rs	1	docs/tui.md:268
-crates/tui/src/app/completion_tests.rs	1	docs/tui.md:1971
 crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is\n//! reached on its own connection"
 crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is reached on\n    /// its own connection"
 crates/tui/src/app/delegates.rs	1	docs/invocation.md`, "A delegate is reached on its own\n            // connection"
-crates/tui/src/app/exit_alias_tests.rs	1	docs/tui.md:1956,1965
-crates/tui/src/app/exit_alias_tests.rs	2	docs/tui.md:1956,1965,1974
 crates/tui/src/app/home.rs	2	docs/invocation.md`, "Sessions"
 crates/tui/src/app/home/open_at_tests.rs	1	docs/invocation.md:1044
-crates/tui/src/app/home/open_at_tests.rs	7	docs/tui.md:268
 crates/tui/src/app/home/scoped_page_tests.rs	8	docs/invocation.md:1102
-crates/tui/src/app/home/scoped_page_tests.rs	1	docs/tui.md:233-234
-crates/tui/src/app/home/scoped_page_tests.rs	2	docs/tui.md:254-255
-crates/tui/src/app/home/scoped_page_tests.rs	11	docs/tui.md:268
-crates/tui/src/app/home/workspace_tests.rs	1	docs/tui.md`, "The workspace picker"
 crates/tui/src/app/home_tests.rs	29	docs/invocation.md:1102
-crates/tui/src/app/home_tests.rs	8	docs/tui.md:233-234
-crates/tui/src/app/home_tests.rs	1	docs/tui.md:242
-crates/tui/src/app/home_tests.rs	13	docs/tui.md:254-255
-crates/tui/src/app/home_tests.rs	52	docs/tui.md:268
-crates/tui/src/app/home_tests.rs	1	docs/tui.md`, "Key map"
 crates/tui/src/app/hub_version_tests.rs	1	docs/testing.md`, "A test asserts an order\n/// or a count only where a doc promises it"
 crates/tui/src/app/items/output_tests.rs	1	docs/events.md:697-701
 crates/tui/src/app/items_tests.rs	1	docs/events.md:699-701
-crates/tui/src/app/items_tests.rs	1	docs/tui.md:2734
-crates/tui/src/app/items_tests.rs	10	docs/tui.md:576
-crates/tui/src/app/keyboard_screen_tests.rs	1	docs/tui.md:589
-crates/tui/src/app/keyboard_screen_tests.rs	1	docs/tui.md`, "Key map"
-crates/tui/src/app/keyboard_tests.rs	16	docs/tui.md:2953-2966
-crates/tui/src/app/keyboard_tests.rs	2	docs/tui.md:3050-3053
-crates/tui/src/app/links_tests.rs	1	docs/tui.md:2100
 crates/tui/src/app/model_picker_tests.rs	1	docs/errors.md`, "Notices"
-crates/tui/src/app/model_picker_tests.rs	4	docs/tui.md:576
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:1280
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3016
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3020
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3023
-crates/tui/src/app/moving_tests.rs	1	docs/tui.md:3025
-crates/tui/src/app/offer_tests.rs	5	docs/tui.md:576
-crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2430-2431
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2430-2436
-crates/tui/src/app/overlay_tests.rs	2	docs/tui.md:2431-2434
-crates/tui/src/app/overlay_tests.rs	7	docs/tui.md:2432-2434
-crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2439-2440
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2440-2442
-crates/tui/src/app/overlay_tests.rs	9	docs/tui.md:2445-2446
-crates/tui/src/app/overlay_tests.rs	3	docs/tui.md:2446-2448
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2449-2450
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2458-2459
-crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2470-2473
-crates/tui/src/app/overlay_tests.rs	4	docs/tui.md:2474-2475
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2484-2489
-crates/tui/src/app/overlay_tests.rs	1	docs/tui.md:2484-2493
-crates/tui/src/app/overlay_tests.rs	3	docs/tui.md:2492-2493
-crates/tui/src/app/panel/quota_tests.rs	1	docs/tui.md:268
 crates/tui/src/app/rail_tests.rs	1	docs/testing.md`, "A test asserts an order or a count only where\n    // a doc promises it"
-crates/tui/src/app/rail_tests.rs	2	docs/tui.md:1936
-crates/tui/src/app/rail_tests.rs	1	docs/tui.md:251
-crates/tui/src/app/rail_tests.rs	2	docs/tui.md:362
-crates/tui/src/app/reconnect_tests.rs	2	docs/tui.md:268
-crates/tui/src/app/results_tests.rs	1	docs/tui.md:576
-crates/tui/src/app/rewind_tests.rs	2	docs/tui.md:576
-crates/tui/src/app/screen_tests.rs	2	docs/tui.md`,\n    // "Pinned call"
-crates/tui/src/app/screen_tests.rs	1	docs/tui.md`, "Pinned call"
-crates/tui/src/app/session_views_tests.rs	4	docs/tui.md:830
-crates/tui/src/app/session_views_tests.rs	2	docs/tui.md`, "Changed files"
 crates/tui/src/app_focus.rs	1	docs/errors.md`, "Notices"
 crates/tui/src/app_focus_tests.rs	1	docs/errors.md`, "Notices"
-crates/tui/src/app_tests.rs	2	docs/tui.md:1296-1306
-crates/tui/src/app_tests.rs	1	docs/tui.md:444-447
 crates/tui/src/changed_files_view_tests.rs	1	docs/tui.md:830
 crates/tui/src/event_loop.rs	1	docs/invocation.md`, "Three signals, one path"
 crates/tui/src/event_loop/attach_tests.rs	1	docs/state.md`,\n/// "Diagnostic logs"

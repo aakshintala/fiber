@@ -1018,7 +1018,7 @@ fn open_files_from_totals(app: &mut App, width: u16, height: u16) {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1272,7 +1272,7 @@ fn a_panel_file_rank_past_the_end_opens_the_list_sending_only_the_numstat_comman
     let Effect::Send(lines) = effect else {
         panic!("a rank past the end sends only the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -1304,7 +1304,7 @@ fn the_narrow_changed_files_segment_opens_the_file_list() {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    // docs/tui.md:830 promises one numstat query, run when the view opens.
+    // docs/tui.md, "Swapped views" promises one numstat query, run when the view opens.
     assert_eq!(lines.len(), 1);
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
@@ -2547,7 +2547,7 @@ fn open_figures(app: &mut App, width: u16, height: u16) -> String {
     let Effect::Send(lines) = effect else {
         panic!("opening the list sends the numstat query, got {effect:?}");
     };
-    assert_eq!(lines.len(), 1, "one numstat command"); // docs/tui.md:830, run when the view opens.
+    assert_eq!(lines.len(), 1, "one numstat command"); // docs/tui.md, "Swapped views", run when the view opens.
     let request: Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     request["id"].as_str().unwrap_or_default().to_owned()
@@ -3031,7 +3031,7 @@ fn returning_the_remote_copy_stores_it_and_rereads() {
     accept_hub_line(&script, &asked, json!({}));
     let (lines, mut app) = collect(rx, "the workspace write");
     handle.join().unwrap();
-    // `docs/tui.md`, "Changed files": the view reads the file's diff and
+    // `docs/tui.md`, "Swapped views": the view reads the file's diff and
     // numstat again. That promises both requests, in no promised order.
     assert_eq!(lines.len(), 2);
     let mut got: Vec<String> = shell_requests(&lines)
@@ -3075,7 +3075,7 @@ fn a_hub_side_edit_leaves_the_remote_copy_unwritten_with_the_notice_but_still_re
         app.notices.newest(),
         Some("/w/src/file-0.rs changed since it was read.")
     );
-    // `docs/tui.md`, "Changed files": the view still reads the diff and
+    // `docs/tui.md`, "Swapped views": the view still reads the diff and
     // numstat again. That promises both requests, in no promised order.
     assert_eq!(lines.len(), 2);
     let mut got: Vec<String> = shell_requests(&lines)

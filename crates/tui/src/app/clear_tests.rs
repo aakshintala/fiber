@@ -331,7 +331,7 @@ fn a_stale_clear_start_id_keeps_the_pending_clear_and_its_tag() {
 const NEW: &str = "s_nnnnnnnnnnnnnnnn";
 
 /// The `/clear` start carries the old session's wire state
-/// (`docs/tui.md:2148–2178`, "Clearing").
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_sends_a_start_with_the_old_session_s_wire() {
     let mut app = attached();
@@ -382,7 +382,7 @@ fn clear_without_status_sends_nothing_and_keeps_draft() {
 }
 
 /// A build or switch that names no credential overrides an earlier start
-/// label (`docs/tui.md:2148–2178`, "Clearing").
+/// label (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_does_not_restore_a_start_credential_after_explicit_absence() {
     for event in [
@@ -404,7 +404,7 @@ fn clear_does_not_restore_a_start_credential_after_explicit_absence() {
 }
 
 /// One clear start omits unset values as documented
-/// (`docs/tui.md:2148–2178`, "Clearing").
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_omits_thinking_credential_and_continues_when_unset() {
     let mut app = attached();
@@ -418,7 +418,7 @@ fn clear_omits_thinking_credential_and_continues_when_unset() {
     assert!(start["args"].get("continues").is_none());
 }
 
-/// A clear of a worktree session continues it (`docs/tui.md:2148–2178`).
+/// A clear of a worktree session continues it (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_of_a_worktree_session_continues_it() {
     let mut app = attached();
@@ -459,7 +459,7 @@ fn clear_of_a_worktree_session_continues_it() {
 }
 
 /// Clearing waits for the `start` answer before moving the screen and
-/// closing the old session (`docs/tui.md:2148–2178`).
+/// closing the old session (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_switches_only_on_the_start_answer_then_closes_old() {
     let mut app = attached();
@@ -539,7 +539,7 @@ fn clear_keeps_the_learned_sender_names() {
 const NEW2: &str = "s_mmmmmmmmmmmmmmmm";
 
 /// A second `/clear` cannot replace the still-pending `start`
-/// (`docs/tui.md:2148–2178`).
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_waiting_for_start_answer_does_not_send_a_second_start() {
     let mut app = attached();
@@ -560,7 +560,7 @@ fn clear_waiting_for_start_answer_does_not_send_a_second_start() {
 
 /// Two `/clear`s before any prompt: each `start` uses its session's
 /// `session_status` model, thinking only when present, and keeps the
-/// credential the first `start` named (`docs/tui.md:2148–2178`).
+/// credential the first `start` named (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_twice_before_any_prompt_keeps_the_start_credential() {
     let mut app = connected();
@@ -635,7 +635,7 @@ fn clear_refusal_only_settles_the_matching_start() {
 }
 
 /// A refused clear start leaves the old session in place and sends no
-/// close (`docs/tui.md:2148–2178`).
+/// close (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_start_refused_keeps_the_old_session_with_one_notice() {
     let mut app = homed();
@@ -646,7 +646,7 @@ fn clear_start_refused_keeps_the_old_session_with_one_notice() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // The introducing status queues its project's scoped ask (`docs/tui.md`, "The session list"):
     // assert only its presence, not the outgoing order or count.
     assert!(
         queued
@@ -838,7 +838,7 @@ fn clear_confirmation_without_status_closes_prompt_without_sending_start() {
 }
 
 /// Enter clears a wait only after the clear start answers
-/// (`docs/tui.md:2148–2178`, "Clearing").
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_overlay_enter_sends_the_start_then_closes_with_now() {
     let mut app = homed();
@@ -872,7 +872,7 @@ fn clear_overlay_esc_stays() {
     assert_eq!(app.draft(), "");
 }
 
-/// A refused overlay start sends no close (`docs/tui.md:2148–2178`).
+/// A refused overlay start sends no close (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_overlay_refused_start_closes_with_one_notice() {
     let mut app = homed();
@@ -883,7 +883,7 @@ fn clear_overlay_refused_start_closes_with_one_notice() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    // The introducing status queues its project's scoped ask (`docs/tui.md:268`):
+    // The introducing status queues its project's scoped ask (`docs/tui.md`, "The session list"):
     // assert only its presence, not the outgoing order or count.
     assert!(
         queued
@@ -907,7 +907,7 @@ fn clear_overlay_refused_start_closes_with_one_notice() {
 }
 
 /// The clear choice sends a start and stay sends nothing
-/// (`docs/tui.md:2148–2178`, "Clearing").
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_overlay_clicks_do_what_their_keys_do() {
     use crate::home::{ClearChoice, Spot};
@@ -928,7 +928,7 @@ fn clear_overlay_clicks_do_what_their_keys_do() {
 }
 
 /// A wait arriving after dispatch keeps the close polite
-/// (`docs/tui.md:2148–2178`).
+/// (`docs/tui.md`, "Clearing").
 #[test]
 fn clear_late_approval_keeps_the_close_polite() {
     let mut app = homed();

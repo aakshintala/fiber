@@ -2767,7 +2767,7 @@ fn wheel_over_rewind_moves_the_list_not_the_conversation() {
 
 /// The wheel that carries focus offscreen moves the selection and follows
 /// it to the new row's rewind target, never the conversation
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_carrying_focus_offscreen_follows_the_new_target() {
     let clock = fakes::clock::FakeClock::new();
@@ -2856,7 +2856,7 @@ fn wheel_carrying_focus_offscreen_follows_the_new_target() {
 
 /// A wheel-down that clamps the selection into the window also moves the
 /// detail's point: the lines under the rows name the new row's turn, never
-/// the conversation (`docs/tui.md:576`).
+/// the conversation (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
     let clock = fakes::clock::FakeClock::new();
