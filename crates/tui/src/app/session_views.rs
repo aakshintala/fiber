@@ -909,6 +909,19 @@ impl App {
                         }
                         Some(super::Waiting::Sessions) => return Vec::new(),
                         Some(super::Waiting::Abandoned) => return Vec::new(),
+                        Some(
+                            super::Waiting::Directories
+                            | super::Waiting::Subscribe
+                            | super::Waiting::Stop
+                            | super::Waiting::Delete
+                            | super::Waiting::OfferImport
+                            | super::Waiting::DeleteDiscovery
+                            | super::Waiting::DeleteStop
+                            | super::Waiting::DeleteFinal
+                            | super::Waiting::Feed
+                            | super::Waiting::Recent
+                            | super::Waiting::Close,
+                        ) => return Vec::new(),
                         None => {}
                     }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {
@@ -946,6 +959,19 @@ impl App {
                         }
                         Some(super::Waiting::Sessions) => return Vec::new(),
                         Some(super::Waiting::Abandoned) => return Vec::new(),
+                        Some(
+                            super::Waiting::Directories
+                            | super::Waiting::Subscribe
+                            | super::Waiting::Stop
+                            | super::Waiting::Delete
+                            | super::Waiting::OfferImport
+                            | super::Waiting::DeleteDiscovery
+                            | super::Waiting::DeleteStop
+                            | super::Waiting::DeleteFinal
+                            | super::Waiting::Feed
+                            | super::Waiting::Recent
+                            | super::Waiting::Close,
+                        ) => return Vec::new(),
                         None => {}
                     }
                     if matches!(self.session_views.open, Some(Open::Call(_))) {

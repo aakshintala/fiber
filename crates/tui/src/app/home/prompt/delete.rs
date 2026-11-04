@@ -16,6 +16,7 @@ use contract::SessionId;
 /// `/delete`'s feature-owned lifecycle under home's questions: one
 /// command at a time, each phase exclusive. The candidate set is
 /// immutable once the hub answers the discovery dry run.
+// debt: the command, stop and delete ids kept in this state beside the outbox `DeleteDiscovery`, `DeleteStop` and `DeleteFinal` tags by hand, the outbox tags become the sole record once the command lookup runs off the tag alone once #4127 lands.
 #[derive(Debug, Default)]
 pub(super) struct DeleteCommand {
     generation: u64,
@@ -122,6 +123,8 @@ impl App {
                 name,
             },
         };
+        self.outbox
+            .wait(&command, super::super::super::Waiting::DeleteDiscovery);
         self.draft.clear();
         Effect::Send(vec![line])
     }
@@ -233,6 +236,7 @@ impl App {
             return Some(Vec::new());
         }
         let (target, name) = self.delete_discovery_parts(id)?;
+        self.outbox.settled(id);
         if !accepted {
             self.delete_command_finish(false);
             self.notices.push(
@@ -327,6 +331,7 @@ impl App {
         let Some(session) = session else {
             return false;
         };
+        self.outbox.settled(id);
         if accepted {
             return true;
         }
@@ -442,6 +447,8 @@ impl App {
                 home.questions
                     .closing
                     .push((session.clone(), close.clone()));
+                self.outbox
+                    .wait(close, super::super::super::Waiting::DeleteStop);
             }
             home.questions.delete_command.state = State::Stopping {
                 target,
@@ -510,6 +517,8 @@ impl App {
             home.questions
                 .asks
                 .insert(command.clone(), super::Ask::Delete(target.clone()));
+            self.outbox
+                .wait(&command, super::super::super::Waiting::DeleteFinal);
             home.questions.delete_command.state = State::Deleting {
                 command,
                 target,

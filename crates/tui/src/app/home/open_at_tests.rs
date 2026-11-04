@@ -1109,3 +1109,69 @@ fn an_openings_commands_answer_fills_the_slash_list_while_its_replay_is_gated() 
             .any(|row| row.name == "tdd")
     );
 }
+
+#[test]
+fn subscribes_register_a_tag_settled_by_their_answer() {
+    use crate::app::Waiting;
+    let mut app = home_at(OpenAt::Home);
+    let session = id("s_aaaaaaaaaaaaaaaa");
+    let line: Value = serde_json::from_str(&app.subscribe(&session, Level::Summary))
+        .unwrap_or_else(|err| panic!("{err}"));
+    let ack = line["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("subscribe id"));
+    assert_eq!(app.outbox.waiting(ack), Some(Waiting::Subscribe));
+    app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
+    assert_eq!(app.outbox.waiting(ack), None);
+}
+
+#[test]
+fn a_refused_subscribe_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home_at(OpenAt::Session(id("s_aaaaaaaaaaaaaaaa"), None));
+    let lines = commands(app.on_line(hello()));
+    let ack = lines[2]["id"].as_str().unwrap_or_else(|| panic!("ack id"));
+    assert_eq!(app.outbox.waiting(ack), Some(Waiting::Subscribe));
+    app.on_line(refused(ack, "held by another process"));
+    assert_eq!(app.outbox.waiting(ack), None);
+    assert!(app.on_home());
+}
+
+#[test]
+fn a_subscribe_answer_for_another_session_changes_nothing_here() {
+    use crate::app::Waiting;
+    let mut app = home_at(OpenAt::Home);
+    let session = id("s_aaaaaaaaaaaaaaaa");
+    let line: Value = serde_json::from_str(&app.subscribe(&session, Level::Summary))
+        .unwrap_or_else(|err| panic!("{err}"));
+    let ack = line["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("subscribe id"));
+    // The answer arrives on another session's stream: the levels and
+    // the tag stay, as if the id were unknown.
+    let notice = app.notice().map(str::to_owned);
+    app.on_line(session_accepted("s_bbbbbbbbbbbbbbbb", ack));
+    assert_eq!(app.outbox.waiting(ack), Some(Waiting::Subscribe));
+    assert_eq!(app.notice(), notice.as_deref());
+    // The minting session's own answer still folds and settles.
+    app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
+    assert_eq!(app.outbox.waiting(ack), None);
+}
+
+#[test]
+fn a_second_subscribe_answer_changes_nothing() {
+    use crate::app::Waiting;
+    let mut app = home_at(OpenAt::Home);
+    let session = id("s_aaaaaaaaaaaaaaaa");
+    let line: Value = serde_json::from_str(&app.subscribe(&session, Level::Summary))
+        .unwrap_or_else(|err| panic!("{err}"));
+    let ack = line["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("subscribe id"));
+    assert_eq!(app.outbox.waiting(ack), Some(Waiting::Subscribe));
+    app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
+    assert_eq!(app.outbox.waiting(ack), None);
+    let notice = app.notice().map(str::to_owned);
+    app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", ack));
+    assert_eq!(app.notice(), notice.as_deref());
+}

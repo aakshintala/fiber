@@ -6893,3 +6893,197 @@ fn wheel_over_keymap_on_home_leaves_the_session_list() {
     );
     assert!(app.keymap_top().is_some(), "the key map stays open");
 }
+
+#[test]
+fn feed_and_recent_register_tags_settled_by_their_answers() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let lines = commands(app.on_line(hello()));
+    let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
+    let recent = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"));
+    assert_eq!(app.outbox.waiting(feed), Some(Waiting::Feed));
+    assert_eq!(app.outbox.waiting(recent), Some(Waiting::Recent));
+    app.on_line(accepted(feed, json!({"sessions": []})));
+    assert_eq!(app.outbox.waiting(feed), None);
+    assert!(rows(&app).is_empty());
+    app.on_line(accepted(recent, json!({"sessions": []})));
+    assert_eq!(app.outbox.waiting(recent), None);
+}
+
+#[test]
+fn feed_and_recent_refusals_settle_their_tags() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let lines = commands(app.on_line(hello()));
+    let feed = lines[0]["id"].as_str().unwrap_or_else(|| panic!("feed id"));
+    let recent = lines[1]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("recent id"));
+    assert_eq!(app.outbox.waiting(feed), Some(Waiting::Feed));
+    assert_eq!(app.outbox.waiting(recent), Some(Waiting::Recent));
+    assert!(app.on_line(refused(feed, "no feed")).is_empty());
+    assert_eq!(app.outbox.waiting(feed), None);
+    assert!(app.on_line(refused(recent, "no recent")).is_empty());
+    assert_eq!(app.outbox.waiting(recent), None);
+    assert!(app.notice().is_some());
+    assert!(rows(&app).is_empty());
+}
+
+#[test]
+fn a_second_recent_answer_changes_nothing() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [{
+            "session_id": "s_aaaaaaaaaaaaaaaa",
+            "ts": 0,
+            "project": "-w",
+            "workspace": "/w",
+            "name": "old work",
+            "how": "exited",
+        }]}),
+    ));
+    assert_eq!(app.outbox.waiting(&recent), None);
+    assert_eq!(rows(&app), ["○  old work"]);
+    app.on_line(accepted(&recent, json!({"sessions": []})));
+    assert_eq!(rows(&app), ["○  old work"]);
+}
+
+#[test]
+fn a_feed_id_answered_by_a_recent_payload_changes_no_row() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let (feed, recent) = linked(&mut app);
+    // The tag names the entry, never the payload's shape: a feed id
+    // folds as the feed even with recent rows in its result.
+    app.on_line(accepted(
+        &feed,
+        json!({"sessions": [{
+            "session_id": "s_aaaaaaaaaaaaaaaa",
+            "ts": 0,
+            "project": "-w",
+            "workspace": "/w",
+            "name": "old work",
+            "how": "exited",
+        }]}),
+    ));
+    assert_eq!(app.outbox.waiting(&feed), None);
+    assert!(rows(&app).is_empty());
+    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+}
+
+#[test]
+fn an_unscoped_recent_id_answered_by_a_scoped_payload_folds_unscoped() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    // The unscoped total is never stored: even with a total in its
+    // payload, the new project still fans out its scoped ask.
+    let out = commands(app.on_line(accepted(
+        &recent,
+        json!({"sessions": [{
+            "session_id": "s_aaaaaaaaaaaaaaaa",
+            "ts": 0,
+            "project": "-w",
+            "workspace": "/w",
+            "name": "old work",
+            "how": "exited",
+        }], "total": 5}),
+    )));
+    assert_eq!(app.outbox.waiting(&recent), None);
+    assert_eq!(rows(&app), ["○  old work"]);
+    assert!(
+        out.iter()
+            .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w"),
+        "{out:?}"
+    );
+}
+
+#[test]
+fn an_early_import_registers_its_tag_at_queue_time() {
+    use crate::app::Waiting;
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    // The link is down: the press queues the import instead of
+    // dropping it, and the offer stays open for its answer.
+    let now = fakes::clock::FakeClock::new().now();
+    assert!(matches!(app.on_key(Key::Char('1'), now), Effect::None));
+    let held: Vec<Value> = app
+        .outbox
+        .held
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_else(|err| panic!("{err}")))
+        .collect();
+    let import = held
+        .iter()
+        .find(|line| line["command"] == "import")
+        .unwrap_or_else(|| panic!("the held import"));
+    let id = import["id"].as_str().unwrap_or_else(|| panic!("import id"));
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::OfferImport));
+    let lines: Vec<Value> = commands(app.on_line(hello()));
+    let import = lines
+        .iter()
+        .find(|line| line["command"] == "import")
+        .unwrap_or_else(|| panic!("the held import goes out on hello"));
+    assert_eq!(import["id"], id);
+    assert!(app.on_line(hub_accepted(id, import_result())).is_empty());
+    assert_eq!(app.outbox.waiting(id), None);
+    assert!(app.import_report().is_some());
+}
+
+#[test]
+fn a_gated_opening_session_still_hands_an_import_answer_to_its_handler() {
+    use crate::app::Waiting;
+    let seam = Arc::new(Fake::new(Vec::new()));
+    if let Ok(mut pending) = seam.pending.lock() {
+        *pending = true;
+    }
+    let mut app = offered(Arc::clone(&seam));
+    resolve(&mut app, &seam);
+    let _ = linked(&mut app);
+    let line = press(&mut app, Key::Char('1'));
+    let id = line["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("import id"))
+        .to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::OfferImport));
+    // The session opens and its gate holds while the import waits.
+    let session = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    app.open_session(session.clone(), None, None, false);
+    assert!(app.gated(&session));
+    // The import's answer arrives on the opening session's stream
+    // while gated: the ask consumes it, opening no report here, and
+    // the gate still holds for the subscribe's own answer.
+    let answer = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: session.clone(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: json!({"command_id": id, "result": import_result()})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    });
+    app.on_line(answer);
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.import_report().is_none());
+    assert!(app.gated(&session));
+    // The taken ask is gone, so the offer sends again for a retry once
+    // the terminal is back home.
+    app.go_home();
+    let retry = press(&mut app, Key::Char('1'));
+    assert_ne!(retry["id"], line["id"]);
+}
