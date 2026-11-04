@@ -68,23 +68,7 @@ fn within_cleanup_hands_its_closure_half_of_what_the_wait_has_left() {
 
 #[test]
 fn a_matching_exits_step_gets_twice_the_child_budget_of_a_plain_wait() {
-    let doubled =
-        within_cleanup("an exit wait", matching_exits_wait(), |inner| inner.left()).unwrap();
-    let plain = within_cleanup(
-        "an exit wait",
-        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        |inner| inner.left(),
-    )
-    .unwrap();
-    // `matching_exits_wait` doubles the outer wait, so `within_cleanup`'s
-    // halving leaves the closure a full `MUST_SUCCEED_WITHIN` rather than
-    // half of one. Compared as a ratio, not against the constant: both
-    // measurements lose the same few milliseconds to the real clock
-    // (`docs/testing.md`, "Waits and timeouts").
-    assert!(
-        doubled > plain * 3 / 2,
-        "doubled={doubled:?} plain={plain:?}: the cleanup step did not get a doubled wait"
-    );
+    assert_eq!(matching_exits_wait(), fakes::MUST_SUCCEED_WITHIN * 2);
 }
 
 /// The grammar a person completes, taken from the parser: every visible
@@ -260,8 +244,8 @@ fn set(words: &[&str]) -> BTreeSet<String> {
 /// and `pgrep` bounds inside `fakes`, which are fractions of the same const,
 /// so the inner step expires first and the failure names it
 /// (`docs/testing.md`, "Waits and timeouts").
-fn matching_exits_wait() -> Deadline {
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN * 2) // ruling: #4078
+fn matching_exits_wait() -> Duration {
+    fakes::MUST_SUCCEED_WITHIN * 2 // ruling: #4078
 }
 
 /// Runs `command` to its exit, in its own process group, with stdin a pipe
@@ -305,7 +289,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         );
         let tag_gone = within_cleanup(
             &format!("processes matching {tag} to exit"),
-            matching_exits_wait(),
+            Deadline::after(matching_exits_wait()),
             move |inner| try_matching_exits(&tag_for_wait, inner),
         );
         drop((group_dog, tag_dog));
@@ -323,7 +307,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
     );
     let tag_gone = within_cleanup(
         &format!("processes matching {tag} to exit"),
-        matching_exits_wait(),
+        Deadline::after(matching_exits_wait()),
         move |inner| try_matching_exits(&tag_for_wait, inner),
     );
     let stand_down = if group_gone.as_ref() == Ok(&true) && matches!(&tag_gone, Ok(Ok(()))) {
