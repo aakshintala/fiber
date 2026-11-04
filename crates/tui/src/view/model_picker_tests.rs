@@ -2463,6 +2463,89 @@ fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
     );
 }
 
+/// A wheel step whose window holds no focusable row leaves the focus
+/// (`docs/tui.md`, "The model picker").
+#[test]
+fn a_wheel_step_whose_window_holds_no_focusable_row_leaves_the_focus() {
+    let mut app = choosing(160, 16);
+    let now = fakes::clock::FakeClock::new().now();
+    // The picker draws below the swapped-view header: the conversation
+    // area less one row, ten picker rows fitting two body rows.
+    assert_eq!(
+        app.conversation_area_height().saturating_sub(1),
+        10,
+        "the screen leaves ten picker rows"
+    );
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(model_fit(&view, 10), 2, "ten picker rows fit two body rows");
+    // Three Downs walk past acme's models onto zeta's last model: m2 is
+    // the second model of the first provider, z1 the first row of the
+    // next provider past the blank.
+    for _ in 0..3 {
+        assert_eq!(app.on_key(Key::Down, now), Effect::None);
+    }
+    let view = app.model_picker_view().expect("open");
+    let display = display_rows(&view, false);
+    assert_eq!(view.focused, Some(7), "three Downs focus zeta z2");
+    assert_eq!(view.top, 8, "three Downs park the window on zeta z2");
+    assert_eq!(
+        display.rows[3].focus,
+        Some(4),
+        "m2 is the second model of the first provider"
+    );
+    assert_eq!(
+        display.rows[7].focus,
+        Some(6),
+        "z1 is the first row of the next provider"
+    );
+    assert!(
+        display.rows[5].row.spans.is_empty(),
+        "a blank separates acme's last model from zeta"
+    );
+    assert!(
+        display.rows[6]
+            .row
+            .spans
+            .iter()
+            .any(|span| span.content.as_ref() == "zeta"),
+        "zeta heads the section past the blank"
+    );
+    // One step up from the z2 window lands on the blank and zeta's
+    // heading: no focusable row, so the pure window keeps no focus ...
+    assert_eq!(
+        picker_wheel_window(&view, true, 10),
+        (5, None),
+        "the up step lands past every focusable row"
+    );
+    assert_eq!(app.model_picker_wheel(true), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.top, 5, "one wheel-up step moves three rows");
+    assert_eq!(
+        view.focused,
+        Some(7),
+        "a window with no focusable row leaves the focus on z2"
+    );
+    // ... and one step up from z1 reaches m2 with its detail row, moving
+    // the focus to the nearest focusable row in the new window.
+    assert_eq!(app.on_key(Key::Up, now), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.focused, Some(6), "one Up focuses zeta z1");
+    assert_eq!(view.top, 6, "one Up parks the window above zeta z1");
+    assert_eq!(
+        picker_wheel_window(&view, true, 10),
+        (3, Some(4)),
+        "the next up step reaches acme's last model"
+    );
+    assert_eq!(app.model_picker_wheel(true), Effect::None);
+    let view = app.model_picker_view().expect("open");
+    assert_eq!(view.top, 3, "the second wheel-up step moves three rows");
+    assert_eq!(
+        view.focused,
+        Some(4),
+        "a window holding m2 focuses acme's last model"
+    );
+}
+
 /// One model in a `layout_view` section: its id, whether it draws the
 /// session-only third row, and the checklist mark (`Some` only there).
 struct ModelSpec {
