@@ -611,6 +611,59 @@ fn the_screen_maxima_table_rejects_malformed_mouse_lines_with_exact_errors() {
 }
 
 #[test]
+fn blank_and_comment_lines_carry_no_screen_maxima() {
+    // Each line has exactly one side of the skip true, so `||` skips it
+    // while `&&` would fall through into the table parse and fail.
+    for input in ["\n", "   \n", "# a comment\n", "   # an indented comment\n"] {
+        assert_eq!(
+            parse_screen_maxima(input),
+            Ok(screen_maxima(&[], &[])),
+            "input: {input:?}"
+        );
+    }
+}
+
+#[test]
+fn the_screen_maxima_table_rejects_malformed_plain_lines_with_exact_errors() {
+    // A bare path has a missing maximum but no trailing word, so the
+    // shape check is true on its middle arm only; an overlong line has a
+    // trailing word but no missing arm. Each fails the `||` chain while
+    // the matching `&&` mutant lets it through to a different outcome.
+    // (A missing path with a present maximum is untestable: both words
+    // come from one whitespace split, so an empty first word means an
+    // empty maximum too, and blank lines are skipped above.)
+    let cases: &[(&str, &str)] = &[
+        (
+            "crates/main/tests/a.rs\n",
+            "line 1: expected `<path> <maximum>`, got `crates/main/tests/a.rs`",
+        ),
+        (
+            "crates/main/tests/a.rs 1 extra\n",
+            "line 1: expected `<path> <maximum>`, got `crates/main/tests/a.rs 1 extra`",
+        ),
+        (
+            "crates/main/tests/a.rs many\n",
+            "line 1: maximum for crates/main/tests/a.rs: invalid digit found in string",
+        ),
+        (
+            "crates/main/tests/a.rs 1\ncrates/main/tests/a.rs 2\n",
+            "line 2: duplicate maximum for crates/main/tests/a.rs",
+        ),
+        (
+            "crates/main/tests/a.rs 1\nbadline\n",
+            "line 2: expected `<path> <maximum>`, got `badline`",
+        ),
+    ];
+    for (input, expected) in cases {
+        assert_eq!(
+            parse_screen_maxima(input),
+            Err((*expected).to_owned()),
+            "input: {input:?}"
+        );
+    }
+}
+
+#[test]
 fn the_plain_maxima_table_rejects_a_mouse_line() {
     assert_eq!(
         parse_maxima("mouse crates/main/tests/a.rs 1\n"),
