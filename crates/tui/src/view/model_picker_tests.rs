@@ -2248,7 +2248,7 @@ fn trim_count_only_for_headed_counts() {
 /// together or not at all (`docs/tui.md`, "The model picker").
 #[test]
 fn a_list_under_two_rows_with_no_model_draws_a_count_and_its_heading_together_or_not_at_all() {
-    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    // One count row per group after its heading, before its models (`docs/tui.md`, "The model picker").
     let catalogue = Catalogue {
         left_out: vec![LeftOutGroup {
             provider: "opencode".to_owned(),
