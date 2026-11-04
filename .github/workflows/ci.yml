@@ -514,8 +514,9 @@ jobs:
     steps: *test-steps
 
   # The tests the pull request touches, each run 30 times (100 when the
-  # pull request fixes a flaky test), beside the test jobs; non-blocking
-  # during the pilot (docs/ci.md, "On every pull request that changes code").
+  # pull request fixes a flaky test), beside the test jobs: one failure stops
+  # the merge, so a test this pull request touches must not be flaky
+  # (docs/ci.md, "On every pull request that changes code").
   stress:
     name: Stress the tests the pull request touches
     needs: select
