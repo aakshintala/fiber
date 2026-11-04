@@ -32,11 +32,6 @@ impl Subscriptions {
         self.levels.sent(id, session, level);
     }
 
-    /// The session an in-flight subscribe `id` names, without consuming it.
-    pub(super) fn session_for(&self, id: &str) -> Option<SessionId> {
-        self.levels.session_for(id)
-    }
-
     /// The level a new subscribe for `session` must differ from: the
     /// last in-flight subscribe's level, else the accepted one.
     pub(super) fn expected(&self, session: &SessionId) -> Option<Level> {
@@ -473,8 +468,8 @@ impl App {
     /// was an in-flight subscribe, else `None`. A session answer names
     /// its source session, which must be the session the subscribe went
     /// out for: an answer for another session changes nothing, as an
-    /// unknown id does. The hub names no source session and matches by
-    /// id, as before.
+    /// unknown id does. A hub subscribe answer has no source session
+    /// and matches by id.
     pub(super) fn subscribe_answer(
         &mut self,
         id: &str,
@@ -486,7 +481,7 @@ impl App {
             && self
                 .home
                 .as_ref()
-                .and_then(|home| home.subs.session_for(id))
+                .and_then(|home| home.subs.levels.session_for(id))
                 .is_some_and(|minting| &minting != source)
         {
             return None;

@@ -69,8 +69,8 @@ impl Notice {
 
 impl Recent {
     /// Takes the one-time feed and first unscoped page, if not sent yet.
-    /// A repeat call replaces both entries, so the old tags settle where
-    /// the entries go.
+    /// The call after `fed` is cleared settles the old feed and recent
+    /// ids.
     pub(super) fn first_asks(&mut self, outbox: &mut Outbox) -> Option<Vec<String>> {
         if self.fed {
             return None;

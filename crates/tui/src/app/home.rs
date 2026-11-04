@@ -748,8 +748,8 @@ impl App {
                             }
                         }
                         Some(super::Waiting::Subscribe) => {
-                            // The hub names no source session, so a hub
-                            // subscribe answer matches by id, as before.
+                            // A hub subscribe answer has no source
+                            // session and matches by id.
                             if let Some(lines) =
                                 self.subscribe_answer(id, accepted, &hub.payload, None)
                             {
@@ -793,8 +793,8 @@ impl App {
                         Some(super::Waiting::Close) => {
                             // The quit question's closes own no answer
                             // fold: the terminal exits with them sent.
-                            // The tag settles so a late answer falls
-                            // through as an unknown id does.
+                            // The tag settles so a late answer is
+                            // consumed here.
                             self.outbox.settled(id);
                             return Some(Vec::new());
                         }
@@ -936,11 +936,18 @@ impl App {
                                 return Some(self.answer_ask(ask, accepted, &envelope.payload));
                             }
                         }
+                        Some(super::Waiting::Close) => {
+                            // The quit question's closes own no answer
+                            // fold: the terminal exits with them sent.
+                            // The tag settles so a late answer is
+                            // consumed here.
+                            self.outbox.settled(id);
+                            return Some(Vec::new());
+                        }
                         Some(
                             super::Waiting::Directories
                             | super::Waiting::Feed
                             | super::Waiting::Recent
-                            | super::Waiting::Close
                             | super::Waiting::Dismiss(_)
                             | super::Waiting::Fork
                             | super::Waiting::RewindHistory

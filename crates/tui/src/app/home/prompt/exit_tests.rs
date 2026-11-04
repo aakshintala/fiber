@@ -1416,3 +1416,40 @@ fn quit_closes_register_a_close_tag_each() {
         assert_eq!(app.outbox.waiting(id), Some(Waiting::Close));
     }
 }
+
+#[test]
+fn quit_close_session_answer_settles_its_tag() {
+    use crate::app::Waiting;
+    let mut app = home_with(80, 24, launch());
+    linked(&mut app);
+    working(&mut app, "s_aaaaaaaaaaaaaaaa");
+    assert_eq!(ctrl_c(&mut app), Effect::None);
+    let clock = fakes::clock::FakeClock::new();
+    let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
+        panic!("`c` closes all");
+    };
+    let lines = commands(lines);
+    let close = lines
+        .iter()
+        .find(|line| line["command"] == "close")
+        .unwrap_or_else(|| panic!("close line: {lines:?}"));
+    let id = close["id"].as_str().unwrap_or_else(|| panic!("close id"));
+    let session = close["session_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("close session"));
+    assert_eq!(app.outbox.waiting(id), Some(Waiting::Close));
+    let answer = Line::Session(contract::Envelope {
+        kind: "command_accepted".to_owned(),
+        session_id: SessionId(session.to_owned()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: [("command_id".to_owned(), Value::String(id.to_owned()))]
+            .into_iter()
+            .collect(),
+    });
+    assert!(app.on_line(answer).is_empty());
+    assert_eq!(app.outbox.waiting(id), None);
+}
