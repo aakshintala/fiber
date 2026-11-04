@@ -2244,6 +2244,53 @@ fn trim_count_only_for_headed_counts() {
     );
 }
 
+/// A list under two rows with no model draws a count and its heading
+/// together or not at all (`docs/tui.md`, "The model picker").
+#[test]
+fn a_list_under_two_rows_with_no_model_draws_a_count_and_its_heading_together_or_not_at_all() {
+    // One count row per group after its heading, before its models (`docs/tui.md:661-668`).
+    let catalogue = Catalogue {
+        left_out: vec![LeftOutGroup {
+            provider: "opencode".to_owned(),
+            extension: "github.com/aakshintala/fiber/providers/opencode".to_owned(),
+            file: "config/opencode.json".to_owned(),
+            setting: "workspace".to_owned(),
+            login: true,
+            models: vec![LeftOutModel {
+                id: "o1".to_owned(),
+                name: None,
+            }],
+        }],
+        ..Catalogue::default()
+    };
+    let fixture = |height: u16| {
+        let mut app = attached(80, height);
+        app.on_models(Ok(catalogue.clone()));
+        open(&mut app);
+        assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Stale));
+        app.on_models(Ok(catalogue.clone()));
+        app
+    };
+    let keep = fixture(16);
+    let cut = fixture(15);
+    // The picker draws below the swapped-view header: the conversation
+    // area less one row, 10 rows kept and 9 rows cut.
+    assert_eq!(
+        keep.conversation_area_height().saturating_sub(1),
+        10,
+        "the keep screen leaves ten picker rows"
+    );
+    assert_eq!(
+        cut.conversation_area_height().saturating_sub(1),
+        9,
+        "the cut screen leaves nine picker rows"
+    );
+    let view = keep.model_picker_view().expect("open");
+    assert_eq!(model_fit(&view, 10), 2, "ten picker rows fit two body rows");
+    insta::assert_snapshot!("trim-keep", screen(&keep, 80, 16));
+    insta::assert_snapshot!("trim-cut", screen(&cut, 80, 15));
+}
+
 /// A far focus resets to a nonzero window offset (`docs/tui.md:710-714`).
 #[test]
 fn focus_window_top_is_nonzero_for_a_far_focus() {
