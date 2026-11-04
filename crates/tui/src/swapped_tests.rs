@@ -996,6 +996,32 @@ fn below_and_field_note_breaks_after_a_wrap() {
     assert_eq!(effect, Effect::Copy("query".to_owned()));
 }
 
+/// Selecting with an unknown height never adds: a scrolled list keeps
+/// its top, and the window's edge scrolls exactly onto the selection.
+#[test]
+fn select_with_an_unknown_height_never_adds() {
+    // A scrolled list: down a short list with a small height first.
+    let mut list = List::default();
+    list.select(30, 40, 6);
+    assert_eq!((list.selected(), list.top()), (30, 25));
+    // The rewind view's unknown height: the selection moves and the top
+    // stays, instead of overflowing `top + height`.
+    list.select(30, 40, usize::MAX);
+    assert_eq!((list.selected(), list.top()), (30, 25));
+    // Just below the edge the top stays.
+    let mut list = List::default();
+    list.select(5, 10, 3);
+    assert_eq!((list.selected(), list.top()), (5, 3));
+    list.select(5, 10, 3);
+    assert_eq!((list.selected(), list.top()), (5, 3));
+    // Exactly on the edge the window scrolls onto the selection.
+    list.select(6, 10, 3);
+    assert_eq!((list.selected(), list.top()), (6, 4));
+    // Past the edge it scrolls the same way.
+    list.select(8, 10, 3);
+    assert_eq!((list.selected(), list.top()), (8, 6));
+}
+
 /// A selection exactly on the new top stays, and a target exactly on the
 /// exclusive bottom stays outside: the window still moves three rows
 /// (`docs/tui.md:576`).
