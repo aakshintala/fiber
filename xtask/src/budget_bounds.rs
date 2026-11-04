@@ -245,7 +245,9 @@ fn site_at(trees: &[TokenTree], i: usize, scan: &Scan, test: bool) -> Option<Sit
         }),
         None => Some(Site {
             line,
-            what: format!("Deadline::after({spelling}) is not shown below 60 s"),
+            what: format!(
+                "Deadline::after({spelling}) (readable: WAIT, DEADLINE, MUST_SUCCEED_WITHIN, Duration::ZERO) is not shown below 60 s"
+            ),
         }),
     }
 }
