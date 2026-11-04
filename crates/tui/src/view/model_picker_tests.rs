@@ -1918,7 +1918,7 @@ fn wheel_offsets_count_headings_and_blank_rows_as_displayed_rows() {
     let (top, _) = picker_wheel_window(&view, false, height);
     assert_eq!(
         top,
-        3, // `docs/tui.md:589`
+        3, // (`docs/tui.md`, "The model picker")
         "heading, count and model rows each consume an offset"
     );
     app.model_picker_wheel(false);
@@ -2213,7 +2213,8 @@ fn chips_need_a_spaceless_middle() {
     assert!(!super::is_chip("]"));
 }
 
-/// A headed model never trims with its heading, while a headed count does.
+/// A headed model never trims with its heading, while a headed count does
+/// (`docs/tui.md`, "The model picker").
 #[test]
 fn trim_count_only_for_headed_counts() {
     let app = choosing(160, 48);
@@ -2259,7 +2260,7 @@ fn focus_window_top_is_nonzero_for_a_far_focus() {
 
 /// An up wheel that lands the focus exactly on the new exclusive bottom
 /// keeps it offscreen and clamps to the nearest visible row, never the
-/// row at the edge.
+/// row at the edge (`docs/tui.md`, "The model picker").
 #[test]
 fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
     let mut app = attached(160, 11);
@@ -2300,7 +2301,7 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
     let effective = keep_focus_visible_top(&view, height);
     assert_eq!(effective, target, "an above focus pulls the window to it");
     let (top, focus) = picker_wheel_window(&view, true, height);
-    assert_eq!(top, target.saturating_sub(3), "one step up moves three"); // `docs/tui.md:589`
+    assert_eq!(top, target.saturating_sub(3), "one step up moves three"); // (`docs/tui.md`, "The model picker")
     let end = top.saturating_add(fit);
     let current = display
         .rows
@@ -2353,7 +2354,8 @@ fn wheel_up_with_focus_on_the_new_exclusive_bottom_clamps_inside() {
 
 /// An up wheel that resets the window to the start while the focus sits
 /// just past the new end clamps to the nearest visible row: row zero can
-/// never stand in for the focus, since only an exact focus match counts.
+/// never stand in for the focus, since only an exact focus match counts
+/// (`docs/tui.md`, "The model picker").
 #[test]
 fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
     let mut app = attached(160, 11);
@@ -2395,7 +2397,7 @@ fn wheel_up_resetting_to_zero_clamps_past_a_nonmatching_first_row() {
     let effective = keep_focus_visible_top(&view, height);
     assert_eq!(effective, 3, "the stored window already shows the focus");
     let (top, focus) = picker_wheel_window(&view, true, height);
-    assert_eq!(top, 0, "one step up resets the window to zero"); // `docs/tui.md:589`
+    assert_eq!(top, 0, "one step up resets the window to zero"); // (`docs/tui.md`, "The model picker")
     let end = top.saturating_add(fit);
     // Row zero never matches the focus, so it must not count as found:
     // the clamp is the nearest visible focusable row, row 1.

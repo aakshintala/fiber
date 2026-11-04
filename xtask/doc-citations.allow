@@ -478,7 +478,7 @@ crates/tui/src/timing_tests.rs	4	docs/state.md:450-454
 crates/tui/src/timing_tests.rs	4	docs/state.md`, "Diagnostic logs"
 crates/tui/src/turn/group_tests.rs	1	docs/events.md:697-701
 crates/tui/src/turn_tests.rs	1	docs/events.md:697-701
-crates/tui/src/view/model_picker_tests.rs	6	docs/tui.md:589
+crates/tui/src/view/model_picker_tests.rs	3	docs/tui.md:589
 crates/tui/src/view/model_picker_tests.rs	2	docs/tui.md:642-644
 crates/tui/src/view/model_picker_tests.rs	10	docs/tui.md:661-668
 crates/tui/src/view/model_picker_tests.rs	1	docs/tui.md:669-714
