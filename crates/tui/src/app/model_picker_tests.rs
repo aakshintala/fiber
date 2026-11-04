@@ -72,7 +72,7 @@ fn a_read_error_is_one_notice_and_keeps_the_catalogue() {
     assert_eq!(app.model_picker.catalogue.models.len(), 1);
     app.on_models(Err("the lists could not be read".to_owned()));
     assert_eq!(app.notice(), Some("the lists could not be read"));
-    assert_eq!(newest_code(&app), "io_failed");
+    assert_eq!(newest_code(&app), ErrorCode::IoFailed);
     assert_eq!(app.notices().len(), 2);
     assert_eq!(app.model_picker.catalogue.models.len(), 1);
     assert_eq!(
@@ -118,7 +118,7 @@ fn catalogue_notices_show_under_their_own_codes() {
         .notices()
         .iter()
         .map(|line| match line {
-            crate::app::NoticeLine::Notice { code, .. } => code.clone(),
+            crate::app::NoticeLine::Notice { code, .. } => code.name().to_owned(),
             line @ crate::app::NoticeLine::More(_) => {
                 panic!("a more row, not a notice: {line:?}")
             }
@@ -168,7 +168,9 @@ fn catalogue_notices_group_by_code() {
         .notices()
         .into_iter()
         .filter_map(|line| match line {
-            crate::app::NoticeLine::Notice { code, text, .. } => Some((code, text)),
+            crate::app::NoticeLine::Notice { code, text, .. } => {
+                Some((code.name().to_owned(), text))
+            }
             crate::app::NoticeLine::More(_) => None,
         })
         .collect();
@@ -251,7 +253,7 @@ fn levels(levels: &[&str]) -> Vec<String> {
 }
 
 /// The first notice row's code.
-fn first_code(app: &App) -> String {
+fn first_code(app: &App) -> ErrorCode {
     match app.notices().into_iter().next() {
         Some(crate::app::NoticeLine::Notice { code, .. }) => code,
         line => panic!("a notice row, not {line:?}"),
@@ -259,7 +261,7 @@ fn first_code(app: &App) -> String {
 }
 
 /// The newest notice row's code.
-fn newest_code(app: &App) -> String {
+fn newest_code(app: &App) -> ErrorCode {
     match app.notices().into_iter().last() {
         Some(crate::app::NoticeLine::Notice { code, .. }) => code,
         line => panic!("a notice row, not {line:?}"),
@@ -1521,7 +1523,7 @@ fn shown_notices(app: &App) -> String {
     app.notices()
         .iter()
         .map(|line| match line {
-            crate::app::NoticeLine::Notice { code, text, .. } => format!("{code} {text}"),
+            crate::app::NoticeLine::Notice { code, text, .. } => format!("{} {text}", code.name()),
             crate::app::NoticeLine::More(n) => format!("+{n} more"),
         })
         .collect::<Vec<_>>()
@@ -2505,7 +2507,7 @@ fn with_no_entry_on_home_it_asks_for_a_read() {
         app.notice(),
         Some("The model list is not read yet; try again in a moment.")
     );
-    assert_eq!(first_code(&app), "models_loading");
+    assert_eq!(first_code(&app), ErrorCode::ModelsLoading);
     assert_eq!(app.take_reads(), Some(crate::catalogue::Refresh::Cached));
 }
 
@@ -2514,7 +2516,7 @@ fn with_no_model_it_says_to_choose_one() {
     let (mut app, _) = choosing_app();
     assert_eq!(run_draft(&mut app, "/thinking high"), Effect::None);
     assert_eq!(app.notice(), Some("Choose a model first: Ctrl+L."));
-    assert_eq!(first_code(&app), "no_model");
+    assert_eq!(first_code(&app), ErrorCode::NoModel);
     assert!(app.model_picker.awaiting.is_empty());
 
     let mut app = home();
@@ -3983,7 +3985,7 @@ fn a_rejected_chip_read_notices_once_and_waits_for_reconnect() {
     let crate::app::NoticeLine::Notice { code, text, .. } = &lines[0] else {
         panic!("one notice line");
     };
-    assert_eq!(code, "invalid_arguments");
+    assert_eq!(*code, ErrorCode::InvalidArguments);
     assert_eq!(text, "bad settings");
     assert!(app.chip_read_owed());
     assert!(app.model_picker.open.is_none());
@@ -4432,9 +4434,9 @@ fn folding_mid_turn(app: &mut App) {
 }
 
 /// Whether any notice row carries `code`.
-fn has_code(app: &App, code: &str) -> bool {
-    app.notices().into_iter().any(
-        |line| matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if found == code),
+fn has_code(app: &App, code: ErrorCode) -> bool {
+    app.notices().iter().any(
+        |line| matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if *found == code),
     )
 }
 
@@ -4449,7 +4451,7 @@ fn a_send_while_busy_pushes_the_pending_notice() {
     assert_eq!(line["command"], json!("model"));
     // The notice names the stashed choice, not the chips: the model with
     // its untouched level rides along.
-    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(newest_code(&app), ErrorCode::SwitchPending);
     assert_eq!(
         app.notice(),
         Some("acme/m1 · high applies when this turn ends")
@@ -4470,7 +4472,7 @@ fn a_send_while_busy_in_a_folded_pass_pushes_the_pending_notice() {
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     assert_eq!(line["command"], json!("model"));
-    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(newest_code(&app), ErrorCode::SwitchPending);
     assert_eq!(
         app.notice(),
         Some("acme/m1 · high applies when this turn ends")
@@ -4499,10 +4501,10 @@ fn an_accept_while_busy_adds_no_notice() {
     open(&mut app);
     let line = sent(app.on_key(Key::Enter, now()));
     let id = line["id"].as_str().expect("an id").to_owned();
-    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(newest_code(&app), ErrorCode::SwitchPending);
     app.on_line(accepted(SESSION, &id));
     // Only the pending notice stands: the acceptance is silent.
-    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(newest_code(&app), ErrorCode::SwitchPending);
     assert_eq!(
         app.notice(),
         Some("acme/m1 · high applies when this turn ends")
@@ -4539,8 +4541,8 @@ fn a_rejection_after_acceptance_pushes_without_replacing() {
     // A late rejection for the drained id changes nothing: the pending
     // row is gone, and with it the generic path's push.
     app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
-    assert_eq!(newest_code(&app), "switch_pending");
-    assert!(!has_code(&app, "credential_missing"));
+    assert_eq!(newest_code(&app), ErrorCode::SwitchPending);
+    assert!(!has_code(&app, ErrorCode::CredentialMissing));
 }
 
 #[test]
@@ -4558,9 +4560,9 @@ fn a_rejection_replaces_the_pending_notice() {
     app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
     // The rejection takes the pending notice's place: its code and
     // message, with no `switch_pending` row left.
-    assert_eq!(newest_code(&app), "credential_missing");
+    assert_eq!(newest_code(&app), ErrorCode::CredentialMissing);
     assert_eq!(app.notice(), Some("no key."));
-    assert!(!has_code(&app, "switch_pending"));
+    assert!(!has_code(&app, ErrorCode::SwitchPending));
 }
 
 #[test]
@@ -4572,14 +4574,14 @@ fn a_duplicate_rejection_mid_turn_is_silent_and_drops_the_writes() {
     // Session-only, so the wait names the row and no write waits.
     let line = sent(ctrl_s(&mut app));
     let id = line["id"].as_str().expect("an id").to_owned();
-    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(newest_code(&app), ErrorCode::SwitchPending);
     let notices = app.notices().len();
     // A resent copy the session already holds closes with no notice of
     // its own; the first send is still in flight, so its pending notice
     // stands.
     app.on_line(refused(SESSION, &id, "duplicate_command", "twice."));
     assert_eq!(app.notices().len(), notices);
-    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(newest_code(&app), ErrorCode::SwitchPending);
     assert!(!app.model_picker.awaiting.contains_key(&id));
     // A later acceptance carrying the dropped id writes nothing.
     app.on_line(accepted(SESSION, &id));
@@ -4595,7 +4597,7 @@ fn a_rejection_after_leaving_drops_the_stash_without_a_notice() {
     // Session-only, so leaving drops its whole wait.
     let line = sent(ctrl_s(&mut app));
     let id = line["id"].as_str().expect("an id").to_owned();
-    assert_eq!(newest_code(&app), "switch_pending");
+    assert_eq!(newest_code(&app), ErrorCode::SwitchPending);
     app.leave_session(Some(contract::SessionId(SESSION.to_owned())));
     // The late rejection for the dropped choice is neither written nor
     // notified: its pending notice goes with it, since the choice can
@@ -4619,16 +4621,16 @@ fn a_dismiss_leaves_a_newer_other_code_standing() {
     // the dismissal keys on the stashed choice's exact wording, so the
     // newest row survives while the stashed choice's own older notice
     // is still taken.
-    app.push_notice("credential_missing", "no key.".to_owned());
+    app.push_notice(ErrorCode::CredentialMissing, "no key.".to_owned());
     app.dismiss_pending_notice("acme/m1", Some("high"));
-    assert_eq!(newest_code(&app), "credential_missing");
+    assert_eq!(newest_code(&app), ErrorCode::CredentialMissing);
     assert_eq!(app.notice(), Some("no key."));
-    assert!(!has_code(&app, "switch_pending"));
+    assert!(!has_code(&app, ErrorCode::SwitchPending));
     // The stash is untouched, so the later reject still replaces the
     // pending notice with the rejection notice.
     app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
-    assert_eq!(newest_code(&app), "credential_missing");
-    assert!(!has_code(&app, "switch_pending"));
+    assert_eq!(newest_code(&app), ErrorCode::CredentialMissing);
+    assert!(!has_code(&app, ErrorCode::SwitchPending));
 }
 
 #[test]
@@ -4643,7 +4645,7 @@ fn a_dismiss_leaves_a_newer_other_choice_standing() {
     // text. The dismissal keys on the stashed choice's exact wording,
     // so the newest row survives it.
     app.push_notice(
-        "switch_pending",
+        ErrorCode::SwitchPending,
         "other/om · low applies when this turn ends".to_owned(),
     );
     app.dismiss_pending_notice("acme/m1", Some("high"));
@@ -4651,11 +4653,11 @@ fn a_dismiss_leaves_a_newer_other_choice_standing() {
         app.notice(),
         Some("other/om · low applies when this turn ends")
     );
-    assert!(has_code(&app, "switch_pending"));
+    assert!(has_code(&app, ErrorCode::SwitchPending));
     // The stash is untouched, so the later reject still takes only the
     // stashed choice's own notice, leaving the other's standing.
     app.on_line(refused(SESSION, &id, "credential_missing", "no key."));
-    assert_eq!(newest_code(&app), "credential_missing");
+    assert_eq!(newest_code(&app), ErrorCode::CredentialMissing);
     assert_eq!(app.notice(), Some("no key."));
     assert!(
         app.notices().into_iter().any(|line| matches!(
@@ -4669,11 +4671,11 @@ fn a_dismiss_leaves_a_newer_other_choice_standing() {
 }
 
 /// Counts the stacked rows under `code`.
-fn count_code(app: &App, code: &str) -> usize {
+fn count_code(app: &App, code: ErrorCode) -> usize {
     app.notices()
         .into_iter()
         .filter(
-            |line| matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if found == code),
+            |line| matches!(line, crate::app::NoticeLine::Notice { code: found, .. } if *found == code),
         )
         .count()
 }
@@ -4730,7 +4732,7 @@ fn two_identical_pending_choices_stack_and_one_rejection_leaves_one() {
     let second = sent(app.on_key(Key::Enter, now()));
     let second_id = second["id"].as_str().expect("an id").to_owned();
     assert_ne!(first_id, second_id);
-    assert_eq!(count_code(&app, "switch_pending"), 2);
+    assert_eq!(count_code(&app, ErrorCode::SwitchPending), 2);
     assert_eq!(
         app.notice(),
         Some("acme/m1 · high applies when this turn ends")
@@ -4744,33 +4746,33 @@ fn two_identical_pending_choices_stack_and_one_rejection_leaves_one() {
         "credential_missing",
         "no key.",
     ));
-    assert_eq!(count_code(&app, "switch_pending"), 1);
+    assert_eq!(count_code(&app, ErrorCode::SwitchPending), 1);
     assert!(app.notices().into_iter().any(|line| matches!(line,
         crate::app::NoticeLine::Notice { code, text, .. }
-        if code == "switch_pending" && text == "acme/m1 · high applies when this turn ends")));
+        if code == ErrorCode::SwitchPending && text == "acme/m1 · high applies when this turn ends")));
     // The turn ending applies the last share: the turn-end fold clears
     // it, with no rejection in play.
     app.on_line(turn_completed());
-    assert!(!has_code(&app, "switch_pending"));
+    assert!(!has_code(&app, ErrorCode::SwitchPending));
 }
 
 #[test]
 fn on_models_arrival_clears_models_loading() {
     let (mut app, _) = choosing_app();
     app.push_notice(
-        "models_loading",
+        ErrorCode::ModelsLoading,
         "The model list is not read yet; try again in a moment.".to_owned(),
     );
-    assert!(has_code(&app, "models_loading"));
+    assert!(has_code(&app, ErrorCode::ModelsLoading));
     // The load landed, answered or not: its wait is over.
     app.on_models(Ok(three()));
-    assert!(!has_code(&app, "models_loading"));
+    assert!(!has_code(&app, ErrorCode::ModelsLoading));
     app.push_notice(
-        "models_loading",
+        ErrorCode::ModelsLoading,
         "The model list is not read yet; try again in a moment.".to_owned(),
     );
     app.on_models(Err("gone".to_owned()));
-    assert!(!has_code(&app, "models_loading"));
+    assert!(!has_code(&app, ErrorCode::ModelsLoading));
 }
 
 /// A catalogue with five models, so three steps fit without clamping.

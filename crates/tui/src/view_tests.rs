@@ -7,6 +7,7 @@ use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
 use crate::theme::Role;
+use contract::ErrorCode;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
@@ -632,7 +633,7 @@ fn conversation_slots_replace_through_the_seam() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "again"));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "failed"));
     // A notice above the working line.
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     // Per-slot tests cover the other replacements; this test pins the
     // whole-screen effect of replacing one prompt.
     let fake = std::rc::Rc::new(SlotRenderer::filling(
@@ -681,7 +682,7 @@ fn notice_replacement_reserves_each_painted_row() {
 
     let mut app = empty();
     attach(&mut app, S_A);
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     let fake = Rc::new(SlotRenderer::filling(
         &["notice"],
         SlotScript::Replace(vec![vec![raw("first")], vec![raw("second")]]),
@@ -2360,7 +2361,7 @@ fn painted_item_and_notice_keys_join_the_shared_frame_mark() {
     let interval = std::time::Duration::from_millis(500);
     let mut app = empty();
     tool_turn(&mut app);
-    app.push_notice("io_failed", "x".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "x".to_owned());
     let item = std::rc::Rc::new(AnimatedRenderer::filling("group_line", interval, 3));
     let notice = std::rc::Rc::new(AnimatedRenderer::filling("notice", interval, 1));
     app.install_renderer(std::rc::Rc::new(ItemAndNotice {

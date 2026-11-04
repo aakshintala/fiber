@@ -10,6 +10,7 @@ use super::{App, Effect, Surface};
 use crate::focus::{Area, Regions, area_of, order};
 use crate::keys::Key;
 use crate::mouse::{Target, TargetId};
+use contract::ErrorCode;
 
 impl App {
     /// The focused click target in navigate mode; None while the input box
@@ -112,8 +113,7 @@ impl App {
             return false;
         }
         for notice in contract::events::group_notices(batch, contract::events::grouped_lead) {
-            self.notices
-                .push(&crate::format::code(&notice.code), notice.message);
+            self.notices.push(notice.code.clone(), notice.message);
         }
         true
     }
@@ -465,7 +465,7 @@ impl App {
         });
         if !missing.is_empty() {
             self.notices
-                .push("history_loading", "Loading history…".to_owned());
+                .push(ErrorCode::HistoryLoading, "Loading history…".to_owned());
             return None;
         }
         let text = self.screen.pages().turn_text(at);
@@ -480,7 +480,7 @@ impl App {
             // The wait is over, landed or abandoned: the notice the first
             // press pushed goes with the pending turn.
             self.notices
-                .clear_code("history_loading", "Loading history…");
+                .clear_code(ErrorCode::HistoryLoading, "Loading history…");
             for at in pending.pages {
                 self.screen.pages_mut().unwant(at);
             }

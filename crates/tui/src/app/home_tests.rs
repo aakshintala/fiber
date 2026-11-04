@@ -8,6 +8,7 @@ use crate::keys::{Edit, Key};
 use crate::keys::{Mouse, MouseKind};
 use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
+use contract::ErrorCode;
 use contract::clock::Clock;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -1543,7 +1544,7 @@ fn an_unreadable_row_does_not_open_and_says_so() {
     assert!(app.notices().iter().any(|line| matches!(
         line,
         crate::app::NoticeLine::Notice { code, text, .. }
-        if code == "session_held"
+        if *code == ErrorCode::SessionHeld
             && text == "Cannot attach: its status did not parse."
     )));
 }
@@ -3893,7 +3894,7 @@ fn a_dependents_refusal_with_no_other_ids_notes_the_row() {
     assert!(app.notices().iter().any(|line| matches!(
         line,
         crate::app::NoticeLine::Notice { code, text, .. }
-        if code == "session_has_dependents" && text == message
+        if *code == ErrorCode::SessionHasDependents && text == message
     )));
 }
 
@@ -3903,13 +3904,16 @@ fn a_refusal_code_is_the_payload_code_or_malformed() {
     let payload = |value: Value| value.as_object().cloned().unwrap_or_default();
     assert_eq!(
         super::refusal_code(&payload(json!({"code": "session_held"}))),
-        "session_held"
+        ErrorCode::SessionHeld
     );
     assert_eq!(
         super::refusal_code(&payload(json!({"code": ""}))),
-        "malformed"
+        ErrorCode::Malformed
     );
-    assert_eq!(super::refusal_code(&payload(json!({}))), "malformed");
+    assert_eq!(
+        super::refusal_code(&payload(json!({}))),
+        ErrorCode::Malformed
+    );
 }
 
 #[test]
@@ -4018,7 +4022,7 @@ fn x_on_an_unreadable_row_says_so() {
     assert!(app.notices().iter().any(|line| matches!(
         line,
         crate::app::NoticeLine::Notice { code, text, .. }
-        if code == "session_held"
+        if *code == ErrorCode::SessionHeld
             && text == "Cannot attach: its status did not parse."
     )));
 }
@@ -6067,7 +6071,7 @@ fn offer_notices(app: &App) -> Vec<String> {
     app.notices()
         .iter()
         .map(|line| match line {
-            crate::app::NoticeLine::Notice { code, text, .. } => format!("{code} {text}"),
+            crate::app::NoticeLine::Notice { code, text, .. } => format!("{} {text}", code.name()),
             crate::app::NoticeLine::More(n) => format!("+{n} more"),
         })
         .collect()
@@ -6612,7 +6616,7 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
     assert_eq!(app.notice(), Some("no recent"));
     assert!(app.notices().iter().any(|line| matches!(
         line,
-        crate::app::NoticeLine::Notice { code, .. } if code == "gone"
+        crate::app::NoticeLine::Notice { code, .. } if code.name() == "gone"
     )));
     // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), None);
@@ -6626,7 +6630,7 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
     );
     assert!(app.notices().iter().any(|line| matches!(
         line,
-        crate::app::NoticeLine::Notice { code, .. } if code == "gone"
+        crate::app::NoticeLine::Notice { code, .. } if code.name() == "gone"
     )));
     assert!(!app.home.as_ref().unwrap().sessions.is_dirty("-w"));
 }
@@ -6656,7 +6660,7 @@ fn a_scoped_malformed_answer_keeps_the_total_notices_once_and_sends_nothing() {
     assert_eq!(app.notice(), Some("rejected"));
     assert!(app.notices().iter().any(|line| matches!(
         line,
-        crate::app::NoticeLine::Notice { code, .. } if code == "malformed"
+        crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::Malformed
     )));
     // `docs/invocation.md:1102` (recent total) and `docs/tui.md`, "The session list" (counts from total).
     assert_eq!(stored(&app, "-w"), Some(5));
@@ -6701,7 +6705,7 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
         assert!(
             app.notices().iter().any(|line| matches!(
                 line,
-                crate::app::NoticeLine::Notice { code, .. } if code == "malformed"
+                crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::Malformed
             )),
             "{label}"
         );

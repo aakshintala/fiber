@@ -14,6 +14,7 @@ use crate::input::Draft;
 use crate::keys::Key;
 use crate::mouse::TargetId;
 use crate::view::max_question_scroll;
+use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::CommandAccepted;
 
@@ -283,7 +284,7 @@ impl App {
         };
         if row.state == State::Unreadable {
             let text = format!("{}.", self.unreadable_reason());
-            self.notices.push("session_held", text);
+            self.notices.push(ErrorCode::SessionHeld, text);
             return Effect::None;
         }
         if row.left.is_some() {
@@ -513,14 +514,10 @@ impl App {
             Some(remote) => match remote.import_pending_hub() {
                 Ok(pending) => Some(pending),
                 Err(error) => {
-                    let code = serde_json::to_value(&error.code)
-                        .ok()
-                        .and_then(|code| code.as_str().map(str::to_owned))
-                        .unwrap_or_else(|| "io_failed".to_owned());
                     if let Some(home) = self.home.as_mut() {
                         home.import_owed = false;
                     }
-                    self.push_notice(&code, error.message);
+                    self.push_notice(error.code.clone(), error.message);
                     return;
                 }
             },
@@ -561,7 +558,7 @@ impl App {
             // The hub refused the offer's import: the feed and recent
             // rows' notice, with the offer staying open for a retry.
             let code = refusal_code(payload);
-            self.notices.push(&code, refusal(payload));
+            self.notices.push(code, refusal(payload));
             return Some(Vec::new());
         }
         let Ok(accepted) =
@@ -570,7 +567,7 @@ impl App {
             // The hub answered what the terminal cannot read as a
             // command answer: the refused path with the offer open.
             let code = refusal_code(payload);
-            self.notices.push(&code, refusal(payload));
+            self.notices.push(code, refusal(payload));
             return Some(Vec::new());
         };
         if !self.import_answered(Some(source), &accepted) {
@@ -578,7 +575,7 @@ impl App {
             // refused path with the offer open, as for an
             // unparseable payload.
             let code = refusal_code(payload);
-            self.notices.push(&code, refusal(payload));
+            self.notices.push(code, refusal(payload));
             return Some(Vec::new());
         }
         self.close_import_prompt();
@@ -628,7 +625,7 @@ impl App {
                     let code = refusal_code(payload);
                     let message = refusal(payload);
                     self.note(&session, message.clone());
-                    self.notices.push(&code, message);
+                    self.notices.push(code, message);
                 }
                 Vec::new()
             }
@@ -648,7 +645,7 @@ impl App {
                     return self.ask_recent_first(project.as_deref());
                 }
                 let (code, message) = refusal_parts(payload);
-                if code == "session_has_dependents" || code == "stale_request" {
+                if code == ErrorCode::SessionHasDependents || code == ErrorCode::StaleRequest {
                     // The hub names the root too, so the row goes first
                     // and the set deduplicates keeping first occurrence.
                     let mut expect = vec![id.clone()];
@@ -670,7 +667,7 @@ impl App {
                     }
                 }
                 self.note(&id, message.clone());
-                self.notices.push(&refusal_code(payload), message);
+                self.notices.push(refusal_code(payload), message);
                 self.clear_prompt(&id);
                 Vec::new()
             }
@@ -715,10 +712,10 @@ fn delete_line(id: &SessionId, expect: Option<&[SessionId]>) -> (String, String)
 }
 
 /// A refusal's code and message.
-fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (&str, String) {
+fn refusal_parts(payload: &serde_json::Map<String, Value>) -> (ErrorCode, String) {
     let code = payload
         .get("code")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    (code, refusal(payload))
+    (ErrorCode::from_name(code), refusal(payload))
 }

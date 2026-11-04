@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value};
 
 use crate::app::App;
+use contract::ErrorCode;
 use contract::SessionId;
 
 use super::{State, refusal, refusal_code};
@@ -35,7 +36,7 @@ impl App {
 
         let code = refusal_code(payload);
         let message = refusal(payload);
-        if code == "session_held" {
+        if code == ErrorCode::SessionHeld {
             // An invalid or missing `held` array names nothing new: the
             // notice keeps the name captured when the question opened, so
             // a rename in between never changes it.
@@ -60,15 +61,15 @@ impl App {
                 )
             };
             self.delete_command_finish(false);
-            self.notices.push("session_held", notice);
+            self.notices.push(ErrorCode::SessionHeld, notice);
             return Some(Vec::new());
         }
-        if code == "stale_request" {
+        if code == ErrorCode::StaleRequest {
             let project = self.delete_target_project(&target);
             let lines = self.ask_recent_first(project.as_deref());
             self.delete_command_finish(false);
             self.notices
-                .push(&code, format!("{message} The sessions remain stopped."));
+                .push(code, format!("{message} The sessions remain stopped."));
             self.go_home();
             return Some(lines);
         }
@@ -76,8 +77,7 @@ impl App {
         let project = self.delete_target_project(&target);
         let lines = self.ask_recent_first(project.as_deref());
         self.delete_command_finish(true);
-        self.notices
-            .push(&code, format!("Delete failed: {message}"));
+        self.notices.push(code, format!("Delete failed: {message}"));
         self.go_home();
         Some(lines)
     }
@@ -164,7 +164,7 @@ impl App {
             )
         };
         self.delete_command_finish(true);
-        self.notices.push("io_failed", notice);
+        self.notices.push(ErrorCode::IoFailed, notice);
     }
 
     /// Settles only this command's exact unsent delete ask, or an unsent
@@ -219,7 +219,7 @@ impl App {
     pub(super) fn delete_command_delete_unknown(&mut self) {
         self.delete_command_finish(false);
         self.notices
-            .push("indeterminate", "Delete status unknown".to_owned());
+            .push(ErrorCode::Indeterminate, "Delete status unknown".to_owned());
     }
 }
 

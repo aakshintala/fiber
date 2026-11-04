@@ -63,14 +63,8 @@ impl App {
                 (accepted.command_id.0, None)
             }
             EventKind::CommandRejected => {
-                let Some((Some(id), code, message)) =
-                    read!(envelope, CommandRejected).map(|rejected| {
-                        (
-                            rejected.command_id,
-                            crate::format::code(&rejected.code),
-                            rejected.message,
-                        )
-                    })
+                let Some((Some(id), code, message)) = read!(envelope, CommandRejected)
+                    .map(|rejected| (rejected.command_id, rejected.code, rejected.message))
                 else {
                     return Vec::new();
                 };
@@ -151,7 +145,7 @@ impl App {
             return Vec::new();
         }
         if let Some((code, message)) = rejection {
-            self.rejected(&id, &code, message);
+            self.rejected(&id, code, message);
             return Vec::new();
         }
         self.outbox.pending.remove(&id);

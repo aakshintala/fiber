@@ -1,6 +1,7 @@
 //! Tests for the keyboard: the context on screen, actions, and the
 //! person's bindings reaching every handler.
 
+use contract::ErrorCode;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -647,7 +648,8 @@ fn an_open_delete_question_keeps_right_and_esc_from_going_back() {
 #[test]
 fn esc_closes_a_notice_without_going_back() {
     let mut app = backed();
-    app.notices.push("extension_failed", "A notice.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "A notice.".to_owned());
     app.open_more_notices();
     assert!(app.notice_overlay().is_some());
     assert_eq!(press(&mut app, "right"), Effect::None);
@@ -1414,7 +1416,8 @@ fn end_outside_the_input_contexts_leaves_the_draft_cursor() {
     // The open notice overlay holds the keyboard past the input box,
     // and takes no key but Esc: End falls through to the jump-to-end
     // arm below the editor's guard.
-    app.notices.push("extension_failed", "A notice.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "A notice.".to_owned());
     app.open_notice(0);
     assert_eq!(app.key_context(), Context::Overlay);
     assert_eq!(app.on_key(Key::End, now()), Effect::None);
@@ -1618,7 +1621,8 @@ fn run_skips_the_overlay_picker_and_search() {
         let mut app = keyed_app(&canned);
         match open {
             "overlay" => {
-                app.notices.push("extension_failed", "A notice.".to_owned());
+                app.notices
+                    .push(ErrorCode::ExtensionFailed, "A notice.".to_owned());
                 app.open_notice(0);
                 assert_eq!(app.key_context(), Context::Overlay);
             }

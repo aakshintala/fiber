@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::CommandAccepted;
 use serde_json::json;
@@ -414,7 +415,7 @@ pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
         let (renderer, notices) = loader.load();
         app.use_renderer(renderer);
         for (code, text) in notices {
-            app.push_notice(&code, text);
+            app.push_notice(ErrorCode::from_name(&code), text);
         }
     }
     Some(app.send_command("reload", None).0)
@@ -459,7 +460,7 @@ fn run_feedback(app: &mut App, rest: &str) -> Option<Effect> {
     let description = rest.trim();
     if description.is_empty() {
         app.push_notice(
-            "feedback",
+            ErrorCode::Other("feedback".to_owned()),
             "Describe the feedback after /feedback, then press Enter.".to_owned(),
         );
         app.draft.clear();
@@ -530,7 +531,7 @@ impl App {
     /// screen, so a late answer after a switch elsewhere never attaches.
     fn send_change_workspace(&mut self, rest: &str) -> Effect {
         if rest.is_empty() {
-            self.push_notice("usage", "/cd needs a path.".to_owned());
+            self.push_notice(ErrorCode::Usage, "/cd needs a path.".to_owned());
             return Effect::None;
         }
         let Some((session, _)) = self.command_session() else {
@@ -548,7 +549,7 @@ impl App {
 fn run_fork(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     let Phase::Attached { .. } = &app.phase else {
-        app.push_notice("session_not_found", NO_SESSION.to_owned());
+        app.push_notice(ErrorCode::SessionNotFound, NO_SESSION.to_owned());
         return Some(Effect::None);
     };
     Some(app.send_fork())
@@ -572,7 +573,7 @@ fn run_jobs(app: &mut App, _rest: &str) -> Option<Effect> {
         return Some(app.open_session_view(super::SessionView::Jobs));
     }
     if app.panel_state().running_jobs().is_empty() {
-        app.push_notice("no_jobs_running", "No jobs running".to_owned());
+        app.push_notice(ErrorCode::NoJobsRunning, "No jobs running".to_owned());
         return Some(Effect::None);
     }
     Some(app.open_session_view(super::SessionView::Jobs))
@@ -627,7 +628,7 @@ fn run_add_dir(app: &mut App, rest: &str) -> Option<Effect> {
     let path = rest.trim();
     if path.is_empty() {
         app.push_notice(
-            "add-dir",
+            ErrorCode::from_name("add-dir"),
             "Add a folder after /add-dir, then press Enter.".to_owned(),
         );
         app.draft.clear();
@@ -649,11 +650,11 @@ fn run_add_dir(app: &mut App, rest: &str) -> Option<Effect> {
 fn run_pwd(app: &mut App, _rest: &str) -> Option<Effect> {
     app.draft.clear();
     let Phase::Attached { .. } = &app.phase else {
-        app.push_notice("session_not_found", NO_SESSION.to_owned());
+        app.push_notice(ErrorCode::SessionNotFound, NO_SESSION.to_owned());
         return Some(Effect::None);
     };
     if let Some(workspace) = app.panel_state.workspace() {
-        app.push_notice("workspace", workspace.to_owned());
+        app.push_notice(ErrorCode::Workspace, workspace.to_owned());
     } else {
         app.pwd_pending = true;
     }
@@ -941,7 +942,7 @@ impl App {
     pub(super) fn command_session(&mut self) -> Option<(contract::SessionId, bool)> {
         let Phase::Attached { session, busy } = &self.phase else {
             self.notices
-                .push("session_not_found", NO_SESSION.to_owned());
+                .push(ErrorCode::SessionNotFound, NO_SESSION.to_owned());
             self.draft.clear();
             return None;
         };
@@ -1072,7 +1073,7 @@ impl App {
             return false;
         }
         self.push_notice(
-            "unknown_command",
+            ErrorCode::UnknownCommand,
             format!("Unknown command /{name}. Type / for the list."),
         );
         true
@@ -1121,8 +1122,10 @@ impl App {
         let shell = (!has_image).then(|| shell::parse(&text)).flatten();
         let (kind, line) = match (&self.phase, shell) {
             (Phase::Starting | Phase::Pending { .. }, Some(_)) => {
-                self.notices
-                    .push("session_not_found", "Start a session first.".to_owned());
+                self.notices.push(
+                    ErrorCode::SessionNotFound,
+                    "Start a session first.".to_owned(),
+                );
                 return Effect::None;
             }
             (Phase::Pending { .. }, None) => return Effect::None,
@@ -1250,7 +1253,7 @@ impl App {
     /// Handles the route without settling; the caller owns the layout pass.
     pub(crate) fn editor_returned_inner(&mut self, target: Target, result: Result<String, String>) {
         match (result, target) {
-            (Err(notice), _) => self.notices.push("io_failed", notice),
+            (Err(notice), _) => self.notices.push(ErrorCode::IoFailed, notice),
             (Ok(text), Target::Token(number)) => self.draft.set_token(number, &text),
             (Ok(text), Target::Draft) => self.draft.edited(&text),
             (Ok(_), Target::Item) => {}
@@ -1276,7 +1279,7 @@ impl App {
                 self.edited();
             }
             super::paste::Landed::Notice(notice) => {
-                self.notices.push("io_failed", notice);
+                self.notices.push(ErrorCode::IoFailed, notice);
             }
             super::paste::Landed::Dropped => {}
         }
@@ -1297,12 +1300,13 @@ impl App {
             Ok(done) => {
                 self.draft.clear();
                 self.notices.push(
-                    "feedback",
+                    ErrorCode::Other("feedback".to_owned()),
                     format!("Wrote {}\n{}", done.path.display(), done.link),
                 );
             }
             Err(notice) => {
-                self.notices.push("feedback", notice);
+                self.notices
+                    .push(ErrorCode::Other("feedback".to_owned()), notice);
             }
         }
     }

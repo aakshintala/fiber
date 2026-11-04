@@ -10,6 +10,7 @@ use super::super::commands::commands_testkit::{
 use crate::app::{App, Effect};
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
+use contract::ErrorCode;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1023,7 +1024,7 @@ fn slash_theme_name_without_a_workspace_is_a_notice() {
     assert_eq!(app.draft(), "");
     assert!(
         app.notices().iter().any(
-            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "io_failed" && text == "Not available in this terminal.")
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if *code == ErrorCode::IoFailed && text == "Not available in this terminal.")
         ),
         "a notice names why nothing changed"
     );

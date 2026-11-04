@@ -9,6 +9,7 @@ use super::{
 use crate::app::App;
 use crate::keys::{Event, Reply};
 use crate::link::Line;
+use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::{Envelope, Seq};
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
@@ -1539,7 +1540,7 @@ fn frames_sweep_notices_before_and_after_the_draw() {
     drop(theirs);
     let (_tx, rx) = mpsc::channel();
     lp.app
-        .push_notice("io_failed", "frame fade probe".to_owned());
+        .push_notice(ErrorCode::IoFailed, "frame fade probe".to_owned());
     // Frame one: the pre-draw sweep births the pushed event at the
     // birth instant, the draw shows it, and the post-draw sweep past
     // the fade expires it before arming: drawn once, stacked never.
@@ -1549,7 +1550,8 @@ fn frames_sweep_notices_before_and_after_the_draw() {
     assert_eq!(lp.app.take_wake(), None);
     // Frame two after the fade: the pre-draw sweep births the new push
     // at its instant and the arm covers its expiry.
-    lp.app.push_notice("io_failed", "second probe".to_owned());
+    lp.app
+        .push_notice(ErrorCode::IoFailed, "second probe".to_owned());
     assert_eq!(lp.frame(&rx), None);
     assert!(shown(&lp).contains("second probe"), "{}", shown(&lp));
     assert_eq!(notice_codes(&lp.app), ["io_failed"]);
@@ -3468,7 +3470,7 @@ fn notice_codes(app: &App) -> Vec<String> {
     app.notices()
         .into_iter()
         .filter_map(|line| match line {
-            crate::app::NoticeLine::Notice { code, .. } => Some(code),
+            crate::app::NoticeLine::Notice { code, .. } => Some(code.name().to_owned()),
             crate::app::NoticeLine::More(_) => None,
         })
         .collect()
@@ -3484,14 +3486,14 @@ fn take_wake_folds_the_notices_wake() {
     // Quiet: no motion, no items, no notices.
     assert_eq!(app.take_wake(), None);
     // One event: the wake is its expiry.
-    app.push_notice("io_failed", "x".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "x".to_owned());
     app.sweep_notices(t0);
     assert_eq!(
         app.take_wake(),
         Some(t0 + std::time::Duration::from_secs(10))
     );
     // Two staggered events: the earlier expiry wins.
-    app.push_notice("config_invalid", "y".to_owned());
+    app.push_notice(ErrorCode::ConfigInvalid, "y".to_owned());
     app.sweep_notices(t0 + std::time::Duration::from_secs(5));
     assert_eq!(
         app.take_wake(),
@@ -3542,8 +3544,8 @@ fn login_url_survives_sweeps_and_falls_to_dismiss() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 12);
     app.attach(contract::SessionId(SESSION.to_owned()));
-    app.push_notice("login_url", "open the link to log in".to_owned());
-    app.push_notice("io_failed", "x".to_owned());
+    app.push_notice(ErrorCode::LoginUrl, "open the link to log in".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "x".to_owned());
     app.sweep_notices(t0);
     // Past the fade the event is gone and the condition stands: no
     // terminal-visible signal ends it, only the person's ✕ does.

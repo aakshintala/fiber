@@ -11,6 +11,7 @@ use super::super::super::{App, Effect, Phase, mint};
 use super::super::{refusal, refusal_code};
 use super::Prompt;
 use crate::home::title;
+use contract::ErrorCode;
 use contract::SessionId;
 
 /// `/delete`'s feature-owned lifecycle under home's questions: one
@@ -85,7 +86,7 @@ impl App {
         }
         if self.delete_command_active() {
             self.notices.push(
-                "stale_request",
+                ErrorCode::StaleRequest,
                 "`/delete` is already in progress.".to_owned(),
             );
             return Effect::None;
@@ -240,7 +241,7 @@ impl App {
         if !accepted {
             self.delete_command_finish(false);
             self.notices.push(
-                &refusal_code(payload),
+                refusal_code(payload),
                 format!("Delete failed: {}", refusal(payload)),
             );
             return Some(Vec::new());
@@ -304,7 +305,7 @@ impl App {
     fn delete_command_malformed(&mut self) {
         self.delete_command_finish(false);
         self.notices.push(
-            "malformed",
+            ErrorCode::Malformed,
             "Not deleted: the hub's preview was invalid. Nothing was deleted.".to_owned(),
         );
     }
@@ -341,7 +342,7 @@ impl App {
             refusal(payload)
         );
         self.delete_command_finish(false);
-        self.notices.push(&refusal_code(payload), message);
+        self.notices.push(refusal_code(payload), message);
         true
     }
 

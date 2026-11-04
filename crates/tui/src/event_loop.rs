@@ -179,7 +179,7 @@ pub(crate) fn run_with(
     app.set_logo_depth(look.depth());
     screen.set_look(look);
     if let Some(notice) = notice {
-        app.push_notice("config_invalid", notice);
+        app.push_notice(ErrorCode::ConfigInvalid, notice);
     }
     app.set_keys(std::mem::take(&mut launch.keys));
     // The model lists are read off the loop: taken out before home
@@ -281,7 +281,7 @@ pub(crate) fn run_with(
         drop(load);
         app.use_renderer(renderer);
         for (code, text) in notices {
-            app.push_notice(&code, text);
+            app.push_notice(ErrorCode::from_name(&code), text);
         }
     }
     if screen.draw(&mut app, None).is_err() {
@@ -1820,7 +1820,7 @@ impl<B: Backend> Loop<B> {
         self.app.set_logo_depth(look.depth());
         self.screen.set_look(look);
         if let Some(notice) = notice {
-            self.app.push_notice("config_invalid", notice);
+            self.app.push_notice(ErrorCode::ConfigInvalid, notice);
         }
     }
 

@@ -2,6 +2,7 @@
 //! they differ, and the reason an unreadable row gives (`docs/tui.md`,
 //! "Notices" and "The session list").
 
+use contract::ErrorCode;
 use serde_json::{Map, Value};
 
 use super::{App, hub_string};
@@ -68,7 +69,7 @@ impl App {
         let hub = build_text(version, commit.as_deref());
         let text = notice_text(&hub, &build_text(&launch.version, launch.commit.as_deref()));
         home.hub_other = Some(hub);
-        self.push_notice("hub_version", text);
+        self.push_notice(ErrorCode::HubVersion, text);
     }
 
     /// Why an unreadable row cannot attach, with no final period.

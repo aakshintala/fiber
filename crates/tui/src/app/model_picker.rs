@@ -11,6 +11,7 @@ use crate::model_picker::{
     Choice, InstallStart, Landed, Mode, Progress, command_args, saves, scoped_save,
 };
 use crate::swapped::{Spot, about};
+use contract::ErrorCode;
 use contract::ThinkingLevel;
 
 impl App {
@@ -27,18 +28,18 @@ impl App {
     pub(crate) fn on_models_inner(&mut self, result: Result<Catalogue, String>) {
         // The load landed, answered or not: its wait is over.
         self.notices
-            .clear_code("models_loading", Self::MODELS_LOADING_TEXT);
+            .clear_code(ErrorCode::ModelsLoading, Self::MODELS_LOADING_TEXT);
         match &result {
             Ok(catalogue) => {
                 for notice in contract::events::group_notices(
                     catalogue.notices.clone(),
                     contract::events::grouped_lead,
                 ) {
-                    self.push_notice(&crate::format::code(&notice.code), notice.message.clone());
+                    self.push_notice(notice.code.clone(), notice.message.clone());
                 }
             }
             Err(error) => {
-                self.push_notice("io_failed", error.clone());
+                self.push_notice(ErrorCode::IoFailed, error.clone());
             }
         }
         self.model_picker.store(result);
@@ -205,7 +206,7 @@ impl App {
         };
         if !self.outbox.is_up() {
             self.push_notice(
-                "connection_failed",
+                ErrorCode::ConnectionFailed,
                 "The hub is not connected; nothing changed.".to_owned(),
             );
             return super::Effect::None;
@@ -217,7 +218,7 @@ impl App {
             || choice.level.as_deref() != self.panel_state.thinking();
         if changed && let Some(tokens) = self.usage_on_screen() {
             self.push_notice(
-                "cache_rebuild",
+                ErrorCode::CacheRebuild,
                 format!(
                     "switching rebuilds the cache: about {} tokens",
                     about(tokens)
@@ -276,7 +277,7 @@ impl App {
                     self.picker_saved(&key, &choice)
                 }
                 Some(Err(error)) => {
-                    self.push_notice("io_failed", format!("Saving {key} failed: {error}"))
+                    self.push_notice(ErrorCode::IoFailed, format!("Saving {key} failed: {error}"))
                 }
                 // No workspace to address on a local terminal:
                 // the choice rides the next `start` unsaved.
@@ -402,7 +403,7 @@ impl App {
     /// Pushes the pending notice for a choice sent while a turn runs.
     fn push_pending_notice(&mut self, choice: &Choice) {
         let text = self.pending_text(&choice.reference, choice.level.as_deref());
-        self.push_notice("switch_pending", text);
+        self.push_notice(ErrorCode::SwitchPending, text);
     }
 
     /// Dismisses the newest `switch_pending` notice when its text is
@@ -420,7 +421,7 @@ impl App {
                     id,
                     code,
                     text: shown,
-                } if code == "switch_pending" && shown == text => Some(id),
+                } if code == ErrorCode::SwitchPending && shown == text => Some(id),
                 super::NoticeLine::Notice { .. } | super::NoticeLine::More(_) => None,
             });
         if let Some(id) = newest {
@@ -473,7 +474,7 @@ impl App {
                     self.picker_accepted(&key, &text)
                 }
                 Some(Err(error)) => {
-                    self.push_notice("io_failed", format!("Saving {key} failed: {error}"));
+                    self.push_notice(ErrorCode::IoFailed, format!("Saving {key} failed: {error}"));
                 }
                 // No workspace to address on a local terminal: the write
                 // is dropped, as a missing seam drops it.
@@ -607,7 +608,10 @@ impl App {
     /// home with no entry the read is asked for instead.
     fn set_level(&mut self, level: &str) -> super::Effect {
         let Some((model, _)) = self.thinking_model() else {
-            self.push_notice("no_model", "Choose a model first: Ctrl+L.".to_owned());
+            self.push_notice(
+                ErrorCode::NoModel,
+                "Choose a model first: Ctrl+L.".to_owned(),
+            );
             return super::Effect::None;
         };
         let declared = self
@@ -621,12 +625,12 @@ impl App {
             Some(levels) if !levels.iter().any(|declared| declared == level) => {
                 if levels.is_empty() {
                     self.push_notice(
-                        "invalid_arguments",
+                        ErrorCode::InvalidArguments,
                         format!("{model} takes no thinking level."),
                     );
                 } else {
                     self.push_notice(
-                        "invalid_arguments",
+                        ErrorCode::InvalidArguments,
                         format!("{model} takes {}.", levels.join(", ")),
                     );
                 }
@@ -647,7 +651,10 @@ impl App {
                 session_only: false,
             }),
             None => {
-                self.push_notice("models_loading", Self::MODELS_LOADING_TEXT.to_owned());
+                self.push_notice(
+                    ErrorCode::ModelsLoading,
+                    Self::MODELS_LOADING_TEXT.to_owned(),
+                );
                 let want = self.model_picker.want;
                 self.model_picker.want =
                     Some(want.map_or(Refresh::Cached, |want| want.max(Refresh::Cached)));
@@ -727,10 +734,13 @@ impl App {
                 }
             }
             Some(Err(error)) => {
-                self.push_notice("io_failed", format!("Saving scoped_models failed: {error}"));
+                self.push_notice(
+                    ErrorCode::IoFailed,
+                    format!("Saving scoped_models failed: {error}"),
+                );
             }
             None => self.push_notice(
-                "io_failed",
+                ErrorCode::IoFailed,
                 "Saving is not available; nothing changed.".to_owned(),
             ),
         }
@@ -741,7 +751,7 @@ impl App {
     /// Refuses an unknown thinking word with the seven levels.
     fn refuse_level(&mut self, word: &str) -> super::Effect {
         self.push_notice(
-            "invalid_arguments",
+            ErrorCode::InvalidArguments,
             format!(
                 "Unknown thinking level \"{word}\"; the levels are {}.",
                 ThinkingLevel::ALL.map(ThinkingLevel::as_str).join(", ")
@@ -843,16 +853,15 @@ impl App {
         let code = result
             .as_ref()
             .err()
-            .map(|error| crate::format::code(&error.code))
-            .filter(|code| !code.is_empty())
-            .unwrap_or_else(|| "io_failed".to_owned());
+            .map(|error| error.code.clone())
+            .unwrap_or(ErrorCode::IoFailed);
         match self.model_picker.land_install(provider, result) {
             Landed::Installed { notices } => {
                 for (code, text) in notices {
-                    self.push_notice(code, text);
+                    self.push_notice(ErrorCode::from_name(code), text);
                 }
             }
-            Landed::Notice(text) => self.push_notice(&code, text),
+            Landed::Notice(text) => self.push_notice(code, text),
             Landed::Nothing => {}
         }
     }

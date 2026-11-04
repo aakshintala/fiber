@@ -3,6 +3,7 @@
 //! seam's absence, the editor's return and the theme a choice queues
 //! (`docs/tui.md`, "Swapped views").
 
+use contract::ErrorCode;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -177,7 +178,10 @@ fn notices_show_above_the_open_view_on_home_and_attached() {
         } else {
             attached(fake())
         };
-        app.push_notice("config_invalid", "The theme solar floats above.".to_owned());
+        app.push_notice(
+            ErrorCode::ConfigInvalid,
+            "The theme solar floats above.".to_owned(),
+        );
         slash_settings(&mut app);
         assert!(app.config_view_open());
         let rows = screen(&app);
@@ -1598,7 +1602,7 @@ fn slash_theme_name_saves_applies_and_refuses() {
     assert!(enter_text(&mut app, "/theme nope").is_empty());
     assert!(
         app.notices().iter().any(
-            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "invalid_arguments" && text == "Unknown theme \"nope\".")
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if *code == ErrorCode::InvalidArguments && text == "Unknown theme \"nope\".")
         ),
         "the refusal names the typed text"
     );
@@ -1617,7 +1621,7 @@ fn slash_theme_name_saves_applies_and_refuses() {
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(
         app.notices().iter().any(
-            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "invalid_arguments" && text == "Unknown theme \"Light\".")
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if *code == ErrorCode::InvalidArguments && text == "Unknown theme \"Light\".")
         )
     );
     assert_eq!(seam.writes().len(), writes);

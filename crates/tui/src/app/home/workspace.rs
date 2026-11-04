@@ -432,11 +432,7 @@ impl App {
                 if let Some(home) = self.home.as_mut() {
                     home.chooser.chip_read = ChipRead::Failed;
                 }
-                let code = serde_json::to_value(&error.code)
-                    .ok()
-                    .and_then(|code| code.as_str().map(str::to_owned))
-                    .unwrap_or_else(|| "io_failed".to_owned());
-                self.push_notice(&code, error.message);
+                self.push_notice(error.code.clone(), error.message);
             }
         }
     }

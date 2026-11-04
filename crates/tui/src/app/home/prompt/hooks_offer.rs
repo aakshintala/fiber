@@ -61,7 +61,7 @@ pub(in crate::app::home) struct State {
     /// The offer's stage: what shows and what input may do.
     stage: Stage,
     /// The original refusal, for the decline and query-error paths.
-    code: String,
+    code: ErrorCode,
     message: String,
     /// The refused start's args, read before settlement: the retry
     /// resends them unchanged under a fresh command id.
@@ -226,7 +226,7 @@ impl App {
             refused_id: id.to_owned(),
             ticket,
             stage: Stage::Querying,
-            code: code.to_owned(),
+            code: ErrorCode::from_name(code),
             message: message.to_owned(),
             args,
         };
@@ -318,8 +318,8 @@ impl App {
     /// rejected paths: the clear-staged start through its clear path,
     /// anything else through the ordinary refusal. Exactly one notice.
     fn settle_refused(&mut self, state: &State) {
-        if !self.clear_rejected(&state.refused_id, &state.code, &state.message) {
-            self.rejected(&state.refused_id, &state.code, state.message.clone());
+        if !self.clear_rejected(&state.refused_id, state.code.clone(), &state.message) {
+            self.rejected(&state.refused_id, state.code.clone(), state.message.clone());
         }
     }
 
@@ -350,19 +350,14 @@ impl App {
     fn fail_hooks_install(&mut self, error: ConfigureError) {
         if let Some(state) = self.take_hooks_offer() {
             let code = if matches!(error.code, ErrorCode::ConnectionFailed) {
-                "extension_failed".to_owned()
+                ErrorCode::ExtensionFailed
             } else {
-                let code = crate::format::code(&error.code);
-                if code.is_empty() {
-                    "io_failed".to_owned()
-                } else {
-                    code
-                }
+                error.code.clone()
             };
             self.settle_hooks_start(&state);
             let text = install_failure_text(&error);
             self.hooks_failed = Some((code.clone(), text.clone()));
-            self.push_notice(&code, text);
+            self.push_notice(code, text);
         }
     }
 
@@ -504,12 +499,12 @@ impl App {
         if !standing {
             return;
         }
-        self.notices.clear_code(&code, &identity);
+        self.notices.clear_code(code, &identity);
         let error = ConfigureError {
             code: ErrorCode::ConnectionFailed,
             message: INSTALL_CONNECTION_LOST.to_owned(),
         };
-        self.push_notice("extension_failed", install_failure_text(&error));
+        self.push_notice(ErrorCode::ExtensionFailed, install_failure_text(&error));
     }
 }
 

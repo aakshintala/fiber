@@ -6,6 +6,7 @@ use crate::app::commands::commands_testkit::{
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::link::Line;
+use contract::ErrorCode;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -627,9 +628,9 @@ fn clear_refusal_only_settles_the_matching_start() {
         .as_str()
         .unwrap_or_else(|| panic!("start id"));
 
-    assert!(!app.clear_rejected("c_unrelated", "busy", "Unrelated."));
+    assert!(!app.clear_rejected("c_unrelated", ErrorCode::from_name("busy"), "Unrelated."));
     assert!(app.clear_pending_command_id().is_some());
-    assert!(app.clear_rejected(id, "busy", "Busy."));
+    assert!(app.clear_rejected(id, ErrorCode::from_name("busy"), "Busy."));
     assert!(app.clear_pending_command_id().is_none());
     assert_eq!(app.notice(), Some("Busy."));
 }

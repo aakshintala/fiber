@@ -8,6 +8,7 @@ use super::super::{App, Effect, Phase, mint, session_command};
 use super::{refusal, refusal_code};
 use crate::home::{Level, Subs};
 use crate::keyset::Context;
+use contract::ErrorCode;
 use contract::SessionId;
 
 /// This connection's subscriptions: the level per session, the session
@@ -343,7 +344,7 @@ impl App {
         };
         if row.state == crate::home::State::Unreadable {
             let text = format!("{}.", self.unreadable_reason());
-            self.notices.push("session_held", text);
+            self.notices.push(ErrorCode::SessionHeld, text);
             return Effect::None;
         }
         let session = row.id.clone();
@@ -436,7 +437,7 @@ impl App {
     /// note and a notice. A missing-workspace refusal renders the ruled
     /// sentence instead, naming the path. A rejection of an earlier step
     /// changes nothing by itself.
-    fn fail_open(&mut self, code: &str, message: String) -> Vec<String> {
+    fn fail_open(&mut self, code: ErrorCode, message: String) -> Vec<String> {
         let session = self
             .home
             .as_mut()
@@ -445,7 +446,7 @@ impl App {
         let Some(session) = session else {
             return Vec::new();
         };
-        let text = match Self::missing_workspace(code, &message) {
+        let text = match Self::missing_workspace(code.name(), &message) {
             Some(path) => {
                 format!("Cannot resume: {path} no longer exists. Delete removes the session.")
             }
@@ -497,7 +498,7 @@ impl App {
             }
             if !accepted && self.is_ack(id) {
                 let code = refusal_code(payload);
-                return Some(self.fail_open(&code, refusal(payload)));
+                return Some(self.fail_open(code, refusal(payload)));
             }
             return Some(Vec::new());
         }
@@ -545,7 +546,7 @@ impl App {
             // succeeded, so a stale close notice for this session ends
             // with it. A log still cut past here re-pushes
             // `stream_closed` when its replay reaches the cut.
-            self.notices.clear_code("stream_closed", &session.0);
+            self.notices.clear_code(ErrorCode::StreamClosed, &session.0);
             if let Some(home) = self.home.as_mut() {
                 home.subs.opening = None;
             }

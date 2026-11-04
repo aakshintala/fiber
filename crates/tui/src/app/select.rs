@@ -4,6 +4,7 @@
 //! pages; the app hands it points in conversation rows and the pages to
 //! read the text from.
 
+use contract::ErrorCode;
 use ratatui::layout::{Position, Rect};
 
 use super::{App, Effect};
@@ -756,7 +757,8 @@ impl App {
     pub(in crate::app) fn abandon_copy(&mut self) {
         if self.select.pending.is_some() {
             self.drop_pending_copy();
-            self.notices.push("io_failed", COPY_FAILED.to_owned());
+            self.notices
+                .push(ErrorCode::IoFailed, COPY_FAILED.to_owned());
         }
     }
 

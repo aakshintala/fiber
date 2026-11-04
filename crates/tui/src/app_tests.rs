@@ -1817,7 +1817,7 @@ fn stream_closed_for_the_open_session_is_one_notice_and_keeps_the_lines() {
         app.notices().into_iter().next(),
         Some(crate::app::NoticeLine::Notice {
             id: 0,
-            code: "stream_closed".to_owned(),
+            code: ErrorCode::StreamClosed,
             text: "this session's log can't be read past here; reopen the session to try again"
                 .to_owned(),
         })
@@ -1976,6 +1976,7 @@ where
     assert_eq!(super::read_ref::<T>(&map), None);
 }
 
+use contract::ErrorCode;
 use contract::events::{
     AssistantMessageCompleted, CommandAccepted, CommandRejected, ContextNudged, DelegateFinished,
     DelegateStarted, ExtensionUi, FiberExited, FiberStarted, HandoffCompleted, HandoffStarted,

@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 use std::time::Instant;
 
+use contract::ErrorCode;
 use contract::events::SessionState;
 use contract::{Envelope, RequestId, SessionId};
 use serde_json::{Map, Value, json};
@@ -752,7 +753,7 @@ impl App {
             Some(key) => self.switch_to(key),
             None => {
                 self.notices
-                    .push("stale_request", "No requests waiting.".to_owned());
+                    .push(ErrorCode::StaleRequest, "No requests waiting.".to_owned());
                 Effect::None
             }
         }
@@ -799,7 +800,7 @@ impl App {
             if let Some(home) = self.home.as_mut() {
                 home.sessions.note(session, message.clone());
             }
-            self.notices.push(&code, message);
+            self.notices.push(code, message);
         }
         Some(Vec::new())
     }

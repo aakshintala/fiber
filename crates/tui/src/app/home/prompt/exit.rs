@@ -9,6 +9,7 @@ use super::{Ask, Prompt};
 use crate::home::{Level, QuitChoice, Spot, State};
 use crate::keys::Key;
 use crate::mouse::TargetId;
+use contract::ErrorCode;
 use contract::SessionId;
 
 impl App {
@@ -62,8 +63,10 @@ impl App {
     pub(crate) fn ask_close_all(&mut self) -> Effect {
         let sessions = self.live_sessions();
         if sessions.is_empty() {
-            self.notices
-                .push("session_not_found", "No sessions to close.".to_owned());
+            self.notices.push(
+                ErrorCode::SessionNotFound,
+                "No sessions to close.".to_owned(),
+            );
             return Effect::None;
         }
         if !self.outbox.is_up() {

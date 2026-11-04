@@ -451,7 +451,7 @@ fn codes(app: &App) -> Vec<String> {
     app.notices()
         .into_iter()
         .filter_map(|line| match line {
-            crate::app::NoticeLine::Notice { code, .. } => Some(code),
+            crate::app::NoticeLine::Notice { code, .. } => Some(code.name().to_owned()),
             crate::app::NoticeLine::More(_) => None,
         })
         .collect()

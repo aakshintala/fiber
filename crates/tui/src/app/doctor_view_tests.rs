@@ -2,6 +2,7 @@
 //! and attached, whole-line clipping, scrolling, and the remote-home
 //! route that never reaches the hub (`docs/tui.md`, "Swapped views").
 
+use contract::ErrorCode;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -284,7 +285,7 @@ fn slash_doctor_capture_failure_keeps_a_notice_and_opens_nothing() {
     // headless door prints.
     assert!(
         app.notices().iter().any(
-            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if code == "io_failed" && text == "could not capture the `fiber doctor` output: boom")
+            |notice| matches!(notice, crate::app::NoticeLine::Notice { code, text, .. } if *code == ErrorCode::IoFailed && text == "could not capture the `fiber doctor` output: boom")
         ),
         "the failure notice names the capture text"
     );

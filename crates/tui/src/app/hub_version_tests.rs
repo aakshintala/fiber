@@ -1,6 +1,7 @@
 //! Tests for the hub's build against this terminal's: the comparison, the
 //! notice, and the reason an unreadable row gives.
 
+use contract::ErrorCode;
 use serde_json::{Value, json};
 
 use super::super::notices::NoticeLine;
@@ -92,7 +93,7 @@ fn notices(app: &App) -> Vec<String> {
             let NoticeLine::Notice { code, text, .. } = line else {
                 return None;
             };
-            (code == "hub_version").then_some(text)
+            (code == ErrorCode::HubVersion).then_some(text)
         })
         .collect()
 }
@@ -201,7 +202,7 @@ fn a_refused_schema_shows_both_notices_and_stays_refused() {
     assert!(
         app.notices().iter().any(|line| matches!(
             line,
-            NoticeLine::Notice { code, .. } if code == "connection_failed"
+            NoticeLine::Notice { code, .. } if *code == ErrorCode::ConnectionFailed
         )),
         "the schema notice shows too"
     );

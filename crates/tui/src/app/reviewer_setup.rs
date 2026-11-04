@@ -12,6 +12,7 @@ use contract::events::EventKind;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use contract::ErrorCode;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{CommandId, Envelope, SessionId};
 use serde_json::Value;
@@ -81,14 +82,14 @@ impl App {
         let workspace = match self.reviewer_binding(&session) {
             Ok(workspace) => workspace,
             Err(why) => {
-                self.push_notice("io_failed", why.to_owned());
+                self.push_notice(ErrorCode::IoFailed, why.to_owned());
                 return Effect::None;
             }
         };
         match seam.reviewer_notes(&workspace) {
             Ok(notes) => self.start_reviewer_setup(Setup::open(notes), session, workspace),
             Err(error) => self.push_notice(
-                "io_failed",
+                ErrorCode::IoFailed,
                 format!("Could not read the reviewer notes: {}", error.message),
             ),
         }
@@ -244,7 +245,7 @@ impl App {
             }
             Act::Unchanged => {
                 self.reviewer_setup_close();
-                self.push_notice("notes_unchanged", UNCHANGED.to_owned());
+                self.push_notice(ErrorCode::NotesUnchanged, UNCHANGED.to_owned());
                 Effect::None
             }
         }
@@ -370,7 +371,7 @@ impl App {
         let said_nothing = open.setup.screen() == Screen::Notice;
         self.reviewer_setup_close();
         if !said_nothing {
-            self.push_notice("session_not_found", LEFT.to_owned());
+            self.push_notice(ErrorCode::SessionNotFound, LEFT.to_owned());
         }
     }
 

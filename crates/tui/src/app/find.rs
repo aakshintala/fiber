@@ -7,6 +7,7 @@
 //! on its answer. Matches are anchored to their logical line, so a new
 //! width, an opened section or live output never invalidates them.
 
+use contract::ErrorCode;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -550,7 +551,7 @@ impl App {
                 let revision = self.screen.pages().index().revision(fetch.page);
                 self.find.unreadable(fetch.page, revision);
                 self.notices.push(
-                    "io_failed",
+                    ErrorCode::IoFailed,
                     format!("Could not search all of history: {message}"),
                 );
             }
@@ -619,7 +620,7 @@ impl App {
     pub(in crate::app) fn find_lost(&mut self) {
         if self.find.lose() {
             self.notices
-                .push("connection_failed", search_incomplete_text());
+                .push(ErrorCode::ConnectionFailed, search_incomplete_text());
         }
     }
 
@@ -664,7 +665,7 @@ impl App {
             // text goes. A fetch still out, or a position still
             // unscanned, leaves it standing.
             self.notices
-                .clear_code("connection_failed", &search_incomplete_text());
+                .clear_code(ErrorCode::ConnectionFailed, &search_incomplete_text());
         }
         self.pump_find();
         self.reveal_current();
@@ -739,7 +740,7 @@ impl App {
     /// reconnect ends that cause.
     pub(super) fn close_find(&mut self) {
         self.notices
-            .clear_code("connection_failed", &search_incomplete_text());
+            .clear_code(ErrorCode::ConnectionFailed, &search_incomplete_text());
         self.find.close();
     }
 

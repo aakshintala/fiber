@@ -82,8 +82,7 @@ impl App {
             self.model_picker.only_pending.remove(id);
             self.model_picker.sent.remove(id);
         } else if self.model_picker_rejected(id) {
-            let code = crate::format::code(code);
-            self.rejected(id, &code, message);
+            self.rejected(id, code.clone(), message);
         } else {
             // The choice belonged to a dropped session: its wait went
             // with its notice, so the row closes with no further notice.
@@ -114,11 +113,13 @@ impl App {
         // The connection is back: both connection texts ended with it,
         // while a search the drop interrupted still waits on the bar or
         // a rescan.
-        self.notices
-            .clear_code_except("connection_failed", &super::find::search_incomplete_text());
+        self.notices.clear_code_except(
+            ErrorCode::ConnectionFailed,
+            &super::find::search_incomplete_text(),
+        );
         if let Phase::Pending { command_id } = &self.phase {
             let id = command_id.clone();
-            self.rejected(&id, "connection_failed", UNANSWERED.to_owned());
+            self.rejected(&id, ErrorCode::ConnectionFailed, UNANSWERED.to_owned());
         }
         self.home_reset();
         let mut lines = Vec::new();

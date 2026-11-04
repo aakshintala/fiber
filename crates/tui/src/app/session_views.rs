@@ -14,6 +14,7 @@ use crate::shell;
 use crate::swapped::{Frame, List, Spot};
 use crate::usage_view::UsageFold;
 use contract::Envelope;
+use contract::ErrorCode;
 use contract::events::{
     CommandAccepted, CommandRejected, DelegateStarted, JobStarted, ToolCallCompleted, UsageRecorded,
 };
@@ -134,8 +135,10 @@ impl App {
             return Effect::None;
         }
         if self.session().is_none() {
-            self.notices
-                .push("session_not_found", "No session on screen.".to_owned());
+            self.notices.push(
+                ErrorCode::SessionNotFound,
+                "No session on screen.".to_owned(),
+            );
             return Effect::None;
         }
         self.model_picker.close();
@@ -701,7 +704,10 @@ impl App {
             return Effect::None;
         };
         let Some(workspace) = self.workspace() else {
-            self.push_notice("io_failed", super::config_views::UNAVAILABLE.to_owned());
+            self.push_notice(
+                ErrorCode::IoFailed,
+                super::config_views::UNAVAILABLE.to_owned(),
+            );
             return Effect::None;
         };
         let hub = workspace.join(&relative);
@@ -709,7 +715,7 @@ impl App {
             match remote.fetch_workspace_file(&workspace, std::path::Path::new(&relative)) {
                 Ok(fetched) => fetched,
                 Err(error) => {
-                    self.push_notice("io_failed", error.message);
+                    self.push_notice(ErrorCode::IoFailed, error.message);
                     return Effect::None;
                 }
             };
@@ -723,7 +729,7 @@ impl App {
                 })
             }
             Err(error) => {
-                self.push_notice("io_failed", error.to_string());
+                self.push_notice(ErrorCode::IoFailed, error.to_string());
                 Effect::None
             }
         }
@@ -745,7 +751,7 @@ impl App {
         result: Result<(), String>,
     ) -> Vec<String> {
         if let Err(message) = &result {
-            self.push_notice("io_failed", message.clone());
+            self.push_notice(ErrorCode::IoFailed, message.clone());
         }
         let remote_relative = self.close_remote_copy(path, result.is_ok());
         if !self.changed_files_open() {
@@ -808,7 +814,7 @@ impl App {
                         .map_err(|error| error.message)
                 });
             if let Err(message) = written {
-                self.push_notice("io_failed", message);
+                self.push_notice(ErrorCode::IoFailed, message);
             }
         }
         relative
