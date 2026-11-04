@@ -174,6 +174,23 @@ fn old_form_shard_name_declines() {
 }
 
 #[test]
+fn extra_failed_shard_declines() {
+    // Three successful matching-base shards plus one failed shard must
+    // decline: success is a predicate over the whole shard set, never a
+    // filter that hides the failure from the count gate.
+    let jobs = Value::Array(
+        (0..SHARD_TOTAL)
+            .map(|index| shard(index, BASE, "success"))
+            .chain([shard(SHARD_TOTAL, BASE, "failure")])
+            .collect(),
+    );
+    let runs = json!({ "workflow_runs": [matching_candidate()] });
+    let jobs = jobs_for(7, jobs);
+    assert_eq!(matched_with(&current(), &runs, &jobs), None);
+    assert!(!decide_with(&current(), &runs, &jobs));
+}
+
+#[test]
 fn pr_mismatch_reruns() {
     let runs =
         json!({ "workflow_runs": [candidate(7, HEAD, HEAD, PR + 1, Some(BASE), "completed")] });

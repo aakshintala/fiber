@@ -98,19 +98,24 @@ fn match_in_run(
             })
         })?;
     let jobs = jobs_by_run.get(id.to_string()).and_then(Value::as_array)?;
-    let shard_bases: Vec<&str> = jobs
+    let shards: Vec<&Value> = jobs
         .iter()
-        .filter(|job| job.get("conclusion").and_then(Value::as_str) == Some("success"))
-        .filter_map(|job| {
+        .filter(|job| {
             job.get("name")
                 .and_then(Value::as_str)
                 .and_then(is_mutants_shard)
+                .is_some()
         })
         .collect();
-    if shard_bases.len() as u64 == total
-        && shard_bases
-            .iter()
-            .all(|base| *base == current.base.0.as_str())
+    if shards.len() as u64 == total
+        && shards.iter().all(|job| {
+            job.get("conclusion").and_then(Value::as_str) == Some("success")
+                && job
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .and_then(is_mutants_shard)
+                    == Some(current.base.0.as_str())
+        })
     {
         Some(MatchedReuse {
             run_id: id,
