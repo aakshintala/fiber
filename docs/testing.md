@@ -342,7 +342,9 @@ A journey is a screen test that walks one path a person walks, from start to
 finish, through the release binary, and asserts what the screen shows at every
 step. Journeys live in their own test binary and run after merge (`docs/ci.md`,
 "The journey suite"), not in the gate. A bug a person finds gets a journey,
-unless its fix PR names the journey that already covers the path.
+unless its fix PR names the journey that already covers the path. A provider
+bug a person finds adds its recorded gateway transcript, and its journey
+replays that transcript.
 
 The gate runs the screen journeys in `crates/main/tests/terminal.rs`,
 `crates/main/tests/journeys.rs` and `crates/main/tests/inline_images.rs`; the
