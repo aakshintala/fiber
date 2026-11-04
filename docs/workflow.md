@@ -315,11 +315,13 @@ Agents never do, and never ask a peer to.
 
 A pull request is eligible only when all of these hold:
 
-- its diff stays inside `xtask/`, `.github/`, `scripts/` and `docs/ci.md`;
+- its diff stays inside `xtask/`, `.github/`, `scripts/`, `docs/ci.md` and
+  the root-level gate configuration that `RUN_ALL_ROOTS` in
+  `xtask/src/select.rs` lists, and every changed file is needed to repair
+  the defect;
 - its own `CI` fails or cannot finish because of the defect it fixes, and
   that defect blocks one or more other open pull requests; a `CI` that is
-  only slow, or red for another reason, does not qualify;
-- it names its ticket.
+  only slow, or red for another reason, does not qualify.
 
 Before asking the owner, the orchestrator confirms on the exact head:
 
@@ -327,8 +329,8 @@ Before asking the owner, the orchestrator confirms on the exact head:
 - the review loop is done, with every finding resolved;
 - when the diff changes what a required check does, a surveyor approval
   comment is on the pull request;
-- the pull request body starts with `Break-glass:`, then names the blocked
-  pull requests and the defect that stops its own `CI`.
+- the pull request body starts with `Break-glass:`, then names its ticket,
+  the blocked pull requests and the defect that stops its own `CI`.
 
 The `main` ruleset keeps no bypass actors outside a break-glass merge; check
 `bypass_actors` on the ruleset after each one. To break glass, the owner, in
@@ -340,10 +342,11 @@ the browser:
    requirements to be met", as a squash merge;
 3. removes the bypass at once, leaving the list empty.
 
-`CI` still runs on the merge commit. If it fails on a job the diff touched,
-as classified by `ci-triage`, the merge is reverted at once in a new pull
-request, and nobody fixes it forward. A failure on a job the diff did not
-touch is handled like any other failure on `main`.
+`CI` still runs on the merge commit. The orchestrator classifies each
+failure with `ci-triage`. If the break-glass diff caused it, the
+orchestrator opens a revert pull request at once, and nobody fixes it
+forward. A failure the diff did not cause is handled like any other failure
+on `main`.
 
 While the bypass list is empty, an `--admin` merge fails on GitHub's side,
 whoever runs it. Agents run `gh` with the owner's admin login, so nothing on
