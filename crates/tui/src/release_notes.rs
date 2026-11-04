@@ -8,7 +8,7 @@ use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 use crate::theme::Role;
 
 /// The bullet's marker: accent, as reply bullets draw
-/// (`docs/tui.md`, "Markdown in replies").
+/// (`docs/tui.md`, "Look").
 const BULLET: &str = "• ";
 /// The hanging indent wrapped bullet lines keep: two columns.
 const HANG: &str = "  ";
@@ -85,7 +85,7 @@ pub(crate) fn frame(
 
 /// Wraps one logical `line` into physical rows: a dash-space line draws
 /// its bullet marker in accent with its wrapped lines hanging two
-/// columns in (`docs/tui.md`, "Markdown in replies"); any other line
+/// columns in (`docs/tui.md`, "Look"); any other line
 /// wraps at the width, blank lines staying blank.
 fn push_line(rows: &mut Vec<Vec<(String, Option<Spot>, Ink)>>, line: &str, width: usize) {
     if line.is_empty() {

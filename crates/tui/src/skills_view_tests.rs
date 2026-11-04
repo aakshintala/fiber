@@ -154,7 +154,7 @@ fn before_the_answer_it_says_reading_and_has_no_rows() {
 
 #[test]
 fn rows_show_source_and_visibility() {
-    // One row per skill (`docs/tui.md:895`); each row carries where its
+    // One row per skill (`docs/tui.md`, "Swapped views"); each row carries where its
     // skill comes from and whether the model can see it. Row order is not
     // a contract — the answer's discovery order is `docs/invocation.md:474`
     // — so each check finds its row by skill name.
@@ -292,8 +292,8 @@ fn shadow_sources_names_one_source() {
 #[test]
 fn shadow_sources_orders_repo_personal_extensions_then_builtin() {
     // Shuffled discovery order must not move the words: repo, personal,
-    // extensions by extension name, then built in (`docs/tui.md:899-901`).
-    // Enter lists the same sources with their paths (`docs/tui.md:892-901`).
+    // extensions by extension name, then built in (`docs/tui.md`, "Swapped views").
+    // Enter lists the same sources with their paths (`docs/tui.md`, "Swapped views").
     let infos = shadow_infos();
     let paths = vec![
         "/fiber/docs/skills/review/SKILL.md".to_owned(),
@@ -314,7 +314,7 @@ fn shadow_sources_orders_repo_personal_extensions_then_builtin() {
 
 #[test]
 fn shadow_sources_orders_extensions_by_name() {
-    // Extensions list by extension name (`docs/tui.md:899-901`).
+    // Extensions list by extension name (`docs/tui.md`, "Swapped views").
     let infos = vec![
         sourced(
             "review",
@@ -342,7 +342,7 @@ fn shadow_sources_orders_extensions_by_name() {
 #[test]
 fn shadow_sources_lists_two_paths_from_one_source_once() {
     // Each source lists once, however many paths map to it
-    // (`docs/tui.md:899-901`).
+    // (`docs/tui.md`, "Swapped views").
     let infos = vec![
         sourced(
             "review",
@@ -369,7 +369,7 @@ fn shadow_sources_lists_two_paths_from_one_source_once() {
 
 #[test]
 fn shadow_sources_omits_the_clause_unless_every_path_resolves() {
-    // An unresolved path leaves out the whole clause (`docs/tui.md:901-902`).
+    // An unresolved path leaves out the whole clause (`docs/tui.md`, "Swapped views").
     let infos = shadow_infos();
     assert_eq!(
         shadowed_by(&["/nowhere/review/SKILL.md".to_owned()], &infos),
@@ -393,7 +393,7 @@ fn shadow_sources_omits_the_clause_unless_every_path_resolves() {
 #[test]
 fn shadow_sources_treats_a_nameless_extension_as_unresolved() {
     // A nameless extension entry is unresolved, so the row leaves out the
-    // whole clause (`docs/tui.md:901-902`).
+    // whole clause (`docs/tui.md`, "Swapped views").
     let infos = vec![sourced(
         "review",
         "/ext/nameless/skills/review/SKILL.md",
@@ -411,7 +411,7 @@ fn shadow_sources_treats_a_nameless_extension_as_unresolved() {
 fn colliding_extension_names_keep_their_kind() {
     // An extension named after another source keeps its kind, so the two
     // never read the same; any other extension reads as its bare name
-    // (`docs/tui.md:885-888`).
+    // (`docs/tui.md`, "Swapped views").
     for name in ["repo", "personal", "built in"] {
         let info = sourced(
             "a",
@@ -437,8 +437,8 @@ fn colliding_extension_names_keep_their_kind() {
 fn shadow_sources_lists_a_personal_source_and_a_personal_named_extension() {
     // Deduplication is by source identity, not by display word: a personal
     // skill and an extension named `personal` are two sources. The
-    // `extension <name>` collision prefix is `docs/tui.md:886-888`; each
-    // source lists once in precedence order (`docs/tui.md:899-901`).
+    // `extension <name>` collision prefix is `docs/tui.md`, "Swapped views"; each
+    // source lists once in precedence order (`docs/tui.md`, "Swapped views").
     let infos = vec![
         sourced(
             "review",
@@ -958,7 +958,7 @@ fn enter_on_a_read_error_stays_on_the_rows_with_the_message() {
 #[test]
 fn enter_lists_every_shadow_path_before_the_text() {
     // Enter shows the text after every shadowed skill with its source and
-    // path (`docs/tui.md:892-901`); unresolved paths keep the path-only
+    // path (`docs/tui.md`, "Swapped views"); unresolved paths keep the path-only
     // line.
     let fake = text_fake("The text.");
     let skills = entered(&fake, shadowed_infos(30).as_slice());
@@ -979,8 +979,8 @@ fn enter_lists_every_shadow_path_before_the_text() {
 fn enter_lists_each_shadow_source_and_path_above_the_text() {
     // Shadow order is the winner's path order, not precedence order, and
     // every path gets its own line, including a repeated source. Enter
-    // shows each shadowed skill's source and path (`docs/tui.md:892-901`).
-    // Precedence order, for contrast, is `docs/tui.md:899-901`.
+    // shows each shadowed skill's source and path (`docs/tui.md`, "Swapped views").
+    // Precedence order, for contrast, is `docs/tui.md`, "Swapped views".
     let fake = text_fake("The text.");
     let mut win = repository("review");
     win.shadows = vec![
@@ -1302,7 +1302,7 @@ fn initial_frame_selects_the_first_skill() {
     docs.shadowed_by = Some(winner.to_owned());
     let fake = fake_with(off(&[], &["notes"]));
     let skills = opened(&fake, &[win, shadowed, kit, docs, repository("notes")]);
-    // No header row: one row per skill (`docs/tui.md:895`), with the first
+    // No header row: one row per skill (`docs/tui.md`, "Swapped views"), with the first
     // row selected. The ruling example only fits uncut at pty width, so the
     // frame is 160 columns wide.
     let frame = skills.frame(160, 22);
@@ -1434,7 +1434,7 @@ fn resize_redraws_rows_details_and_text_at_the_new_width() {
 }
 
 /// The wheel shifts the visible rows three a step, keeping a visible
-/// selection where it was (`docs/tui.md:576`, "Swapped views"; see #3578).
+/// selection where it was (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
     let fake = fake_with(off(&[], &[]));
@@ -1451,7 +1451,7 @@ fn wheel_shifts_three_rows_and_keeps_a_visible_selection() {
 }
 
 /// A wheel that moves clears what was said, while a clamped wheel keeps it
-/// (`docs/tui.md:576`).
+/// (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_move_clears_and_clamp_preserves_what_was_said() {
     let fake = fake_with(off(&[], &[]));

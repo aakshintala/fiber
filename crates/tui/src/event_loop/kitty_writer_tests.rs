@@ -116,7 +116,7 @@ fn images_transmit_then_place_in_order() {
     // between one image's chunks: the pipe holds the exact bytes.
     let rx = read_exact(read, first_bytes.len() + second_bytes.len());
     let (bytes, _read) = recv_bytes(&rx);
-    // docs/tui.md:2529-2530 ("Images"): images transmit and place in
+    // docs/tui.md ("Images"): images transmit and place in
     // the order queued, with no other image command between one
     // image's chunks.
     assert_eq!(bytes, [first_bytes, second_bytes].concat());
@@ -146,7 +146,7 @@ fn a_delete_covering_a_queued_image_drops_it_whole() {
     let deleted = crate::graphics::delete(2);
     let rx = read_exact(read, deleted.len() + first_bytes.len());
     let (rest, read) = recv_bytes(&rx);
-    // docs/tui.md:2529-2532 ("Images"): the delete goes at the next
+    // docs/tui.md ("Images"): the delete goes at the next
     // chunk boundary; the covered image sends nothing more, and the
     // interrupted upload is sent again whole after it.
     assert_eq!(bytes, first_bytes[..head].to_vec());
@@ -169,7 +169,7 @@ fn a_delete_covering_a_partial_upload_sends_no_more_chunks_and_no_place() {
     assert!(writer.push(first));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, chunk0);
     assert!(writer.push(delete(1)));
     gate.release();
@@ -178,7 +178,7 @@ fn a_delete_covering_a_partial_upload_sends_no_more_chunks_and_no_place() {
     let deleted = crate::graphics::delete(1);
     let rx = read_exact(read, deleted.len());
     let (rest, read) = recv_bytes(&rx);
-    // docs/tui.md:2531-2532 ("Images"): an image the delete removes
+    // docs/tui.md ("Images"): an image the delete removes
     // sends nothing more.
     assert_eq!(rest, deleted);
     // No replay follows: stopping joins the thread, so EOF proves the
@@ -206,7 +206,7 @@ fn a_delete_missing_a_partial_upload_replays_it_whole_after_the_delete() {
     let deleted = crate::graphics::delete(9);
     let rx = read_exact(read, deleted.len() + first_bytes.len());
     let (rest, _read) = recv_bytes(&rx);
-    // docs/tui.md:2531-2532 ("Images"): an unrelated upload the delete
+    // docs/tui.md ("Images"): an unrelated upload the delete
     // interrupts is sent again whole after it.
     assert_eq!(
         [bytes, rest].concat(),
@@ -239,7 +239,7 @@ fn a_covering_delete_before_the_place_drops_the_place() {
     let deleted = crate::graphics::delete(1);
     let rx = read_exact(read, deleted.len());
     let (rest, read) = recv_bytes(&rx);
-    // docs/tui.md:2531-2532 ("Images"): an image the delete removes
+    // docs/tui.md ("Images"): an image the delete removes
     // sends nothing more.
     assert_eq!(rest, deleted);
     // No replay follows: stopping joins the thread, so EOF proves the
@@ -268,7 +268,7 @@ fn a_non_covering_delete_before_the_place_goes_first() {
     let place = crate::graphics::place(1, 7, 3);
     let rx = read_exact(read, deleted.len() + place.len());
     let (rest, _read) = recv_bytes(&rx);
-    // docs/tui.md:2529-2532 ("Images"): the delete goes at the next
+    // docs/tui.md ("Images"): the delete goes at the next
     // chunk boundary, then the place follows: no resend of the
     // completed upload.
     assert_eq!(
@@ -296,7 +296,7 @@ fn queued_deletes_with_several_ids_emit_in_order_and_drop_covered() {
     assert!(writer.push(seventh));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, seventh_bytes[..head].to_vec());
     assert!(writer.push(ninth));
     assert!(writer.push(eleventh));
@@ -312,7 +312,7 @@ fn queued_deletes_with_several_ids_emit_in_order_and_drop_covered() {
         seventh_deleted.len() + eleventh_deleted.len() + ninth_bytes.len(),
     );
     let (rest, read) = recv_bytes(&rx);
-    // docs/tui.md:2529-2532 ("Images"): both deletes go out in push
+    // docs/tui.md ("Images"): both deletes go out in push
     // order at the boundary, covered images send nothing more, and the
     // uncovered image transmits whole after them.
     assert_eq!(
@@ -343,7 +343,7 @@ fn a_barrier_acks_only_after_pending_deletes_emit() {
     assert!(writer.push(delete(1)));
     gate.release();
     // The ack means the delete is on the wire: it reads back at once,
-    // with no wait. docs/tui.md:2530-2531 ("Images"): the delete goes
+    // with no wait. docs/tui.md ("Images"): the delete goes
     // at the next chunk boundary.
     flush(&writer);
     rustix::fs::fcntl_setfl(&read, rustix::fs::OFlags::NONBLOCK)
@@ -383,7 +383,7 @@ fn purge_mid_upload_aborts_once_and_sends_no_later_chunk_or_place() {
     let rx = read_exact(read, aborted.len());
     let (rest, _read) = recv_bytes(&rx);
     // Exactly one abort delete for the in-flight image, and no later
-    // chunk or place. docs/tui.md:2529-2532 ("Images"): a forgotten
+    // chunk or place. docs/tui.md ("Images"): a forgotten
     // image's partial upload closes with its delete at the next chunk
     // boundary, and nothing more of it is sent.
     assert_eq!(rest, aborted);
@@ -423,7 +423,7 @@ fn stop_aborts_a_partial_upload() {
     assert!(writer.push(first));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, chunk0);
     // Stop rides behind the held gate, after the barrier send: the
     // teardown meets the partial upload at the boundary, emits its
@@ -438,7 +438,7 @@ fn stop_aborts_a_partial_upload() {
     let aborted = crate::graphics::delete(1);
     let rx = read_exact(read, aborted.len());
     let (rest, _read) = recv_bytes(&rx);
-    // docs/tui.md:2532-2534 ("Images"): quitting while an image
+    // docs/tui.md ("Images"): quitting while an image
     // transmits sends its delete at the next chunk boundary and nothing
     // more of it.
     assert_eq!(rest, aborted);
@@ -458,7 +458,7 @@ fn stop_with_a_queued_payload_behind_a_held_gate_writes_nothing_further() {
     assert!(writer.push(first));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, chunk0);
     // A queued payload behind the held gate, and a delete covering the
     // partial upload: Stop frees the queue and returns with no abort
@@ -502,7 +502,7 @@ fn handover_pauses_at_boundary_and_restarts_whole() {
     assert!(writer.push(upload));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, full[..head].to_vec());
     // The pause waits for the boundary abort delete, then returns the
     // ids the writer still holds. The send rides ahead of the release
@@ -514,7 +514,7 @@ fn handover_pauses_at_boundary_and_restarts_whole() {
         Ok(ids) => ids,
         Err(error) => panic!("waited {DEADLINE:?} for the pause ack: {error}"),
     };
-    // docs/tui.md:2529 ("Images"): the retained ids keep the queue order.
+    // docs/tui.md ("Images"): the retained ids keep the queue order.
     assert_eq!(ids, vec![1]);
     // The foreground program runs between the pause and the resume:
     // its bytes land on the same sink in order.
@@ -535,7 +535,7 @@ fn handover_pauses_at_boundary_and_restarts_whole() {
     let markers = b"\x1b[?1049l\x1b[?1049hFRAME".to_vec();
     let rx = read_exact(read, aborted.len() + markers.len() + full.len());
     let (rest, _read) = recv_bytes(&rx);
-    // docs/tui.md:2548-2551 ("Images"): handover closes the partial
+    // docs/tui.md ("Images"): handover closes the partial
     // upload with its delete at the boundary, and the retained image is
     // sent again whole from chunk zero.
     assert_eq!(
@@ -560,7 +560,7 @@ fn a_failed_write_drops_payloads_and_reports_failure() {
     // failure.
     let chunk_rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&chunk_rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, first_bytes[..head].to_vec());
     assert!(writer.push(second));
     // Closing the read end fails the next write after both images were
@@ -576,7 +576,7 @@ fn a_failed_write_drops_payloads_and_reports_failure() {
     }
     assert!(failed.load(Ordering::SeqCst));
     // A dead ack receiver takes the terminal-failure path too.
-    // docs/tui.md:2534-2535 ("Images"): a failed write to the terminal
+    // docs/tui.md ("Images"): a failed write to the terminal
     // is the terminal failing.
     assert!(!writer.barrier());
     writer.join();
@@ -758,7 +758,7 @@ fn kitty_writer_yields_to_waiting_loop() {
         .windows(second.len())
         .position(|window| window == second)
         .expect("the second chunk is on the wire");
-    // docs/tui.md:2525-2528 ("Images"): frames go out between whole
+    // docs/tui.md ("Images"): frames go out between whole
     // chunks, so the queued loop write beats the writer's next chunk.
     assert!(
         at_marker < at_second,
@@ -879,7 +879,7 @@ fn pause_for_handover_returns_empty_when_nothing_is_held() {
     // Nothing pushed: the pause acks at once with no ids. `None` and
     // the wrong singletons fail this; the empty-vector mutant is
     // killed by the retained-ids test below.
-    // docs/tui.md:2548-2551 ("Images"): nothing held means no ids to
+    // docs/tui.md ("Images"): nothing held means no ids to
     // replay whole on return.
     assert_eq!(writer.pause_for_handover(), Some(vec![]));
     writer.resume_after_handover();
@@ -900,7 +900,7 @@ fn pause_for_handover_retains_queued_ids_in_order() {
     assert!(writer.push(seventh));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, seventh_bytes[..head].to_vec());
     // The second image queues behind the parked first: both are
     // retained, in order. The send hook orders the release after the
@@ -918,7 +918,7 @@ fn pause_for_handover_retains_queued_ids_in_order() {
         gate.release();
         paused.join().expect("the pause joined")
     });
-    // docs/tui.md:2529 ("Images"): the retained ids keep the queue order.
+    // docs/tui.md ("Images"): the retained ids keep the queue order.
     assert_eq!(ids, Some(vec![7, 9]));
     writer.resume_after_handover();
     // The abort closes the partial upload, then both images go whole
@@ -929,7 +929,7 @@ fn pause_for_handover_retains_queued_ids_in_order() {
         aborted.len() + seventh_bytes.len() + ninth_bytes.len(),
     );
     let (rest, _read) = recv_bytes(&rx);
-    // docs/tui.md:2548-2551 ("Images"): handover closes the partial
+    // docs/tui.md ("Images"): handover closes the partial
     // upload with its delete at the boundary, and both retained images
     // go whole from their first chunks.
     assert_eq!(rest, [aborted, seventh_bytes, ninth_bytes].concat());
@@ -950,7 +950,7 @@ fn handover_of_a_completed_upload_sends_no_abort() {
     assert!(writer.push(only));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, only_bytes[..head].to_vec());
     let paused = writer.handover_send();
     gate.release();
@@ -958,13 +958,13 @@ fn handover_of_a_completed_upload_sends_no_abort() {
         Ok(ids) => ids,
         Err(error) => panic!("waited {DEADLINE:?} for the pause ack: {error}"),
     };
-    // docs/tui.md:2529 ("Images"): the retained ids keep the queue order.
+    // docs/tui.md ("Images"): the retained ids keep the queue order.
     assert_eq!(ids, vec![5]);
     writer.resume_after_handover();
     // No abort: the retained image goes whole from its first chunk.
     let rx = read_exact(read, only_bytes.len());
     let (rest, _read) = recv_bytes(&rx);
-    // docs/tui.md:2550-2551 ("Images"): every image on screen is sent
+    // docs/tui.md ("Images"): every image on screen is sent
     // again whole: no abort for the completed upload.
     assert_eq!(rest, only_bytes);
     writer.stop_and_join();
@@ -984,7 +984,7 @@ fn stop_after_a_completed_upload_sends_no_abort() {
     assert!(writer.push(only));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, only_bytes[..head].to_vec());
     let ack = writer.barrier_send();
     writer.stop_send();
@@ -1013,7 +1013,7 @@ fn stop_and_join_aborts_and_joins() {
     assert!(writer.push(first));
     let rx = read_exact(read, head);
     let (bytes, read) = recv_bytes(&rx);
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(bytes, first_bytes[..head].to_vec());
     // The send hook orders the release after the Stop the blocking
     // join cannot order, so Stop meets the partial upload at the
@@ -1034,7 +1034,7 @@ fn stop_and_join_aborts_and_joins() {
     let aborted = crate::graphics::delete(3);
     let rx = read_exact(read, aborted.len());
     let (rest, read) = recv_bytes(&rx);
-    // docs/tui.md:2532-2534 ("Images"): quitting while an image
+    // docs/tui.md ("Images"): quitting while an image
     // transmits sends its delete at the next chunk boundary.
     assert_eq!(rest, aborted);
     assert!(read_rest(read).is_empty());

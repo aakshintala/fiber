@@ -47,7 +47,7 @@ fn template_row(name: &str) -> CommandInfo {
 }
 
 /// The `/` list's built-in order, as drawn: the table keeps this order,
-/// and the "Slash commands" table (`docs/tui.md:1990-1993`) matches it.
+/// and the "Slash commands" table (`docs/tui.md`, "Slash commands") matches it.
 const DRAWN_ORDER: &[&str] = &[
     "home",
     "new",
@@ -188,10 +188,10 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"exit",
         &"bug",
     ];
-    // The table enumerates built-in names and aliases (`docs/tui.md:1940-1997`).
+    // The table enumerates built-in names and aliases (`docs/tui.md`, "Slash commands").
     assert_eq!(extra, wanted);
     // An extension or skill named like an alias cannot take it silently
-    // (`docs/tui.md:2006`).
+    // (`docs/tui.md`, "Slash commands").
     for alias in TABLE
         .iter()
         .flat_map(|entry| aliases_of(entry.name).iter().copied())
@@ -328,7 +328,7 @@ fn an_empty_query_shows_every_row() {
 fn prefix_matches_come_before_contains_matches() {
     let all = rows(&[skill("prereview"), skill("Review")]);
     // `re`: prefix matches first, each group in the `/` list's drawn
-    // order (`docs/tui.md:1940-1993`): resume, release-notes, reviewer-setup,
+    // order (`docs/tui.md`, "Slash commands"): resume, release-notes, reviewer-setup,
     // rewind, name by its alias `rename`, reload, and the skill `Review`
     // (case ignored); then the contains matches, credential and
     // `prereview`.
@@ -354,7 +354,7 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
-    // The table orders `/compact` after `/handoff` (`docs/tui.md:1978,1993`).
+    // The table orders `/compact` after `/handoff` (`docs/tui.md`, "Slash commands").
     let all = rows(&[]);
     let handoff = all.iter().find(|row| row.name == "handoff");
     assert_eq!(

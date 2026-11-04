@@ -264,7 +264,7 @@ fn wide_and_combining_marks_draw_whole() {
 
 #[test]
 fn steering_card_with_title_entries_and_hint() {
-    // docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first; docs/tui.md:444-447: panel.
+    // docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first.
     insta::assert_snapshot!(
         "steering_card_with_title_entries_and_hint",
         screen(&queued(60, 12), 60, 12)
@@ -275,7 +275,7 @@ fn steering_card_with_title_entries_and_hint() {
 fn the_card_draws_title_entries_and_hint() {
     let shown = screen(&queued(80, 12), 80, 12);
     // The title with its figure, each entry with its mark, and the key
-    // hint: the undroppable row draws no ✕ (docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first; docs/tui.md:444-447: panel).
+    // hint: the undroppable row draws no ✕ (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first).
     for line in [
         "Steering",
         "2 queued · joins at the next step",
@@ -283,7 +283,7 @@ fn the_card_draws_title_entries_and_hint() {
         "↳ and test it",
         "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
     ] {
-        assert!(shown.contains(line), "{line}\n{shown}"); // docs/tui.md:1296-1306: card; docs/tui.md:3048.
+        assert!(shown.contains(line), "{line}\n{shown}"); // docs/tui.md, "Steering": card; docs/tui.md, "The slots".
     }
     let crossed = queue_row(&shown, "use the parser");
     assert!(crossed.trim_end().ends_with('✕'), "{crossed:?}");
@@ -296,7 +296,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
     let app = three_wrapping(80, 24);
     let shown = screen(&app, 80, 24);
     // The title row, three entries with the long one's continuation
-    // aligned under its text, and the key hint (docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first; docs/tui.md:444-447: panel).
+    // aligned under its text, and the key hint (docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first).
     for line in [
         "Steering",
         "3 queued · joins at the next step",
@@ -306,7 +306,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
         "one row per step",
         "⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop",
     ] {
-        assert!(shown.contains(line), "{line}\n{shown}"); // docs/tui.md:1296-1306: card with count; docs/tui.md:3048: oldest-first.
+        assert!(shown.contains(line), "{line}\n{shown}"); // docs/tui.md, "Steering": card with count; docs/tui.md, "The slots": oldest-first.
     }
     // The long entry wraps: its continuation starts under its text,
     // past the stripe, the gap and the mark's two columns, with no
@@ -319,7 +319,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
     let cont = rows.get(first + 1).expect("its continuation");
     assert!(cont.starts_with("▌   "), "{cont:?}");
     assert!(!cont.contains('↳') && !cont.contains('▸'), "{cont:?}");
-    // docs/tui.md:1296-1306: card; docs/tui.md:3048: oldest-first; docs/tui.md:444-447: panel.
+    // docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first.
     insta::assert_snapshot!(
         "three_entries_wrap_with_continuations_under_the_text",
         shown
@@ -565,7 +565,7 @@ fn a_droppable_rows_cross_sits_at_the_texts_right_edge() {
 fn the_cross_needs_more_than_four_columns() {
     // The `✕` draws only while it, its gap, the mark and one text cell
     // fit: at four text columns the droppable entry keeps its text with
-    // no `✕`; at five it draws the `✕` (`docs/tui.md:1301-1302`,
+    // no `✕`; at five it draws the `✕` (`docs/tui.md`,
     // "Steering"). `MARK_CELLS` is 2, so the threshold is 4.
     let narrow = super::entry_rows(false, true, "a", 0, 4);
     assert_eq!(narrow.len(), 1, "one row for one cell");
@@ -599,7 +599,7 @@ fn below_rows_counts_the_cards_title_entry_hint_and_edges() {
             {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
         ]}),
     ));
-    assert_eq!(app.below_rows(), bare + 5); // docs/tui.md:1296-1306: title, entry, hint with edges; docs/tui.md:444-447: panel card.
+    assert_eq!(app.below_rows(), bare + 5); // docs/tui.md, "Steering": title, entry, hint with edges.
 }
 
 #[test]
@@ -1118,17 +1118,17 @@ fn draw_queue(app: &App, width: u16, height: u16) -> (String, Vec<crate::mouse::
 fn messages_carry_full_text_images_and_flags_oldest_first() {
     let app = imaged(60, 12);
     let messages = app.steering_messages();
-    // docs/tui.md:2891: the queued messages oldest-first (three fixture rows).
-    assert_eq!(messages.len(), 3); // docs/tui.md:2891: oldest-first messages.
+    // docs/tui.md, "The slots": the queued messages oldest-first (three fixture rows).
+    assert_eq!(messages.len(), 3); // docs/tui.md, "The slots": oldest-first messages.
     // The first row keeps its full raw text, newline included: only the
-    // laid rows flatten it. docs/tui.md:2891: oldest-first, with text and flags.
-    assert_eq!(messages[0].text, "first line\nsecond line"); // docs/tui.md:2891.
+    // laid rows flatten it. docs/tui.md, "The slots": oldest-first, with text and flags.
+    assert_eq!(messages[0].text, "first line\nsecond line"); // docs/tui.md, "The slots".
     assert!(messages[0].images.is_empty());
     assert!(messages[0].droppable);
     assert!(messages[0].selectable);
     assert!(!messages[0].selected);
-    // The second row carries its image's path and size. docs/tui.md:2891: oldest-first.
-    assert_eq!(messages[1].text, "look"); // docs/tui.md:2891.
+    // The second row carries its image's path and size. docs/tui.md, "The slots": oldest-first.
+    assert_eq!(messages[1].text, "look"); // docs/tui.md, "The slots".
     assert!(messages[1].droppable);
     assert!(!messages[1].selectable);
     let image = messages[1].images.first().expect("one image");
@@ -1152,8 +1152,8 @@ fn an_empty_replacement_hides_the_whole_card() {
     let fake = std::rc::Rc::new(RecordingRenderer::lines(&[], None));
     app.install_renderer(fake);
     // No rows reserved and none drawn, and no target left behind: the
-    // whole card hides. docs/tui.md:3042-3044.
-    assert_eq!(super::count(&app, 80), 0); // docs/tui.md:3042-3044: no lines hides the card.
+    // whole card hides. docs/tui.md, "The slots".
+    assert_eq!(super::count(&app, 80), 0); // docs/tui.md, "The slots": no lines hides the card.
     let (shown, targets, _) = draw_queue(&app, 80, 24);
     assert!(!shown.contains("Steering"), "{shown}");
     assert!(!shown.contains("use the parser"), "{shown}");
@@ -1168,8 +1168,8 @@ fn an_empty_replacement_hides_the_whole_card() {
     // reserves six rows more, the title, two entries and the hint with
     // an edge row above and below.
     let plain = queued(80, 24);
-    // docs/tui.md:3042-3044: the card's six rows hide together.
-    assert_eq!(app.below_rows() + 6, plain.below_rows()); // docs/tui.md:3042-3044: six rows hide; docs/tui.md:1296-1306: card; docs/tui.md:444-447: panel.
+    // docs/tui.md, "The slots": the card's six rows hide together.
+    assert_eq!(app.below_rows() + 6, plain.below_rows()); // docs/tui.md, "The slots": six rows hide; docs/tui.md, "Steering": card.
     // With no rows at all and no renderer, the builtin reserves nothing
     // either: the whole card hides with the rows.
     let mut drained = queued(80, 24);
@@ -1178,7 +1178,7 @@ fn an_empty_replacement_hides_the_whole_card() {
         "steering_queue",
         serde_json::json!({"messages": []}),
     ));
-    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md:2893: empty queue draws nothing.
+    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md, "The slots": empty queue draws nothing.
     let (shown, targets, _) = draw_queue(&drained, 80, 24);
     assert!(!shown.contains("Steering"), "{shown}");
     assert!(
@@ -1198,9 +1198,9 @@ fn an_empty_replacement_hides_the_whole_card() {
         Some(std::time::Duration::from_millis(500)),
     ));
     drained.install_renderer(animated.clone());
-    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md:2893: empty queue draws nothing.
-    assert!(animated.inputs.borrow().is_empty()); // docs/tui.md:2893: no renderer runs.
-    assert!(animated.frames.borrow().is_empty()); // docs/tui.md:2893.
+    assert_eq!(super::count(&drained, 80), 0); // docs/tui.md, "The slots": empty queue draws nothing.
+    assert!(animated.inputs.borrow().is_empty()); // docs/tui.md, "The slots": no renderer runs.
+    assert!(animated.frames.borrow().is_empty()); // docs/tui.md, "The slots".
 }
 
 #[test]
@@ -1251,7 +1251,7 @@ fn an_animated_replacement_records_frame_and_now() {
     app.install_renderer(fake.clone());
     let (shown, _, _) = draw_queue(&app, 80, 24);
     assert!(shown.contains("queued one"), "{shown}");
-    // docs/tui.md:3121: every animated slot carries frame and now.
-    assert_eq!(fake.frames.borrow().clone(), vec![0]); // docs/tui.md:3044: one call on the miss; 3121: frame in input.
-    assert_eq!(fake.nows.borrow().clone(), vec![1_000]); // docs/tui.md:3044: one call on the miss; 3121: now in input.
+    // `docs/tui.md`, "Animation": every animated slot carries frame and now.
+    assert_eq!(fake.frames.borrow().clone(), vec![0]); // `docs/tui.md`, "How a TUI extension runs": one call on the miss; 3121: frame in input.
+    assert_eq!(fake.nows.borrow().clone(), vec![1_000]); // `docs/tui.md`, "How a TUI extension runs": one call on the miss; 3121: now in input.
 }

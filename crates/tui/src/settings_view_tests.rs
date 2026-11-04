@@ -992,8 +992,7 @@ fn ctrl_g_uses_key_ownership_even_for_default_rows() {
 
 /// The wheel shifts the visible rows three a step, keeping a visible
 /// selection where it was; over the edit field it is swallowed, so the
-/// wheel cannot retarget the key being edited (`docs/tui.md:576`, "Swapped
-/// views"; see #3578).
+/// wheel cannot retarget the key being edited (`docs/tui.md`, "Swapped views"; see #3578).
 #[test]
 fn wheel_shifts_three_rows_and_holds_over_the_field() {
     let fake = Fake::new(
@@ -1022,7 +1021,7 @@ fn wheel_shifts_three_rows_and_holds_over_the_field() {
 }
 
 /// A wheel on the header steps off it, and a moving wheel clears what was
-/// said while a clamped wheel keeps it (`docs/tui.md:576`).
+/// said while a clamped wheel keeps it (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_header_steps_off_and_message_lifecycle() {
     let fake = Fake::new(
@@ -1063,7 +1062,7 @@ fn wheel_header_steps_off_and_message_lifecycle() {
 }
 
 /// A wheel over short theme choices cannot move, so it stays without
-/// choosing (`docs/tui.md:576`).
+/// choosing (`docs/tui.md`, "Swapped views").
 #[test]
 fn wheel_over_short_choices_stays_without_choosing() {
     let fake = themed();

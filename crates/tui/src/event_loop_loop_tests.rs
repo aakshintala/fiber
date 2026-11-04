@@ -554,7 +554,7 @@ fn kitty_event_loop_draws_at_chunk_boundary() {
         std::fs::File::from(std::os::fd::OwnedFd::from(pipe_read)),
         head,
     ));
-    // docs/tui.md:2529 ("Images"): images transmit in the order queued.
+    // docs/tui.md ("Images"): images transmit in the order queued.
     assert_eq!(chunk, first_bytes[..head].to_vec());
     // A key's frame is written while the payload is pending: the image's
     // rows stay blank, at their size, until it lands.
@@ -575,7 +575,7 @@ fn kitty_event_loop_draws_at_chunk_boundary() {
     super::tests::flush_kitty(&lp);
     let deleted = crate::graphics::delete(1);
     let (rest, read) = recv_wire(&read_exact_bytes(read, deleted.len() + second_bytes.len()));
-    // docs/tui.md:2529-2532 ("Images"): the delete goes at the next chunk
+    // docs/tui.md ("Images"): the delete goes at the next chunk
     // boundary with no further first-image chunk and no first place, then
     // the full second transmit and place follow in order.
     assert_eq!(
@@ -2701,13 +2701,13 @@ fn resume_open_replays_the_log_to_the_tail() {
     assert_eq!(
         histories.len(),
         6,
-        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows to the chain root for the joint total.
+        // docs/tui.md ("History and paging"): after the frame the terminal reads older windows to the chain root for the joint total.
         "{histories:?}"
     );
     assert_eq!(
         histories[0]["args"],
         json!({}),
-        // docs/tui.md:2438 ("History and paging"): asks `history` with no `from_seq` for the session's last lines.
+        // docs/tui.md ("History and paging"): asks `history` with no `from_seq` for the session's last lines.
         "the newest window first"
     );
     assert_eq!(
@@ -2716,7 +2716,7 @@ fn resume_open_replays_the_log_to_the_tail() {
             .map(|command| command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX))
             .collect::<Vec<_>>(),
         [1091, 835, 579, 323, 67],
-        // docs/tui.md:2446-2448 ("History and paging"): after the frame the terminal reads older windows down to the session's `seq 0` for the joint total.
+        // docs/tui.md ("History and paging"): after the frame the terminal reads older windows down to the session's `seq 0` for the joint total.
         "older count windows reach seq zero before full"
     );
     // Every turn start the terminal applies asks `commands` again. The
