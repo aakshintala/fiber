@@ -15,10 +15,11 @@ use std::sync::Arc;
 
 use contract::SessionId;
 use contract::events::{
-    Event, ExtensionStateSet, OnFork, Parent, Rewind, SessionStarted, Variables, VariablesSource,
+    Event, ExtensionStateSet, FiberStarted, OnFork, Parent, Rewind, SessionStarted, Variables,
+    VariablesSource,
 };
 use contract::shapes::{Point, Worktree};
-use contract::{ErrorCode, JobId, Seq, clock::Clock};
+use contract::{ErrorCode, JobId, Seq, clock::Clock, shapes::Failure};
 use log::Log;
 use serde_json::{Value, json};
 
@@ -168,7 +169,271 @@ fn session_with(dir: &Path, worktree: Option<Worktree>) -> Log {
         None,
     )
     .unwrap();
+    // One `fiber_started` per simulated process generation, as the original
+    // session and one resume each write (`docs/invocation.md`, "Lifecycle"):
+    // the log under test has the envelopes the version reader reads.
+    for _ in 0..2 {
+        log.append(
+            &Event::FiberStarted(FiberStarted {
+                version: "test".to_owned(),
+                resumed: true,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    }
     log
+}
+
+/// Rewrites the `occurrence`th `fiber_started` line's (0-based)
+/// `schema_version` token from `from` to `to` (e.g. `"1"` to `"x"`) with
+/// one equal-length `replacen`, so the file length never moves and the
+/// log stays a mixed-version history. A non-JSON token such as a bare
+/// `x` fails the line parse, which is exactly the reader's `Err` arm.
+fn forge_fiber_started_version(dir: &Path, occurrence: usize, from: &str, to: &str) {
+    assert_eq!(from.len(), to.len(), "the forge keeps the file length");
+    let current = format!("\"schema_version\":{from}");
+    let forged = format!("\"schema_version\":{to}");
+    let path = dir.join("events.jsonl");
+    let before = std::fs::read_to_string(&path).unwrap();
+    assert!(before.ends_with('\n'), "the log ends on a complete line");
+    let mut lines: Vec<String> = before.lines().map(str::to_owned).collect();
+    let targets: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            serde_json::from_str::<Value>(line).is_ok_and(|line| line["kind"] == "fiber_started")
+        })
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(targets.len(), 2, "the log holds two `fiber_started` lines");
+    assert!(
+        occurrence < targets.len(),
+        "the forged occurrence exists: {occurrence} of {}",
+        targets.len()
+    );
+    let at = targets[occurrence];
+    let replaced = lines[at].replacen(&current, &forged, 1);
+    assert_ne!(lines[at], replaced, "the forged line carries {current}");
+    lines[at] = replaced;
+    let after = lines.join("\n") + "\n";
+    assert_eq!(after.len(), before.len(), "the forge changes no length");
+    std::fs::write(&path, after).unwrap();
+}
+
+#[test]
+fn keeper_schema_version_reports_a_readable_log_as_current() {
+    let home = fakes::TempDir::new("main-resume-version-readable");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_0123456789abcdef");
+    let _log = session_with(&dir, None);
+    assert_eq!(
+        super::keeper_schema_version(&dir),
+        Some(u64::from(contract::SCHEMA_VERSION)),
+        "an untouched log reads at this build's version"
+    );
+}
+
+#[test]
+fn keeper_schema_version_names_the_latest_in_a_mixed_history() {
+    let home = fakes::TempDir::new("main-resume-version-mixed");
+    let sessions = home.path().join("sessions");
+    let dir = sessions.join("s_0123456789abcdef");
+    let _log = session_with(&dir, None);
+    let next = u64::from(contract::SCHEMA_VERSION) + 1;
+    forge_fiber_started_version(
+        &dir,
+        1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &next.to_string(),
+    );
+    assert_eq!(
+        super::keeper_schema_version(&dir),
+        Some(next),
+        "a `[v1, v2]` history declines naming the latest"
+    );
+}
+
+#[test]
+fn keeper_schema_version_refusal_names_the_keepers_version() {
+    let home = fakes::TempDir::new("main-resume-version-refusal");
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let dir = sessions.join(&id.0);
+    drop(session_with(&dir, None));
+    let next = u64::from(contract::SCHEMA_VERSION) + 1;
+    forge_fiber_started_version(
+        &dir,
+        1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &next.to_string(),
+    );
+    // A keeper-held lock at an unreadable version declines instead of
+    // attaching: the lock is held through the resume's failed open.
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let _keeper = Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap();
+    let mut attached = 0;
+    let result = super::open_or_attach(&sessions, id.clone(), clock, |_| {
+        attached += 1;
+        7
+    });
+    assert_eq!(result.err(), Some(1), "a refused resume exits 1");
+    assert_eq!(attached, 0, "a keeper-held lock never attaches");
+    // The refusal built from that version names the keeper's version.
+    let keeper = log::Error::Held {
+        session: id.0.clone(),
+        holder: "keeper 4242".to_owned(),
+    };
+    let failure = super::keeper_refusal(&dir, &id, keeper);
+    let mismatch = doors::SessionError::VersionMismatch {
+        id: id.clone(),
+        version: next,
+    };
+    assert_eq!(failure.code, ErrorCode::SessionHeld);
+    assert_eq!(failure.code, mismatch.code());
+    assert_eq!(failure.message, mismatch.to_string());
+}
+
+#[test]
+fn keeper_schema_version_ignores_a_forged_first_line() {
+    let home = fakes::TempDir::new("main-resume-version-reverse");
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let dir = sessions.join(&id.0);
+    let _log = session_with(&dir, None);
+    forge_fiber_started_version(
+        &dir,
+        0,
+        &contract::SCHEMA_VERSION.to_string(),
+        &(u64::from(contract::SCHEMA_VERSION) + 1).to_string(),
+    );
+    assert_eq!(
+        super::keeper_schema_version(&dir),
+        Some(u64::from(contract::SCHEMA_VERSION)),
+        "a `[v2, v1]` history reports the latest readable version"
+    );
+    // The refusal stays the bare `Held` and never names the forged first.
+    let keeper = log::Error::Held {
+        session: id.0.clone(),
+        holder: "keeper 4242".to_owned(),
+    };
+    let failure = super::keeper_refusal(&dir, &id, keeper);
+    assert_eq!(failure.code, ErrorCode::SessionHeld);
+    assert_eq!(
+        failure.message,
+        log::Error::Held {
+            session: id.0.clone(),
+            holder: "keeper 4242".to_owned(),
+        }
+        .to_string(),
+        "a readable latest keeps today's bare refusal"
+    );
+}
+
+#[test]
+fn keeper_schema_version_falls_back_without_a_parseable_version() {
+    let home = fakes::TempDir::new("main-resume-version-unparseable");
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let dir = sessions.join(&id.0);
+    let _log = session_with(&dir, None);
+    // The earlier `fiber_started` line still parses at this build's
+    // version while the latest carries a bare `x`: invalid JSON fails
+    // the line parse, which is exactly the reader's `Err` arm, so no
+    // keeper version can be named even though an earlier line parsed.
+    forge_fiber_started_version(&dir, 1, &contract::SCHEMA_VERSION.to_string(), "x");
+    assert_eq!(
+        super::keeper_schema_version(&dir),
+        None,
+        "an unparseable latest clears an earlier version"
+    );
+    let keeper = log::Error::Held {
+        session: id.0.clone(),
+        holder: "keeper 4242".to_owned(),
+    };
+    let failure = super::keeper_refusal(&dir, &id, keeper);
+    assert_eq!(failure.code, ErrorCode::SessionHeld);
+    assert_eq!(
+        failure.message,
+        log::Error::Held {
+            session: id.0.clone(),
+            holder: "keeper 4242".to_owned(),
+        }
+        .to_string(),
+        "no version to name keeps today's bare refusal"
+    );
+}
+
+/// The hub path's `Held` decision beside the ask path's keeper decision
+/// on one log: readable and forged-latest. Both call sites share the
+/// helper, so a keeper-held lock declines identically through either.
+fn parity_failures(sessions: &Path, id: &SessionId, dir: &Path) -> (Failure, Failure) {
+    let held = || log::Error::Held {
+        session: id.0.clone(),
+        holder: "keeper 4242".to_owned(),
+    };
+    let hub = super::session_held_failure(sessions, id, held());
+    let ask = super::keeper_refusal(dir, id, held());
+    (hub, ask)
+}
+
+#[test]
+fn keeper_schema_version_parity_across_call_sites() {
+    let home = fakes::TempDir::new("main-resume-version-parity");
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let dir = sessions.join(&id.0);
+    drop(session_with(&dir, None));
+    // A keeper-held lock, as the resume's failed `Log::open` finds it.
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let _keeper = Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap();
+    // Readable: both decline with today's bare refusal.
+    let (hub, ask) = parity_failures(&sessions, &id, &dir);
+    assert_eq!(hub, ask, "the call sites share the readable decision");
+    assert_eq!(hub.code, ErrorCode::SessionHeld);
+    // Forged latest: both decline naming the keeper's version.
+    let next = u64::from(contract::SCHEMA_VERSION) + 1;
+    forge_fiber_started_version(
+        &dir,
+        1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &next.to_string(),
+    );
+    let (hub, ask) = parity_failures(&sessions, &id, &dir);
+    assert_eq!(hub, ask, "the call sites share the forged-latest decision");
+    assert_eq!(hub.code, ErrorCode::SessionHeld);
+    assert!(
+        hub.message.contains(&format!("runs schema version {next}")),
+        "both name the keeper's version: {}",
+        hub.message
+    );
+}
+
+#[test]
+fn keeper_schema_version_treats_zero_as_unreadable() {
+    let home = fakes::TempDir::new("main-resume-version-zero");
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let dir = sessions.join(&id.0);
+    let _log = session_with(&dir, None);
+    forge_fiber_started_version(&dir, 1, &contract::SCHEMA_VERSION.to_string(), "0");
+    assert_eq!(
+        super::keeper_schema_version(&dir),
+        Some(0),
+        "the edge just below this build's version still reads"
+    );
+    let keeper = log::Error::Held {
+        session: id.0.clone(),
+        holder: "keeper 4242".to_owned(),
+    };
+    let failure = super::keeper_refusal(&dir, &id, keeper);
+    assert_eq!(failure.code, ErrorCode::SessionHeld);
+    assert!(
+        failure.message.contains("runs schema version 0"),
+        "version 0 declines naming 0: {}",
+        failure.message
+    );
 }
 
 #[test]
