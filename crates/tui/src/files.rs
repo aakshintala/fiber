@@ -16,7 +16,7 @@ pub(crate) const KEPT: usize = 50;
 
 /// How many entries a path search examines across the base listing and
 /// the walk before it stops.
-pub(crate) const VISITS: usize = 100_000;
+const VISITS: usize = 100_000;
 
 /// The bounds a search runs under: rows kept, entries examined, and
 /// entries between looks at whether the search was abandoned.

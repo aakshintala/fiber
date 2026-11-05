@@ -513,7 +513,7 @@ fn alt_stroke(buf: &[u8]) -> Step {
 }
 
 /// What a kitty graphics reply candidate is: `buf` starts with `ESC _`.
-pub(crate) enum Apc {
+enum Apc {
     /// Every byte so far fits the grammar; the rest may follow.
     Hold,
     /// A complete reply: its events and the reply's length.
