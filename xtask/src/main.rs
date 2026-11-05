@@ -145,6 +145,7 @@ mod stress;
 mod test_index;
 mod threads;
 mod ticket;
+mod visibility;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
