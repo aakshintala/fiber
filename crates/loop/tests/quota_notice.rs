@@ -45,14 +45,14 @@ fn turn(session: &mut Session) -> Vec<Envelope> {
 fn quota_events(lines: &[Envelope]) -> Vec<&Envelope> {
     lines
         .iter()
-        .filter(|line| line.kind.starts_with("quota_"))
+        .filter(|line| line.kind().name().starts_with("quota_"))
         .collect()
 }
 
 fn check_turn(lines: &[Envelope], quota: &[&str], fiber: Option<&str>) {
     let at = lines
         .iter()
-        .position(|line| line.kind == "turn_started")
+        .position(|line| line.kind() == EventKind::TurnStarted)
         .unwrap();
     assert!(matches!(
         kinds(&lines[..at]).as_slice(),
@@ -142,12 +142,12 @@ fn quota_notice_is_input_not_preamble_and_fires_once_until_a_low_reading() {
     assert_eq!(
         lines
             .iter()
-            .find(|l| l.kind == "preamble_built")
+            .find(|l| l.kind() == EventKind::PreambleBuilt)
             .unwrap()
             .payload,
         plain
             .iter()
-            .find(|l| l.kind == "preamble_built")
+            .find(|l| l.kind() == EventKind::PreambleBuilt)
             .unwrap()
             .payload
     );
@@ -305,5 +305,8 @@ fn quota_notice_fold_reads_only_the_sessions_own_log() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(quota_events(&child_lines).len(), 1);
-    assert_eq!(quota_events(&child_lines)[0].kind, "quota_noticed");
+    assert_eq!(
+        quota_events(&child_lines)[0].kind(),
+        EventKind::QuotaNoticed
+    );
 }

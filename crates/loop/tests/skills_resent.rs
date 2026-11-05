@@ -1207,7 +1207,10 @@ fn hosted_skill() -> Scripted {
 /// `kind` line, as a crash there would leave it.
 fn truncate_after(session: &Session, kind: &str) {
     let lines = log::read(&session.dir).unwrap();
-    let at = lines.iter().position(|line| line.kind == kind).unwrap();
+    let at = lines
+        .iter()
+        .position(|line| line.kind() == EventKind::from_name(kind))
+        .unwrap();
     let mut text = String::new();
     for line in &lines[..=at] {
         text.push_str(&serde_json::to_string(line).unwrap());

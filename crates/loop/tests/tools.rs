@@ -50,11 +50,11 @@ fn turn(tools: Vec<Arc<dyn Tool>>, calls: &[(&str, Value)]) -> (Session, Vec<Env
 }
 
 /// The durable lines about tool calls, as `kind name-or-status`.
-fn calls(lines: &[Envelope]) -> Vec<String> {
+fn calls(lines: &[Envelope]) -> Vec<EventKind> {
     lines
         .iter()
-        .filter(|l| l.kind.starts_with("tool_call_") && l.seq.is_some())
-        .map(|l| l.kind.clone())
+        .filter(|l| l.kind().name().starts_with("tool_call_") && l.seq.is_some())
+        .map(|l| l.kind())
         .collect()
 }
 
@@ -65,9 +65,9 @@ fn a_reads_call_runs_and_its_result_goes_to_the_model() {
     assert_eq!(
         calls(&lines),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
         ]
     );
     assert!(
@@ -77,7 +77,7 @@ fn a_reads_call_runs_and_its_result_goes_to_the_model() {
     );
     let started = lines
         .iter()
-        .find(|l| l.kind == "tool_call_started")
+        .find(|l| l.kind() == EventKind::ToolCallStarted)
         .unwrap();
     assert_eq!(
         Value::Object(started.payload.clone()),
@@ -154,7 +154,7 @@ fn an_unknown_tool_is_told_which_names_exist() {
     let (_, lines) = turn(tools, &[("get_wether", paris())]);
     assert_eq!(
         calls(&lines),
-        ["tool_call_requested", "tool_call_completed"]
+        [EventKind::ToolCallRequested, EventKind::ToolCallCompleted]
     );
     let done = completed(&lines)[0];
     assert_eq!(done.payload["error"]["code"], "unknown_tool");
@@ -253,7 +253,7 @@ fn bad_arguments_fail_invalid_arguments_and_never_start() {
     // The recorded call keeps the arguments as the model sent them.
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_requested")
+        .filter(|line| line.kind() == EventKind::ToolCallRequested)
         .collect();
     assert_eq!(requested.len(), 4);
     assert_eq!(requested[1].payload["arguments"], malformed);
@@ -421,7 +421,7 @@ fn shell_call_with_read_shaped_arguments_names_the_matching_tool() {
     // The recorded call keeps the model's choice of tool.
     let requested = lines
         .iter()
-        .find(|l| l.kind == "tool_call_requested")
+        .find(|l| l.kind() == EventKind::ToolCallRequested)
         .unwrap();
     assert_eq!(requested.payload["name"], "shell");
     assert_eq!(requested.payload["arguments"], read_shaped());
@@ -502,7 +502,10 @@ fn an_effectively_deferred_match_adds_no_suggestion() {
     assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
     // The preamble really did defer `read`: the suggestion is skipped
     // because of the effective deferred set, not a schema miss.
-    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    let built = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::PreambleBuilt)
+        .unwrap();
     let read_row = built.payload["tools"]
         .as_array()
         .unwrap()
@@ -533,7 +536,7 @@ fn a_match_only_after_repair_adds_no_suggestion() {
     assert_eq!(kinds(&lines), ONE_FAILED_CALL_TURN);
     let requested = lines
         .iter()
-        .find(|l| l.kind == "tool_call_requested")
+        .find(|l| l.kind() == EventKind::ToolCallRequested)
         .unwrap();
     assert_eq!(
         requested.payload["repaired"],
@@ -561,7 +564,7 @@ fn repaired_arguments_are_recorded_run_and_sent_back_as_written() {
     let (session, lines) = turn(vec![tool.clone()], &[("get_weather", written.clone())]);
     let requested = lines
         .iter()
-        .find(|l| l.kind == "tool_call_requested")
+        .find(|l| l.kind() == EventKind::ToolCallRequested)
         .unwrap();
     assert_eq!(requested.payload["arguments"], written);
     assert_eq!(
@@ -627,7 +630,7 @@ fn required_nullable_arguments_are_absent_and_replayed_as_written() {
         );
         let requested = lines
             .iter()
-            .find(|line| line.kind == "tool_call_requested")
+            .find(|line| line.kind() == EventKind::ToolCallRequested)
             .unwrap();
         assert_eq!(requested.payload["arguments"], written);
         if written.get("days").is_some() {
@@ -662,7 +665,7 @@ fn arguments_that_need_no_repair_record_none() {
     let (_, lines) = turn(vec![tool], &[("get_weather", paris())]);
     let requested = lines
         .iter()
-        .find(|l| l.kind == "tool_call_requested")
+        .find(|l| l.kind() == EventKind::ToolCallRequested)
         .unwrap();
     assert_eq!(requested.payload.get("repaired"), None);
 }
@@ -675,7 +678,7 @@ fn an_effects_function_that_errors_fails_tool_error_and_never_runs() {
     let (_, lines) = turn(vec![tool.clone()], &[("get_weather", paris())]);
     assert_eq!(
         calls(&lines),
-        ["tool_call_requested", "tool_call_completed"]
+        [EventKind::ToolCallRequested, EventKind::ToolCallCompleted]
     );
     let done = completed(&lines)[0];
     assert_eq!(done.payload["error"]["code"], "tool_error");
@@ -705,19 +708,19 @@ fn every_call_is_decided_before_any_runs_and_results_return_in_request_order() {
     assert_eq!(
         calls(&lines),
         [
-            "tool_call_requested",
-            "tool_call_requested",
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_started",
-            "tool_call_completed",
-            "tool_call_completed",
-            "tool_call_completed",
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
         ]
     );
     let requested: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_requested")
+        .filter(|l| l.kind() == EventKind::ToolCallRequested)
         .map(|l| l.action_id.clone())
         .collect();
     let done: Vec<_> = completed(&lines)
@@ -850,7 +853,10 @@ fn a_cut_off_reply_runs_none_of_its_calls_and_the_turn_continues() {
         assert_eq!(line.payload["error"]["code"], "output_truncated");
         assert!(text_first(line).contains("may be incomplete"));
     }
-    let part = lines.iter().find(|l| l.kind == "text_completed").unwrap();
+    let part = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::TextCompleted)
+        .unwrap();
     assert_eq!(part.payload["text"], "Let me");
 }
 
@@ -1063,19 +1069,19 @@ fn streaming_turn(
 /// Every `tool_call_*` lifecycle kind, requested, started, delta and
 /// completed, in log order: not the model's `tool_call_arguments_delta`
 /// fragments, which stream while the reply arrives.
-fn tool_kinds(lines: &[Envelope]) -> Vec<&str> {
+fn tool_kinds(lines: &[Envelope]) -> Vec<EventKind> {
     lines
         .iter()
         .filter(|l| {
             matches!(
-                l.kind.as_str(),
-                "tool_call_requested"
-                    | "tool_call_started"
-                    | "tool_call_delta"
-                    | "tool_call_completed"
+                l.kind(),
+                EventKind::ToolCallRequested
+                    | EventKind::ToolCallStarted
+                    | EventKind::ToolCallDelta
+                    | EventKind::ToolCallCompleted
             )
         })
-        .map(|l| l.kind.as_str())
+        .map(|l| l.kind())
         .collect()
 }
 
@@ -1083,7 +1089,7 @@ fn tool_kinds(lines: &[Envelope]) -> Vec<&str> {
 fn delta_texts(lines: &[Envelope]) -> Vec<&str> {
     lines
         .iter()
-        .filter(|l| l.kind == "tool_call_delta")
+        .filter(|l| l.kind() == EventKind::ToolCallDelta)
         .map(|l| l.payload["text"].as_str().unwrap())
         .collect()
 }
@@ -1109,10 +1115,10 @@ fn a_running_call_streams_one_delta_between_started_and_completed() {
     assert_eq!(
         tool_kinds(&lines),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_delta",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallDelta,
+            EventKind::ToolCallCompleted,
         ]
     );
 }
@@ -1143,7 +1149,9 @@ fn a_second_delta_within_the_interval_waits_for_the_clock() {
             "the loop did not park until the interval ends"
         );
         assert!(
-            tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
+            tap.pending()
+                .iter()
+                .all(|l| l.kind() != EventKind::ToolCallDelta),
             "a delta leaked before the clock moved"
         );
         clock.advance_when_parked(
@@ -1163,11 +1171,11 @@ fn a_second_delta_within_the_interval_waits_for_the_clock() {
     assert_eq!(
         tool_kinds(&lines),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_delta",
-            "tool_call_delta",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallDelta,
+            EventKind::ToolCallDelta,
+            EventKind::ToolCallCompleted,
         ]
     );
     assert_eq!(delta_texts(&lines), ["one", "two"]);
@@ -1191,7 +1199,9 @@ fn a_delta_emitted_just_before_the_call_returns_flushes_without_the_clock_moving
         // "b" is not yet emitted: the tool is blocked at its gate, so no
         // second delta can have been written.
         assert!(
-            tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
+            tap.pending()
+                .iter()
+                .all(|l| l.kind() != EventKind::ToolCallDelta),
             "a delta leaked before the gate opened"
         );
         gate.open();
@@ -1204,9 +1214,13 @@ fn a_delta_emitted_just_before_the_call_returns_flushes_without_the_clock_moving
     assert_eq!(delta_texts(&lines), ["a", "b"]);
     let at: Vec<usize> = lines
         .iter()
-        .position(|l| l.kind == "tool_call_delta" && l.payload["text"] == "b")
+        .position(|l| l.kind() == EventKind::ToolCallDelta && l.payload["text"] == "b")
         .into_iter()
-        .chain(lines.iter().position(|l| l.kind == "tool_call_completed"))
+        .chain(
+            lines
+                .iter()
+                .position(|l| l.kind() == EventKind::ToolCallCompleted),
+        )
         .collect();
     assert_eq!(at.len(), 2);
     assert_eq!(at[1], at[0] + 1);
@@ -1267,9 +1281,9 @@ fn events_that_are_not_deltas_write_nothing_extra() {
     assert_eq!(
         tool_kinds(&lines),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
         ]
     );
 }
@@ -1302,7 +1316,7 @@ fn two_calls_complete_in_request_order_with_their_own_deltas() {
     let lines = session.lines();
     let requested: Vec<(String, _)> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_requested")
+        .filter(|l| l.kind() == EventKind::ToolCallRequested)
         .map(|l| {
             (
                 l.payload["name"].as_str().unwrap().to_owned(),
@@ -1326,11 +1340,14 @@ fn two_calls_complete_in_request_order_with_their_own_deltas() {
     );
     let done: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .map(|l| l.action_id.clone())
         .collect();
     assert_eq!(done, [slow_id.clone(), fast_id.clone()]);
-    for line in lines.iter().filter(|l| l.kind == "tool_call_delta") {
+    for line in lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::ToolCallDelta)
+    {
         let text = line.payload["text"].as_str().unwrap();
         let want = if text == "S" { &slow_id } else { &fast_id };
         assert_eq!(&line.action_id, want, "delta {text} rides the wrong call");
@@ -1379,7 +1396,9 @@ fn a_large_write_paces_the_next_delta_past_100_ms() {
             "the loop did not park until the byte-paced interval ends"
         );
         assert!(
-            tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
+            tap.pending()
+                .iter()
+                .all(|l| l.kind() != EventKind::ToolCallDelta),
             "a delta leaked before the clock moved"
         );
         clock.advance_when_parked(
@@ -1399,11 +1418,11 @@ fn a_large_write_paces_the_next_delta_past_100_ms() {
     assert_eq!(
         tool_kinds(&lines),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_delta",
-            "tool_call_delta",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallDelta,
+            EventKind::ToolCallDelta,
+            EventKind::ToolCallCompleted,
         ]
     );
     assert_eq!(delta_texts(&lines), [big.as_str(), "small"]);
@@ -1436,7 +1455,7 @@ fn a_returned_call_flushes_while_an_earlier_call_still_runs() {
         assert!(
             tap.pending()
                 .iter()
-                .all(|l| l.kind != "tool_call_completed"),
+                .all(|l| l.kind() != EventKind::ToolCallCompleted),
             "a completion preceded the earlier call's release"
         );
         gate_a.open();
@@ -1449,28 +1468,28 @@ fn a_returned_call_flushes_while_an_earlier_call_still_runs() {
     assert_eq!(delta_texts(&lines), ["x", "y"]);
     let completed: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .map(|l| l.payload["status"].clone())
         .collect();
     assert_eq!(completed.len(), 2);
     let done: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .map(|l| l.action_id.clone())
         .collect();
     let requested: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_requested")
+        .filter(|l| l.kind() == EventKind::ToolCallRequested)
         .map(|l| l.action_id.clone())
         .collect();
     assert_eq!(done, requested);
     let first_completed = lines
         .iter()
-        .position(|l| l.kind == "tool_call_completed")
+        .position(|l| l.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     let flushed = lines
         .iter()
-        .position(|l| l.kind == "tool_call_delta" && l.payload["text"] == "y")
+        .position(|l| l.kind() == EventKind::ToolCallDelta && l.payload["text"] == "y")
         .unwrap();
     assert!(
         flushed < first_completed,
@@ -1665,7 +1684,7 @@ fn a_hosted_search_is_logged_in_three_lines_and_never_reviewed_or_run() {
     let lines = session.lines();
     let at = lines
         .iter()
-        .position(|l| l.kind == "tool_call_requested")
+        .position(|l| l.kind() == EventKind::ToolCallRequested)
         .unwrap();
     let three = &lines[at..at + 3];
     assert_eq!(
@@ -1716,7 +1735,7 @@ fn a_hosted_call_beside_an_ordinary_one_leaves_only_the_ordinary_one_to_run() {
     assert_eq!(
         lines
             .iter()
-            .filter(|l| l.kind == "tool_call_completed")
+            .filter(|l| l.kind() == EventKind::ToolCallCompleted)
             .count(),
         2,
         "the hosted call and the ordinary one"
@@ -1748,7 +1767,7 @@ fn a_hosted_search_the_registry_does_not_know_declares_no_effects() {
     let lines = session.lines();
     let started = lines
         .iter()
-        .find(|l| l.kind == "tool_call_started")
+        .find(|l| l.kind() == EventKind::ToolCallStarted)
         .unwrap();
     assert_eq!(started.payload["effects"], json!([]));
     assert_eq!(started.payload["reversible"], true);
@@ -1842,7 +1861,7 @@ fn a_hosted_calls_start_keeps_the_registered_tools_always_reviewed() {
     );
     let started = lines
         .iter()
-        .find(|l| l.kind == "tool_call_started")
+        .find(|l| l.kind() == EventKind::ToolCallStarted)
         .unwrap();
     assert_eq!(started.payload["effects"], json!(["network"]));
     assert_eq!(started.payload["always_reviewed"], true);

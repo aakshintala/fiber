@@ -476,7 +476,12 @@ fn a_normal_end_stops_only_extension_jobs_and_waits_for_their_ends() {
     let lines = log::read(&held.dir).unwrap();
     let ends: Vec<_> = lines
         .iter()
-        .filter(|line| matches!(line.kind.as_str(), "delegate_finished" | "job_completed"))
+        .filter(|line| {
+            matches!(
+                line.kind(),
+                EventKind::DelegateFinished | EventKind::JobCompleted
+            )
+        })
         .collect();
     assert_eq!(ends.len(), 2);
     assert_eq!(ends[1].payload["status"], "cancelled");
@@ -484,11 +489,10 @@ fn a_normal_end_stops_only_extension_jobs_and_waits_for_their_ends() {
         ends.iter()
             .all(|line| line.turn_id.is_none() && line.action_id.is_none())
     );
-    assert!(
-        !lines
-            .iter()
-            .any(|line| matches!(line.kind.as_str(), "turn_started" | "jobs_pending_notified"))
-    );
+    assert!(!lines.iter().any(|line| matches!(
+        line.kind(),
+        EventKind::TurnStarted | EventKind::JobsPendingNotified
+    )));
 }
 
 #[test]
@@ -695,7 +699,7 @@ fn a_normal_end_releases_running_extension_jobs_before_its_first_drain() {
     let lines = held.durable();
     let ends: Vec<_> = lines
         .iter()
-        .filter(|line| line.kind.as_str() == "job_completed")
+        .filter(|line| line.kind() == EventKind::JobCompleted)
         .collect();
     assert_eq!(ends.len(), 2);
     for (end, id) in ends.iter().zip(["j_1", "j_2"]) {
@@ -706,7 +710,7 @@ fn a_normal_end_releases_running_extension_jobs_before_its_first_drain() {
     assert!(
         !lines
             .iter()
-            .any(|line| line.kind.as_str() == "delegate_finished"
+            .any(|line| line.kind() == EventKind::DelegateFinished
                 && line.payload["text"] == "QUEUED SENTINEL"),
         "the dropped end was never written"
     );
@@ -839,7 +843,9 @@ fn a_normal_end_hooks_a_model_jobs_end() {
     let lines = held.durable();
     let end = lines
         .iter()
-        .find(|line| line.kind == "delegate_finished" && line.payload["job_id"] == "j_model")
+        .find(|line| {
+            line.kind() == EventKind::DelegateFinished && line.payload["job_id"] == "j_model"
+        })
         .unwrap();
     assert_eq!(end.payload["text"], "redacted");
     assert_eq!(end.payload["changed_by"], serde_json::json!(["redactor"]));
@@ -952,7 +958,7 @@ fn a_normal_end_with_no_jobs_drains_nothing() {
         !log::read(&world.held.dir)
             .unwrap()
             .iter()
-            .any(|line| line.kind == "shell_command")
+            .any(|line| line.kind() == EventKind::ShellCommand)
     );
 }
 
@@ -1352,14 +1358,14 @@ fn an_extension_log_taken_while_settling_is_written_and_never_saved() {
         .expect("extension_log arrives in time")
         .expect("the log outlives the settle")
         .expect("the log ended before extension_log");
-    assert_eq!(line.kind, "extension_log");
+    assert_eq!(line.kind(), EventKind::ExtensionLog);
     assert!(line.seq.is_none(), "extension_log is ephemeral");
-    let saved: Vec<String> = log::read(&home.path().join("s_test"))
+    let saved: Vec<EventKind> = log::read(&home.path().join("s_test"))
         .unwrap_or_default()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
-    assert!(!saved.contains(&"extension_log".to_owned()));
+    assert!(!saved.contains(&EventKind::ExtensionLog));
     let diag =
         std::fs::read_to_string(home.path().join("logs").join("session-s_test.log")).unwrap();
     assert!(diag.ends_with("\"message\":\"fiber.test/notes: hello\"}\n"));
@@ -1485,7 +1491,7 @@ fn settle_writes_an_interaction_and_its_resolution_then_acks() {
         let seen = log::read(&dir)
             .unwrap_or_default()
             .into_iter()
-            .map(|line| line.kind)
+            .map(|line| line.kind())
             .collect::<Vec<_>>();
         let _sent = tx.send((answer.is_ok(), seen));
     }));
@@ -1496,8 +1502,8 @@ fn settle_writes_an_interaction_and_its_resolution_then_acks() {
     let (accepted, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(accepted, "resolved accepts its ack");
     assert_eq!(
-        seen.last().map(String::as_str),
-        Some("interaction_resolved"),
+        seen.last().cloned(),
+        Some(EventKind::InteractionResolved),
         "settle calls the ack only after its line is written"
     );
     let kinds = world.held.kinds();
@@ -1786,17 +1792,17 @@ fn queued_ahead_notice(
 /// completion with no action, all with no turn, as shutdown writes them.
 /// `fiber_exited` follows these in production; `run` does not write it.
 fn assert_settled_ahead(lines: &[Envelope], action: &contract::ActionId) {
-    assert_eq!(lines[1].kind, "job_started");
+    assert_eq!(lines[1].kind(), EventKind::JobStarted);
     assert_eq!(lines[1].action_id.as_ref(), Some(action));
     assert_eq!(lines[1].turn_id, None);
-    assert_eq!(lines[2].kind, "delegate_started");
+    assert_eq!(lines[2].kind(), EventKind::DelegateStarted);
     assert_eq!(lines[2].action_id.as_ref(), Some(action));
     assert_eq!(lines[2].turn_id, None);
-    assert_eq!(lines[3].kind, "delegate_finished");
+    assert_eq!(lines[3].kind(), EventKind::DelegateFinished);
     assert_eq!(lines[3].action_id, None);
     assert_eq!(lines[3].turn_id, None);
     assert_eq!(lines[3].payload["job_id"], "j_1");
-    assert_eq!(lines[4].kind, "job_completed");
+    assert_eq!(lines[4].kind(), EventKind::JobCompleted);
     assert_eq!(lines[4].action_id, None);
     assert_eq!(lines[4].turn_id, None);
     assert_eq!(lines[4].payload["job_id"], "j_1");
@@ -2213,7 +2219,7 @@ fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
         .unwrap();
     assert_eq!(hooks.calls(), 0);
     let lines = held_of(&world);
-    assert_eq!(lines[lines.len() - 1].kind, "job_completed");
+    assert_eq!(lines[lines.len() - 1].kind(), EventKind::JobCompleted);
     assert_eq!(lines[lines.len() - 1].payload["output_tail"], "1 failing\n");
     assert!(lines[lines.len() - 1].payload.get("notice").is_none());
 }

@@ -1602,7 +1602,7 @@ fn wait_requested(watcher: &mut log::Watcher, deadline: &Deadline, what: &str) -
             .unwrap_or_else(|| panic!("a line arrives before the deadline: {what}"))
             .expect("the log stays readable")
             .expect("no end yet");
-        if line.kind == "permission_requested" {
+        if line.kind() == EventKind::PermissionRequested {
             let request = line.payload["request_id"]
                 .as_str()
                 .unwrap_or_default()
@@ -1916,7 +1916,7 @@ fn resolved_bys(world: &World) -> Vec<(String, String)> {
     log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "permission_resolved")
+        .filter(|line| line.kind() == EventKind::PermissionResolved)
         .map(|line| {
             (
                 line.payload["decision"]
@@ -3329,7 +3329,7 @@ fn wait_interaction_nth(
             .unwrap_or_else(|| panic!("a line arrives before the deadline: {what}"))
             .expect("the log stays readable")
             .expect("no end yet");
-        if line.kind == "interaction_requested"
+        if line.kind() == EventKind::InteractionRequested
             && let Some(request) = line.payload["request_id"].as_str()
         {
             found = request.to_owned();
@@ -3857,7 +3857,7 @@ fn a_handoff_selection_reviews_with_no_tool_stage() {
     let turn_id = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .expect("the turn started")
         .turn_id
         .expect("a turn id");
@@ -4560,7 +4560,7 @@ fn later_cap_work_stays_outside_the_after_timer() {
 #[test]
 fn a_job_bearing_result_reaches_one_after_dispatch() {
     use contract::JobId;
-    use contract::events::{JobCompleted, Outcome};
+    use contract::events::{EventKind, JobCompleted, Outcome};
     let rules = Arc::new(FakeRules::default());
     let tool = Arc::new(ProbeTool::reads("atlas"));
     tool.queue_jobs(vec![contract::jobs::JobRecord::Completed(JobCompleted {
@@ -4602,7 +4602,7 @@ fn a_job_bearing_result_reaches_one_after_dispatch() {
 #[test]
 fn an_autonomous_job_end_writes_no_tool_timer() {
     use contract::JobId;
-    use contract::events::{JobCompleted, Outcome};
+    use contract::events::{EventKind, JobCompleted, Outcome};
     use contract::inbox::{Claim, JobNotice};
     let rules = Arc::new(FakeRules::default());
     let tool = Arc::new(ProbeTool::reads("atlas"));
@@ -4764,7 +4764,7 @@ fn a_cancel_mid_run_completes_cancelled_with_its_record() {
     let completions: Vec<String> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .map(|line| {
             line.payload["status"]
                 .as_str()
@@ -4919,14 +4919,14 @@ fn concurrent_runs_keep_independent_spans_in_request_order() {
     let completed: Vec<String> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
         .collect();
     assert_eq!(completed.len(), 2);
     let requested: Vec<String> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "tool_call_requested")
+        .filter(|line| line.kind() == EventKind::ToolCallRequested)
         .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
         .collect();
     assert_eq!(completed, requested, "results return in request order");
@@ -4937,7 +4937,7 @@ fn completed_statuses(world: &World) -> Vec<String> {
     log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .map(|line| {
             line.payload["status"]
                 .as_str()
@@ -5243,7 +5243,7 @@ fn eight_nested_levels_run_and_the_ninth_is_refused() {
         log::read(&world.home.path().join("s_test"))
             .unwrap()
             .iter()
-            .filter(|line| line.kind == "tool_call_completed")
+            .filter(|line| line.kind() == EventKind::ToolCallCompleted)
             .any(|line| serde_json::to_string(&line.payload)
                 .unwrap()
                 .contains("depth exceeds 8")),
@@ -5863,12 +5863,12 @@ fn three_first_stages_fly_together_and_resolve_in_request_order() {
     let lines = log::read(&world.home.path().join("s_test")).unwrap();
     let requested: Vec<String> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_requested")
+        .filter(|line| line.kind() == EventKind::ToolCallRequested)
         .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
         .collect();
     let resolved: Vec<(String, String)> = lines
         .iter()
-        .filter(|line| line.kind == "permission_resolved")
+        .filter(|line| line.kind() == EventKind::PermissionResolved)
         .map(|line| {
             (
                 line.action_id.clone().map(|id| id.0).unwrap_or_default(),
@@ -5997,7 +5997,7 @@ fn carried_hook_state_stays_with_its_already_decided_call() {
     let lines = log::read(&world.home.path().join("s_test")).unwrap();
     let started: Vec<String> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_started")
+        .filter(|line| line.kind() == EventKind::ToolCallStarted)
         .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
         .collect();
     assert_eq!(
@@ -6007,13 +6007,13 @@ fn carried_hook_state_stays_with_its_already_decided_call() {
     );
     let state_at = lines
         .iter()
-        .position(|line| line.kind == "extension_state_set")
+        .position(|line| line.kind() == EventKind::ExtensionStateSet)
         .expect("the carried state is written");
     assert_eq!(lines[state_at].payload["key"], json!("carried"));
     let started_a_at = lines
         .iter()
         .position(|line| {
-            line.kind == "tool_call_started"
+            line.kind() == EventKind::ToolCallStarted
                 && line.action_id.as_ref().is_some_and(|id| id.0 == "a_a")
         })
         .expect("the first call starts");
@@ -6159,7 +6159,7 @@ fn a_second_blocks_count_lands_the_escalation_on_the_third_call() {
     );
     let requested: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "permission_requested")
+        .filter(|line| line.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1, "only the third call escalates");
     assert_eq!(
@@ -6168,7 +6168,7 @@ fn a_second_blocks_count_lands_the_escalation_on_the_third_call() {
     );
     let resolved: Vec<&str> = lines
         .iter()
-        .filter(|line| line.kind == "permission_resolved")
+        .filter(|line| line.kind() == EventKind::PermissionResolved)
         .map(|line| line.payload["decision"].as_str().unwrap_or(""))
         .collect();
     assert_eq!(resolved, vec!["allow", "deny", "allow"]);
@@ -6238,7 +6238,7 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
         let lines = log::read(&world.home.path().join("s_test")).unwrap();
         let resolved: Vec<(String, String)> = lines
             .iter()
-            .filter(|line| line.kind == "permission_resolved")
+            .filter(|line| line.kind() == EventKind::PermissionResolved)
             .map(|line| {
                 (
                     line.payload["decision"].as_str().unwrap_or("").to_owned(),
@@ -6419,7 +6419,7 @@ fn a_grant_remembers_across_the_rest_of_the_batch() {
     let lines = log::read(&world.home.path().join("s_test")).unwrap();
     let resolved: Vec<(String, String)> = lines
         .iter()
-        .filter(|line| line.kind == "permission_resolved")
+        .filter(|line| line.kind() == EventKind::PermissionResolved)
         .map(|line| {
             (
                 line.payload["decision"].as_str().unwrap_or("").to_owned(),
@@ -6445,14 +6445,14 @@ fn a_grant_remembers_across_the_rest_of_the_batch() {
     // even though its second stage never ran.
     let requested: Vec<String> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_requested")
+        .filter(|line| line.kind() == EventKind::ToolCallRequested)
         .map(|line| line.action_id.clone().map(|id| id.0).unwrap_or_default())
         .collect();
     let third = requested.get(2).expect("three calls");
     let third_usages: Vec<&contract::Envelope> = lines
         .iter()
         .filter(|line| {
-            line.kind == "usage_recorded"
+            line.kind() == EventKind::UsageRecorded
                 && line.payload.get("reviewer").is_some_and(|reviewer| {
                     reviewer["purpose"] == "stage_1" && reviewer["action_id"] == *third
                 })
@@ -6528,7 +6528,7 @@ fn hook_notices_come_before_the_fanned_out_usages() {
         .unwrap_or_else(|| panic!("the stream ends after the turn"))
         .expect("no end yet")
     {
-        let last = line.kind == "turn_completed";
+        let last = line.kind() == EventKind::TurnCompleted;
         streamed.push(line);
         if last {
             break;
@@ -6536,7 +6536,7 @@ fn hook_notices_come_before_the_fanned_out_usages() {
     }
     let notices: Vec<String> = streamed
         .iter()
-        .filter(|line| line.kind == "notice")
+        .filter(|line| line.kind() == EventKind::Notice)
         .map(|line| line.payload["message"].as_str().unwrap_or("").to_owned())
         .collect();
     assert_eq!(
@@ -6550,11 +6550,13 @@ fn hook_notices_come_before_the_fanned_out_usages() {
     );
     let first_usage = streamed
         .iter()
-        .position(|line| line.kind == "usage_recorded" && line.payload.get("reviewer").is_some())
+        .position(|line| {
+            line.kind() == EventKind::UsageRecorded && line.payload.get("reviewer").is_some()
+        })
         .expect("the fanned-out stages record usage");
     let last_notice = streamed
         .iter()
-        .rposition(|line| line.kind == "notice")
+        .rposition(|line| line.kind() == EventKind::Notice)
         .expect("hooks noticed");
     assert!(
         last_notice < first_usage,

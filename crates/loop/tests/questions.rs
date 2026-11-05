@@ -90,7 +90,7 @@ fn subdirectory(session: &Session) {
 /// The payload of the last line, which is `turn_completed`.
 fn turn_completed(lines: &[Envelope]) -> Value {
     let last = lines.last().unwrap();
-    assert_eq!(last.kind, "turn_completed");
+    assert_eq!(last.kind(), EventKind::TurnCompleted);
     Value::Object(last.payload.clone())
 }
 
@@ -221,7 +221,7 @@ fn a_call_beside_the_asking_one_still_completes() {
     );
     let results: Vec<&Value> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .map(|line| &line.payload["content"][0]["text"])
         .collect();
     assert_eq!(results, ["Sunny.", "Asked."]);
@@ -264,7 +264,7 @@ fn a_failed_call_asks_nothing() {
     );
     let done: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .collect();
     assert_eq!(done[0].payload["status"], "failed");
     assert_eq!(turn_completed(&lines), json!({"outcome": "completed"}));
@@ -340,7 +340,12 @@ fn a_handoff_in_the_same_step_applies_before_the_questions_end_the_turn() {
             .map(|name| EventKind::from_name(name))
             .collect::<Vec<_>>()
     );
-    let at = |kind: &str| lines.iter().position(|line| line.kind == kind).unwrap();
+    let at = |kind: &str| {
+        lines
+            .iter()
+            .position(|line| line.kind() == EventKind::from_name(kind))
+            .unwrap()
+    };
     assert!(at("handoff_completed") < at("turn_completed"));
     assert_eq!(turn_completed(&lines)["questions"], asked(&["Which?"]));
     assert_eq!(session.requests().len(), 1);
@@ -379,7 +384,7 @@ fn the_queued_subdirectory_lines_are_written_before_the_turn_ends() {
     );
     let file = lines
         .iter()
-        .find(|line| line.kind == "instruction_file")
+        .find(|line| line.kind() == EventKind::InstructionFile)
         .unwrap();
     assert!(
         file.payload["path"]
@@ -584,7 +589,11 @@ fn a_cancel_after_the_questions_are_collected_ends_the_turn_interrupted() {
             .map(|name| EventKind::from_name(name))
             .collect::<Vec<_>>()
     );
-    assert!(lines.iter().any(|line| line.kind == "handoff_completed"));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.kind() == EventKind::HandoffCompleted)
+    );
     assert_eq!(turn_completed(&lines), json!({"outcome": "interrupted"}));
     assert_eq!(session.requests().len(), 1);
 }

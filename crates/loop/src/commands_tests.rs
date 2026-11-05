@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::commands::AddDirectoryArgs;
-use contract::events::CommandInfo;
+use contract::events::{CommandInfo, EventKind};
 use contract::inbox::{Ack, Answer};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -559,7 +559,7 @@ fn added(tree: &Tree) -> Vec<String> {
     log::read(&tree.root.join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "directory_added")
+        .filter(|line| line.kind() == EventKind::DirectoryAdded)
         .map(|line| {
             line.payload
                 .get("path")
@@ -810,7 +810,7 @@ fn a_fork_root_missing_from_its_prefix_keeps_the_normal_add_message() {
     let lines = log::read(&tree.root.join("s_test")).unwrap();
     let added = lines
         .iter()
-        .find(|line| line.kind == "directory_added")
+        .find(|line| line.kind() == EventKind::DirectoryAdded)
         .unwrap();
     assert!(added.payload.get("inherited").is_none());
     let conversation = crate::conversation::rebuild(&lines, "fake/model").unwrap();

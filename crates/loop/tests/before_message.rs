@@ -259,7 +259,10 @@ fn finish_turn(session: &mut Session, finished: &Finished) -> Option<TurnOutcome
 }
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
-    lines.iter().find(|line| line.kind == kind).unwrap()
+    lines
+        .iter()
+        .find(|line| line.kind() == EventKind::from_name(kind))
+        .unwrap()
 }
 
 fn user(text: &str) -> Input {
@@ -298,7 +301,7 @@ fn a_replaced_steer_applies_hooked_with_its_context_after_it() {
     session.inbox.send(delivery("go")).unwrap();
     let finished = run_turn(&mut session);
     let (_, until) = read_until(watcher, "a permission_requested line", |line| {
-        line.kind == "permission_requested"
+        line.kind() == EventKind::PermissionRequested
     });
     let request_id = RequestId(
         until.last().unwrap().payload["request_id"]
@@ -345,7 +348,7 @@ fn a_replaced_steer_applies_hooked_with_its_context_after_it() {
     let lines = session.lines();
     let queues: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "steering_queue")
+        .filter(|line| line.kind() == EventKind::SteeringQueue)
         .collect();
     assert_eq!(queues.len(), 2, "a refused steer lists no queue");
     assert_eq!(
@@ -364,9 +367,9 @@ fn a_replaced_steer_applies_hooked_with_its_context_after_it() {
     assert_eq!(applied.payload["source"], "driver");
     let at = lines
         .iter()
-        .position(|line| line.kind == "steering_applied")
+        .position(|line| line.kind() == EventKind::SteeringApplied)
         .unwrap();
-    assert_eq!(lines[at + 1].kind, "context_added");
+    assert_eq!(lines[at + 1].kind(), EventKind::ContextAdded);
     assert_eq!(lines[at + 1].payload["hook"], "before_message");
     assert_eq!(lines[at + 1].payload["extension"], "fiber.test/redact");
     assert_eq!(lines[at + 1].payload["text"], "ctx");

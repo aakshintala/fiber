@@ -101,11 +101,8 @@ fn notes_on_the_inbox_record_usage_before_acknowledging() {
     assert_eq!(proposed[0].text(), "This is ours.");
     assert_eq!(proposed[0].cites(), [0]);
     assert_eq!(
-        at_ack
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["session_started", "usage_recorded"]
+        at_ack.iter().map(|line| line.kind()).collect::<Vec<_>>(),
+        ["session_started", "usage_recorded"].map(EventKind::from_name)
     );
     let usage = &at_ack[1];
     assert!(usage.turn_id.is_none());

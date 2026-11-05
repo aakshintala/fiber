@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, mpsc};
 
 use contract::Envelope;
 use contract::ErrorCode;
-use contract::events::{CacheLifetime, Control, Event, Progress, TurnOutcome};
+use contract::events::{CacheLifetime, Control, Event, EventKind, Progress, TurnOutcome};
 use contract::inbox::{Ack, Delivery};
 use contract::provider::{Input, ModelCall, ModelRequest, Provider, ToolDefinition};
 use contract::shapes::Question;
@@ -78,7 +78,7 @@ fn finish_turn(
             loop {
                 match watcher.recv() {
                     Ok(Some(line)) => {
-                        let last = line.kind == "turn_completed";
+                        let last = line.kind() == EventKind::TurnCompleted;
                         lines.push(line);
                         if last {
                             return (watcher, lines, looped, outcome);
@@ -313,12 +313,12 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
         move |lines| {
             lines
                 .iter()
-                .filter(|line| line.kind == "tool_call_started")
+                .filter(|line| line.kind() == EventKind::ToolCallStarted)
                 .count()
                 == n
                 && firsts.iter().all(|first| {
                     lines.iter().any(|line| {
-                        line.kind == "tool_call_delta"
+                        line.kind() == EventKind::ToolCallDelta
                             && line.payload.get("text").and_then(Value::as_str) == Some(first)
                     })
                 })
@@ -352,12 +352,12 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
         move |lines| {
             lines
                 .iter()
-                .filter(|line| line.kind == "tool_call_completed")
+                .filter(|line| line.kind() == EventKind::ToolCallCompleted)
                 .count()
                 == p
                 && flushed.iter().all(|second| {
                     lines.iter().any(|line| {
-                        line.kind == "tool_call_delta"
+                        line.kind() == EventKind::ToolCallDelta
                             && line.payload.get("text").and_then(Value::as_str) == Some(second)
                     })
                 })
@@ -376,20 +376,20 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
     all.extend(drain(&mut watcher));
     let all: Vec<Envelope> = all
         .into_iter()
-        .filter(|line| line.kind != "session_status")
+        .filter(|line| line.kind() != EventKind::SessionStatus)
         .collect();
 
     prop_assert_eq!(outcome, Some(TurnOutcome::Interrupted));
     let ends: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "turn_completed")
+        .filter(|line| line.kind() == EventKind::TurnCompleted)
         .collect();
     prop_assert_eq!(ends.len(), 1);
     prop_assert_eq!(ends[0].payload["outcome"].as_str().unwrap(), "interrupted");
     prop_assert!(ends[0].payload.get("questions").is_none());
     prop_assert_eq!(
         all.iter()
-            .filter(|line| line.kind == "turn_started")
+            .filter(|line| line.kind() == EventKind::TurnStarted)
             .count(),
         1
     );
@@ -403,12 +403,12 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
 
     let requested: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "tool_call_requested")
+        .filter(|line| line.kind() == EventKind::ToolCallRequested)
         .collect();
     prop_assert_eq!(requested.len(), n);
     let done: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .collect();
     prop_assert_eq!(done.len(), n);
     let requested_ids: Vec<Option<contract::ActionId>> = requested
@@ -435,7 +435,7 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
         prop_assert_eq!(text_all(mine), kind.text(index));
         let deltas: Vec<&Envelope> = all
             .iter()
-            .filter(|line| line.kind == "tool_call_delta" && line.action_id == id)
+            .filter(|line| line.kind() == EventKind::ToolCallDelta && line.action_id == id)
             .collect();
         if kind.has_delta() {
             prop_assert_eq!(deltas.len(), 2);
@@ -452,17 +452,17 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
         }
         let at = all
             .iter()
-            .position(|line| line.kind == "tool_call_completed" && line.action_id == id)
+            .position(|line| line.kind() == EventKind::ToolCallCompleted && line.action_id == id)
             .unwrap();
         prop_assert!(
             all[at + 1..]
                 .iter()
-                .filter(|line| line.kind == "tool_call_delta")
+                .filter(|line| line.kind() == EventKind::ToolCallDelta)
                 .all(|line| line.action_id != id)
         );
         let named: Vec<&Envelope> = all
             .iter()
-            .filter(|line| line.kind == "session_named" && line.action_id == id)
+            .filter(|line| line.kind() == EventKind::SessionNamed && line.action_id == id)
             .collect();
         if kind.has_control() && expected == "completed" {
             prop_assert_eq!(named.len(), 1);
@@ -477,7 +477,7 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
 
     let end = all
         .iter()
-        .position(|line| line.kind == "turn_completed")
+        .position(|line| line.kind() == EventKind::TurnCompleted)
         .unwrap();
     let silent = all[end + 1..].iter().all(|line| match &line.action_id {
         Some(id) => !requested_ids.contains(&Some(id.clone())),
@@ -581,12 +581,12 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
         move |lines| {
             lines
                 .iter()
-                .filter(|line| line.kind == "tool_call_started")
+                .filter(|line| line.kind() == EventKind::ToolCallStarted)
                 .count()
                 == n
                 && firsts.iter().all(|first| {
                     lines.iter().any(|line| {
-                        line.kind == "tool_call_delta"
+                        line.kind() == EventKind::ToolCallDelta
                             && line.payload.get("text").and_then(Value::as_str) == Some(first)
                     })
                 })
@@ -605,7 +605,7 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
             "the tool's flushed second delta",
             move |lines| {
                 lines.iter().any(|line| {
-                    line.kind == "tool_call_delta"
+                    line.kind() == EventKind::ToolCallDelta
                         && line.payload.get("text").and_then(Value::as_str) == Some(&second)
                 })
             },
@@ -621,7 +621,7 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
     all.extend(drain(&mut watcher));
     let all: Vec<Envelope> = all
         .into_iter()
-        .filter(|line| line.kind != "session_status")
+        .filter(|line| line.kind() != EventKind::SessionStatus)
         .collect();
 
     // A failed call's questions are never acted on: the turn takes its
@@ -629,7 +629,7 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
     prop_assert_eq!(outcome, Some(TurnOutcome::Completed));
     let ends: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "turn_completed")
+        .filter(|line| line.kind() == EventKind::TurnCompleted)
         .collect();
     prop_assert_eq!(ends.len(), 1);
     prop_assert_eq!(ends[0].payload["outcome"].as_str().unwrap(), "completed");
@@ -643,7 +643,7 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
     // the permutation.
     prop_assert_eq!(
         all.iter()
-            .filter(|line| line.kind == "tool_call_delta")
+            .filter(|line| line.kind() == EventKind::ToolCallDelta)
             .filter_map(|line| line.payload.get("text").and_then(Value::as_str))
             .filter(|text| text.starts_with('b'))
             .map(str::to_owned)
@@ -653,12 +653,12 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
 
     let requested: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "tool_call_requested")
+        .filter(|line| line.kind() == EventKind::ToolCallRequested)
         .collect();
     prop_assert_eq!(requested.len(), n);
     let done: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .collect();
     prop_assert_eq!(done.len(), n);
     let requested_ids: Vec<Option<contract::ActionId>> = requested
@@ -685,7 +685,7 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
         prop_assert_eq!(text_all(mine), kind.text(index));
         let deltas: Vec<&Envelope> = all
             .iter()
-            .filter(|line| line.kind == "tool_call_delta" && line.action_id == id)
+            .filter(|line| line.kind() == EventKind::ToolCallDelta && line.action_id == id)
             .collect();
         prop_assert_eq!(deltas.len(), 2);
         prop_assert_eq!(
@@ -698,12 +698,12 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
         );
         let at = all
             .iter()
-            .position(|line| line.kind == "tool_call_completed" && line.action_id == id)
+            .position(|line| line.kind() == EventKind::ToolCallCompleted && line.action_id == id)
             .unwrap();
         prop_assert!(
             all[at + 1..]
                 .iter()
-                .filter(|line| line.kind == "tool_call_delta")
+                .filter(|line| line.kind() == EventKind::ToolCallDelta)
                 .all(|line| line.action_id != id)
         );
     }
@@ -965,12 +965,13 @@ fn run_intake_case(turns: Vec<TurnPlan>) -> Result<(), TestCaseError> {
     // in a row.
     prop_assert_eq!(
         all.iter()
-            .filter(|line| line.kind == "turn_started" || line.kind == "turn_completed")
-            .map(|line| line.kind.as_str())
+            .filter(|line| line.kind() == EventKind::TurnStarted
+                || line.kind() == EventKind::TurnCompleted)
+            .map(|line| line.kind())
             .collect::<Vec<_>>(),
         turns
             .iter()
-            .flat_map(|_| ["turn_started", "turn_completed"])
+            .flat_map(|_| [EventKind::TurnStarted, EventKind::TurnCompleted])
             .collect::<Vec<_>>(),
     );
 
@@ -994,11 +995,11 @@ fn run_intake_case(turns: Vec<TurnPlan>) -> Result<(), TestCaseError> {
     // reordered input fails.
     let mut seen: Vec<String> = Vec::new();
     for line in &all {
-        if line.kind == "turn_started" {
+        if line.kind() == EventKind::TurnStarted {
             for item in line.payload["input"].as_array().unwrap() {
                 seen.push(item["content"][0]["text"].as_str().unwrap().to_owned());
             }
-        } else if line.kind == "steering_applied" {
+        } else if line.kind() == EventKind::SteeringApplied {
             seen.push(
                 line.payload["content"][0]["text"]
                     .as_str()

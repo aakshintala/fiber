@@ -1039,7 +1039,10 @@ fn a_shutdown_after_turn_completed_writes_model_changed_and_starts_no_turn() {
         ] as &[&str]],
     );
     assert_eq!(
-        shutdown.iter().filter(|l| l.kind == "turn_started").count(),
+        shutdown
+            .iter()
+            .filter(|l| l.kind() == EventKind::TurnStarted)
+            .count(),
         1
     );
 }
@@ -1806,7 +1809,8 @@ fn a_switch_replaces_the_reviewer() {
 fn resume_interleaving_holds_arrival_order() {
     use contract::events::RuleScope;
     use contract::events::{
-        AskStep, Empty, PermissionRequested, SessionStarted, StandingRule, TurnStarted as TurnBegin,
+        AskStep, Empty, EventKind, PermissionRequested, SessionStarted, StandingRule,
+        TurnStarted as TurnBegin,
     };
     use contract::shapes::{ContentPart as Part, DeclaredEffects, Origin, Sender as From};
     use contract::{ActionId as Aid, CommandId as Cid, SessionId as Sid, TurnId as Tid};
@@ -2017,7 +2021,7 @@ fn resume_interleaving_holds_arrival_order() {
             .expect("a line in time")
             .expect("log")
             .expect("line");
-        if line.kind == "permission_requested" {
+        if line.kind() == EventKind::PermissionRequested {
             break RequestId(line.payload["request_id"].as_str().unwrap().into());
         }
     };
@@ -2076,8 +2080,10 @@ fn resume_interleaving_holds_arrival_order() {
             "turn_completed",
         ] as &[&str]],
     );
-    let changed: Vec<&contract::Envelope> =
-        lines.iter().filter(|l| l.kind == "model_changed").collect();
+    let changed: Vec<&contract::Envelope> = lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::ModelChanged)
+        .collect();
     assert_eq!(changed.len(), 2);
     assert_eq!(changed[0].payload["after"]["model"], "fake/n");
     assert_eq!(changed[1].payload["before"]["model"], "fake/n");
@@ -2444,7 +2450,8 @@ fn run_deferred_case(case: &DeferredCase) {
     let live = switch_delivery(case.live.0, case.live.1);
     use contract::events::RuleScope;
     use contract::events::{
-        AskStep, Empty, PermissionRequested, SessionStarted, StandingRule, TurnStarted as TurnBegin,
+        AskStep, Empty, EventKind, PermissionRequested, SessionStarted, StandingRule,
+        TurnStarted as TurnBegin,
     };
     use contract::shapes::{ContentPart as Part, DeclaredEffects, Origin, Sender as From};
     use contract::{ActionId as Aid, CommandId as Cid, SessionId as Sid, TurnId as Tid};
@@ -2650,7 +2657,7 @@ fn run_deferred_case(case: &DeferredCase) {
     support::read_until(
         watcher,
         &format!("case {name}: a re-raised permission_requested line"),
-        |line| line.kind == "permission_requested",
+        |line| line.kind() == EventKind::PermissionRequested,
     );
     inbox_tx.send(live).unwrap();
     inbox_tx
@@ -2716,7 +2723,7 @@ fn run_deferred_case(case: &DeferredCase) {
     );
     let changed: Vec<contract::Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "model_changed")
+        .filter(|line| line.kind() == EventKind::ModelChanged)
         .cloned()
         .collect();
     let seen = seen.lock().unwrap().clone();

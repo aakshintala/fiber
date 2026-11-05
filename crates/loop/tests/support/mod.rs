@@ -118,7 +118,7 @@ pub(crate) fn on_request(
     let watcher = session.log.watch();
     thread::spawn(move || {
         let (_, lines) = read_until(watcher, "a permission_requested line", |line| {
-            line.kind == "permission_requested"
+            line.kind() == EventKind::PermissionRequested
         });
         let line = lines.last().unwrap();
         send(RequestId(
@@ -1737,7 +1737,7 @@ impl Session {
     #[track_caller]
     pub(crate) fn lines(&mut self) -> Vec<Envelope> {
         self.events_until("a turn_completed line", |line| {
-            line.kind == "turn_completed"
+            line.kind() == EventKind::TurnCompleted
         })
     }
 
@@ -1755,7 +1755,7 @@ impl Session {
         // loop's own; `tests/status.rs` reads them.
         lines
             .into_iter()
-            .filter(|line| line.kind != "session_status")
+            .filter(|line| line.kind() != EventKind::SessionStatus)
             .collect()
     }
 }
@@ -1854,7 +1854,7 @@ pub(crate) fn paris() -> Value {
 pub(crate) fn completed(lines: &[Envelope]) -> Vec<&Envelope> {
     lines
         .iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .collect()
 }
 
@@ -1947,7 +1947,10 @@ pub(crate) fn answer_value(session: &Session, request: &str, value: Value) -> An
 
 /// The lines of `kind`, in order.
 pub(crate) fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
-    lines.iter().filter(|line| line.kind == kind).collect()
+    lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::from_name(kind))
+        .collect()
 }
 
 /// A command answer that accepts with no result.
@@ -2062,7 +2065,7 @@ pub(crate) fn attempt_numbers(lines: &[Envelope]) -> Vec<u32> {
     let mut pending: Option<u32> = None;
     let mut last_started: Option<u32> = None;
     for line in lines {
-        match line.kind.as_str() {
+        match line.kind().name() {
             "assistant_message_started" => {
                 let n = pending.map(|p| p + 1).unwrap_or(1);
                 numbers.push(n);
@@ -2090,7 +2093,7 @@ pub(crate) fn attempt_numbers(lines: &[Envelope]) -> Vec<u32> {
 pub(crate) fn assert_no_stored_attempt(lines: &[Envelope]) {
     for line in lines
         .iter()
-        .filter(|l| l.kind == "assistant_message_completed")
+        .filter(|l| l.kind() == EventKind::AssistantMessageCompleted)
     {
         assert!(
             line.payload.get("attempt").is_none(),
@@ -2108,7 +2111,7 @@ pub(crate) fn assert_scheduled_attempts(lines: &[Envelope]) {
     let numbers = attempt_numbers(lines);
     let starts: Vec<(&Envelope, u32)> = lines
         .iter()
-        .filter(|l| l.kind == "assistant_message_started")
+        .filter(|l| l.kind() == EventKind::AssistantMessageStarted)
         .zip(numbers)
         .collect();
     let by_action: std::collections::HashMap<String, u32> = starts
@@ -2116,7 +2119,7 @@ pub(crate) fn assert_scheduled_attempts(lines: &[Envelope]) {
         .filter_map(|(l, n)| l.action_id.clone().map(|a| (a.0.clone(), *n)))
         .collect();
     for (i, line) in lines.iter().enumerate() {
-        if line.kind != "retry_scheduled" {
+        if line.kind() != EventKind::RetryScheduled {
             continue;
         }
         let scheduled = u32::try_from(line.payload["attempt"].as_u64().unwrap()).unwrap();
@@ -2131,7 +2134,7 @@ pub(crate) fn assert_scheduled_attempts(lines: &[Envelope]) {
         // a next start past 1 is checked against the schedule.
         let next_number = lines[i + 1..]
             .iter()
-            .find(|l| l.kind == "assistant_message_started")
+            .find(|l| l.kind() == EventKind::AssistantMessageStarted)
             .and_then(|next| {
                 next.action_id
                     .clone()
@@ -2168,7 +2171,10 @@ impl Tap {
     pub(crate) fn wait_for(&self, kind: &str) -> Envelope {
         let owned = kind.to_owned();
         let what = format!("a {kind} line");
-        self.wait_until(move |line| line.kind == owned, what)
+        self.wait_until(
+            move |line| line.kind() == EventKind::from_name(&owned),
+            what,
+        )
     }
 
     /// The next `tool_call_delta` whose text is `text`, buffering the
@@ -2230,7 +2236,7 @@ fn take_from(
 
 /// The text of a `tool_call_delta` line, if it carries any.
 fn delta_text(line: &Envelope) -> Option<&str> {
-    (line.kind == "tool_call_delta")
+    (line.kind() == EventKind::ToolCallDelta)
         .then(|| line.payload.get("text")?.as_str())
         .flatten()
 }

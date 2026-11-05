@@ -77,7 +77,7 @@ impl StateHooks {
             self.trace
                 .lock()
                 .unwrap()
-                .push(format!("write:{}", line.kind));
+                .push(format!("write:{}", line.kind().name()));
         }
     }
 
@@ -362,15 +362,15 @@ fn state_lines_take_follows_every_hook_call() {
     }
     let all = lines(&world);
     for (index, line) in all.iter().enumerate() {
-        if line.kind == "extension_state_set" {
+        if line.kind() == EventKind::ExtensionStateSet {
             match line.payload["key"].as_str().unwrap() {
                 "before_message" | "session_start" | "turn_start" => {
-                    assert_eq!(all[index + 1].kind, "context_added")
+                    assert_eq!(all[index + 1].kind(), EventKind::ContextAdded)
                 }
-                "turn_end" => assert_eq!(all[index + 1].kind, "steering_applied"),
-                "before_tool" => assert_eq!(all[index + 1].kind, "tool_call_started"),
-                "after_tool" => assert_eq!(all[index + 1].kind, "tool_call_completed"),
-                "before_handoff" => assert_eq!(all[index + 1].kind, "handoff_completed"),
+                "turn_end" => assert_eq!(all[index + 1].kind(), EventKind::SteeringApplied),
+                "before_tool" => assert_eq!(all[index + 1].kind(), EventKind::ToolCallStarted),
+                "after_tool" => assert_eq!(all[index + 1].kind(), EventKind::ToolCallCompleted),
+                "before_handoff" => assert_eq!(all[index + 1].kind(), EventKind::HandoffCompleted),
                 key => assert!(key.starts_with("timer-")),
             }
         }
@@ -380,7 +380,7 @@ fn state_lines_take_follows_every_hook_call() {
 fn state_written(world: &World, key: &str) -> Vec<Envelope> {
     lines(world)
         .into_iter()
-        .filter(|line| line.kind == "extension_state_set" && line.payload["key"] == key)
+        .filter(|line| line.kind() == EventKind::ExtensionStateSet && line.payload["key"] == key)
         .collect()
 }
 
@@ -390,12 +390,13 @@ fn state_adjacent(world: &World, key: &str, next: &str) {
         .iter()
         .enumerate()
         .filter_map(|(index, line)| {
-            (line.kind == "extension_state_set" && line.payload["key"] == key).then_some(index)
+            (line.kind() == EventKind::ExtensionStateSet && line.payload["key"] == key)
+                .then_some(index)
         })
         .collect();
     assert!(!positions.is_empty(), "{key}");
     for index in positions {
-        assert_eq!(all[index + 1].kind, next, "{key}");
+        assert_eq!(all[index + 1].kind(), EventKind::from_name(next), "{key}");
     }
 }
 
@@ -441,13 +442,14 @@ fn state_lines_prompt_replacements_and_contexts_write_at_their_own_lines() {
         let all = lines(&world);
         let turn = all
             .iter()
-            .position(|line| line.kind == "turn_started")
+            .position(|line| line.kind() == EventKind::TurnStarted)
             .unwrap();
         let state: Vec<_> = all
             .iter()
             .enumerate()
             .filter_map(|(i, line)| {
-                (line.kind == "extension_state_set" && line.payload["key"] == "before_message")
+                (line.kind() == EventKind::ExtensionStateSet
+                    && line.payload["key"] == "before_message")
                     .then_some(i)
             })
             .collect();
@@ -492,7 +494,7 @@ fn state_lines_queued_steer_is_written_or_dropped_with_its_state() {
             assert!(
                 !lines(&world)
                     .iter()
-                    .any(|line| line.kind == "steering_applied")
+                    .any(|line| line.kind() == EventKind::SteeringApplied)
             );
         } else {
             state_adjacent(&world, "before_message", "context_added");
@@ -752,12 +754,13 @@ fn state_lines_all_output_shapes_are_carried_to_the_completion_writer() {
                 let all = lines(&world);
                 let named = all
                     .iter()
-                    .position(|line| line.kind == "session_named")
+                    .position(|line| line.kind() == EventKind::SessionNamed)
                     .unwrap();
                 let carried = all
                     .iter()
                     .position(|line| {
-                        line.kind == "extension_state_set" && line.payload["key"] == "after_tool"
+                        line.kind() == EventKind::ExtensionStateSet
+                            && line.payload["key"] == "after_tool"
                     })
                     .unwrap();
                 assert!(named < carried);
@@ -940,7 +943,7 @@ fn state_lines_tool_rewrites_survive_only_accepted_model_and_inner_calls() {
                 assert!(
                     !lines(&world)
                         .iter()
-                        .any(|line| line.kind == "tool_call_started"),
+                        .any(|line| line.kind() == EventKind::ToolCallStarted),
                     "{mode}"
                 );
             }
@@ -953,7 +956,7 @@ fn state_lines_tool_rewrites_survive_only_accepted_model_and_inner_calls() {
                 assert!(
                     lines(&world)
                         .iter()
-                        .any(|line| line.kind == "permission_resolved")
+                        .any(|line| line.kind() == EventKind::PermissionResolved)
                 );
             }
         }
@@ -962,7 +965,7 @@ fn state_lines_tool_rewrites_survive_only_accepted_model_and_inner_calls() {
 
 #[test]
 fn state_lines_resumed_approval_carries_only_the_matching_calls_rewrite() {
-    use contract::events::{AskStep, Decision, PermissionRequested};
+    use contract::events::{AskStep, Decision, EventKind, PermissionRequested};
     for allow in [false, true] {
         let inner = Arc::new(FakeHooks::new());
         let mut world = started_with_tools(
@@ -1058,8 +1061,8 @@ fn state_lines_resumed_approval_carries_only_the_matching_calls_rewrite() {
         let all = lines(&world);
         let mut actions = Vec::new();
         for (index, line) in all.iter().enumerate() {
-            if line.kind == "extension_state_set" && line.payload["key"] == "before_tool" {
-                assert_eq!(all[index + 1].kind, "tool_call_started");
+            if line.kind() == EventKind::ExtensionStateSet && line.payload["key"] == "before_tool" {
+                assert_eq!(all[index + 1].kind(), EventKind::ToolCallStarted);
                 actions.push(all[index + 1].action_id.as_ref().unwrap().0.as_str());
             }
         }
@@ -1073,17 +1076,17 @@ fn state_lines_resumed_approval_carries_only_the_matching_calls_rewrite() {
         );
         let requested = all
             .iter()
-            .position(|line| line.kind == "permission_requested")
+            .position(|line| line.kind() == EventKind::PermissionRequested)
             .unwrap();
         let resolved = all
             .iter()
-            .position(|line| line.kind == "permission_resolved")
+            .position(|line| line.kind() == EventKind::PermissionResolved)
             .unwrap();
         assert!(requested < resolved);
         let first_state = all
             .iter()
             .position(|line| {
-                line.kind == "extension_state_set" && line.payload["key"] == "before_tool"
+                line.kind() == EventKind::ExtensionStateSet && line.payload["key"] == "before_tool"
             })
             .unwrap();
         assert!(resolved < first_state);
@@ -1194,7 +1197,7 @@ fn state_lines_non_hook_sender_drains_without_a_registered_hook() {
             finish_turn(&mut world, &done);
         }
         let all = lines(&world);
-        assert_eq!(all[1].kind, "extension_state_set", "{boundary}");
+        assert_eq!(all[1].kind(), EventKind::ExtensionStateSet, "{boundary}");
         assert_eq!(all[1].payload["key"], "outside", "{boundary}");
         assert_eq!(state_written(&world, "outside").len(), 1);
     }
@@ -1232,7 +1235,11 @@ fn state_lines_slash_rejection_drops_the_prompt_and_its_carried_state() {
     );
     assert!(input.pieces.is_empty());
     assert!(state_written(&world, "before_message").is_empty());
-    assert!(!lines(&world).iter().any(|line| line.kind == "turn_started"));
+    assert!(
+        !lines(&world)
+            .iter()
+            .any(|line| line.kind() == EventKind::TurnStarted)
+    );
     assert_eq!(state_written(&world, "timer-before_message").len(), 1);
 }
 
@@ -1321,7 +1328,7 @@ fn state_lines_later_unchanged_start_write_supersedes_a_carried_handoff_note() {
     assert!(
         lines(&world)
             .iter()
-            .any(|line| line.kind == "handoff_completed")
+            .any(|line| line.kind() == EventKind::HandoffCompleted)
     );
 }
 
@@ -1936,7 +1943,10 @@ fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
 }
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
-    lines.iter().find(|line| line.kind == kind).unwrap()
+    lines
+        .iter()
+        .find(|line| line.kind() == EventKind::from_name(kind))
+        .unwrap()
 }
 
 /// Every line the world's watcher received up to and including
@@ -1953,7 +1963,7 @@ fn streamed(world: &mut World) -> Vec<Envelope> {
             let mut watcher = watcher;
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
-                let done = line.kind == "turn_completed";
+                let done = line.kind() == EventKind::TurnCompleted;
                 streamed.push(line);
                 if done {
                     break;
@@ -2015,7 +2025,7 @@ fn a_turn_start_context_is_logged_before_the_first_step_and_sent_after_the_promp
     );
     let contexts: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "context_added")
+        .filter(|line| line.kind() == EventKind::ContextAdded)
         .collect();
     assert_eq!(contexts.len(), 2);
     // A `before_message` context precedes the `turn_start` one.
@@ -2151,7 +2161,10 @@ fn a_non_blocking_turn_start_failure_writes_a_notice_and_the_turn_goes_on() {
 /// notice per code, count and first item up front, no extension across
 /// extensions).
 fn grouped_notice(all: &[Envelope]) {
-    let notices: Vec<&Envelope> = all.iter().filter(|line| line.kind == "notice").collect();
+    let notices: Vec<&Envelope> = all
+        .iter()
+        .filter(|line| line.kind() == EventKind::Notice)
+        .collect();
     assert_eq!(notices.len(), 1, "{all:?}");
     assert_eq!(notices[0].payload["code"], "hook_failed");
     assert_eq!(
@@ -2418,11 +2431,12 @@ fn a_cancel_or_shutdown_inside_turn_start_ends_the_turn_interrupted_with_no_cont
             "complete ordered kinds"
         );
         assert!(
-            !all.iter().any(|line| line.kind == "context_added"),
+            !all.iter()
+                .any(|line| line.kind() == EventKind::ContextAdded),
             "no context is written: {all:?}"
         );
         assert!(
-            !all.iter().any(|line| line.kind == "step_started"),
+            !all.iter().any(|line| line.kind() == EventKind::StepStarted),
             "no step starts: {all:?}"
         );
     }
@@ -2470,7 +2484,7 @@ fn two_turn_start_contexts_are_written_in_run_order() {
     );
     let texts: Vec<&str> = all
         .iter()
-        .filter(|line| line.kind == "context_added")
+        .filter(|line| line.kind() == EventKind::ContextAdded)
         .map(|line| line.payload["text"].as_str().unwrap())
         .collect();
     assert_eq!(texts, vec!["one", "two"]);
@@ -2512,7 +2526,7 @@ fn without_hooks_the_kinds_list_is_unchanged() {
 
 #[test]
 fn a_refused_held_write_keeps_session_start_contexts_for_the_next_step() {
-    use contract::events::ContextAdded;
+    use contract::events::{ContextAdded, EventKind};
 
     fn held(text: &str) -> ContextAdded {
         ContextAdded {
@@ -2543,7 +2557,7 @@ fn a_refused_held_write_keeps_session_start_contexts_for_the_next_step() {
     assert!(
         !lines(&world)
             .iter()
-            .any(|line| line.kind == "context_added"),
+            .any(|line| line.kind() == EventKind::ContextAdded),
         "nothing was written"
     );
     // The next successful step writes them oldest first.
@@ -2569,7 +2583,7 @@ fn a_refused_held_write_keeps_session_start_contexts_for_the_next_step() {
     let all = lines(&world);
     let texts: Vec<&str> = all
         .iter()
-        .filter(|line| line.kind == "context_added")
+        .filter(|line| line.kind() == EventKind::ContextAdded)
         .map(|line| line.payload["text"].as_str().unwrap())
         .collect();
     assert_eq!(texts, vec!["one", "two"]);
@@ -2671,7 +2685,7 @@ fn a_session_start_context_is_logged_before_turn_started_and_sent_first() {
     );
     let contexts: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "context_added")
+        .filter(|line| line.kind() == EventKind::ContextAdded)
         .collect();
     assert_eq!(contexts.len(), 1);
     assert_eq!(contexts[0].payload["hook"], "session_start");
@@ -2912,7 +2926,7 @@ fn a_shutdown_between_the_handoff_hook_and_its_commit_cancels_the_handoff() {
         );
         let done: Vec<&Envelope> = all
             .iter()
-            .filter(|line| line.kind == "handoff_completed")
+            .filter(|line| line.kind() == EventKind::HandoffCompleted)
             .collect();
         assert_eq!(done.len(), 1);
         assert_eq!(
@@ -3716,7 +3730,7 @@ fn a_steer_waiting_at_the_end_of_turn_drain_skips_turn_end_that_time() {
     );
     let steering: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "steering_applied")
+        .filter(|line| line.kind() == EventKind::SteeringApplied)
         .collect();
     assert_eq!(steering.len(), 1);
     assert_eq!(
@@ -3803,7 +3817,7 @@ fn a_cancel_inside_turn_end_drops_its_message_and_starts_no_later_turn_with_it()
     );
     let started: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .collect();
     assert_eq!(started.len(), 2);
     let input = started_input(std::slice::from_ref(started[1]));
@@ -3966,7 +3980,8 @@ fn a_blocking_turn_end_failure_writes_nothing_and_fails_the_turn() {
         "complete ordered kinds"
     );
     assert!(
-        !all.iter().any(|line| line.kind == "steering_applied"),
+        !all.iter()
+            .any(|line| line.kind() == EventKind::SteeringApplied),
         "the failure wrote no message"
     );
     let end = line(&all, "turn_completed");
@@ -4038,7 +4053,7 @@ fn two_turn_end_messages_are_written_in_run_order_after_a_late_steer() {
     );
     let texts: Vec<&str> = all
         .iter()
-        .filter(|line| line.kind == "steering_applied")
+        .filter(|line| line.kind() == EventKind::SteeringApplied)
         .map(|line| line.payload["content"][0]["text"].as_str().unwrap())
         .collect();
     assert_eq!(
@@ -4120,7 +4135,8 @@ fn a_cancel_before_the_next_steps_commit_drops_held_messages() {
         "complete ordered kinds"
     );
     assert!(
-        !all.iter().any(|line| line.kind == "steering_applied"),
+        !all.iter()
+            .any(|line| line.kind() == EventKind::SteeringApplied),
         "no held message was written: {:?}",
         kinds(&all)
     );
@@ -4153,7 +4169,8 @@ fn a_shutdown_before_the_held_write_applies_no_held_message() {
         "complete ordered kinds"
     );
     assert!(
-        !all.iter().any(|line| line.kind == "steering_applied"),
+        !all.iter()
+            .any(|line| line.kind() == EventKind::SteeringApplied),
         "no held message was written after shutdown: {all:?}"
     );
 }
@@ -4200,7 +4217,8 @@ fn a_shutdown_during_turn_start_from_another_thread_writes_no_context() {
         "complete ordered kinds"
     );
     assert!(
-        !all.iter().any(|line| line.kind == "context_added"),
+        !all.iter()
+            .any(|line| line.kind() == EventKind::ContextAdded),
         "no context is written: {all:?}"
     );
 }
@@ -4235,7 +4253,8 @@ fn a_shutdown_after_the_turn_start_check_writes_no_context() {
         "complete ordered kinds"
     );
     assert!(
-        !all.iter().any(|line| line.kind == "context_added"),
+        !all.iter()
+            .any(|line| line.kind() == EventKind::ContextAdded),
         "no context is written after the shutdown: {all:?}"
     );
 }
@@ -4283,7 +4302,8 @@ fn a_shutdown_after_step_started_writes_no_held_message() {
         "complete ordered kinds"
     );
     assert!(
-        !all.iter().any(|line| line.kind == "steering_applied"),
+        !all.iter()
+            .any(|line| line.kind() == EventKind::SteeringApplied),
         "no held message was written after shutdown: {all:?}"
     );
 }

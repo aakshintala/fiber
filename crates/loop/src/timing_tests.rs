@@ -1952,7 +1952,7 @@ fn a_partial_failure_after_deltas_times_its_hold() {
     let generations: Vec<String> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .iter()
-        .filter(|line| line.kind == "usage_recorded")
+        .filter(|line| line.kind() == EventKind::UsageRecorded)
         .filter_map(|line| line.payload.get("generation_id"))
         .filter_map(|id| id.as_str().map(str::to_owned))
         .collect();
@@ -2560,7 +2560,7 @@ fn two_tool_notes_join_one_handoff_in_call_order() {
     let completed: Vec<Value> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "handoff_completed")
+        .filter(|line| line.kind() == EventKind::HandoffCompleted)
         .map(|line| Value::Object(line.payload.clone()))
         .collect();
     assert_eq!(completed.len(), 1, "one joined handoff");
@@ -2673,7 +2673,7 @@ fn a_refused_note_fails_the_handoff_and_blocks() {
     let completed: Vec<Value> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "handoff_completed")
+        .filter(|line| line.kind() == EventKind::HandoffCompleted)
         .map(|line| Value::Object(line.payload.clone()))
         .collect();
     assert_eq!(completed.len(), 1);

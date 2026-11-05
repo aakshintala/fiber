@@ -530,14 +530,14 @@ impl World {
     fn watched(&mut self) -> Vec<Envelope> {
         let watcher = self.watched.take().unwrap();
         let (watcher, lines) = read_until(watcher, "a turn_completed line", |line| {
-            line.kind == "turn_completed"
+            line.kind() == EventKind::TurnCompleted
         });
         self.watched = Some(watcher);
         // `run` starts the status observer, whose lines race the
         // loop's own and are not what these tests pin.
         lines
             .into_iter()
-            .filter(|line| line.kind != "session_status")
+            .filter(|line| line.kind() != EventKind::SessionStatus)
             .collect()
     }
 
@@ -585,7 +585,7 @@ impl World {
             .collect();
         let from = lines
             .iter()
-            .rposition(|line| line.kind == "turn_started")
+            .rposition(|line| line.kind() == EventKind::TurnStarted)
             .expect("a turn started");
         lines[from..].to_vec()
     }
@@ -618,7 +618,7 @@ fn users(request: &ModelRequest) -> Vec<String> {
 /// The `job_completed` line for `id` carries no action, names `id` and
 /// reads as [`failed`].
 fn assert_notice(line: &Envelope, id: &str) {
-    assert_eq!(line.kind, "job_completed");
+    assert_eq!(line.kind(), EventKind::JobCompleted);
     assert_eq!(line.action_id, None);
     assert!(line.turn_id.is_some());
     assert_eq!(line.payload["job_id"], id);
@@ -706,7 +706,10 @@ fn an_extension_end_is_claimed_hooked_and_logged_without_turn_input() {
                     .unwrap()
                     .into_iter()
                     .filter(|line| {
-                        matches!(line.kind.as_str(), "delegate_finished" | "job_completed")
+                        matches!(
+                            line.kind(),
+                            EventKind::DelegateFinished | EventKind::JobCompleted
+                        )
                     })
                     .collect();
                 assert_eq!(ends.len(), if hold { 2 } else { 0 });
@@ -816,12 +819,15 @@ fn extension_start_racing_a_running_read_neither_holds_idle_nor_notifies_on_clos
         }
         ran(&finished, &wait);
         let lines = log::read(&world.dir).unwrap();
+        assert!(!lines.iter().any(|line| matches!(
+            line.kind(),
+            EventKind::TurnStarted | EventKind::JobsPendingNotified
+        )));
         assert!(
-            !lines
+            lines
                 .iter()
-                .any(|line| matches!(line.kind.as_str(), "turn_started" | "jobs_pending_notified"))
+                .any(|line| line.kind() == EventKind::DelegateFinished)
         );
-        assert!(lines.iter().any(|line| line.kind == "delegate_finished"));
         assert!(world.requests().is_empty());
     }
 }
@@ -971,7 +977,7 @@ fn finish_suspended_turn(send_start: bool, send_end: bool) -> World {
         move || {
             for _ in 0..2 {
                 let (next, lines) = read_until(watcher, "a permission_requested line", |line| {
-                    line.kind == "permission_requested"
+                    line.kind() == EventKind::PermissionRequested
                 });
                 watcher = next;
                 let line = lines.last().unwrap();
@@ -1000,14 +1006,14 @@ fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
     // The finishing turn recorded the waiting start with no turn and no action.
     let started: Vec<_> = lines
         .iter()
-        .filter(|line| line.kind == "job_started")
+        .filter(|line| line.kind() == EventKind::JobStarted)
         .collect();
     assert_eq!(started.len(), 1);
     assert!(started[0].turn_id.is_none() && started[0].action_id.is_none());
     assert_eq!(started[0].payload["extension"], json!("test/scan"));
     let delegates: Vec<_> = lines
         .iter()
-        .filter(|line| line.kind == "delegate_started")
+        .filter(|line| line.kind() == EventKind::DelegateStarted)
         .collect();
     assert_eq!(delegates.len(), 1);
     assert!(delegates[0].turn_id.is_none() && delegates[0].action_id.is_none());
@@ -1015,20 +1021,23 @@ fn a_resumed_suspended_turn_records_a_waiting_extension_start_first() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.kind == "turn_started")
+            .filter(|line| line.kind() == EventKind::TurnStarted)
             .count(),
         1
     );
     // The step drain wrote the end with no turn and no wake.
     let ends: Vec<_> = lines
         .iter()
-        .filter(|line| matches!(line.kind.as_str(), "delegate_finished" | "job_completed"))
+        .filter(|line| {
+            matches!(
+                line.kind(),
+                EventKind::DelegateFinished | EventKind::JobCompleted
+            )
+        })
         .collect();
     assert_eq!(
-        ends.iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["delegate_finished", "job_completed"]
+        ends.iter().map(|line| line.kind()).collect::<Vec<_>>(),
+        ["delegate_finished", "job_completed"].map(EventKind::from_name)
     );
     assert_eq!(ends[0].payload["text"], json!("PRIVATE SENTINEL"));
     assert!(
@@ -1145,7 +1154,7 @@ fn a_delegate_notice_writes_its_finish_before_its_end() {
         lines[0].payload["input"],
         json!([{"type": "jobs", "job_ids": [DELEGATE]}])
     );
-    assert_eq!(lines[2].kind, "delegate_finished");
+    assert_eq!(lines[2].kind(), EventKind::DelegateFinished);
     assert_eq!(lines[2].action_id, None);
     assert_eq!(lines[2].payload["job_id"], DELEGATE);
     assert_eq!(lines[2].payload["text"], "Done.");
@@ -1266,7 +1275,7 @@ fn delegate_mode_records_its_parent_with_or_without_a_worktree() {
         .into_iter()
         .filter(Envelope::is_durable)
         .collect();
-    assert_eq!(lines[0].kind, "session_started");
+    assert_eq!(lines[0].kind(), EventKind::SessionStarted);
     assert_eq!(
         lines[0].payload["parent"],
         json!({
@@ -1281,7 +1290,7 @@ fn delegate_mode_records_its_parent_with_or_without_a_worktree() {
         .into_iter()
         .filter(Envelope::is_durable)
         .collect();
-    assert_eq!(lines[0].kind, "session_started");
+    assert_eq!(lines[0].kind(), EventKind::SessionStarted);
     assert!(lines[0].payload.get("parent").is_none());
     let worktree = contract::shapes::Worktree {
         path: "/worktrees/s_child".into(),
@@ -1855,7 +1864,11 @@ fn a_notice_while_a_call_runs_is_written_at_the_next_step_boundary() {
     assert_eq!(lines[0].payload["input"].as_array().unwrap().len(), 1);
     // A notice is not a steering message: the queue line never moves.
     let watched = world.watched();
-    assert!(watched.iter().any(|line| line.kind == "job_completed"));
+    assert!(
+        watched
+            .iter()
+            .any(|line| line.kind() == EventKind::JobCompleted)
+    );
     assert!(!kinds(&watched).contains(&EventKind::SteeringQueue));
     let requests = world.requests();
     assert_eq!(requests.len(), 2);
@@ -1903,7 +1916,7 @@ fn a_steer_and_a_notice_are_written_in_arrival_order() {
         let queues: Vec<usize> = world
             .watched()
             .iter()
-            .filter(|line| line.kind == "steering_queue")
+            .filter(|line| line.kind() == EventKind::SteeringQueue)
             .map(|line| line.payload["messages"].as_array().unwrap().len())
             .collect();
         assert_eq!(queues, [1, 0]);
@@ -2000,7 +2013,7 @@ fn on_request(log: &Log, send: impl FnOnce(RequestId) + Send + 'static) -> threa
     let watcher = log.watch();
     thread::spawn(move || {
         let (_, lines) = read_until(watcher, "a permission_requested line", |line| {
-            line.kind == "permission_requested"
+            line.kind() == EventKind::PermissionRequested
         });
         let line = lines.last().unwrap();
         send(RequestId(
@@ -2079,7 +2092,7 @@ fn a_notice_kept_by_a_cancelled_turn_starts_the_next_one() {
         "{:?}",
         kinds(&cut)
     );
-    assert_eq!(cut.last().unwrap().kind, "turn_completed");
+    assert_eq!(cut.last().unwrap().kind(), EventKind::TurnCompleted);
     let _first = world.watched();
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();
@@ -2091,7 +2104,11 @@ fn a_notice_kept_by_a_cancelled_turn_starts_the_next_one() {
     assert_notice(&lines[2], JOB);
     // A kept notice is not a kept steer: no queue line moves.
     let watched = world.watched();
-    assert!(watched.iter().any(|line| line.kind == "job_completed"));
+    assert!(
+        watched
+            .iter()
+            .any(|line| line.kind() == EventKind::JobCompleted)
+    );
     assert!(!kinds(&watched).contains(&EventKind::SteeringQueue));
 }
 
@@ -2131,7 +2148,7 @@ fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
         !kinds(&cut).contains(&EventKind::SteeringApplied),
         "{cut:?}"
     );
-    assert_eq!(cut.last().unwrap().kind, "turn_completed");
+    assert_eq!(cut.last().unwrap().kind(), EventKind::TurnCompleted);
     let _first = world.watched();
     // The close ends the wait for a turn; the kept message starts one
     // after it, while the person's steer in it is refused.
@@ -2307,7 +2324,7 @@ impl World {
             .collect();
         let from = lines
             .iter()
-            .position(|line| line.kind == "turn_started")
+            .position(|line| line.kind() == EventKind::TurnStarted)
             .expect("a turn started");
         lines[from..].to_vec()
     }
@@ -2751,7 +2768,7 @@ fn fiber_input(text: &str) -> Value {
 /// `step_started`.
 fn assert_check(lines: &[Envelope], id: &str) {
     assert_eq!(lines[0].payload["input"], fiber_input(&check_text(&[id])));
-    assert_eq!(lines[2].kind, "jobs_pending_notified");
+    assert_eq!(lines[2].kind(), EventKind::JobsPendingNotified);
     assert_eq!(
         Value::Object(lines[2].payload.clone()),
         json!({"job_ids": [id], "reason": "unattended"})
@@ -3048,7 +3065,7 @@ fn a_session_message_in_the_check_turn_does_not_arm_the_check_again() {
     assert_check(&check, &id);
     let applied = check
         .iter()
-        .find(|line| line.kind == "steering_applied")
+        .find(|line| line.kind() == EventKind::SteeringApplied)
         .expect("the message applies");
     assert_eq!(applied.payload["source"], "session");
     assert_eq!(applied.payload["command_id"], "c_message");
@@ -3209,7 +3226,7 @@ fn a_steer_arriving_as_the_check_turn_starts_follows_jobs_pending_notified() {
     let lines = world.watched();
     let from = lines
         .iter()
-        .position(|line| line.kind == "turn_started")
+        .position(|line| line.kind() == EventKind::TurnStarted)
         .expect("a turn started");
     assert_eq!(
         kinds(&lines[from..]),
@@ -3598,7 +3615,7 @@ fn a_session_message_queued_before_close_is_applied_by_the_turn_in_flight() {
     assert_eq!(kinds(&turn), expected);
     let applied = turn
         .iter()
-        .find(|line| line.kind == "steering_applied")
+        .find(|line| line.kind() == EventKind::SteeringApplied)
         .expect("the message applies");
     assert_eq!(applied.payload["source"], "session");
     assert_eq!(applied.payload["command_id"], "c_message");
@@ -3907,14 +3924,14 @@ fn a_notice_admitted_during_an_approval_wait_is_claimed_once_at_the_next_boundar
     );
     let finished = lines
         .iter()
-        .find(|line| line.kind == "delegate_finished")
+        .find(|line| line.kind() == EventKind::DelegateFinished)
         .expect("a delegate_finished line");
     assert_eq!(finished.payload["job_id"], DELEGATE);
     assert_eq!(finished.payload["text"], "Done.");
     assert_eq!(finished.turn_id, lines[0].turn_id);
     let completed = lines
         .iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("a job_completed line");
     assert_notice(completed, DELEGATE);
 }
@@ -4137,16 +4154,16 @@ fn assert_ahead_lines(lines: &[Envelope], id: &str, action: &ActionId, at: usize
     let four = &lines[at..at + 4];
     assert_eq!(
         [
-            four[0].kind.as_str(),
-            four[1].kind.as_str(),
-            four[2].kind.as_str(),
-            four[3].kind.as_str()
+            four[0].kind(),
+            four[1].kind(),
+            four[2].kind(),
+            four[3].kind()
         ],
         [
-            "job_started",
-            "delegate_started",
-            "delegate_finished",
-            "job_completed"
+            EventKind::JobStarted,
+            EventKind::DelegateStarted,
+            EventKind::DelegateFinished,
+            EventKind::JobCompleted
         ]
     );
     assert_eq!(four[0].action_id.as_ref(), Some(action));
@@ -4209,7 +4226,7 @@ fn a_notice_claims_write_what_it_took_ahead_at_the_next_boundary() {
     );
     let at = lines
         .iter()
-        .position(|line| line.kind == "job_started")
+        .position(|line| line.kind() == EventKind::JobStarted)
         .expect("a job_started line");
     assert_ahead_lines(&lines, DELEGATE, &action, at);
 }
@@ -4250,7 +4267,7 @@ fn a_notice_kept_for_the_next_turn_writes_what_its_claim_took_ahead() {
     assert_eq!(input[1]["type"], "message");
     let at = lines
         .iter()
-        .position(|line| line.kind == "job_started")
+        .position(|line| line.kind() == EventKind::JobStarted)
         .expect("a job_started line");
     assert_ahead_lines(&lines, DELEGATE, &action, at);
 }
@@ -4285,7 +4302,7 @@ fn a_notice_while_idle_writes_what_its_claim_took_ahead_first() {
     );
     let at = lines
         .iter()
-        .position(|line| line.kind == "job_started")
+        .position(|line| line.kind() == EventKind::JobStarted)
         .expect("a job_started line");
     assert_ahead_lines(&lines, DELEGATE, &action, at);
 }
@@ -4325,7 +4342,7 @@ fn two_sent_shells_come_before_the_drain_s_messages() {
     let logged: Vec<u64> = log::read(&world.dir)
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "shell_command")
+        .filter(|line| line.kind() == EventKind::ShellCommand)
         .map(|line| line.seq.map(|seq| seq.0).unwrap())
         .collect();
     assert_eq!(logged, vec![first, second]);
@@ -4369,7 +4386,7 @@ fn a_shell_sent_during_a_turn_joins_the_next_turn_only() {
     assert!(
         first
             .iter()
-            .filter(|line| line.kind == "turn_started")
+            .filter(|line| line.kind() == EventKind::TurnStarted)
             .flat_map(|line| line.payload["input"].as_array().unwrap().clone())
             .all(|item| item["type"] != "shell_command"),
         "the running turn names no shell"
@@ -4976,7 +4993,7 @@ fn a_claimed_end_is_logged_as_the_completion_hook_left_it() {
     let completed = world
         .turn_lines()
         .into_iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("the claimed end is logged");
     assert_eq!(
         completed.payload["notice"],
@@ -5231,11 +5248,11 @@ fn a_non_blocking_failure_writes_its_notice_before_the_unchanged_end() {
     let all = world.watched();
     let notice = all
         .iter()
-        .position(|line| line.kind == "notice")
+        .position(|line| line.kind() == EventKind::Notice)
         .expect("the failure notice is emitted");
     let end = all
         .iter()
-        .position(|line| line.kind == "job_completed")
+        .position(|line| line.kind() == EventKind::JobCompleted)
         .expect("the unchanged end is emitted");
     assert!(notice < end);
     assert_eq!(all[notice].payload["message"], "redactor blinked");
@@ -5303,19 +5320,19 @@ fn an_artifact_only_output_file_change_writes_its_carried_state() {
     // fix the state line is never written. The `output_file` pass runs
     // at intake, before `turn_started`, so the state line precedes the
     // turn's lines and the test reads the whole log.
-    let all: Vec<String> = log::read(&world.dir)
+    let all: Vec<EventKind> = log::read(&world.dir)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
     assert!(
-        all.contains(&"extension_state_set".to_owned()),
+        all.contains(&EventKind::ExtensionStateSet),
         "an artifact-only output-file change writes its carried state: {all:?}"
     );
     let stated = log::read(&world.dir)
         .unwrap()
         .into_iter()
-        .find(|line| line.kind == "extension_state_set")
+        .find(|line| line.kind() == EventKind::ExtensionStateSet)
         .expect("the carried state is written");
     assert_eq!(stated.payload["extension"], "redactor");
     assert_eq!(stated.payload["key"], "last_seen");
@@ -5351,19 +5368,19 @@ fn an_artifact_only_completion_answer_writes_no_carried_state() {
     // `artifact_counts || artifact.is_some()` mutant the state line is
     // written. The output file is untouched, so only the completion
     // pass stages state.
-    let all: Vec<String> = log::read(&world.dir)
+    let all: Vec<EventKind> = log::read(&world.dir)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
     assert!(
-        !all.contains(&"extension_state_set".to_owned()),
+        !all.contains(&EventKind::ExtensionStateSet),
         "an artifact-only completion answer writes no carried state: {all:?}"
     );
     let end = world
         .turn_lines()
         .into_iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("the unchanged end is logged");
     assert!(end.payload.get("notice").is_none());
     assert!(end.payload.get("changed_by").is_none());
@@ -5552,7 +5569,7 @@ fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
         .unwrap();
     assert!(hooks.calls().is_empty());
     let lines: Vec<Envelope> = log::read(&world.dir).unwrap();
-    assert_eq!(lines[lines.len() - 1].kind, "job_completed");
+    assert_eq!(lines[lines.len() - 1].kind(), EventKind::JobCompleted);
     assert_eq!(
         lines[lines.len() - 1].payload["output_tail"],
         "token TOKEN-1234 here\n"
@@ -5845,7 +5862,7 @@ fn a_non_blocking_output_failure_keeps_the_file_and_gives_a_notice_with_no_turn(
     let all = world.watched();
     let notice = all
         .iter()
-        .find(|line| line.kind == "notice")
+        .find(|line| line.kind() == EventKind::Notice)
         .expect("the failure notice is emitted");
     assert_eq!(notice.payload["message"], "redactor blinked");
     assert_eq!(notice.turn_id, None);
@@ -6209,7 +6226,7 @@ fn a_non_regular_output_file_with_only_non_blocking_hooks_is_kept_with_a_notice_
     let mut extensions: Vec<_> = world
         .watched()
         .iter()
-        .filter(|line| line.kind == "notice")
+        .filter(|line| line.kind() == EventKind::Notice)
         .map(|line| {
             line.payload["extension"]
                 .as_str()
@@ -6245,7 +6262,12 @@ fn a_non_regular_output_path_with_no_after_tool_hook_is_left_alone() {
         output_bytes(&world, "artifacts/target.log"),
         b"token TOKEN-1234\n"
     );
-    assert!(world.watched().iter().all(|line| line.kind != "notice"));
+    assert!(
+        world
+            .watched()
+            .iter()
+            .all(|line| line.kind() != EventKind::Notice)
+    );
 }
 
 #[test]
@@ -6404,7 +6426,11 @@ fn a_claim_refused_notice_still_runs_the_pass_once_and_writes_no_end() {
             .any(|call| call.delivery == Some(JobDelivery::OutputFile))
     );
     let lines = world.turn_lines();
-    assert!(lines.iter().all(|line| line.kind != "job_completed"));
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::JobCompleted)
+    );
 }
 
 #[test]
@@ -6428,7 +6454,11 @@ fn a_running_claim_refused_notice_still_runs_the_pass() {
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     assert_eq!(asked.count(), 1, "the claim is asked once, at the write");
     let lines = world.turn_lines();
-    assert!(lines.iter().all(|line| line.kind != "job_completed"));
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::JobCompleted)
+    );
 }
 
 #[test]

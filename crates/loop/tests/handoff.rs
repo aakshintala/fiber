@@ -3184,7 +3184,7 @@ fn a_blocking_session_start_failure_at_an_overflow_handoff_fails_context_overflo
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "hook_failed");
     let last = lines.last().unwrap();
-    assert_eq!(last.kind, "turn_completed");
+    assert_eq!(last.kind(), EventKind::TurnCompleted);
     assert_eq!(last.payload["outcome"], "failed");
     assert_eq!(last.payload["error"]["code"], "context_overflow");
 }

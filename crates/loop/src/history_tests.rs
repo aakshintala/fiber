@@ -14,9 +14,9 @@ use std::path::{Path, PathBuf};
 
 use crate::conversation::{rebuild_and_sent, summary_conversation};
 use contract::events::{
-    Anchor, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event, Grant,
-    HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem, ModelChanged, ModelSettings,
-    Moved, OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent,
+    Anchor, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event, EventKind,
+    Grant, HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem, ModelChanged,
+    ModelSettings, Moved, OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent,
     PermissionResolved, PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered,
     RepositoryCodeResolved, Rewound, SessionStarted, SkillLoad, SkillSent, SkillsResent,
     SteeringApplied, SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted,
@@ -478,8 +478,11 @@ fn a_resolved_approval_is_not_seeded() {
 fn an_unresolved_extension_ask_is_seeded_and_a_resolved_one_is_not() {
     let open = [asked("r_ext", Some("ext")), process_started()];
     let exit = seeded("seed-ask", &open, None);
-    let kinds: Vec<&str> = exit.iter().map(|line| line.kind.as_str()).collect();
-    assert_eq!(kinds, ["interaction_resolved", "fiber_exited"]);
+    let kinds: Vec<EventKind> = exit.iter().map(|line| line.kind()).collect();
+    assert_eq!(
+        kinds,
+        [EventKind::InteractionResolved, EventKind::FiberExited]
+    );
     assert_eq!(exit[0].payload["request_id"], "r_ext");
     let done = [
         asked("r_ext", Some("ext")),
@@ -677,7 +680,10 @@ fn the_window_reader_makes_a_parent_image_absolute_and_keeps_the_owns() {
     .unwrap();
     let lines = read_window(&log, folded.window, folded.end).unwrap();
     let mut paths = Vec::new();
-    for line in lines.iter().filter(|line| line.kind == "turn_started") {
+    for line in lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::TurnStarted)
+    {
         let Some(input) = line.payload.get("input").and_then(Value::as_array) else {
             continue;
         };
@@ -743,23 +749,17 @@ fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
     )
     .unwrap();
     let lines = read_window(&log, folded.window, folded.end).unwrap();
-    let held: Vec<(&str, u64, &str)> = lines
+    let held: Vec<(&str, u64, EventKind)> = lines
         .iter()
-        .map(|line| {
-            (
-                line.session_id.0.as_str(),
-                line.seq.unwrap().0,
-                line.kind.as_str(),
-            )
-        })
+        .map(|line| (line.session_id.0.as_str(), line.seq.unwrap().0, line.kind()))
         .collect();
     assert_eq!(
         held,
         [
-            (B, 1, "turn_started"),
-            (B, 2, "handoff_completed"),
-            (B, 3, "turn_started"),
-            (C, 0, "session_started"),
+            (B, 1, EventKind::TurnStarted),
+            (B, 2, EventKind::HandoffCompleted),
+            (B, 3, EventKind::TurnStarted),
+            (C, 0, EventKind::SessionStarted),
         ]
     );
     assert_eq!(
@@ -845,8 +845,8 @@ fn the_window_reader_makes_a_parents_steering_and_tool_result_images_absolute() 
     let mut paths = Vec::new();
     for line in &lines {
         if !matches!(
-            line.kind.as_str(),
-            "steering_applied" | "tool_call_completed"
+            line.kind(),
+            EventKind::SteeringApplied | EventKind::ToolCallCompleted
         ) {
             continue;
         }
@@ -927,7 +927,7 @@ fn the_window_reader_makes_a_parent_pdf_and_its_pages_absolute() {
     let lines = read_window(&log, folded.window, folded.end).unwrap();
     let completed = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     let content = completed.payload["content"].as_array().unwrap();
     assert_eq!(
@@ -997,7 +997,7 @@ fn the_window_reader_leaves_image_shaped_tool_arguments_alone() {
     let lines = read_window(&log, folded.window, folded.end).unwrap();
     let requested = lines
         .iter()
-        .find(|line| line.kind == "tool_call_requested")
+        .find(|line| line.kind() == EventKind::ToolCallRequested)
         .unwrap();
     assert_eq!(requested.payload["arguments"], shaped);
     let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
@@ -1016,7 +1016,7 @@ fn the_window_reader_leaves_image_shaped_tool_arguments_alone() {
     // A real image part in the same window is still made absolute.
     let image = lines
         .iter()
-        .find(|line| line.kind == "turn_started" && line.seq.unwrap().0 == 1)
+        .find(|line| line.kind() == EventKind::TurnStarted && line.seq.unwrap().0 == 1)
         .unwrap();
     assert_eq!(
         image.payload["input"][0]["content"][0]["path"],

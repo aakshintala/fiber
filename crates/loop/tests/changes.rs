@@ -267,7 +267,7 @@ fn a_new_instruction_file_is_created_at_the_next_turn_start() {
     assert_eq!(kinds(&lines), created);
     let created = lines
         .iter()
-        .find(|line| line.kind == "instruction_file")
+        .find(|line| line.kind() == EventKind::InstructionFile)
         .unwrap();
     assert_eq!(created.payload["reason"], "created");
     assert_eq!(created.payload["sent"], "full");
@@ -313,7 +313,10 @@ fn two_new_shadowed_skills_group_at_the_next_turn_start() {
         .collect();
     expected.extend(later_text_turn());
     assert_eq!(kinds(&lines), expected);
-    let notices: Vec<_> = lines.iter().filter(|line| line.kind == "notice").collect();
+    let notices: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::Notice)
+        .collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].payload["code"], "skill_shadowed");
     let message = notices[0].payload["message"].as_str().unwrap();
@@ -425,7 +428,7 @@ fn an_own_edit_is_recorded_after_the_call_and_sends_nothing() {
     );
     let own = lines
         .iter()
-        .find(|line| line.kind == "instruction_file")
+        .find(|line| line.kind() == EventKind::InstructionFile)
         .unwrap();
     assert_eq!(own.payload["reason"], "own_edit");
     assert_eq!(own.payload["sent"], "none");
@@ -493,7 +496,7 @@ fn an_own_edit_outside_the_workspace_is_recorded_and_sends_nothing() {
     );
     let own = lines
         .iter()
-        .find(|line| line.kind == "instruction_file")
+        .find(|line| line.kind() == EventKind::InstructionFile)
         .unwrap();
     assert_eq!(own.payload["reason"], "own_edit");
     assert_eq!(own.payload["sent"], "none");
@@ -590,7 +593,7 @@ fn an_own_write_to_a_section_file_sends_nothing_at_the_next_turn() {
     );
     let own = lines
         .iter()
-        .find(|line| line.kind == "instruction_file")
+        .find(|line| line.kind() == EventKind::InstructionFile)
         .unwrap();
     assert_eq!(own.payload["reason"], "own_edit");
     assert_eq!(own.payload["extension"], "fiber.test/notes");
@@ -786,7 +789,7 @@ fn an_over_budget_write_ends_its_result_with_the_prune_line() {
     );
     let done = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert_eq!(done.payload["status"], "completed");
     let parts = texts(done);
@@ -797,7 +800,7 @@ fn an_over_budget_write_ends_its_result_with_the_prune_line() {
     // The own edit is recorded too, with nothing sent.
     let own = lines
         .iter()
-        .find(|line| line.kind == "instruction_file")
+        .find(|line| line.kind() == EventKind::InstructionFile)
         .unwrap();
     assert_eq!(own.payload["reason"], "own_edit");
     assert_eq!(own.payload["sent"], "none");
@@ -863,7 +866,7 @@ fn a_tool_declaring_a_write_gets_the_prune_line_whatever_its_name() {
     );
     let done = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     let parts = texts(done);
     assert_eq!(
@@ -930,7 +933,7 @@ fn a_tool_named_write_declaring_only_a_read_gets_no_prune_line() {
     );
     let done = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert!(
         texts(done)
@@ -999,7 +1002,7 @@ fn an_under_budget_write_has_no_prune_line() {
     );
     let done = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert!(
         texts(done).iter().all(|text| !text.contains("Prune them")),
@@ -1066,7 +1069,7 @@ fn a_write_touching_no_section_file_has_no_prune_line() {
     );
     let done = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert!(
         texts(done).iter().all(|text| !text.contains("Prune them")),
@@ -1134,7 +1137,7 @@ fn a_failed_write_over_budget_has_no_prune_line() {
     );
     let done = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert_eq!(done.payload["status"], "failed");
     assert!(
@@ -1200,7 +1203,7 @@ fn a_subdirectory_file_is_queued_for_the_next_step() {
     );
     let opening = lines
         .iter()
-        .find(|line| line.kind == "opening_message")
+        .find(|line| line.kind() == EventKind::OpeningMessage)
         .unwrap();
     assert_eq!(
         opening.payload["instruction_files"],
@@ -1208,7 +1211,7 @@ fn a_subdirectory_file_is_queued_for_the_next_step() {
     );
     let sub = lines
         .iter()
-        .find(|line| line.kind == "instruction_file")
+        .find(|line| line.kind() == EventKind::InstructionFile)
         .unwrap();
     assert_eq!(sub.payload["reason"], "subdirectory");
     assert_eq!(sub.payload["sent"], "full");
@@ -1431,7 +1434,7 @@ fn a_resume_detects_an_outside_change_with_a_diff() {
         .map(EventKind::from_name)
     );
     assert_eq!(lines[0].payload["reason"], "resume");
-    assert_eq!(lines[1].kind, "instruction_file");
+    assert_eq!(lines[1].kind(), EventKind::InstructionFile);
     assert_eq!(lines[1].payload["reason"], "changed");
     assert_eq!(lines[1].payload["sent"], "diff");
     assert_eq!(lines[1].payload["content"], new);
@@ -1460,7 +1463,7 @@ fn late_skill(workspace: &Path) {
 fn turn_input(lines: &[Envelope]) -> String {
     lines
         .iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .unwrap()
         .payload["input"][0]["content"][0]["text"]
         .as_str()
@@ -1487,7 +1490,7 @@ fn a_skill_added_between_turns_is_announced_before_turn_started() {
     assert_eq!(kinds(&lines), announced);
     let changed = lines
         .iter()
-        .find(|line| line.kind == "skills_changed")
+        .find(|line| line.kind() == EventKind::SkillsChanged)
         .unwrap();
     assert_eq!(changed.payload["added"][0]["name"], "late");
     assert_eq!(changed.payload["added"][0]["description"], "Runs late.");
@@ -1495,7 +1498,7 @@ fn a_skill_added_between_turns_is_announced_before_turn_started() {
     let log = log::read(&session.dir).unwrap();
     assert_eq!(
         log.iter()
-            .filter(|line| line.kind == "opening_message")
+            .filter(|line| line.kind() == EventKind::OpeningMessage)
             .count(),
         1
     );
@@ -1583,13 +1586,16 @@ fn switching_a_skill_off_and_on_is_removed_then_added() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.kind == "opening_message")
+            .filter(|line| line.kind() == EventKind::OpeningMessage)
             .count(),
         1
     );
     // Every preamble build is the harness's own: a start, then resumes.
     // The check builds none.
-    for line in lines.iter().filter(|line| line.kind == "preamble_built") {
+    for line in lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::PreambleBuilt)
+    {
         assert!(
             line.payload["reason"] == "start" || line.payload["reason"] == "resume",
             "{}",
@@ -1598,13 +1604,13 @@ fn switching_a_skill_off_and_on_is_removed_then_added() {
     }
     let removed = third
         .iter()
-        .find(|line| line.kind == "skills_changed")
+        .find(|line| line.kind() == EventKind::SkillsChanged)
         .unwrap();
     assert!(removed.payload["added"].as_array().unwrap().is_empty());
     assert_eq!(removed.payload["removed"], json!(["late"]));
     let added = fourth
         .iter()
-        .find(|line| line.kind == "skills_changed")
+        .find(|line| line.kind() == EventKind::SkillsChanged)
         .unwrap();
     assert_eq!(added.payload["added"][0]["name"], "late");
     assert!(added.payload["removed"].as_array().unwrap().is_empty());

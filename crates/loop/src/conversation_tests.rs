@@ -2853,7 +2853,7 @@ mod from_log {
         let mut carry = crate::handoff::Carry::default();
         for line in &lines {
             let Some(event) = Event::from_envelope(line).unwrap() else {
-                panic!("a known kind: {}", line.kind);
+                panic!("a known kind: {}", line.kind().name());
             };
             crate::conversation::render(
                 &mut live,
@@ -3606,7 +3606,10 @@ mod from_log {
                 },
             ]
         );
-        let turn = lines.iter().position(|l| l.kind == "turn_started").unwrap();
+        let turn = lines
+            .iter()
+            .position(|l| l.kind() == EventKind::TurnStarted)
+            .unwrap();
         lines[turn].payload.insert("input".into(), json!(3));
         let error = crate::conversation::rebuild(&lines, MODEL).unwrap_err();
         assert_eq!(error.code(), contract::ErrorCode::LogCorrupt);

@@ -570,7 +570,7 @@ fn a_reload_groups_the_prepared_notices_by_code() {
         move || {
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
-                let done = line.kind == "preamble_built";
+                let done = line.kind() == EventKind::PreambleBuilt;
                 streamed.push(line);
                 if done {
                     break;
@@ -579,14 +579,19 @@ fn a_reload_groups_the_prepared_notices_by_code() {
             streamed
         },
     );
-    let seen: Vec<&str> = streamed.iter().map(|line| line.kind.as_str()).collect();
+    let seen: Vec<EventKind> = streamed.iter().map(|line| line.kind()).collect();
     assert_eq!(
         seen,
-        ["reloaded", "extensions_loaded", "notice", "preamble_built"]
+        [
+            EventKind::Reloaded,
+            EventKind::ExtensionsLoaded,
+            EventKind::Notice,
+            EventKind::PreambleBuilt
+        ]
     );
     let notices: Vec<_> = streamed
         .iter()
-        .filter(|line| line.kind == "notice")
+        .filter(|line| line.kind() == EventKind::Notice)
         .collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].payload["code"], "extension_shadowed");
@@ -791,7 +796,7 @@ fn reconnects_in_one_idle_batch_start_one_failing_process() {
                 let failed: Vec<_> = log::read(w.looped.log.dir())
                     .unwrap()
                     .into_iter()
-                    .filter(|line| line.kind == "mcp_server_failed")
+                    .filter(|line| line.kind() == EventKind::McpServerFailed)
                     .collect();
                 assert_eq!(failed.len(), 1);
                 assert_eq!(failed[0].payload["server"], "db");
@@ -865,7 +870,10 @@ fn reconnect_duplicates_accept_after_the_shared_outcome_and_a_later_retry_runs()
                 Ack(Box::new(move |outcome| {
                     // An accepted join cannot precede the durable server outcome
                     // (`docs/mcp.md`, "Servers, their state and the per-server commands").
-                    assert_eq!(log::read(log.dir()).unwrap().last().unwrap().kind, expected);
+                    assert_eq!(
+                        log::read(log.dir()).unwrap().last().unwrap().kind(),
+                        EventKind::from_name(expected)
+                    );
                     observed.send(()).unwrap();
                     (joined.0)(outcome);
                 })),
@@ -944,7 +952,9 @@ fn reconnect_duplicates_accept_after_the_shared_outcome_and_a_later_retry_runs()
 
 #[test]
 fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
-    use contract::events::{McpServerFailed, McpServerReady, ReloadFailure, ServerFailure};
+    use contract::events::{
+        EventKind, McpServerFailed, McpServerReady, ReloadFailure, ServerFailure,
+    };
     let mut w = world();
     w.looped = w.looped.reloader(Arc::new(|_| {
         let mut next = prepared();

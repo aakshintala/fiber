@@ -322,7 +322,7 @@ fn a_confirm_is_answered_and_the_ack_follows_its_line() {
     let ack = Ack(Box::new(move |answer| {
         let mut resolved = false;
         while let Ok(Some(line)) = watcher.try_recv() {
-            resolved |= line.kind == "interaction_resolved";
+            resolved |= line.kind() == EventKind::InteractionResolved;
         }
         let _sent = seen_tx.send((answer, resolved));
     }));
@@ -732,7 +732,7 @@ fn stopped_while_pending(stop: impl FnOnce(&Session)) -> (Vec<Envelope>, Option<
     assert_eq!(told(&answers, &wait), Answered::NoAnswer);
     let outcome = finish(&mut session, &finished).unwrap();
     let lines = session.events_until("the call's completion and the turn's end", |line| {
-        line.kind == "turn_completed"
+        line.kind() == EventKind::TurnCompleted
     });
     (lines, outcome)
 }
@@ -849,7 +849,7 @@ fn until_passes(mut session: Session, answers: &mpsc::Receiver<Answered>, at: In
     assert!(
         tap.pending()
             .iter()
-            .all(|line| line.kind != "interaction_resolved"),
+            .all(|line| line.kind() != EventKind::InteractionResolved),
         "1 ms before it, the request still pends"
     );
     assert!(answers.try_recv().is_err(), "the call still waits");
@@ -1039,14 +1039,14 @@ fn two_calls_ask_at_once_and_each_gets_its_own_answer() {
         let resolved = lines
             .iter()
             .position(|line| {
-                line.kind == "interaction_resolved"
+                line.kind() == EventKind::InteractionResolved
                     && line.payload.get("request_id").and_then(Value::as_str) == Some(request)
             })
             .unwrap();
         let completed = lines
             .iter()
             .position(|line| {
-                line.kind == "tool_call_completed"
+                line.kind() == EventKind::ToolCallCompleted
                     && line.action_id.as_ref().is_some_and(|id| id.0 == action)
             })
             .unwrap();
@@ -1282,7 +1282,12 @@ fn other_deliveries_are_admitted_while_a_call_waits() {
     session.inbox.send(steer("next")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let next = session.lines();
-    assert_eq!(next[0].kind, "model_changed", "{:?}", kinds(&next));
+    assert_eq!(
+        next[0].kind(),
+        EventKind::ModelChanged,
+        "{:?}",
+        kinds(&next)
+    );
     assert_eq!(switched.requests().len(), 1);
 }
 
@@ -1462,7 +1467,7 @@ fn a_log_failure_while_a_call_is_pending_releases_it() {
     assert!(
         tap.pending()
             .iter()
-            .all(|line| line.kind != "interaction_resolved"),
+            .all(|line| line.kind() != EventKind::InteractionResolved),
         "nothing is written after the failure"
     );
 }
@@ -1490,7 +1495,7 @@ fn a_log_failure_before_a_calls_first_ask_releases_it() {
     assert!(
         tap.pending()
             .iter()
-            .all(|line| line.kind != "interaction_resolved"),
+            .all(|line| line.kind() != EventKind::InteractionResolved),
         "nothing is written after the failure"
     );
 }
@@ -1564,12 +1569,12 @@ fn an_extension_ask_still_open_at_the_exit_is_declined_by_fiber() {
         panic!("{:?}", kinds(&all));
     };
     assert_eq!(
+        (turn.kind(), declined.kind(), exited.kind()),
         (
-            turn.kind.as_str(),
-            declined.kind.as_str(),
-            exited.kind.as_str()
-        ),
-        ("turn_completed", "interaction_resolved", "fiber_exited")
+            EventKind::TurnCompleted,
+            EventKind::InteractionResolved,
+            EventKind::FiberExited
+        )
     );
     assert_eq!(declined.payload["request_id"], "r_ext");
     assert_eq!(declined.payload["by"], "fiber");

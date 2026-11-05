@@ -109,7 +109,7 @@ impl Session {
         let exited = fiber_exited(&self.log, &self.summary, ran, one_turn, signal).unwrap();
         let lines = log::read(&self.dir).unwrap();
         let last = lines.last().unwrap();
-        assert_eq!(last.kind, "fiber_exited");
+        assert_eq!(last.kind(), EventKind::FiberExited);
         assert!(last.turn_id.is_none());
         // The returned error is the written one, byte for byte.
         let written = last.payload.get("error").cloned().unwrap_or(Value::Null);
@@ -133,7 +133,7 @@ impl Session {
         log::read(&self.dir)
             .unwrap()
             .into_iter()
-            .filter(|line| line.kind == "interaction_resolved")
+            .filter(|line| line.kind() == EventKind::InteractionResolved)
             .collect()
     }
 }
@@ -752,21 +752,21 @@ fn fiber_exited_after_a_resume_reports_only_the_resumed_process_lines() {
     assert_eq!(code, 0);
     let lines = log::read(&session.dir).unwrap();
     assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
         [
-            "fiber_started",
-            "turn_started",
-            "usage_recorded",
-            "text_completed",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_started",
-            "turn_started",
-            "usage_recorded",
-            "text_completed",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
+            EventKind::FiberStarted,
+            EventKind::TurnStarted,
+            EventKind::UsageRecorded,
+            EventKind::TextCompleted,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
+            EventKind::FiberStarted,
+            EventKind::TurnStarted,
+            EventKind::UsageRecorded,
+            EventKind::TextCompleted,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
+            EventKind::FiberExited,
         ]
     );
     assert_eq!(exited["text"], "Second.");
@@ -1084,8 +1084,11 @@ fn a_signalled_exit_over_the_seed_alone_names_the_approval_and_declines_the_ask(
     let exited = fiber_exited(&session.log, &seed, Ok(()), false, Some(143)).unwrap();
     assert_eq!(exited.code, 143);
     let lines = log::read(&session.dir).unwrap();
-    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
-    assert_eq!(kinds, ["interaction_resolved", "fiber_exited"]);
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    assert_eq!(
+        kinds,
+        [EventKind::InteractionResolved, EventKind::FiberExited]
+    );
     assert_eq!(lines[0].payload["request_id"], "r_ask");
     assert_eq!(lines[1].payload["suspended_on"], "r_old");
 }

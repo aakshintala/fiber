@@ -348,7 +348,10 @@ struct Ran {
 
 impl Ran {
     fn of_kind(&self, kind: &str) -> Vec<&Envelope> {
-        self.lines.iter().filter(|l| l.kind == kind).collect()
+        self.lines
+            .iter()
+            .filter(|l| l.kind() == EventKind::from_name(kind))
+            .collect()
     }
 
     /// The complete, ordered kinds of the durable lines: every event the
@@ -358,7 +361,10 @@ impl Ran {
     }
 
     fn streamed_of_kind(&self, kind: &str) -> Vec<&Envelope> {
-        self.streamed.iter().filter(|l| l.kind == kind).collect()
+        self.streamed
+            .iter()
+            .filter(|l| l.kind() == EventKind::from_name(kind))
+            .collect()
     }
 
     fn kinds(&self) -> Vec<EventKind> {
@@ -461,7 +467,7 @@ fn run_with_home(
         move || {
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
-                let last = line.kind == "turn_completed";
+                let last = line.kind() == EventKind::TurnCompleted;
                 streamed.push(line);
                 if last {
                     break;

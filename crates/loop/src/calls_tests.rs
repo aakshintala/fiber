@@ -983,12 +983,12 @@ fn assert_job_triplet(lines: &[Envelope], id: &str, status: &str) -> ActionId {
     let lines = durable(lines);
     let index = lines
         .iter()
-        .position(|line| line.kind == "job_started" && line.payload["job_id"] == id)
+        .position(|line| line.kind() == EventKind::JobStarted && line.payload["job_id"] == id)
         .unwrap_or_else(|| panic!("no job_started for {id}"));
     let three = &lines[index..index + 3];
-    assert_eq!(three[0].kind, "job_started");
-    assert_eq!(three[1].kind, "job_completed");
-    assert_eq!(three[2].kind, "tool_call_completed");
+    assert_eq!(three[0].kind(), EventKind::JobStarted);
+    assert_eq!(three[1].kind(), EventKind::JobCompleted);
+    assert_eq!(three[2].kind(), EventKind::ToolCallCompleted);
     let action = three[0].action_id.clone().unwrap();
     assert!(action.0.starts_with("a_"), "{}", action.0);
     assert_eq!(three[1].action_id.as_ref(), Some(&action));
@@ -1124,23 +1124,23 @@ fn a_calls_delegate_records_are_written_in_order_under_its_action() {
     let lines = durable(&with.lines);
     let index = lines
         .iter()
-        .position(|line| line.kind == "job_started")
+        .position(|line| line.kind() == EventKind::JobStarted)
         .expect("a job_started line");
     let five = &lines[index..index + 5];
     assert_eq!(
         [
-            five[0].kind.as_str(),
-            five[1].kind.as_str(),
-            five[2].kind.as_str(),
-            five[3].kind.as_str(),
-            five[4].kind.as_str()
+            five[0].kind(),
+            five[1].kind(),
+            five[2].kind(),
+            five[3].kind(),
+            five[4].kind()
         ],
         [
-            "job_started",
-            "delegate_started",
-            "delegate_finished",
-            "job_completed",
-            "tool_call_completed"
+            EventKind::JobStarted,
+            EventKind::DelegateStarted,
+            EventKind::DelegateFinished,
+            EventKind::JobCompleted,
+            EventKind::ToolCallCompleted
         ]
     );
     let action = five[0].action_id.clone().unwrap();
@@ -1215,11 +1215,11 @@ fn two_calls_write_their_job_lines_in_request_order() {
     let lines = durable(&ran.lines);
     let first_at = lines
         .iter()
-        .position(|line| line.kind == "job_started")
+        .position(|line| line.kind() == EventKind::JobStarted)
         .unwrap();
     let second_at = lines
         .iter()
-        .rposition(|line| line.kind == "job_started")
+        .rposition(|line| line.kind() == EventKind::JobStarted)
         .unwrap();
     assert_eq!(lines[first_at].payload["job_id"], first);
     assert_eq!(lines[second_at].payload["job_id"], second);
@@ -1384,11 +1384,11 @@ fn a_calls_server_failed_is_written_under_its_action_before_its_completion() {
     let lines = durable(&ran.lines);
     let index = lines
         .iter()
-        .position(|line| line.kind == "mcp_server_failed")
+        .position(|line| line.kind() == EventKind::McpServerFailed)
         .unwrap_or_else(|| panic!("no mcp_server_failed"));
     let pair = &lines[index..index + 2];
-    assert_eq!(pair[0].kind, "mcp_server_failed");
-    assert_eq!(pair[1].kind, "tool_call_completed");
+    assert_eq!(pair[0].kind(), EventKind::McpServerFailed);
+    assert_eq!(pair[1].kind(), EventKind::ToolCallCompleted);
     let action = pair[0].action_id.clone().unwrap();
     assert!(action.0.starts_with("a_"), "{}", action.0);
     assert_eq!(pair[1].action_id.as_ref(), Some(&action));
@@ -1460,18 +1460,15 @@ fn a_calls_server_lines_are_written_in_order_under_its_action() {
     let lines = durable(&ran.lines);
     let index = lines
         .iter()
-        .position(|line| line.kind == "mcp_server_failed")
+        .position(|line| line.kind() == EventKind::McpServerFailed)
         .unwrap_or_else(|| panic!("no mcp_server_failed"));
     let three = &lines[index..index + 3];
     assert_eq!(
-        three
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
+        three.iter().map(|line| line.kind()).collect::<Vec<_>>(),
         [
-            "mcp_server_failed",
-            "mcp_server_ready",
-            "tool_call_completed"
+            EventKind::McpServerFailed,
+            EventKind::McpServerReady,
+            EventKind::ToolCallCompleted,
         ],
     );
     let action = three[0].action_id.clone().unwrap();
@@ -1542,7 +1539,7 @@ fn a_call_that_returns_an_error_after_its_turn_is_cancelled_ends_failed() {
     let lines = durable(&ran.lines);
     let completed = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap_or_else(|| panic!("no tool_call_completed"));
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "mcp_cancel_requested");
@@ -1611,21 +1608,21 @@ fn a_call_settle_is_written_before_its_jobs_under_its_action() {
     let lines = durable(&ran.lines);
     let at = lines
         .iter()
-        .position(|line| line.kind == "tool_call_started")
+        .position(|line| line.kind() == EventKind::ToolCallStarted)
         .expect("a tool_call_started line");
     let four = &lines[at..at + 4];
     assert_eq!(
         [
-            four[0].kind.as_str(),
-            four[1].kind.as_str(),
-            four[2].kind.as_str(),
-            four[3].kind.as_str()
+            four[0].kind(),
+            four[1].kind(),
+            four[2].kind(),
+            four[3].kind()
         ],
         [
-            "tool_call_started",
-            "job_completed",
-            "job_started",
-            "tool_call_completed"
+            EventKind::ToolCallStarted,
+            EventKind::JobCompleted,
+            EventKind::JobStarted,
+            EventKind::ToolCallCompleted
         ]
     );
     let action = four[0].action_id.clone().unwrap();
@@ -1701,7 +1698,7 @@ fn a_call_settle_writes_a_foreign_action_under_that_action_and_its_own_turn() {
     let lines = durable(&ran.lines);
     let at = lines
         .iter()
-        .position(|line| line.kind == "tool_call_started")
+        .position(|line| line.kind() == EventKind::ToolCallStarted)
         .expect("a tool_call_started line");
     let five = &lines[at..at + 5];
     let action = five[0].action_id.clone().unwrap();
@@ -1868,7 +1865,7 @@ fn two_calls_settles_write_under_their_own_actions() {
     let lines = durable(&ran.lines);
     let starts: Vec<&&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_started")
+        .filter(|line| line.kind() == EventKind::ToolCallStarted)
         .collect();
     assert_eq!(starts.len(), 2);
     let first_action = starts[0].action_id.clone().unwrap();
@@ -1876,7 +1873,7 @@ fn two_calls_settles_write_under_their_own_actions() {
     assert_ne!(first_action, second_action);
     let completed = lines
         .iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("a settled job_completed");
     assert_eq!(completed.payload["job_id"], settled);
     assert_eq!(
@@ -2111,7 +2108,7 @@ fn a_cancelled_call_still_runs_its_settle_before_its_completion() {
     let lines = durable(&ran.lines);
     let at = lines
         .iter()
-        .position(|line| line.kind == "tool_call_started")
+        .position(|line| line.kind() == EventKind::ToolCallStarted)
         .expect("a tool_call_started line");
     let five = &lines[at..at + 5];
     assert_eq!(five[1].payload["job_id"], settled);
@@ -2177,7 +2174,7 @@ fn searched_completed(ran: &Ran) -> &Envelope {
     ran.lines
         .iter()
         .filter(|line| line.seq.is_some())
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .expect("a tool_call_completed")
 }
 

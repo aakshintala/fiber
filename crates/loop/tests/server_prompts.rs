@@ -298,7 +298,7 @@ fn a_failed_prompt_is_rejected_and_starts_no_turn() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.kind == "turn_started")
+            .filter(|line| line.kind() == EventKind::TurnStarted)
             .count(),
         1
     );

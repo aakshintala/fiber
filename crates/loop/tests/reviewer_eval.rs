@@ -16,9 +16,9 @@
 mod support;
 
 use contract::events::{
-    AskStep, DecidedBy, Decision, Event, InputItem, PermissionRequested, PermissionResolved,
-    SessionStarted, ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables,
-    VariablesSource,
+    AskStep, DecidedBy, Decision, Event, EventKind, InputItem, PermissionRequested,
+    PermissionResolved, SessionStarted, ToolCallRequested, ToolCallStarted, TurnOutcome,
+    TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
@@ -1184,7 +1184,7 @@ fn fold_until(dir: &Path, action: &str) -> Vec<r#loop::Reviewed> {
             envelope.action_id.as_ref(),
             envelope.seq,
         );
-        if envelope.kind == "tool_call_requested"
+        if envelope.kind() == EventKind::ToolCallRequested
             && envelope.action_id.as_ref().is_some_and(|id| id.0 == action)
         {
             break;

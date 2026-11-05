@@ -112,7 +112,7 @@ fn run_a_with_tail(tail: Vec<Scripted>) -> Session {
 fn point(lines: &[Envelope]) -> u64 {
     let mut starts = lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .map(|line| line.seq.unwrap().0);
     starts.next().unwrap();
     starts.next().unwrap() - 1
@@ -221,7 +221,7 @@ fn run_turn(b: Loop, tx: &mpsc::Sender<Delivery>, text: &str) -> Loop {
 fn session_started(lines: &[Envelope]) -> &Envelope {
     lines
         .iter()
-        .find(|line| line.kind == "session_started")
+        .find(|line| line.kind() == EventKind::SessionStarted)
         .unwrap()
 }
 
@@ -265,7 +265,7 @@ fn a_rewound_session_holds_only_its_own_first_line_before_its_prompt() {
 fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
     // The rewind stopped the old session's jobs, so a `job_started` the old
     // log never ended writes no orphaned `job_completed` there.
-    use contract::events::JobStarted;
+    use contract::events::{EventKind, JobStarted};
     let session = run_a();
     session
         .log
@@ -300,7 +300,9 @@ fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
     let _b = run_turn(b, &tx, "three");
     let lines = log::read(&dir).unwrap();
     assert!(
-        lines.iter().all(|line| line.kind != "job_completed"),
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::JobCompleted),
         "no orphaned completion is written"
     );
     let first = &provider.requests()[0];
@@ -369,7 +371,9 @@ fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let lines = log::read(&dir).unwrap();
     assert!(
-        lines.iter().any(|line| line.kind == "handoff_completed"),
+        lines
+            .iter()
+            .any(|line| line.kind() == EventKind::HandoffCompleted),
         "the handoff ran"
     );
     // The next turn sends the restarted conversation: the carried input,
@@ -426,7 +430,7 @@ fn a_rewound_sessions_first_request_matches_the_olds_at_the_point() {
     // The sent tools are the logged build, verbatim.
     let built = a_lines
         .iter()
-        .find(|line| line.kind == "preamble_built")
+        .find(|line| line.kind() == EventKind::PreambleBuilt)
         .unwrap();
     let logged: Vec<Value> = built.payload["tools"]
         .as_array()
@@ -460,7 +464,8 @@ fn a_rewound_sessions_first_request_matches_the_olds_at_the_point() {
     assert!(
         lines
             .iter()
-            .all(|line| line.kind != "preamble_built" && line.kind != "opening_message")
+            .all(|line| line.kind() != EventKind::PreambleBuilt
+                && line.kind() != EventKind::OpeningMessage)
     );
 }
 
@@ -762,7 +767,7 @@ fn a_rewind_of_a_rewind_folds_both_points_in_order() {
     let b_lines = log::read(&b_dir).unwrap();
     let b_turn = b_lines
         .iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .unwrap()
         .seq
         .unwrap()
@@ -892,7 +897,7 @@ fn an_image_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
     let lines = log::read(&session.dir).unwrap();
     let start = lines
         .iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .unwrap()
         .seq
         .unwrap()
@@ -994,7 +999,7 @@ fn a_pdf_in_the_inherited_history_reads_from_the_session_that_wrote_it() {
     let lines = log::read(&session.dir).unwrap();
     let at = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap()
         .seq
         .unwrap()
@@ -1726,7 +1731,7 @@ fn a_budget_or_hook_stop_sends_no_summary_request() {
             lines.last().unwrap().payload["error"]["code"],
             "budget_exceeded"
         );
-        assert!(lines.iter().all(|line| line.kind != "rewound"));
+        assert!(lines.iter().all(|line| line.kind() != EventKind::Rewound));
         let (looped, tx, provider) =
             resume_existing(&session, "s_test", vec![Scripted::text("next")]);
         drop(run_turn(looped, &tx, "next"));
@@ -1830,7 +1835,7 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
                 .collect::<Vec<_>>()
         );
         assert_eq!(lines[summary_end].payload["outcome"], outcome);
-        assert!(lines.iter().all(|line| line.kind != "rewound"));
+        assert!(lines.iter().all(|line| line.kind() != EventKind::Rewound));
         let mut conversation = last.conversation.to_vec();
         conversation.push(Input::Assistant {
             model: MODEL.into(),
@@ -1851,14 +1856,14 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
         );
         let tool = lines[before..=summary_end]
             .iter()
-            .find(|line| line.kind == "tool_call_completed");
+            .find(|line| line.kind() == EventKind::ToolCallCompleted);
         if let Some(tool) = tool {
             assert_eq!(tool.payload["status"], "cancelled");
         }
         assert!(
             lines[before..=summary_end]
                 .iter()
-                .all(|line| line.kind != "tool_call_started")
+                .all(|line| line.kind() != EventKind::ToolCallStarted)
         );
     }
 }
@@ -1959,7 +1964,7 @@ fn a_failed_summary_reuses_its_new_preamble_at_the_next_prompt() {
     assert_eq!(
         lines[before..]
             .iter()
-            .filter(|line| line.kind == "preamble_built")
+            .filter(|line| line.kind() == EventKind::PreambleBuilt)
             .count(),
         1
     );
@@ -2050,7 +2055,7 @@ fn a_crashed_summary_window_closes_for_the_reviewer_and_conversation() {
         .unwrap()
         .iter()
         .rev()
-        .find(|line| line.kind == "usage_recorded")
+        .find(|line| line.kind() == EventKind::UsageRecorded)
         .and_then(|line| contract::events::Event::from_envelope(line).unwrap())
         .unwrap();
     let events = [
@@ -2178,10 +2183,12 @@ fn a_summary_retry_is_one_turn_with_two_billed_attempts() {
         tail[0].payload["input"],
         json!([{"type":"rewind", "command_id":"c_rewind"}])
     );
-    let (_, observed) = read_until(watcher, "the retried rewind", |line| line.kind == "rewound");
+    let (_, observed) = read_until(watcher, "the retried rewind", |line| {
+        line.kind() == EventKind::Rewound
+    });
     let retries: Vec<_> = observed
         .iter()
-        .filter(|line| line.kind == "retry_scheduled")
+        .filter(|line| line.kind() == EventKind::RetryScheduled)
         .collect();
     assert_eq!(retries.len(), 1);
     assert_eq!(retries[0].payload["delay_ms"], 2000);
@@ -2221,7 +2228,7 @@ impl contract::repository::RepositoryCode for SummaryRepository {
 #[test]
 fn prompts_deferred_by_the_repository_offer_are_answered_after_the_summary() {
     use contract::events::{
-        Clients, Event, OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered,
+        Clients, Event, EventKind, OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered,
     };
     for success in [true, false] {
         let session = run_a();
@@ -2295,13 +2302,13 @@ fn prompts_deferred_by_the_repository_offer_are_answered_after_the_summary() {
                 rejection.message,
                 "The session was rewound and takes no more commands."
             );
-            assert_eq!(lines.last().unwrap().kind, "rewound");
+            assert_eq!(lines.last().unwrap().kind(), EventKind::Rewound);
             assert_eq!(provider.requests().len(), 1);
         } else {
             assert_eq!(outcome, Some(TurnOutcome::Completed));
             assert_eq!(rejected(answer_of(answer)).code, ErrorCode::SummaryFailed);
             assert!(answer_of(prompt_answer).is_ok());
-            assert!(lines.iter().all(|line| line.kind != "rewound"));
+            assert!(lines.iter().all(|line| line.kind() != EventKind::Rewound));
             assert_eq!(provider.requests().len(), 2);
             assert!(
                 matches!(provider.requests()[1].conversation.last(), Some(Input::User { text, .. }) if text == "deferred prompt")
@@ -2396,7 +2403,7 @@ fn a_summary_after_an_idle_switch_uses_the_new_model_and_preamble() {
     let lines = log::read(&session.dir).unwrap();
     let built = lines
         .iter()
-        .rfind(|line| line.kind == "preamble_built")
+        .rfind(|line| line.kind() == EventKind::PreambleBuilt)
         .unwrap();
     assert_eq!(built.payload["model"], "fake/switched");
 }
@@ -2417,15 +2424,12 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     // The log's last line is `rewound`, naming the new session and the
     // point, with no `from_session_id` key for this session's own point.
     let lines = log::read(&session.dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(2)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "turn_completed"]);
+    let tail: Vec<EventKind> = lines.iter().rev().take(2).map(|line| line.kind()).collect();
+    assert_eq!(tail, [EventKind::Rewound, EventKind::TurnCompleted]);
     assert!(
-        lines.iter().all(|line| line.kind != "fiber_exited"),
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::FiberExited),
         "no `fiber_exited` follows `rewound`"
     );
     let last = lines.last().unwrap();
@@ -2444,7 +2448,7 @@ fn a_default_rewind_closes_the_session_and_names_the_new_one() {
     ran.result.unwrap();
     let after = log::read(&session.dir).unwrap();
     assert_eq!(after.len(), count, "`run` writes nothing after `rewound`");
-    assert_eq!(after.last().unwrap().kind, "rewound");
+    assert_eq!(after.last().unwrap().kind(), EventKind::Rewound);
     // The exit knows the session rewound from the run's own summary: it
     // writes nothing and reports the run's error.
     let exited = r#loop::fiber_exited(&session.log, &ran.summary, Ok(()), false, None).unwrap();
@@ -2498,9 +2502,9 @@ fn an_at_end_rewind_continues_from_the_admission_time_point() {
     // (`docs/events.md`, "Rewind": "`rewound` is the last line the process
     // writes to that log".)
     let lines = log::read(&session.dir).unwrap();
-    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
-    let mut expected: Vec<&str> = before.iter().map(|line| line.kind.as_str()).collect();
-    expected.push("rewound");
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    let mut expected: Vec<EventKind> = before.iter().map(|line| line.kind()).collect();
+    expected.push(EventKind::Rewound);
     assert_eq!(kinds, expected, "{kinds:?}");
     let last = lines.last().unwrap();
     assert_eq!(last.payload["new_session_id"], json!(new.0));
@@ -2537,10 +2541,10 @@ fn an_at_end_rewind_continues_from_the_admission_time_point() {
         json!({"session_id": "s_test", "seq": at})
     );
     assert!(first.payload.get("parent").is_none());
-    assert_eq!(b_lines[1].kind, "session_named");
+    assert_eq!(b_lines[1].kind(), EventKind::SessionNamed);
     assert_eq!(b_lines[1].payload["name"], json!("fork-name"));
     assert!(
-        b_lines.iter().all(|line| line.kind != "rewound"),
+        b_lines.iter().all(|line| line.kind() != EventKind::Rewound),
         "the child holds no line from after the point"
     );
     let _b = run_turn(b, &tx, "three");
@@ -2596,7 +2600,7 @@ fn an_at_end_rewind_includes_a_line_appended_after_the_send() {
     let new = accepted(answer_of(answered));
     assert_minted(&new);
     let lines = log::read(&session.dir).unwrap();
-    assert_eq!(lines.last().unwrap().kind, "rewound");
+    assert_eq!(lines.last().unwrap().kind(), EventKind::Rewound);
     assert_eq!(
         lines.last().unwrap().payload["seq"],
         json!(appended),
@@ -2639,7 +2643,7 @@ fn an_at_end_rewind_refuses_a_tool_call_with_no_recorded_result() {
         log::read(&session.dir)
             .unwrap()
             .iter()
-            .all(|line| line.kind != "rewound")
+            .all(|line| line.kind() != EventKind::Rewound)
     );
 }
 
@@ -2751,7 +2755,7 @@ fn an_explicit_seq_at_a_boundary_is_accepted() {
     let lines = log::read(&session.dir).unwrap();
     let first_turn = lines
         .iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .unwrap()
         .seq
         .unwrap()
@@ -2763,7 +2767,7 @@ fn an_explicit_seq_at_a_boundary_is_accepted() {
     accepted(answer_of(answered));
     assert_eq!(outcome, None);
     let lines = log::read(&session.dir).unwrap();
-    assert_eq!(lines.last().unwrap().kind, "rewound");
+    assert_eq!(lines.last().unwrap().kind(), EventKind::Rewound);
     assert_eq!(lines.last().unwrap().payload["seq"], json!(first_turn - 1));
 }
 
@@ -2939,7 +2943,7 @@ fn a_rewind_during_a_turn_is_busy() {
         log::read(&session.dir)
             .unwrap()
             .iter()
-            .all(|line| line.kind != "rewound"),
+            .all(|line| line.kind() != EventKind::Rewound),
         "the refused rewind closes nothing"
     );
 }
@@ -3013,7 +3017,7 @@ fn a_rewind_while_an_approval_waits_is_busy() {
     let inbox = session.inbox.clone();
     let waiting = thread::spawn(move || {
         let (_, lines) = read_until(watcher, "a permission_requested line", |line| {
-            line.kind == "permission_requested"
+            line.kind() == EventKind::PermissionRequested
         });
         let id = lines.last().unwrap().payload["request_id"]
             .as_str()
@@ -3073,7 +3077,7 @@ fn a_prompt_and_a_rewind_in_one_batch_runs_the_turn_and_refuses_the_rewind() {
         log::read(&session.dir)
             .unwrap()
             .iter()
-            .all(|line| line.kind != "rewound")
+            .all(|line| line.kind() != EventKind::Rewound)
     );
 }
 
@@ -3115,13 +3119,8 @@ fn a_rewind_before_a_prompt_and_a_close_refuses_both_closing() {
     }
     // Nothing is written after `rewound`.
     let lines = log::read(&session.dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(2)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "turn_completed"]);
+    let tail: Vec<EventKind> = lines.iter().rev().take(2).map(|line| line.kind()).collect();
+    assert_eq!(tail, [EventKind::Rewound, EventKind::TurnCompleted]);
 }
 
 #[test]
@@ -3159,7 +3158,7 @@ fn a_rewind_naming_its_own_session_rewinds() {
     assert_eq!(outcome, None);
     let lines = log::read(&session.dir).unwrap();
     let last = lines.last().unwrap();
-    assert_eq!(last.kind, "rewound");
+    assert_eq!(last.kind(), EventKind::Rewound);
     assert_eq!(last.payload["seq"], json!(at));
     assert!(last.payload.get("from_session_id").is_none());
 }
@@ -3267,7 +3266,7 @@ fn run_chained_a() -> (Session, u64, u64, u64) {
     let lines = log::read(&session.dir).unwrap();
     let mut starts = lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .map(|line| line.seq.unwrap().0);
     let first = starts.next().unwrap();
     let second = starts.next().unwrap();
@@ -3296,7 +3295,7 @@ fn a_rewind_to_an_ancestor_point_names_that_session() {
     let lines = log::read(&dir).unwrap();
     assert_eq!(lines.len(), count + 1, "only `rewound` is written");
     let last = lines.last().unwrap();
-    assert_eq!(last.kind, "rewound");
+    assert_eq!(last.kind(), EventKind::Rewound);
     assert_eq!(last.payload["seq"], json!(first - 1));
     assert_eq!(last.payload["from_session_id"], json!(A_ID));
     assert!(last.payload.get("jobs").is_none());
@@ -3348,7 +3347,7 @@ fn the_default_point_under_a_bound_is_the_ancestor_turn_before_it() {
     assert_eq!(outcome, None);
     let lines = log::read(&dir).unwrap();
     let last = lines.last().unwrap();
-    assert_eq!(last.kind, "rewound");
+    assert_eq!(last.kind(), EventKind::Rewound);
     assert_eq!(last.payload["seq"], json!(first - 1));
     assert_eq!(last.payload["from_session_id"], json!(A_ID));
 }
@@ -3395,7 +3394,7 @@ fn a_summary_checks_jobs_and_the_point_before_starting() {
     assert_eq!(rejected(answer_of(answered)).code, ErrorCode::SummaryFailed);
     let lines = log::read(&dir).unwrap();
     assert!(lines.len() > before, "the failed summary keeps its turn");
-    assert!(lines.iter().all(|line| line.kind != "rewound"));
+    assert!(lines.iter().all(|line| line.kind() != EventKind::Rewound));
 }
 
 /// Loop-level handoff rewinds (`docs/events.md`, "Rewind"): session A runs
@@ -3456,7 +3455,7 @@ fn run_a_handed() -> Session {
 fn turn_start(lines: &[Envelope], nth: usize) -> u64 {
     lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .nth(nth - 1)
         .unwrap()
         .seq
@@ -3481,17 +3480,17 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
     let a_lines = log::read(&session.dir).unwrap();
     // The handoff ran in turn 1: its completion and the new opening sit
     // between the two turns.
-    let kinds: Vec<&str> = a_lines.iter().map(|line| line.kind.as_str()).collect();
+    let kinds: Vec<EventKind> = a_lines.iter().map(|line| line.kind()).collect();
     let completed = kinds
         .iter()
-        .position(|kind| *kind == "handoff_completed")
+        .position(|kind| *kind == EventKind::HandoffCompleted)
         .unwrap();
-    assert_eq!(kinds[completed + 1], "opening_message");
+    assert_eq!(kinds[completed + 1], EventKind::OpeningMessage);
     assert!(
         completed
             < kinds
                 .iter()
-                .position(|kind| *kind == "turn_completed")
+                .position(|kind| *kind == EventKind::TurnCompleted)
                 .unwrap()
     );
     let a_requests = session.provider.requests();
@@ -3563,14 +3562,14 @@ fn a_rewound_session_before_a_handoff_ignores_it() {
     // handoff: the tool results answered, the next line a `step_started`.
     let handoff = a_lines
         .iter()
-        .find(|line| line.kind == "handoff_started")
+        .find(|line| line.kind() == EventKind::HandoffStarted)
         .unwrap()
         .seq
         .unwrap()
         .0;
     let step = a_lines
         .iter()
-        .rfind(|line| line.kind == "step_started" && line.seq.unwrap().0 < handoff)
+        .rfind(|line| line.kind() == EventKind::StepStarted && line.seq.unwrap().0 < handoff)
         .unwrap()
         .seq
         .unwrap()
@@ -3581,8 +3580,8 @@ fn a_rewound_session_before_a_handoff_ignores_it() {
             .iter()
             .find(|line| line.seq.unwrap().0 == step)
             .unwrap()
-            .kind,
-        "step_started"
+            .kind(),
+        EventKind::StepStarted
     );
     // A's note request: the history to the point, then the handoff's
     // instruction. It is the only request ending in one.
@@ -3768,7 +3767,7 @@ fn known_hosts_rewind_retains_hosts_before_the_point_and_reviews_later_hosts() {
     assert_eq!(reviewer.requests().len(), 1);
     let resolved = lines
         .iter()
-        .find(|line| line.kind == "permission_resolved")
+        .find(|line| line.kind() == EventKind::PermissionResolved)
         .unwrap();
     assert_eq!(resolved.payload["hosts"], json!(["https://after.test/"]));
     for tool in tools {

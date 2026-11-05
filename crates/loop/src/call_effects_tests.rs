@@ -195,7 +195,7 @@ fn run_decided(
     tool: Arc<dyn Tool>,
     effects: Effects,
     watcher: &mut log::Watcher,
-) -> Vec<(String, contract::Envelope)> {
+) -> Vec<(EventKind, contract::Envelope)> {
     let prepared = Prepared {
         tool,
         arguments: Map::new(),
@@ -222,40 +222,38 @@ fn run_decided(
         .unwrap();
     let mut lines = Vec::new();
     while let Some(line) = watcher.try_recv().unwrap() {
-        lines.push((line.kind.clone(), line));
+        lines.push((line.kind(), line));
     }
     lines
 }
 
-fn kinds(lines: &[(String, contract::Envelope)]) -> Vec<EventKind> {
-    lines
-        .iter()
-        .map(|(kind, _)| EventKind::from_name(kind))
-        .collect()
+fn kinds(lines: &[(EventKind, contract::Envelope)]) -> Vec<EventKind> {
+    lines.iter().map(|(kind, _)| kind.clone()).collect()
 }
 
 fn line_for(
-    lines: &[(String, contract::Envelope)],
+    lines: &[(EventKind, contract::Envelope)],
     kind: &str,
     action: &str,
 ) -> contract::Envelope {
     lines
         .iter()
         .find(|(line_kind, line)| {
-            line_kind == kind && line.action_id.as_ref().is_some_and(|id| id.0 == action)
+            *line_kind == EventKind::from_name(kind)
+                && line.action_id.as_ref().is_some_and(|id| id.0 == action)
         })
         .map(|(_, line)| line.clone())
         .unwrap_or_else(|| panic!("a {kind} line for {action}"))
 }
 
-fn started_confined(lines: &[(String, contract::Envelope)], action: &str) {
+fn started_confined(lines: &[(EventKind, contract::Envelope)], action: &str) {
     let line = line_for(lines, "tool_call_started", action);
     let started: ToolCallStarted =
         serde_json::from_value(Value::Object(line.payload.clone())).expect("a started payload");
     assert!(started.declared.confined, "the start declares confined");
 }
 
-fn completed_failed(lines: &[(String, contract::Envelope)], action: &str) {
+fn completed_failed(lines: &[(EventKind, contract::Envelope)], action: &str) {
     let line = line_for(lines, "tool_call_completed", action);
     let completed: ToolCallCompleted =
         serde_json::from_value(Value::Object(line.payload.clone())).expect("a completed payload");
@@ -326,7 +324,7 @@ fn an_inner_call_receives_the_exact_prepared_effects() {
     // its own action.
     let inner_action = lines
         .iter()
-        .find(|(kind, _)| kind == "tool_call_requested")
+        .find(|(kind, _)| *kind == EventKind::ToolCallRequested)
         .expect("an inner request")
         .1
         .action_id

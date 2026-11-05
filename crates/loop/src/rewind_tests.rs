@@ -12,9 +12,9 @@ use std::fs;
 use std::path::Path;
 
 use contract::events::{
-    Empty, Environment, Event, FiberStarted, HandoffCompleted, HandoffStarted, HandoffTrigger,
-    InputItem, Note, OpeningMessage, Outcome, TextCompleted, ToolCallRequested, ToolCallStarted,
-    TurnStarted, Variables, VariablesSource,
+    Empty, Environment, Event, EventKind, FiberStarted, HandoffCompleted, HandoffStarted,
+    HandoffTrigger, InputItem, Note, OpeningMessage, Outcome, TextCompleted, ToolCallRequested,
+    ToolCallStarted, TurnStarted, Variables, VariablesSource,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId};
@@ -572,14 +572,14 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
         },
     )
     .unwrap();
-    let kinds: Vec<String> = log::read(&dir)
+    let kinds: Vec<EventKind> = log::read(&dir)
         .unwrap()
         .iter()
-        .map(|line| line.kind.clone())
+        .map(|line| line.kind())
         .collect();
     // The fold ends on the switch's `after`, but the session continues
     // the build at the point, whose label is unchanged: no `model_changed`.
-    assert_eq!(kinds, ["session_started"]);
+    assert_eq!(kinds, [EventKind::SessionStarted]);
 }
 
 /// A parent log holding `events` in order, and the rewound child loop
@@ -746,8 +746,8 @@ fn a_rewound_loop_copies_the_parents_person_name_and_pins() {
         1,
     );
     let lines = log::read(&dir).unwrap();
-    let kinds: Vec<String> = lines.iter().map(|line| line.kind.clone()).collect();
-    assert_eq!(kinds, ["session_started", "session_named"]);
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    assert_eq!(kinds, [EventKind::SessionStarted, EventKind::SessionNamed]);
     let Some(Event::SessionNamed(named)) = Event::from_envelope(&lines[1]).unwrap() else {
         panic!("the second line is the copied session_named");
     };
@@ -777,8 +777,8 @@ fn a_rewound_loop_copies_the_latest_session_named_past_other_lines() {
         3,
     );
     let lines = log::read(&dir).unwrap();
-    let kinds: Vec<String> = lines.iter().map(|line| line.kind.clone()).collect();
-    assert_eq!(kinds, ["session_started", "session_named"]);
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    assert_eq!(kinds, [EventKind::SessionStarted, EventKind::SessionNamed]);
     let Some(Event::SessionNamed(named)) = Event::from_envelope(&lines[1]).unwrap() else {
         panic!("the second line is the copied session_named");
     };
@@ -804,8 +804,8 @@ fn a_rewound_loop_with_an_unnamed_parent_writes_no_session_named() {
         1,
     );
     let lines = log::read(&dir).unwrap();
-    let kinds: Vec<String> = lines.iter().map(|line| line.kind.clone()).collect();
-    assert_eq!(kinds, ["session_started"]);
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    assert_eq!(kinds, [EventKind::SessionStarted]);
     assert!(!pinned(&dir));
 }
 
@@ -1727,14 +1727,14 @@ fn a_forked_loop_writes_no_model_changed_for_a_later_label_switch() {
         },
     )
     .unwrap();
-    let kinds: Vec<String> = log::read(&dir)
+    let kinds: Vec<EventKind> = log::read(&dir)
         .unwrap()
         .iter()
-        .map(|line| line.kind.clone())
+        .map(|line| line.kind())
         .collect();
     // The fold ends on the switch's `after`, but the session continues
     // the build at the point, whose label is unchanged: no `model_changed`.
-    assert_eq!(kinds, ["session_started"]);
+    assert_eq!(kinds, [EventKind::SessionStarted]);
     let lines = log::read(&dir).unwrap();
     assert_eq!(lines[0].payload["parent"]["delegate_id"], "j_fork");
     assert!(lines[0].payload.get("rewind").is_none());

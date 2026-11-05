@@ -212,7 +212,7 @@ fn a_session_message_mid_turn_is_applied_as_steering_at_the_next_step() {
     );
     let queued: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "steering_queue")
+        .filter(|line| line.kind() == EventKind::SteeringQueue)
         .collect();
     assert_eq!(queued.len(), 2);
     assert_eq!(queued[0].payload["messages"][0]["source"], "session");
@@ -221,7 +221,7 @@ fn a_session_message_mid_turn_is_applied_as_steering_at_the_next_step() {
     assert_eq!(queued[1].payload["messages"], json!([]));
     let applied = lines
         .iter()
-        .find(|line| line.kind == "steering_applied")
+        .find(|line| line.kind() == EventKind::SteeringApplied)
         .expect("the message applies");
     assert_eq!(applied.payload["source"], "session");
     assert_eq!(applied.payload["from_session_id"], FROM);
@@ -309,7 +309,7 @@ fn a_steer_drop_naming_a_queued_session_message_mid_turn_is_stale_and_the_messag
     let lines = session.lines();
     let applied = lines
         .iter()
-        .find(|line| line.kind == "steering_applied")
+        .find(|line| line.kind() == EventKind::SteeringApplied)
         .expect("the message applies");
     assert_eq!(applied.payload["command_id"], COMMAND);
     assert_eq!(applied.payload["content"][0]["text"], json!(NAMED));

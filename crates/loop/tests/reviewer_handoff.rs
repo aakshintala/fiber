@@ -73,7 +73,7 @@ fn turn_started_seq(lines: &[Envelope], text: &str) -> u64 {
     lines
         .iter()
         .find(|line| {
-            line.kind == "turn_started"
+            line.kind() == EventKind::TurnStarted
                 && line.payload["input"].as_array().is_some_and(|input| {
                     input.iter().any(|item| {
                         item["content"]
@@ -92,7 +92,7 @@ fn turn_started_seq(lines: &[Envelope], text: &str) -> u64 {
 fn kept_lines(lines: &[Envelope]) -> Vec<&Envelope> {
     lines
         .iter()
-        .filter(|line| line.kind == "reviewer_kept")
+        .filter(|line| line.kind() == EventKind::ReviewerKept)
         .collect()
 }
 
@@ -100,7 +100,7 @@ fn kept_lines(lines: &[Envelope]) -> Vec<&Envelope> {
 fn notice<'a>(lines: &'a [Envelope], code: &str) -> Option<&'a Envelope> {
     lines
         .iter()
-        .find(|line| line.kind == "notice" && line.payload["code"] == code)
+        .find(|line| line.kind() == EventKind::Notice && line.payload["code"] == code)
 }
 
 /// A reviewer request's conversation texts. Every reviewer item is a user
@@ -1490,7 +1490,7 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
     let selection: Vec<_> = lines
         .iter()
         .filter(|line| {
-            line.kind == "usage_recorded"
+            line.kind() == EventKind::UsageRecorded
                 && line.turn_id == turn
                 && line.payload["model"] == REVIEWER_MODEL
         })
@@ -1505,12 +1505,15 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
     // carries a reviewer.
     let calls: Vec<String> = lines
         .iter()
-        .filter(|line| line.kind == "permission_resolved")
+        .filter(|line| line.kind() == EventKind::PermissionResolved)
         .filter_map(|line| line.action_id.as_ref().map(|id| id.0.clone()))
         .collect();
     assert_eq!(calls.len(), 2);
     let mut stages = 0;
-    for line in lines.iter().filter(|line| line.kind == "usage_recorded") {
+    for line in lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::UsageRecorded)
+    {
         if line.payload["model"] == REVIEWER_MODEL {
             if line.turn_id == turn {
                 continue;

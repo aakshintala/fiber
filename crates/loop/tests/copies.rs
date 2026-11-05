@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::Envelope;
-use contract::events::TurnOutcome;
+use contract::events::{EventKind, TurnOutcome};
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
     BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
@@ -87,7 +87,7 @@ fn turn(tool: TestTool, hooks: Option<Arc<dyn Hooks>>) -> (Session, Vec<Envelope
 fn assert_cut(session: &Session, lines: &[Envelope], full: &str) {
     let done = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     let id = done.action_id.clone().unwrap().0;
     let artifact = format!("artifacts/{id}.txt");

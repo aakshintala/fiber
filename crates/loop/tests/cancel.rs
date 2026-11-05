@@ -70,7 +70,10 @@ fn cancel_mid_stream_writes_no_completion_and_ends_interrupted() {
         ]
         .map(EventKind::from_name)
     );
-    let started = next.iter().find(|l| l.kind == "turn_started").unwrap();
+    let started = next
+        .iter()
+        .find(|l| l.kind() == EventKind::TurnStarted)
+        .unwrap();
     let input: Vec<&str> = started.payload["input"]
         .as_array()
         .unwrap()
@@ -133,7 +136,7 @@ fn a_cancel_landing_between_steps_sends_no_request() {
     assert_eq!(
         lines
             .iter()
-            .filter(|l| l.kind == "assistant_message_started")
+            .filter(|l| l.kind() == EventKind::AssistantMessageStarted)
             .count(),
         1
     );
@@ -238,14 +241,14 @@ fn a_running_call_completes_cancelled_and_a_denied_call_behind_it_does_too() {
     assert!(
         lines[at..]
             .iter()
-            .filter(|l| l.kind == "tool_call_delta")
+            .filter(|l| l.kind() == EventKind::ToolCallDelta)
             .all(|l| l.action_id.as_ref() != Some(&slow_id))
     );
     // The denied call behind it completes cancelled, and its deny line stays.
     assert_eq!(done[1].payload["status"], "cancelled");
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "deny");
@@ -362,13 +365,13 @@ fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
     );
     let requested: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     let request_id = requested[0].payload["request_id"].clone();
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "deny");
@@ -389,7 +392,7 @@ fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
     assert!(
         lines
             .iter()
-            .filter(|l| l.kind == "tool_call_started")
+            .filter(|l| l.kind() == EventKind::ToolCallStarted)
             .count()
             == 0
     );
@@ -455,7 +458,7 @@ fn a_cancelled_review_completes_cancelled() {
     // The review keeps its resolved line, decided by the cancel.
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "deny");
@@ -465,7 +468,7 @@ fn a_cancelled_review_completes_cancelled() {
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "cancelled");
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
     assert_eq!(session.requests().len(), 1);
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
@@ -526,7 +529,7 @@ fn an_approved_call_cancelled_while_a_later_call_waits_never_starts() {
     );
     // The approved call never started: no `tool_call_started`, and neither
     // tool ran.
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
     assert!(fast.ran.lock().unwrap().is_empty());
     assert!(ask.ran.lock().unwrap().is_empty());
     let done = completed(&lines);
@@ -536,7 +539,7 @@ fn an_approved_call_cancelled_while_a_later_call_waits_never_starts() {
     // The waiting call keeps its deny-by-cancel line.
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decided_by"], "cancel");
@@ -620,7 +623,7 @@ fn a_reply_queued_ahead_of_the_cancel_wake_is_rejected() {
     // turn ends interrupted.
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "deny");
@@ -629,7 +632,7 @@ fn a_reply_queued_ahead_of_the_cancel_wake_is_rejected() {
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "cancelled");
     assert!(ask.ran.lock().unwrap().is_empty());
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
 
@@ -766,7 +769,7 @@ fn a_stale_cancel_wake_does_not_end_a_later_approval() {
     // call ran.
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "allow");
@@ -847,7 +850,10 @@ fn kept_steering_starts_the_next_turn_without_waiting() {
         ]
         .map(EventKind::from_name)
     );
-    let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
+    let started = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::TurnStarted)
+        .unwrap();
     let input: Vec<&str> = started.payload["input"]
         .as_array()
         .unwrap()
@@ -858,7 +864,7 @@ fn kept_steering_starts_the_next_turn_without_waiting() {
     // The queue drained into the turn: the last queue line is empty.
     let queues: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "steering_queue")
+        .filter(|l| l.kind() == EventKind::SteeringQueue)
         .collect();
     assert!(!queues.is_empty());
     assert_eq!(
@@ -950,7 +956,7 @@ fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
     );
     let after = log::read(&session.dir).unwrap();
     assert_eq!(after.len(), before, "a stale reply logs nothing");
-    assert_eq!(after.last().unwrap().kind, "turn_completed");
+    assert_eq!(after.last().unwrap().kind(), EventKind::TurnCompleted);
 }
 
 #[test]
@@ -1022,7 +1028,10 @@ fn a_kept_steer_with_a_clean_inbox_starts_the_next_turn_without_blocking() {
         ]
         .map(EventKind::from_name)
     );
-    let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
+    let started = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::TurnStarted)
+        .unwrap();
     let input: Vec<&str> = started.payload["input"]
         .as_array()
         .unwrap()
@@ -1062,7 +1071,7 @@ fn a_shutdown_mid_stream_ends_the_turn_interrupted_and_starts_no_other() {
     // The steer that arrived during the call starts no turn.
     assert_eq!(session.turn(), None);
     let written = log::read(&session.dir).unwrap();
-    assert_eq!(written.last().unwrap().kind, "turn_completed");
+    assert_eq!(written.last().unwrap().kind(), EventKind::TurnCompleted);
 }
 
 #[test]
@@ -1178,7 +1187,7 @@ fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
     let lines = session.lines();
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "allow");
@@ -1188,9 +1197,9 @@ fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
     assert_eq!(done[0].payload["status"], "cancelled");
     assert_eq!(text_all(done[0]), "");
     assert_eq!(done[0].payload.get("artifact"), None);
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
     assert!(ask.ran.lock().unwrap().is_empty());
-    assert_eq!(lines.last().unwrap().kind, "turn_completed");
+    assert_eq!(lines.last().unwrap().kind(), EventKind::TurnCompleted);
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 
     let written = r#loop::fiber_exited(
@@ -1203,7 +1212,7 @@ fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
     .unwrap();
     assert_eq!(written.code, 143);
     let exited = log::read(&session.dir).unwrap().pop().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.kind(), EventKind::FiberExited);
     assert!(exited.payload.get("suspended_on").is_none());
 }
 
@@ -1247,7 +1256,7 @@ fn a_reply_taken_before_a_cancel_keeps_its_text() {
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "cancelled");
     assert_eq!(text_all(done[0]), "Cancelled before it ran.");
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
     assert!(ask.ran.lock().unwrap().is_empty());
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
@@ -1466,12 +1475,12 @@ fn a_result_held_behind_a_running_call_completes_cancelled_with_its_content() {
     // completion: nothing from it follows.
     let requested: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_requested")
+        .filter(|l| l.kind() == EventKind::ToolCallRequested)
         .collect();
     let quick_id = requested[1].action_id.clone();
     let deltas: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_delta")
+        .filter(|l| l.kind() == EventKind::ToolCallDelta)
         .collect();
     assert_eq!(deltas.len(), 2);
     assert!(deltas.iter().all(|l| l.action_id == quick_id));
@@ -1484,7 +1493,7 @@ fn a_result_held_behind_a_running_call_completes_cancelled_with_its_content() {
     assert!(
         lines[at..]
             .iter()
-            .filter(|l| l.kind == "tool_call_delta")
+            .filter(|l| l.kind() == EventKind::ToolCallDelta)
             .all(|l| l.action_id.as_ref() != quick_id.as_ref())
     );
     assert_eq!(session.requests().len(), 1);

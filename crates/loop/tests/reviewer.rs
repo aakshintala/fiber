@@ -40,13 +40,16 @@ fn go(session: &mut Session) -> Vec<Envelope> {
 }
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
-    lines.iter().find(|l| l.kind == kind).unwrap()
+    lines
+        .iter()
+        .find(|l| l.kind() == EventKind::from_name(kind))
+        .unwrap()
 }
 
 fn usages(lines: &[Envelope]) -> Vec<&Envelope> {
     lines
         .iter()
-        .filter(|l| l.kind == "usage_recorded")
+        .filter(|l| l.kind() == EventKind::UsageRecorded)
         .collect()
 }
 
@@ -688,7 +691,10 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
         .map(EventKind::from_name)
     );
 
-    let notices: Vec<&Envelope> = lines.iter().filter(|l| l.kind == "notice").collect();
+    let notices: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::Notice)
+        .collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].payload["code"], "no_model");
     assert_eq!(
@@ -698,7 +704,7 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
     assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     for line in &resolved {
@@ -1289,7 +1295,10 @@ fn headless_failures_count_toward_the_block_budget() {
         ]
         .map(EventKind::from_name)
     );
-    for line in lines.iter().filter(|l| l.kind == "permission_resolved") {
+    for line in lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
+    {
         assert_eq!(line.payload["decision"], "deny");
         assert_eq!(line.payload["decided_by"], "reviewer");
         assert_eq!(line.payload["reason"], "the reviewer timed out");
@@ -1450,7 +1459,7 @@ fn a_review_at_the_spending_budget_denies_without_sending() {
     assert_eq!(reviewer.requests().len(), 1);
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved[0].payload["decision"], "allow");
     assert_eq!(resolved[1].payload["decision"], "deny");
@@ -1558,7 +1567,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
     );
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 3);
     assert_eq!(
@@ -1576,7 +1585,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
     );
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 3);
     // With no sender left nobody can answer: every denial is the close's,
@@ -1675,7 +1684,7 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
     // raising one.
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     assert_eq!(
@@ -1684,7 +1693,7 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
     );
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     // The close denies the pending request itself: `cancel`, naming the
@@ -1782,7 +1791,7 @@ fn close_taken_during_a_failed_review_names_the_failed_stage_on_later_calls() {
     );
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     assert_eq!(
@@ -1794,7 +1803,7 @@ fn close_taken_during_a_failed_review_names_the_failed_stage_on_later_calls() {
     );
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     assert_eq!(
@@ -1885,7 +1894,7 @@ fn close_taken_during_a_no_model_escalation_denies_later_calls_as_no_reviewer() 
     );
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     assert_eq!(
@@ -1900,7 +1909,7 @@ fn close_taken_during_a_no_model_escalation_denies_later_calls_as_no_reviewer() 
     );
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     assert_eq!(
@@ -2008,13 +2017,13 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
     );
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     assert_eq!(requested[0].payload["step"], "standing_ask");
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     // The batch asks the standing ask inline, so the close lands there;
     // the review-bound call's escalation then finds no one to answer and
@@ -2253,8 +2262,8 @@ fn a_remembered_allow_taken_before_the_shutdown_stands_and_the_call_never_runs()
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "cancelled");
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
-    assert_eq!(lines.last().unwrap().kind, "turn_completed");
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
+    assert_eq!(lines.last().unwrap().kind(), EventKind::TurnCompleted);
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
 
@@ -2289,7 +2298,7 @@ fn a_shutdown_that_closes_the_inbox_during_an_escalation_leaves_the_request_pend
     std::thread::scope(|scope| {
         scope.spawn(move || {
             support::read_until(watcher, "a permission_requested line", |line| {
-                line.kind == "permission_requested"
+                line.kind() == EventKind::PermissionRequested
             });
             // The wait parks in `recv` with no deadline, so the drop below
             // disconnects it: the shutdown's wake would end the wait
@@ -2988,11 +2997,11 @@ fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
     // The approved call never started.
     let resolved: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "deny");
     assert_eq!(resolved[0].payload["decided_by"], "cancel");
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }

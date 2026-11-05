@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::commands::{Reply as Answer, ReplyAnswer};
-use contract::events::{CacheLifetime, Decision};
+use contract::events::{CacheLifetime, Decision, EventKind};
 use contract::inbox::{Ack, Delivery};
 use contract::jobs::Jobs;
 use contract::provider::{
@@ -115,7 +115,7 @@ fn after_turns(session: &Session) -> Vec<Envelope> {
     let lines = log::read(&session.dir).unwrap();
     let last = lines
         .iter()
-        .rposition(|line| line.kind == "turn_completed")
+        .rposition(|line| line.kind() == EventKind::TurnCompleted)
         .expect("a turn ran");
     lines[last + 1..].to_vec()
 }
@@ -160,8 +160,8 @@ const SWITCHED_OPENING: &[&str] = &["model_changed", "preamble_built", "turn_sta
 fn assert_usage_only(session: &Session, count: usize) {
     let after = after_turns(session);
     assert_eq!(
-        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        vec!["usage_recorded"; count]
+        after.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        vec![EventKind::UsageRecorded; count]
     );
     for line in after {
         assert!(line.turn_id.is_none(), "a refresh belongs to no turn");
@@ -762,10 +762,10 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
             .expect("a line in time")
             .expect("the log outlives the turn")
             .expect("the log ended before the awaited line");
-        if line.kind == "session_status" {
+        if line.kind() == EventKind::SessionStatus {
             continue;
         }
-        let required = match line.kind.as_str() {
+        let required = match line.kind().name() {
             "turn_completed" | "notice" => true,
             "usage_recorded" => line.payload["generation_id"] == "gen_refresh",
             _ => false,
@@ -774,17 +774,22 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
             seen.push(line);
         }
     }
-    let mut kinds: Vec<&str> = seen.iter().map(|line| line.kind.as_str()).collect();
-    kinds.sort_unstable();
+    let mut kinds: Vec<EventKind> = seen.iter().map(|line| line.kind()).collect();
+    kinds.sort_by(|a, b| a.name().cmp(b.name()));
     assert_eq!(
         kinds,
-        ["notice", "turn_completed", "usage_recorded"],
+        [
+            EventKind::Notice,
+            EventKind::TurnCompleted,
+            EventKind::UsageRecorded
+        ],
         "the drain contains exactly the required event kinds, without duplicates"
     );
     let usage = seen
         .iter()
         .find(|line| {
-            line.kind == "usage_recorded" && line.payload["generation_id"] == "gen_refresh"
+            line.kind() == EventKind::UsageRecorded
+                && line.payload["generation_id"] == "gen_refresh"
         })
         .expect("a usage_recorded line");
     assert!(usage.turn_id.is_none(), "a refresh belongs to no turn");
@@ -792,7 +797,9 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
     assert_eq!(usage.payload["generation_id"], "gen_refresh");
     let notice = seen
         .iter()
-        .find(|line| line.kind == "notice" && line.payload["code"] == "provider_unavailable")
+        .find(|line| {
+            line.kind() == EventKind::Notice && line.payload["code"] == "provider_unavailable"
+        })
         .expect("a notice line");
     assert_eq!(notice.payload["code"], "provider_unavailable");
     assert!(!notice.is_durable(), "the notice is ephemeral");
@@ -805,8 +812,8 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
     assert_eq!(session.requests().len(), 2);
     let after = after_turns(&session);
     assert_eq!(
-        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        vec!["usage_recorded"]
+        after.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        vec![EventKind::UsageRecorded]
     );
 }
 
@@ -866,7 +873,7 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
     session.inbox.send(delivery("hi")).unwrap();
     let finished = spawn_run(&mut session);
     let turn_lines = session.events_until("the first turn completion", |line| {
-        line.kind == "turn_completed"
+        line.kind() == EventKind::TurnCompleted
     });
     // Warming after the turn: the first refresh is due 30 s before 5 min.
     parked(
@@ -891,12 +898,12 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
     assert_refreshes(&session, 0);
     let after = after_turns(&session);
     assert_eq!(
-        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        vec!["model_changed"],
+        after.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        vec![EventKind::ModelChanged],
         "the switch writes one line and no refresh usage"
     );
     let switch_lines = session.events_until("the model_changed line", |line| {
-        line.kind == "model_changed"
+        line.kind() == EventKind::ModelChanged
     });
     let mut stream = turn_lines;
     stream.extend(switch_lines);
@@ -973,21 +980,21 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
     assert_eq!(
         first_lines
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind())
             .collect::<Vec<_>>(),
         [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     // The next turn applies the pending switch and takes the queued prompt
@@ -1001,20 +1008,20 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
     assert_eq!(
         second_lines
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind())
             .collect::<Vec<_>>(),
         [
-            "model_changed",
-            "preamble_built",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::ModelChanged,
+            EventKind::PreambleBuilt,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let finished = spawn_run(&mut session);
@@ -1039,19 +1046,21 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
     assert_eq!(requests[2], capped(&requests[0]));
     let after = after_turns(&session);
     assert_eq!(
-        after.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        vec!["usage_recorded", "usage_recorded"],
+        after.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        vec![EventKind::UsageRecorded, EventKind::UsageRecorded],
         "two refreshes and nothing else after the last turn"
     );
     let lines = log::read(&session.dir).unwrap();
-    let changed: Vec<&contract::Envelope> =
-        lines.iter().filter(|l| l.kind == "model_changed").collect();
+    let changed: Vec<&contract::Envelope> = lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::ModelChanged)
+        .collect();
     assert_eq!(changed.len(), 1);
     assert_eq!(changed[0].payload["after"]["model"], "fake/model-2");
     let count = Arc::new(AtomicUsize::new(0));
     let seen = Arc::clone(&count);
     let refresh_lines = session.events_until("two cache refreshes", move |line| {
-        line.kind == "usage_recorded" && seen.fetch_add(1, Ordering::SeqCst) == 1
+        line.kind() == EventKind::UsageRecorded && seen.fetch_add(1, Ordering::SeqCst) == 1
     });
     let mut stream = first_lines;
     stream.extend(second_lines);

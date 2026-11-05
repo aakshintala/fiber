@@ -1322,7 +1322,7 @@ mod supervised {
     fn resolved(lines: &[contract::Envelope]) -> Vec<&contract::Envelope> {
         lines
             .iter()
-            .filter(|line| line.kind == "permission_resolved")
+            .filter(|line| line.kind() == EventKind::PermissionResolved)
             .collect()
     }
 
@@ -1395,7 +1395,7 @@ mod supervised {
         );
         let started = lines
             .iter()
-            .find(|line| line.kind == "session_started")
+            .find(|line| line.kind() == EventKind::SessionStarted)
             .expect("a session_started line");
         // Fixed at start and recorded (`docs/permissions.md`, "Supervised
         // sessions": "`supervised` is fixed at `start`, recorded on
@@ -1421,7 +1421,7 @@ mod supervised {
         // is returned to the model ... The turn continues.").
         let end = lines
             .iter()
-            .find(|line| line.kind == "turn_completed")
+            .find(|line| line.kind() == EventKind::TurnCompleted)
             .expect("a turn_completed line");
         assert_eq!(end.payload["outcome"], json!("completed"));
         // Nothing ran: `tool_call_requested` with no `tool_call_started`

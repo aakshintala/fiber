@@ -203,7 +203,7 @@ fn run_to_end(session: &mut Session) -> r#loop::Ran {
 fn usage_lines(lines: &[Envelope]) -> Vec<&Envelope> {
     lines
         .iter()
-        .filter(|line| line.kind == "usage_recorded")
+        .filter(|line| line.kind() == EventKind::UsageRecorded)
         .collect()
 }
 
@@ -339,7 +339,7 @@ fn a_failed_call_s_cost_settles_30_seconds_later_and_is_counted_once() {
         .map(EventKind::from_name)
     );
     let exited = all.last().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.kind(), EventKind::FiberExited);
     // Two calls of 10 input tokens each: the correction replaces its call.
     assert_eq!(exited.payload["usage"]["tokens"]["input"], 20);
     assert_eq!(exited.payload["usage"]["cost"].as_f64(), Some(0.51));
@@ -506,7 +506,7 @@ fn a_cost_settled_while_idle_is_written_when_the_session_ends() {
     assert_eq!(usage[1].turn_id, first.turn_id);
     assert_eq!(usage[1].action_id, first.action_id);
     assert_eq!(usage[1].payload["cost"].as_f64(), Some(0.5));
-    assert_eq!(all.last().unwrap().kind, "usage_recorded");
+    assert_eq!(all.last().unwrap().kind(), EventKind::UsageRecorded);
 }
 
 #[test]
@@ -884,12 +884,12 @@ fn a_cost_that_settles_mid_turn_is_written_at_the_next_step() {
     let steps: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.kind == "step_started")
+        .filter(|(_, l)| l.kind() == EventKind::StepStarted)
         .map(|(i, _)| i)
         .collect();
     assert_eq!(steps.len(), 2, "{:?}", kinds(&lines));
     let late = &lines[steps[1] - 1];
-    assert_eq!(late.kind, "usage_recorded", "{:?}", kinds(&lines));
+    assert_eq!(late.kind(), EventKind::UsageRecorded, "{:?}", kinds(&lines));
     assert_eq!(late.payload["generation_id"], "gen_failed");
     assert_eq!(late.turn_id, first.turn_id);
     assert_eq!(late.payload["cost"].as_f64(), Some(0.5));

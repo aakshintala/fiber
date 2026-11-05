@@ -57,7 +57,7 @@ fn watched_prompt(text: &str, dir: &Path) -> (Delivery, mpsc::Receiver<(Answer, 
         let saw = log::read(&dir)
             .unwrap()
             .iter()
-            .any(|line| line.kind == "turn_started");
+            .any(|line| line.kind() == EventKind::TurnStarted);
         tx.send((answer, saw)).unwrap();
     }));
     (Delivery::Prompt(message(text), ack), rx)
@@ -494,7 +494,7 @@ fn a_prompt_mid_turn_is_busy_and_starts_nothing() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.kind == "turn_started")
+            .filter(|line| line.kind() == EventKind::TurnStarted)
             .count(),
         1
     );
@@ -504,7 +504,7 @@ fn a_prompt_mid_turn_is_busy_and_starts_nothing() {
 fn input_texts(lines: &[Envelope]) -> Vec<String> {
     let started = lines
         .iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .unwrap();
     started.payload["input"]
         .as_array()
@@ -606,7 +606,7 @@ fn a_steer_mid_turn_is_accepted_and_applied_at_the_next_step() {
         let applied = log::read(&dir)
             .unwrap()
             .iter()
-            .any(|line| line.kind == "steering_applied");
+            .any(|line| line.kind() == EventKind::SteeringApplied);
         tx.send((answer, applied)).unwrap();
     }));
     tool.push(move |inbox| inbox.send(steer_with("more", ack)).unwrap());
@@ -626,7 +626,7 @@ fn a_steer_mid_turn_is_accepted_and_applied_at_the_next_step() {
     assert_eq!(
         lines
             .iter()
-            .find(|line| line.kind == "steering_applied")
+            .find(|line| line.kind() == EventKind::SteeringApplied)
             .unwrap()
             .payload["content"][0]["text"],
         "more"
@@ -644,7 +644,9 @@ fn a_steer_while_idle_starts_a_turn() {
     assert_eq!(kinds(&lines), plain());
     assert_eq!(lines[3].payload["input"][0]["content"][0]["text"], "hello");
     assert!(
-        lines.iter().all(|line| line.kind != "steering_applied"),
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::SteeringApplied),
         "an idle steer is the turn's input"
     );
 }
@@ -744,7 +746,7 @@ fn a_drop_before_its_steer_is_stale_and_the_steer_is_applied() {
     assert_eq!(
         lines
             .iter()
-            .find(|line| line.kind == "steering_applied")
+            .find(|line| line.kind() == EventKind::SteeringApplied)
             .unwrap()
             .payload["content"][0]["text"],
         "more"
@@ -804,7 +806,11 @@ fn a_steer_held_during_an_approval_can_be_dropped() {
     expected.insert(at + 1, EventKind::from_name("steering_queue"));
     expected.insert(at + 2, EventKind::from_name("steering_queue"));
     assert_eq!(kinds(&lines), expected);
-    assert!(lines.iter().all(|line| line.kind != "steering_applied"));
+    assert!(
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::SteeringApplied)
+    );
     assert_eq!(tool.ran().len(), 1);
 }
 
@@ -859,7 +865,7 @@ fn a_reply_to_the_pending_request_is_accepted_and_resolves_it() {
     );
     let resolved = lines
         .iter()
-        .find(|line| line.kind == "permission_resolved")
+        .find(|line| line.kind() == EventKind::PermissionResolved)
         .unwrap();
     assert_eq!(resolved.payload["decision"], "allow");
     assert_eq!(resolved.payload["decided_by"], "person");
@@ -895,7 +901,7 @@ fn a_reply_that_does_not_fit_is_rejected_and_a_fitting_one_still_resolves() {
     assert_eq!(
         lines
             .iter()
-            .find(|line| line.kind == "permission_resolved")
+            .find(|line| line.kind() == EventKind::PermissionResolved)
             .unwrap()
             .payload["decision"],
         "allow"
@@ -968,9 +974,9 @@ fn close_while_idle_ends_run() {
         log::read(&session.dir)
             .unwrap()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind())
             .collect::<Vec<_>>(),
-        ["session_started"]
+        ["session_started"].map(EventKind::from_name)
     );
     assert!(session.provider.requests().is_empty());
 }
@@ -997,7 +1003,7 @@ fn close_mid_turn_lets_the_turn_finish_and_a_later_prompt_is_closing() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.kind == "turn_started")
+            .filter(|line| line.kind() == EventKind::TurnStarted)
             .count(),
         1
     );
@@ -1028,7 +1034,7 @@ fn close_during_an_approval_denies_it_by_cancel() {
     assert_eq!(kinds(&lines), denied_pair());
     let resolved: Vec<_> = lines
         .iter()
-        .filter(|line| line.kind == "permission_resolved")
+        .filter(|line| line.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved[0].payload["decision"], "deny");
     // The close denies the pending request itself, whatever its step: the
@@ -1046,7 +1052,7 @@ fn close_during_an_approval_denies_it_by_cancel() {
     assert!(tool.ran().is_empty());
     for done in lines
         .iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
     {
         assert_eq!(done.payload["status"], "denied");
         assert_eq!(done.payload["reason"], "no_person");
@@ -1079,7 +1085,7 @@ fn a_shutdown_that_closes_the_inbox_during_a_standing_ask_leaves_the_request_pen
     std::thread::scope(|scope| {
         scope.spawn(move || {
             support::read_until(watcher, "a permission_requested line", |line| {
-                line.kind == "permission_requested"
+                line.kind() == EventKind::PermissionRequested
             });
             // The wait parks in `recv` with no deadline, so the drop below
             // disconnects it: the shutdown's wake would end the wait
@@ -1161,7 +1167,7 @@ fn a_skill_written_after_the_first_lookup_is_sent_as_written() {
     );
     let started = lines
         .iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .unwrap();
     assert_eq!(started.payload["input"][0]["content"][0]["text"], "/late 1");
 }

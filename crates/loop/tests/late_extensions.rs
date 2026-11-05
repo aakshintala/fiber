@@ -20,8 +20,8 @@ use std::thread;
 
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{
-    CacheLifetime, Clients, Event, LoadedExtension, McpServerFailed, Notice, OfferDecision,
-    OfferedItem, OfferedKind, ServerFailure, TurnOutcome,
+    CacheLifetime, Clients, Event, EventKind, LoadedExtension, McpServerFailed, Notice,
+    OfferDecision, OfferedItem, OfferedKind, ServerFailure, TurnOutcome,
 };
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
@@ -251,28 +251,35 @@ fn ended(finished: &mpsc::Receiver<Result<(), r#loop::Error>>) -> Result<(), r#l
 }
 
 fn until_kind(watcher: Watcher, kind: &'static str) -> (Watcher, Vec<contract::Envelope>) {
-    read_until(watcher, kind, move |line| line.kind == kind)
+    read_until(watcher, kind, move |line| {
+        line.kind() == EventKind::from_name(kind)
+    })
 }
 
 fn request_of(line: &contract::Envelope) -> RequestId {
     RequestId(line.payload["request_id"].as_str().unwrap().to_owned())
 }
 
-fn durable_kinds(session: &Session) -> Vec<String> {
+fn durable_kinds(session: &Session) -> Vec<EventKind> {
     log::read(&session.dir)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect()
 }
 
 /// The ordered kinds under test, with the lines the contract writes on
 /// their own trigger set aside (`docs/testing.md`, "Event streams"):
 /// `clients`, `session_status` and `attention`.
-fn ordered<'a>(kinds: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+fn ordered(kinds: impl IntoIterator<Item = EventKind>) -> Vec<EventKind> {
     kinds
         .into_iter()
-        .filter(|kind| *kind != "clients" && *kind != "session_status" && *kind != "attention")
+        // No event is named `attention`; compare by name to keep the guard.
+        .filter(|kind| {
+            *kind != EventKind::Clients
+                && *kind != EventKind::SessionStatus
+                && kind.name() != "attention"
+        })
         .collect()
 }
 
@@ -291,7 +298,7 @@ fn an_approved_extension_installs_before_the_preamble() {
     let rx = send_reply(&session, &request, decisions(&[OfferDecision::Approve]));
     assert!(Deadline::after(DEADLINE).recv(&rx).unwrap().is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
-    assert!(lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     close(&session);
     ended(&finished).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one preparation");
@@ -300,33 +307,36 @@ fn an_approved_extension_installs_before_the_preamble() {
     // preamble; no `reloaded` anywhere. The prepared notice is
     // ephemeral, so it is pinned on the watcher's lines below.
     assert_eq!(
-        ordered(durable_kinds(&session).iter().map(String::as_str)),
+        ordered(durable_kinds(&session).iter().cloned()),
         [
-            "session_started",
-            "repository_code_offered",
-            "repository_code_resolved",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::RepositoryCodeOffered,
+            EventKind::RepositoryCodeResolved,
+            EventKind::ExtensionsLoaded,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     // The prepared notice lands between the late set and the preamble.
-    let watched: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let watched: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
     let set = watched
         .iter()
-        .position(|kind| *kind == "extensions_loaded")
+        .position(|kind| *kind == EventKind::ExtensionsLoaded)
         .unwrap();
-    let notice = watched.iter().position(|kind| *kind == "notice").unwrap();
+    let notice = watched
+        .iter()
+        .position(|kind| *kind == EventKind::Notice)
+        .unwrap();
     let built = watched
         .iter()
-        .position(|kind| *kind == "preamble_built")
+        .position(|kind| *kind == EventKind::PreambleBuilt)
         .unwrap();
     assert!(set < notice && notice < built, "{watched:?}");
     // `extensions_loaded` carries the prepared set.
@@ -373,26 +383,26 @@ fn approving_only_a_hook_or_a_server_installs_nothing() {
     );
     assert!(Deadline::after(DEADLINE).recv(&rx).unwrap().is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
-    assert!(lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     close(&session);
     ended(&finished).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no preparation");
     assert_eq!(installed.load(Ordering::SeqCst), 0, "no installation");
     assert_eq!(
-        ordered(durable_kinds(&session).iter().map(String::as_str)),
+        ordered(durable_kinds(&session).iter().cloned()),
         [
-            "session_started",
-            "repository_code_offered",
-            "repository_code_resolved",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::RepositoryCodeOffered,
+            EventKind::RepositoryCodeResolved,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -420,7 +430,7 @@ fn a_never_or_skipped_extension_installs_nothing() {
     let rx = send_reply(&session, &request, decisions(&[OfferDecision::Skip]));
     assert!(Deadline::after(DEADLINE).recv(&rx).unwrap().is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
-    assert!(lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     close(&session);
     ended(&finished).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no preparation");
@@ -428,7 +438,7 @@ fn a_never_or_skipped_extension_installs_nothing() {
     assert!(
         !durable_kinds(&session)
             .iter()
-            .any(|kind| kind == "extensions_loaded"),
+            .any(|kind| *kind == EventKind::ExtensionsLoaded),
         "no late step"
     );
 }
@@ -448,7 +458,7 @@ fn an_approval_answered_obsolete_installs_nothing() {
     let rx = send_reply(&session, &request, decisions(&[OfferDecision::Approve]));
     assert!(Deadline::after(DEADLINE).recv(&rx).unwrap().is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
-    assert!(lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     close(&session);
     ended(&finished).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no preparation");
@@ -456,7 +466,7 @@ fn an_approval_answered_obsolete_installs_nothing() {
     assert!(
         !durable_kinds(&session)
             .iter()
-            .any(|kind| kind == "extensions_loaded"),
+            .any(|kind| *kind == EventKind::ExtensionsLoaded),
         "no late step"
     );
 }
@@ -473,13 +483,13 @@ fn an_approval_without_a_late_preparer_changes_nothing() {
     let rx = send_reply(&session, &request, decisions(&[OfferDecision::Approve]));
     assert!(Deadline::after(DEADLINE).recv(&rx).unwrap().is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
-    assert!(lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     close(&session);
     ended(&finished).unwrap();
     assert!(
         !durable_kinds(&session)
             .iter()
-            .any(|kind| kind == "extensions_loaded"),
+            .any(|kind| *kind == EventKind::ExtensionsLoaded),
         "no late step"
     );
 }
@@ -516,11 +526,11 @@ fn a_rejected_late_preparation_fails_the_run() {
     assert!(session.provider.requests().is_empty(), "no model request");
     // The failing late step writes nothing: no preamble, no turn.
     assert_eq!(
-        ordered(durable_kinds(&session).iter().map(String::as_str)),
+        ordered(durable_kinds(&session).iter().cloned()),
         [
-            "session_started",
-            "repository_code_offered",
-            "repository_code_resolved",
+            EventKind::SessionStarted,
+            EventKind::RepositoryCodeOffered,
+            EventKind::RepositoryCodeResolved,
         ]
     );
 }
@@ -607,7 +617,7 @@ fn a_reload_before_the_first_prompt_builds_twice_around_the_late_step() {
     let rx = send_reply(&session, &request, decisions(&[OfferDecision::Approve]));
     assert!(Deadline::after(DEADLINE).recv(&rx).unwrap().is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
-    assert!(lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     close(&session);
     ended(&finished).unwrap();
     assert_eq!(reload_installed.load(Ordering::SeqCst), 1);
@@ -616,35 +626,38 @@ fn a_reload_before_the_first_prompt_builds_twice_around_the_late_step() {
     // The reload's build, then the offer, then the late set and a second
     // build before the turn. The late notice is ephemeral, pinned below.
     assert_eq!(
-        ordered(durable_kinds(&session).iter().map(String::as_str)),
+        ordered(durable_kinds(&session).iter().cloned()),
         [
-            "session_started",
-            "reloaded",
-            "extensions_loaded",
-            "preamble_built",
-            "repository_code_offered",
-            "repository_code_resolved",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::Reloaded,
+            EventKind::ExtensionsLoaded,
+            EventKind::PreambleBuilt,
+            EventKind::RepositoryCodeOffered,
+            EventKind::RepositoryCodeResolved,
+            EventKind::ExtensionsLoaded,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
-    let watched: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let watched: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
     let set = watched
         .iter()
-        .position(|kind| *kind == "extensions_loaded")
+        .position(|kind| *kind == EventKind::ExtensionsLoaded)
         .unwrap();
-    let notice = watched.iter().position(|kind| *kind == "notice").unwrap();
+    let notice = watched
+        .iter()
+        .position(|kind| *kind == EventKind::Notice)
+        .unwrap();
     let built = watched
         .iter()
-        .position(|kind| *kind == "preamble_built")
+        .position(|kind| *kind == EventKind::PreambleBuilt)
         .unwrap();
     assert!(set < notice && notice < built, "{watched:?}");
     let requests = session.provider.requests();
@@ -783,37 +796,40 @@ fn a_rewound_loop_drops_its_logged_preamble_for_the_late_step() {
     // The logged preamble stays in A's log; B writes one preamble, after
     // the late set, before its first request. B inherits the opening, so
     // it writes none. The late notice is ephemeral, pinned below.
-    let kinds: Vec<String> = log::read(&dir)
+    let kinds: Vec<EventKind> = log::read(&dir)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
     assert_eq!(
-        ordered(kinds.iter().map(String::as_str)),
+        ordered(kinds.iter().cloned()),
         [
-            "session_started",
-            "repository_code_offered",
-            "repository_code_resolved",
-            "extensions_loaded",
-            "preamble_built",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::RepositoryCodeOffered,
+            EventKind::RepositoryCodeResolved,
+            EventKind::ExtensionsLoaded,
+            EventKind::PreambleBuilt,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
-    let watched: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let watched: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
     let set = watched
         .iter()
-        .position(|kind| *kind == "extensions_loaded")
+        .position(|kind| *kind == EventKind::ExtensionsLoaded)
         .unwrap();
-    let notice = watched.iter().position(|kind| *kind == "notice").unwrap();
+    let notice = watched
+        .iter()
+        .position(|kind| *kind == EventKind::Notice)
+        .unwrap();
     let built = watched
         .iter()
-        .position(|kind| *kind == "preamble_built")
+        .position(|kind| *kind == EventKind::PreambleBuilt)
         .unwrap();
     assert!(set < notice && notice < built, "{watched:?}");
     let requests = provider.requests();
@@ -864,7 +880,7 @@ fn a_post_offer_server_load_comes_before_the_late_step() {
     let rx = send_reply(&session, &request, decisions(&[OfferDecision::Approve]));
     assert!(Deadline::after(DEADLINE).recv(&rx).unwrap().is_ok());
     let (_, lines) = until_kind(watcher, "turn_completed");
-    assert!(lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     close(&session);
     ended(&finished).unwrap();
     assert_eq!(load_calls.load(Ordering::SeqCst), 1, "one post-offer load");
@@ -873,33 +889,36 @@ fn a_post_offer_server_load_comes_before_the_late_step() {
     // The post-offer load's events come before the late set. The late
     // notice is ephemeral, pinned below.
     assert_eq!(
-        ordered(durable_kinds(&session).iter().map(String::as_str)),
+        ordered(durable_kinds(&session).iter().cloned()),
         [
-            "session_started",
-            "repository_code_offered",
-            "repository_code_resolved",
-            "mcp_server_failed",
-            "extensions_loaded",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::RepositoryCodeOffered,
+            EventKind::RepositoryCodeResolved,
+            EventKind::McpServerFailed,
+            EventKind::ExtensionsLoaded,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
-    let watched: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let watched: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
     let set = watched
         .iter()
-        .position(|kind| *kind == "extensions_loaded")
+        .position(|kind| *kind == EventKind::ExtensionsLoaded)
         .unwrap();
-    let notice = watched.iter().position(|kind| *kind == "notice").unwrap();
+    let notice = watched
+        .iter()
+        .position(|kind| *kind == EventKind::Notice)
+        .unwrap();
     let built = watched
         .iter()
-        .position(|kind| *kind == "preamble_built")
+        .position(|kind| *kind == EventKind::PreambleBuilt)
         .unwrap();
     assert!(set < notice && notice < built, "{watched:?}");
 }

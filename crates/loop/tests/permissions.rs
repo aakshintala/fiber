@@ -50,7 +50,10 @@ fn go(session: &mut Session) -> Vec<Envelope> {
 }
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
-    lines.iter().find(|l| l.kind == kind).unwrap()
+    lines
+        .iter()
+        .find(|l| l.kind() == EventKind::from_name(kind))
+        .unwrap()
 }
 
 /// The full ordered kind list of a first turn whose first reply calls once
@@ -449,14 +452,14 @@ fn a_reply_naming_a_wrong_request_is_ignored_and_the_right_one_answers() {
     assert_eq!(
         lines
             .iter()
-            .filter(|l| l.kind == "permission_requested")
+            .filter(|l| l.kind() == EventKind::PermissionRequested)
             .count(),
         1
     );
     assert_eq!(
         lines
             .iter()
-            .filter(|l| l.kind == "permission_resolved")
+            .filter(|l| l.kind() == EventKind::PermissionResolved)
             .count(),
         1
     );

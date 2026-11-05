@@ -167,10 +167,10 @@ impl support::History {
     }
 
     /// The history's kinds, in order: the lines the resume folds.
-    fn history_kinds(&self) -> Vec<String> {
+    fn history_kinds(&self) -> Vec<EventKind> {
         self.lines()[..self.history_len]
             .iter()
-            .map(|l| l.kind.clone())
+            .map(|l| l.kind())
             .collect()
     }
 
@@ -179,8 +179,8 @@ impl support::History {
         self.lines()[self.history_len..].to_vec()
     }
 
-    fn new_kinds(&self) -> Vec<String> {
-        self.new_lines().iter().map(|l| l.kind.clone()).collect()
+    fn new_kinds(&self) -> Vec<EventKind> {
+        self.new_lines().iter().map(|l| l.kind()).collect()
     }
 
     fn usage(id: &str, model: &str, cost: Option<f64>) -> Event {
@@ -216,10 +216,10 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     assert_eq!(
         history.history_kinds(),
         [
-            "session_started",
-            "turn_started",
-            "assistant_message_started",
-            "tool_call_requested",
+            EventKind::SessionStarted,
+            EventKind::TurnStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::ToolCallRequested,
         ]
     );
 
@@ -255,15 +255,15 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -280,24 +280,27 @@ fn resume_writes_no_session_started_and_seq_continues() {
 
     let lines = history.lines();
     assert_eq!(
-        lines.iter().filter(|l| l.kind == "session_started").count(),
+        lines
+            .iter()
+            .filter(|l| l.kind() == EventKind::SessionStarted)
+            .count(),
         1
     );
     assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
         [
-            "session_started",
-            "turn_started",
-            "tool_call_requested",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::TurnStarted,
+            EventKind::ToolCallRequested,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let seqs: Vec<u64> = lines.iter().map(|l| l.seq.unwrap().0).collect();
@@ -344,12 +347,12 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
     assert_eq!(
         history.history_kinds(),
         [
-            "session_started",
-            "turn_started",
-            "tool_call_requested",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
+            EventKind::SessionStarted,
+            EventKind::TurnStarted,
+            EventKind::ToolCallRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
         ]
     );
 
@@ -363,7 +366,7 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
         !history
             .new_kinds()
             .iter()
-            .any(|k| k == "permission_requested"),
+            .any(|k| *k == EventKind::PermissionRequested),
         "{:?}",
         history.new_kinds()
     );
@@ -371,31 +374,31 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
     let resolved = history
         .new_lines()
         .into_iter()
-        .find(|l| l.kind == "permission_resolved")
+        .find(|l| l.kind() == EventKind::PermissionResolved)
         .unwrap();
     assert_eq!(resolved.payload["decision"], "allow");
     assert_eq!(resolved.payload["decided_by"], "session_grant");
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -408,7 +411,11 @@ fn budget_counts_spend_from_before_the_resume() {
     history.freeze();
     assert_eq!(
         history.history_kinds(),
-        ["session_started", "turn_started", "usage_recorded"]
+        [
+            EventKind::SessionStarted,
+            EventKind::TurnStarted,
+            EventKind::UsageRecorded
+        ]
     );
 
     let looped = history.resume(Vec::new()).budget(Some(1.0));
@@ -420,17 +427,17 @@ fn budget_counts_spend_from_before_the_resume() {
     assert_eq!(
         kinds,
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "turn_completed"
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::TurnCompleted
         ]
     );
     let completed = history
         .new_lines()
         .into_iter()
-        .find(|l| l.kind == "turn_completed")
+        .find(|l| l.kind() == EventKind::TurnCompleted)
         .unwrap();
     assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
 }
@@ -470,8 +477,8 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
         );
     }
     history.freeze();
-    let mut expected = vec!["session_started".to_owned()];
-    expected.extend(vec!["permission_resolved".to_owned(); 20]);
+    let mut expected = vec![EventKind::SessionStarted];
+    expected.extend(vec![EventKind::PermissionResolved; 20]);
     assert_eq!(history.history_kinds(), expected);
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![
@@ -521,26 +528,26 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "usage_recorded",
-            "usage_recorded",
-            "permission_resolved",
-            "tool_call_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let completed = history
         .new_lines()
         .into_iter()
-        .find(|l| l.kind == "turn_completed")
+        .find(|l| l.kind() == EventKind::TurnCompleted)
         .unwrap();
     assert_eq!(completed.payload["error"]["code"], "blocked");
 }
@@ -577,8 +584,8 @@ fn resume_after_prior_denials(decided_by: DecidedBy) -> (History, contract::even
         );
     }
     history.freeze();
-    let mut expected = vec!["session_started".to_owned()];
-    expected.extend(vec!["permission_resolved".to_owned(); 20]);
+    let mut expected = vec![EventKind::SessionStarted];
+    expected.extend(vec![EventKind::PermissionResolved; 20]);
     assert_eq!(history.history_kinds(), expected);
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![
@@ -634,26 +641,26 @@ fn no_reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "usage_recorded",
-            "usage_recorded",
-            "permission_resolved",
-            "tool_call_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let completed = history
         .new_lines()
         .into_iter()
-        .find(|l| l.kind == "turn_completed")
+        .find(|l| l.kind() == EventKind::TurnCompleted)
         .unwrap();
     assert_eq!(completed.payload["error"]["code"], "blocked");
 }
@@ -667,25 +674,25 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "usage_recorded",
-            "usage_recorded",
-            "permission_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -711,10 +718,10 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     assert_eq!(
         history.history_kinds(),
         [
-            "session_started",
-            "turn_started",
-            "tool_call_requested",
-            "tool_call_completed",
+            EventKind::SessionStarted,
+            EventKind::TurnStarted,
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallCompleted,
         ]
     );
 
@@ -760,25 +767,25 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "usage_recorded",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::UsageRecorded,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let requests = reviewer_provider.requests();
@@ -806,10 +813,10 @@ fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
     assert_eq!(
         history.history_kinds(),
         [
-            "session_started",
-            "turn_started",
-            "tool_call_requested",
-            "assistant_message_started",
+            EventKind::SessionStarted,
+            EventKind::TurnStarted,
+            EventKind::ToolCallRequested,
+            EventKind::AssistantMessageStarted,
         ]
     );
 
@@ -827,15 +834,15 @@ fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -850,7 +857,7 @@ fn a_resume_builds_the_preamble_with_reason_resume() {
     history.run(looped, "two");
 
     let new = history.new_lines();
-    assert_eq!(new[0].kind, "preamble_built");
+    assert_eq!(new[0].kind(), EventKind::PreambleBuilt);
     assert_eq!(new[0].payload["reason"], "resume");
     assert_eq!(new[0].payload["model"], support::MODEL);
     // The resumed request carries the rebuilt prompt.
@@ -893,7 +900,7 @@ fn a_resume_over_a_log_with_an_opening_message_writes_none() {
         history
             .new_lines()
             .iter()
-            .all(|line| line.kind != "opening_message"),
+            .all(|line| line.kind() != EventKind::OpeningMessage),
         "{:?}",
         history.new_kinds()
     );
@@ -910,7 +917,10 @@ fn no_request_before_the_resume_leaves_previous_end_absent() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.freeze();
-    assert_eq!(history.history_kinds(), ["session_started", "turn_started"]);
+    assert_eq!(
+        history.history_kinds(),
+        [EventKind::SessionStarted, EventKind::TurnStarted]
+    );
 
     let looped = history.resume(Vec::new());
     history.run(looped, "two");
@@ -921,15 +931,15 @@ fn no_request_before_the_resume_leaves_previous_end_absent() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -994,8 +1004,8 @@ fn resumed_returns_no_model_for_a_log_with_none() {
 
     let lines = history.lines();
     assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        ["session_started", "turn_started"]
+        lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        ["session_started", "turn_started"].map(EventKind::from_name)
     );
     let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.session, "s_1");
@@ -1056,8 +1066,8 @@ fn resumed_fails_log_corrupt_on_a_log_with_no_session_started() {
     let dir = root.path().join("s_9");
     let lines = log::read(&dir).unwrap();
     assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        ["turn_started"]
+        lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        ["turn_started"].map(EventKind::from_name)
     );
 
     let error = match r#loop::resumed(&dir) {
@@ -1493,18 +1503,18 @@ fn an_open_batch_gets_no_fixed_result() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert_eq!(calls, ["a_1", "a_2"]);
@@ -1557,15 +1567,15 @@ fn without_a_suspend_the_same_batch_gets_fixed_results() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert_eq!(fixed.len(), 2);
@@ -1617,18 +1627,18 @@ fn a_call_outside_the_open_batch_still_gets_its_fixed_result() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert_eq!(fixed, ["a_0"]);
@@ -1658,22 +1668,22 @@ fn no_suspended_on_resumes_as_a_cut_short_turn() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert!(
         !history
             .new_kinds()
             .iter()
-            .any(|k| k == "permission_requested")
+            .any(|k| *k == EventKind::PermissionRequested)
     );
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
@@ -1711,20 +1721,20 @@ fn a_suspended_on_naming_an_unknown_request_resumes_as_cut_short() {
         !history
             .new_kinds()
             .iter()
-            .any(|k| k == "permission_requested")
+            .any(|k| *k == EventKind::PermissionRequested)
     );
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -1753,22 +1763,22 @@ fn a_suspended_on_naming_an_interaction_resumes_as_cut_short() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert!(
         !history
             .new_kinds()
             .iter()
-            .any(|k| k == "permission_requested")
+            .any(|k| *k == EventKind::PermissionRequested)
     );
 }
 
@@ -1797,22 +1807,22 @@ fn an_already_resolved_request_resumes_as_cut_short() {
         history
             .new_kinds()
             .iter()
-            .filter(|k| *k == "permission_requested")
+            .filter(|k| **k == EventKind::PermissionRequested)
             .count(),
         0
     );
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -1847,20 +1857,20 @@ fn a_line_after_fiber_exited_resumes_as_cut_short() {
         !history
             .new_kinds()
             .iter()
-            .any(|k| k == "permission_requested")
+            .any(|k| *k == EventKind::PermissionRequested)
     );
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -1890,20 +1900,20 @@ fn a_completed_turn_resumes_as_cut_short() {
         !history
             .new_kinds()
             .iter()
-            .any(|k| k == "permission_requested")
+            .any(|k| *k == EventKind::PermissionRequested)
     );
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -1934,20 +1944,20 @@ fn a_request_outside_the_batch_resumes_as_cut_short() {
         !history
             .new_kinds()
             .iter()
-            .any(|k| k == "permission_requested")
+            .any(|k| *k == EventKind::PermissionRequested)
     );
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -1979,24 +1989,24 @@ fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let new = history.new_lines();
@@ -2021,12 +2031,12 @@ fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
             line.turn_id.as_ref().unwrap().0,
             "t_1",
             "every finished-turn line carries the original turn id: {}",
-            line.kind
+            line.kind().name()
         );
     }
     // No resumed code path starts a call from before the resume.
     assert!(
-        !new.iter().any(|l| l.kind == "tool_call_started"),
+        !new.iter().any(|l| l.kind() == EventKind::ToolCallStarted),
         "no tool_call_started"
     );
 
@@ -2094,16 +2104,16 @@ fn a_suspended_call_touching_a_configured_credential_file_is_refused_without_ask
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let new = history.new_lines();
@@ -2117,7 +2127,7 @@ fn a_suspended_call_touching_a_configured_credential_file_is_refused_without_ask
     assert_eq!(new[3].payload["status"], "denied");
     assert_eq!(new[3].payload["reason"], "credentials");
     assert!(
-        !new.iter().any(|l| l.kind == "tool_call_started"),
+        !new.iter().any(|l| l.kind() == EventKind::ToolCallStarted),
         "a denied call never starts"
     );
     assert!(tool.ran().is_empty(), "a denied call never runs");
@@ -2168,19 +2178,19 @@ fn a_resumed_credential_refusal_answers_its_request_and_spares_later_calls() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "tool_call_completed",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let new = history.new_lines();
@@ -2193,7 +2203,7 @@ fn a_resumed_credential_refusal_answers_its_request_and_spares_later_calls() {
     let done: Vec<(String, String)> = new[4..7]
         .iter()
         .map(|line| {
-            assert_eq!(line.kind, "tool_call_completed");
+            assert_eq!(line.kind(), EventKind::ToolCallCompleted);
             (
                 line.action_id.as_ref().unwrap().0.clone(),
                 line.payload["status"].as_str().unwrap().to_owned(),
@@ -2211,7 +2221,7 @@ fn a_resumed_credential_refusal_answers_its_request_and_spares_later_calls() {
     let started: Vec<String> = history
         .new_lines()
         .into_iter()
-        .filter(|line| line.kind == "tool_call_started")
+        .filter(|line| line.kind() == EventKind::ToolCallStarted)
         .map(|line| line.action_id.as_ref().unwrap().0.clone())
         .collect();
     assert_eq!(started, ["a_3".to_owned()]);
@@ -2369,7 +2379,7 @@ fn ended_on_the_question(history: &History) {
         !history
             .new_kinds()
             .iter()
-            .any(|kind| kind == "step_started"),
+            .any(|kind| *kind == EventKind::StepStarted),
         "{:?}",
         history.new_kinds()
     );
@@ -2410,13 +2420,13 @@ fn a_resumed_credential_refusal_ends_the_turn_on_a_later_calls_questions() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "tool_call_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     ended_on_the_question(&history);
@@ -2562,17 +2572,17 @@ fn a_resumed_credential_refusal_prefers_the_block_budget_over_later_questions() 
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_resolved",
-            "usage_recorded",
-            "usage_recorded",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "tool_call_completed",
-            "tool_call_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionResolved,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     ended_blocked(&history);
@@ -2707,12 +2717,12 @@ fn a_three_call_batch_completes_in_request_order() {
     assert!(is_accepted(&prompt_seen));
 
     let new = history.new_lines();
-    assert_eq!(new[2].kind, "permission_requested");
-    assert_eq!(new[3].kind, "permission_resolved");
+    assert_eq!(new[2].kind(), EventKind::PermissionRequested);
+    assert_eq!(new[3].kind(), EventKind::PermissionResolved);
     let completions: Vec<(&str, &str)> = new[4..7]
         .iter()
         .map(|line| {
-            assert_eq!(line.kind, "tool_call_completed");
+            assert_eq!(line.kind(), EventKind::ToolCallCompleted);
             (
                 line.action_id.as_ref().unwrap().0.as_str(),
                 line.payload["status"].as_str().unwrap(),
@@ -2729,30 +2739,30 @@ fn a_three_call_batch_completes_in_request_order() {
             ("a_3", "cancelled")
         ]
     );
-    assert!(!new.iter().any(|l| l.kind == "tool_call_started"));
+    assert!(!new.iter().any(|l| l.kind() == EventKind::ToolCallStarted));
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "tool_call_completed",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -2770,7 +2780,7 @@ fn a_review_request_re_raises_with_its_escalation_and_offer() {
     let before = history
         .lines()
         .iter()
-        .find(|l| l.kind == "permission_requested")
+        .find(|l| l.kind() == EventKind::PermissionRequested)
         .unwrap()
         .payload
         .clone();
@@ -2785,7 +2795,7 @@ fn a_review_request_re_raises_with_its_escalation_and_offer() {
     let _ = looped;
 
     let new = history.new_lines();
-    assert_eq!(new[2].kind, "permission_requested");
+    assert_eq!(new[2].kind(), EventKind::PermissionRequested);
     assert_eq!(new[2].payload["request_id"], "r_9");
     assert_eq!(new[2].payload, before);
     assert_eq!(new[2].payload["step"], "review");
@@ -2794,17 +2804,17 @@ fn a_review_request_re_raises_with_its_escalation_and_offer() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -2839,7 +2849,7 @@ fn a_tool_called_in_the_finishing_turn_runs() {
     let new = history.new_lines();
     let ran: Vec<&str> = new
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .map(|l| l.payload["status"].as_str().unwrap())
         .collect();
     // The suspended call denied, the new one completed.
@@ -2847,25 +2857,25 @@ fn a_tool_called_in_the_finishing_turn_runs() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -2895,24 +2905,24 @@ fn a_completed_call_in_the_window_is_not_in_the_batch() {
     let new = history.new_lines();
     let completions: Vec<&str> = new
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .map(|l| l.action_id.as_ref().unwrap().0.as_str())
         .collect();
     assert_eq!(completions, ["a_1"]);
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let requests = history.provider.requests();
@@ -2944,7 +2954,7 @@ const ORPHANED: &str = "The process that ran this job died; it may still be runn
 
 /// The `orphaned` completion a resume writes for `id`.
 fn assert_orphaned(line: &Envelope, id: &str) {
-    assert_eq!(line.kind, "job_completed");
+    assert_eq!(line.kind(), EventKind::JobCompleted);
     assert_eq!(line.turn_id, None);
     assert_eq!(line.action_id, None);
     assert_eq!(
@@ -2992,7 +3002,7 @@ fn keeper_completions_join_one_turn_as_a_single_fiber_message() {
     let turns: Vec<_> = history
         .new_lines()
         .into_iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .collect();
     let fiber_messages = |line: &Envelope| {
         line.payload["input"]
@@ -3014,7 +3024,7 @@ fn keeper_completions_join_one_turn_as_a_single_fiber_message() {
         !history
             .new_lines()
             .iter()
-            .any(|line| line.kind == "job_completed")
+            .any(|line| line.kind() == EventKind::JobCompleted)
     );
 }
 
@@ -3068,17 +3078,17 @@ fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
     assert_eq!(
         history.new_kinds(),
         [
-            "job_completed",
-            "job_completed",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::JobCompleted,
+            EventKind::JobCompleted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -3127,18 +3137,18 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     assert_eq!(
         history.new_kinds(),
         [
-            "job_completed",
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::JobCompleted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let requests = history.provider.requests();
@@ -3192,7 +3202,10 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
 
     let lines = history.lines();
     assert_eq!(
-        lines.iter().filter(|l| l.kind == "job_completed").count(),
+        lines
+            .iter()
+            .filter(|l| l.kind() == EventKind::JobCompleted)
+            .count(),
         1
     );
     let requests = history.provider.requests();
@@ -3276,14 +3289,14 @@ fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -3341,43 +3354,43 @@ fn a_crash_between_the_completion_and_the_new_opening_writes_it_at_the_next_turn
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
 
 /// The kinds of a resumed turn whose first reply calls a tool and whose
 /// second is text.
-const RESUMED_TURN: [&str; 15] = [
-    "preamble_built",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "tool_call_requested",
-    "usage_recorded",
-    "assistant_message_completed",
-    "tool_call_started",
-    "tool_call_completed",
-    "step_started",
-    "assistant_message_started",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const RESUMED_TURN: [EventKind; 15] = [
+    EventKind::PreambleBuilt,
+    EventKind::TurnStarted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::ToolCallRequested,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::ToolCallStarted,
+    EventKind::ToolCallCompleted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::TextCompleted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 /// A resumed turn whose first reply calls a tool with `tokens` in its
 /// prompt: the context is past two thirds of the default trigger.
 #[track_caller]
-fn nudge_after_resume(nudged_before: bool) -> Vec<String> {
+fn nudge_after_resume(nudged_before: bool) -> Vec<EventKind> {
     let mut history = History::new(vec![
         support::with_tokens(support::tool_call_reply("", &["get_weather"]), 270_000, 0),
         Scripted::text("Done."),
@@ -3410,7 +3423,7 @@ fn a_context_nudged_before_the_crash_is_not_nudged_again() {
 #[test]
 fn a_context_not_nudged_before_the_crash_is_nudged_once_a_reply_measures_it() {
     let mut expected = RESUMED_TURN.to_vec();
-    expected.insert(10, "context_nudged");
+    expected.insert(10, EventKind::ContextNudged);
     assert_eq!(nudge_after_resume(false), expected);
 }
 
@@ -3433,7 +3446,7 @@ fn a_suspended_batch_leaves_a_hosted_call_out() {
     let new = history.new_lines();
     let done: Vec<_> = new
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .map(|l| l.action_id.clone().unwrap().0)
         .collect();
     assert_eq!(done, ["a_1"], "the hosted call is given no result");
@@ -3463,28 +3476,25 @@ fn a_resumed_session_replays_a_logged_section_byte_for_byte() {
     live.turn();
     let live_lines = live.lines();
     assert_eq!(
-        live_lines
-            .iter()
-            .map(|l| l.kind.as_str())
-            .collect::<Vec<_>>(),
+        live_lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
         [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let live_opening = live_lines
         .iter()
-        .find(|line| line.kind == "opening_message")
+        .find(|line| line.kind() == EventKind::OpeningMessage)
         .unwrap();
     let Input::User {
         text: live_text, ..
@@ -3508,19 +3518,23 @@ fn a_resumed_session_replays_a_logged_section_byte_for_byte() {
     history.run(looped, "two");
     assert_eq!(
         history.history_kinds(),
-        ["session_started", "opening_message", "turn_started"]
+        [
+            EventKind::SessionStarted,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted
+        ]
     );
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 
@@ -3577,7 +3591,7 @@ fn a_shutdown_before_the_finishing_turn_writes_nothing_and_keeps_the_request() {
 
     assert_eq!(outcome, None);
     // No preamble, no re-raise: only this process's `fiber_started`.
-    assert_eq!(history.new_kinds(), ["fiber_started"]);
+    assert_eq!(history.new_kinds(), [EventKind::FiberStarted]);
     assert!(history.provider.requests().is_empty());
     let exited = exited_on_signal(&history, looped.summary());
     assert_eq!(exited.payload["suspended_on"], "r_9");
@@ -3617,7 +3631,11 @@ fn a_resumed_exit_declines_the_ask_an_earlier_process_left_open() {
 
     assert_eq!(
         history.new_kinds(),
-        ["fiber_started", "interaction_resolved", "fiber_exited"]
+        [
+            EventKind::FiberStarted,
+            EventKind::InteractionResolved,
+            EventKind::FiberExited
+        ]
     );
     let lines = history.new_lines();
     assert_eq!(lines[1].payload["request_id"], "r_ext");
@@ -3636,7 +3654,11 @@ fn a_signalled_resumed_exit_names_the_approval_an_earlier_process_left() {
     assert_eq!(exited.payload["suspended_on"], "r_9");
     assert_eq!(
         history.new_kinds(),
-        ["fiber_started", "interaction_resolved", "fiber_exited"]
+        [
+            EventKind::FiberStarted,
+            EventKind::InteractionResolved,
+            EventKind::FiberExited
+        ]
     );
 }
 
@@ -3662,9 +3684,9 @@ fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
 
     assert_eq!(outcome, Some(contract::events::TurnOutcome::Interrupted));
     let kinds = history.new_kinds();
-    assert!(kinds.contains(&"permission_requested".to_owned()));
-    assert!(kinds.contains(&"permission_resolved".to_owned()));
-    assert_eq!(kinds.last().map(String::as_str), Some("turn_completed"));
+    assert!(kinds.contains(&EventKind::PermissionRequested));
+    assert!(kinds.contains(&EventKind::PermissionResolved));
+    assert_eq!(kinds.last().cloned(), Some(EventKind::TurnCompleted));
     // The loop starts no other turn and rejects the held prompt.
     let (done, finished) = mpsc::channel();
     std::thread::spawn(move || done.send(looped.run()).unwrap());
@@ -3677,8 +3699,8 @@ fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
         other => panic!("the prompt was answered closing, not {other:?}"),
     }
     assert_eq!(
-        history.new_kinds().last().map(String::as_str),
-        Some("turn_completed")
+        history.new_kinds().last().cloned(),
+        Some(EventKind::TurnCompleted)
     );
     let exited = exited_on_signal(&history, &run.summary);
     assert_eq!(exited.payload.get("suspended_on"), None);
@@ -3784,7 +3806,7 @@ fn a_turn_suspended_after_a_handoff_re_raises_its_request_past_lines_written_aft
     let raised: Vec<Envelope> = history
         .new_lines()
         .into_iter()
-        .filter(|line| line.kind == "permission_requested")
+        .filter(|line| line.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(raised.len(), 1, "{:?}", history.new_kinds());
     assert_eq!(raised[0].payload["request_id"], "r_9");
@@ -3837,7 +3859,7 @@ fn on_reraise(
     let watcher = history.log.watch();
     std::thread::spawn(move || {
         support::read_until(watcher, "a re-raised permission_requested line", |line| {
-            line.kind == "permission_requested"
+            line.kind() == EventKind::PermissionRequested
         });
         send();
     })
@@ -3848,7 +3870,7 @@ fn new_of(history: &History, kind: &str) -> Vec<Envelope> {
     history
         .new_lines()
         .into_iter()
-        .filter(|line| line.kind == kind)
+        .filter(|line| line.kind() == EventKind::from_name(kind))
         .collect()
 }
 
@@ -3888,18 +3910,18 @@ fn an_answerable_resume_runs_the_call_a_person_allows() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let done = new_of(&history, "tool_call_completed");
@@ -3948,13 +3970,13 @@ fn an_allowed_call_that_asks_ends_the_finishing_turn_with_its_questions() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     ended_on_the_question(&history);
@@ -4020,20 +4042,20 @@ fn an_answered_resume_prefers_the_block_budget_over_later_questions() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "usage_recorded",
-            "usage_recorded",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_started",
-            "tool_call_completed",
-            "tool_call_completed",
-            "tool_call_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     ended_blocked(&history);
@@ -4139,10 +4161,10 @@ fn the_idle_delay_while_waiting_leaves_the_request_pending_again() {
     assert_eq!(
         history.new_kinds(),
         [
-            "fiber_started",
-            "preamble_built",
-            "opening_message",
-            "permission_requested"
+            EventKind::FiberStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested
         ]
     );
     r#loop::fiber_exited(&history.log, looped.summary(), Ok(()), false, None).unwrap();
@@ -4215,17 +4237,17 @@ fn a_headless_resume_denies_the_re_raised_review_request_by_cancel() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "permission_requested",
-            "permission_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::PermissionRequested,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4260,7 +4282,7 @@ fn a_shutdown_that_closes_the_inbox_while_waiting_keeps_the_re_raised_request() 
     std::thread::scope(|scope| {
         scope.spawn(move || {
             support::read_until(watcher, "a re-raised permission_requested line", |line| {
-                line.kind == "permission_requested"
+                line.kind() == EventKind::PermissionRequested
             });
             // The wait parks in `recv` with no deadline, so the drop below
             // disconnects it: the shutdown's wake would end the wait
@@ -4281,8 +4303,11 @@ fn a_shutdown_that_closes_the_inbox_while_waiting_keeps_the_re_raised_request() 
     });
     assert!(exec.ran().is_empty());
     let new = history.new_lines();
-    assert_eq!(new.last().unwrap().kind, "permission_requested");
-    assert!(new.iter().all(|line| line.kind != "permission_resolved"));
+    assert_eq!(new.last().unwrap().kind(), EventKind::PermissionRequested);
+    assert!(
+        new.iter()
+            .all(|line| line.kind() != EventKind::PermissionResolved)
+    );
     let stepped = stepped.expect("the step ran");
     let exited = exited_on_signal(&history, stepped.summary());
     assert_eq!(exited.payload["suspended_on"], "r_9");
@@ -4339,9 +4364,12 @@ fn calls_before_the_action_are_cancelled_and_calls_after_it_run_after_the_reply(
     let kinds = history.new_kinds();
     let last_decision = kinds
         .iter()
-        .rposition(|k| k == "permission_resolved")
+        .rposition(|k| *k == EventKind::PermissionResolved)
         .unwrap();
-    let first_start = kinds.iter().position(|k| k == "tool_call_started").unwrap();
+    let first_start = kinds
+        .iter()
+        .position(|k| *k == EventKind::ToolCallStarted)
+        .unwrap();
     assert!(last_decision < first_start, "{kinds:?}");
 }
 
@@ -4556,7 +4584,7 @@ fn a_resume_switching_the_label_records_model_changed_before_the_build() {
     // them; the session's current ones are `after`
     // (`docs/events.md`, "`model_changed`").
     let new = history.new_lines();
-    assert_eq!(new[0].kind, "model_changed");
+    assert_eq!(new[0].kind(), EventKind::ModelChanged);
     assert_eq!(
         new[0].payload["before"],
         serde_json::json!({
@@ -4574,22 +4602,22 @@ fn a_resume_switching_the_label_records_model_changed_before_the_build() {
         })
     );
     assert_eq!(new[0].payload["source"], "driver");
-    assert_eq!(new[1].kind, "preamble_built");
+    assert_eq!(new[1].kind(), EventKind::PreambleBuilt);
     assert_eq!(new[1].payload["reason"], "resume");
     assert_eq!(new[1].payload["credential"], "home");
     assert_eq!(
         history.new_kinds(),
         [
-            "model_changed",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::ModelChanged,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4647,11 +4675,11 @@ fn a_resume_switching_the_model_drops_the_recorded_reasoning() {
     // The switch is recorded before the resumed build, with the recorded
     // settings as `before`.
     let new = history.new_lines();
-    assert_eq!(new[0].kind, "model_changed");
+    assert_eq!(new[0].kind(), EventKind::ModelChanged);
     assert_eq!(new[0].payload["before"]["model"], support::MODEL);
     assert_eq!(new[0].payload["after"]["model"], "fake/model-2");
     assert_eq!(new[0].payload["source"], "driver");
-    assert_eq!(new[1].kind, "preamble_built");
+    assert_eq!(new[1].kind(), EventKind::PreambleBuilt);
     assert_eq!(new[1].payload["model"], "fake/model-2");
     // The recorded model's reasoning keeps its producer's stamp, so the
     // request layer sends it only to that model and the new model never
@@ -4679,15 +4707,15 @@ fn a_resume_switching_the_model_drops_the_recorded_reasoning() {
     assert_eq!(
         history.new_kinds(),
         [
-            "model_changed",
-            "preamble_built",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::ModelChanged,
+            EventKind::PreambleBuilt,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4711,7 +4739,7 @@ fn a_resume_switching_only_thinking_records_one_model_changed() {
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
 
     let new = history.new_lines();
-    assert_eq!(new[0].kind, "model_changed");
+    assert_eq!(new[0].kind(), EventKind::ModelChanged);
     assert_eq!(new[0].payload["before"]["model"], support::MODEL);
     assert_eq!(new[0].payload["before"]["thinking"], "low");
     assert_eq!(new[0].payload["after"]["model"], support::MODEL);
@@ -4720,16 +4748,16 @@ fn a_resume_switching_only_thinking_records_one_model_changed() {
     assert_eq!(
         history.new_kinds(),
         [
-            "model_changed",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::ModelChanged,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4746,23 +4774,23 @@ fn a_resume_after_a_switch_records_the_switch_after_as_before() {
     history.run(looped, "hi");
 
     let new = history.new_lines();
-    assert_eq!(new[0].kind, "model_changed");
+    assert_eq!(new[0].kind(), EventKind::ModelChanged);
     assert_eq!(new[0].payload["before"]["model"], "fake/second");
     assert_eq!(new[0].payload["before"]["credential"], "personal");
     assert_eq!(new[0].payload["after"]["credential"], "home");
     assert_eq!(
         history.new_kinds(),
         [
-            "model_changed",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::ModelChanged,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4781,19 +4809,19 @@ fn a_resume_with_the_recorded_label_records_nothing() {
     history.run(looped, "hi");
 
     let new = history.new_lines();
-    assert_eq!(new[0].kind, "preamble_built");
+    assert_eq!(new[0].kind(), EventKind::PreambleBuilt);
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4814,19 +4842,19 @@ fn a_resume_with_a_label_but_no_recorded_one_records_nothing() {
     history.run(looped, "hi");
 
     let new = history.new_lines();
-    assert_eq!(new[0].kind, "preamble_built");
+    assert_eq!(new[0].kind(), EventKind::PreambleBuilt);
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4846,15 +4874,15 @@ fn a_resume_with_a_label_but_no_recorded_settings_records_nothing() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4874,23 +4902,23 @@ fn a_resume_switching_the_label_marks_orphans_first() {
     history.run(looped, "hi");
 
     let new = history.new_lines();
-    assert_eq!(new[0].kind, "job_completed");
+    assert_eq!(new[0].kind(), EventKind::JobCompleted);
     assert_orphaned(&new[0], "j_a");
-    assert_eq!(new[1].kind, "model_changed");
+    assert_eq!(new[1].kind(), EventKind::ModelChanged);
     assert_eq!(
         history.new_kinds(),
         [
-            "job_completed",
-            "model_changed",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::JobCompleted,
+            EventKind::ModelChanged,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
 }
@@ -4936,22 +4964,22 @@ fn a_pinned_history_fails_the_naming_call() {
     assert_eq!(
         kinds,
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let done = new_of(&history, "tool_call_completed");
@@ -4999,23 +5027,23 @@ fn a_cleared_person_name_unpins_the_session() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "session_named",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::SessionNamed,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let named_lines = new_of(&history, "session_named");
@@ -5039,23 +5067,23 @@ fn a_model_name_never_pins_the_session() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "session_named",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::SessionNamed,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let named_lines = new_of(&history, "session_named");
@@ -5080,22 +5108,22 @@ fn a_person_name_before_a_handoff_still_pins_the_session() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     let done = new_of(&history, "tool_call_completed");
@@ -5105,7 +5133,7 @@ fn a_person_name_before_a_handoff_still_pins_the_session() {
 
 #[test]
 fn known_hosts_resume_restores_every_source_but_reviews_an_unknown_host() {
-    use contract::events::{InstructionFile, InstructionReason, InstructionSent};
+    use contract::events::{EventKind, InstructionFile, InstructionReason, InstructionSent};
     use contract::shapes::Effect;
     let names = ["person", "instructions", "surfaced", "allowed", "unknown"];
     let calls: Vec<_> = names.iter().map(|name| (*name, support::paris())).collect();
@@ -5194,45 +5222,45 @@ fn known_hosts_resume_restores_every_source_but_reviews_an_unknown_host() {
     assert_eq!(
         history.new_kinds(),
         [
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "tool_call_requested",
-            "tool_call_requested",
-            "tool_call_requested",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "usage_recorded",
-            "permission_resolved",
-            "usage_recorded",
-            "permission_resolved",
-            "tool_call_started",
-            "tool_call_started",
-            "tool_call_started",
-            "tool_call_started",
-            "tool_call_started",
-            "tool_call_completed",
-            "tool_call_completed",
-            "tool_call_completed",
-            "tool_call_completed",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed"
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::UsageRecorded,
+            EventKind::PermissionResolved,
+            EventKind::UsageRecorded,
+            EventKind::PermissionResolved,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted
         ]
     );
     assert_eq!(reviewer.requests().len(), 2);
     let resolved: Vec<_> = history
         .new_lines()
         .into_iter()
-        .filter(|line| line.kind == "permission_resolved")
+        .filter(|line| line.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     for (line, host) in resolved.iter().zip(["instructions", "unknown"]) {
@@ -5307,7 +5335,9 @@ fn resume_for_backfill(history: &mut History) -> Loop {
 fn copies_of(lines: &[Envelope], generation: &str) -> Vec<Envelope> {
     lines
         .iter()
-        .filter(|line| line.kind == "usage_recorded" && line.payload["generation_id"] == generation)
+        .filter(|line| {
+            line.kind() == EventKind::UsageRecorded && line.payload["generation_id"] == generation
+        })
         .cloned()
         .collect()
 }
@@ -5320,7 +5350,7 @@ fn exited_cost(history: &History, summary: &r#loop::Summary) -> Option<f64> {
     r#loop::fiber_exited(&history.log, summary, Ok(()), false, None).unwrap();
     let all = log::read(&history.dir).unwrap();
     let exited = all.last().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.kind(), EventKind::FiberExited);
     exited.payload["usage"]["cost"].as_f64()
 }
 
@@ -5348,7 +5378,11 @@ fn an_orphaned_delegate_s_records_are_backfilled_after_its_orphan_marking() {
     // naming the delegate as the origin.
     assert_eq!(
         history.new_kinds(),
-        ["job_completed", "usage_recorded", "usage_recorded"]
+        [
+            EventKind::JobCompleted,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded
+        ]
     );
     let found = copies_of(&history.new_lines(), "g_1");
     assert_eq!(found.len(), 2);
@@ -5383,7 +5417,10 @@ fn a_backfill_skips_the_records_the_parent_already_copied() {
     // Only the correction is appended: the already-copied prefix is
     // skipped by ordered occurrence, even though the ledger's latest
     // value already equals the correction's.
-    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    assert_eq!(
+        history.new_kinds(),
+        [EventKind::JobCompleted, EventKind::UsageRecorded]
+    );
     let found = copies_of(&history.new_lines(), "g_1");
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].payload["cost"], 0.18);
@@ -5425,7 +5462,10 @@ fn a_backfill_does_not_count_an_ephemeral_copy_as_the_parents() {
     history.freeze();
 
     drop(resume_for_backfill(&mut history));
-    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    assert_eq!(
+        history.new_kinds(),
+        [EventKind::JobCompleted, EventKind::UsageRecorded]
+    );
     assert_eq!(copies_of(&history.new_lines(), "g_1").len(), 1);
 }
 
@@ -5446,7 +5486,10 @@ fn a_backfill_skips_an_ephemeral_line_in_the_delegates_log() {
     history.freeze();
 
     drop(resume_for_backfill(&mut history));
-    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    assert_eq!(
+        history.new_kinds(),
+        [EventKind::JobCompleted, EventKind::UsageRecorded]
+    );
     assert!(copies_of(&history.new_lines(), "g_2").is_empty());
 }
 
@@ -5469,7 +5512,7 @@ fn a_backfill_appends_nothing_the_parent_already_holds() {
 
     let looped = resume_for_backfill(&mut history);
     // The orphan is still marked, but no copy is appended twice.
-    assert_eq!(history.new_kinds(), ["job_completed"]);
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
     // The exit reports this process's calls only: the resume wrote no
     // usage, so the cost is 0, not the earlier process's 0.18
     // (`docs/events.md`, `fiber_exited`: `usage` is "this process's model
@@ -5500,7 +5543,11 @@ fn a_backfill_matches_occurrences_in_order_not_the_latest_value() {
     // the latest value would have appended nothing.
     assert_eq!(
         history.new_kinds(),
-        ["job_completed", "usage_recorded", "usage_recorded"]
+        [
+            EventKind::JobCompleted,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded
+        ]
     );
     let found = copies_of(&history.new_lines(), "g_1");
     assert_eq!(found.len(), 2);
@@ -5522,7 +5569,10 @@ fn a_resume_after_a_backfill_appends_no_further_copies() {
     history.freeze();
 
     drop(resume_for_backfill(&mut history));
-    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    assert_eq!(
+        history.new_kinds(),
+        [EventKind::JobCompleted, EventKind::UsageRecorded]
+    );
     history.freeze();
     // The first resume settled the orphan and copied the record: the
     // second finds no orphan and no missing copy, and writes nothing.
@@ -5565,16 +5615,16 @@ fn a_backfill_keeps_generations_and_grandchild_origins_distinct() {
     assert_eq!(
         history.new_kinds(),
         [
-            "job_completed",
-            "usage_recorded",
-            "usage_recorded",
-            "usage_recorded"
+            EventKind::JobCompleted,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded
         ]
     );
     let lines = history.new_lines();
     let usages: Vec<_> = lines
         .iter()
-        .filter(|line| line.kind == "usage_recorded")
+        .filter(|line| line.kind() == EventKind::UsageRecorded)
         .collect();
     assert_eq!(usages[0].payload["generation_id"], "g_2");
     assert_eq!(usages[0].payload["origin_session_id"], "s_child");
@@ -5595,11 +5645,11 @@ fn a_mapped_orphan_without_a_log_keeps_its_marking_and_copies_nothing() {
     history.freeze();
 
     drop(resume_for_backfill(&mut history));
-    assert_eq!(history.new_kinds(), ["job_completed"]);
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
     let marked: Vec<_> = history
         .new_lines()
         .into_iter()
-        .filter(|line| line.kind == "job_completed")
+        .filter(|line| line.kind() == EventKind::JobCompleted)
         .collect();
     assert_eq!(marked.len(), 1);
     assert_eq!(marked[0].payload["job_id"], "j_9");
@@ -5613,7 +5663,7 @@ fn an_orphan_without_a_delegate_start_copies_nothing() {
     history.freeze();
 
     drop(resume_for_backfill(&mut history));
-    assert_eq!(history.new_kinds(), ["job_completed"]);
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
 }
 
 #[test]
@@ -5632,7 +5682,7 @@ fn an_orphan_on_another_harness_copies_nothing() {
     history.freeze();
 
     drop(resume_for_backfill(&mut history));
-    assert_eq!(history.new_kinds(), ["job_completed"]);
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
 }
 
 /// Resumes on a thread for the writer-coordination waits: the old writer
@@ -5738,10 +5788,10 @@ fn a_resume_waits_out_a_live_writer_and_backfills_its_final_lines() {
     assert_eq!(
         history.new_kinds(),
         [
-            "job_completed",
-            "usage_recorded",
-            "usage_recorded",
-            "usage_recorded"
+            EventKind::JobCompleted,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded,
+            EventKind::UsageRecorded
         ]
     );
     let first = copies_of(&history.new_lines(), "g_1");
@@ -5778,7 +5828,10 @@ fn a_resume_backfills_a_writer_that_died_mid_stream() {
     let (resumed, result) = deadline.recv_or_fail(&finished, "the resume to report");
     result.unwrap();
     let looped = resumed.expect("the resume built a loop");
-    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    assert_eq!(
+        history.new_kinds(),
+        [EventKind::JobCompleted, EventKind::UsageRecorded]
+    );
     let found = copies_of(&history.new_lines(), "g_1");
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].payload["cost"], 0.10);
@@ -5809,7 +5862,10 @@ fn a_backfill_copies_the_good_prefix_past_a_corrupt_line() {
     history.freeze();
 
     let looped = resume_for_backfill(&mut history);
-    assert_eq!(history.new_kinds(), ["job_completed", "usage_recorded"]);
+    assert_eq!(
+        history.new_kinds(),
+        [EventKind::JobCompleted, EventKind::UsageRecorded]
+    );
     let first = copies_of(&history.new_lines(), "g_1");
     assert_eq!(first.len(), 1);
     assert_eq!(first[0].payload["cost"], 0.10);

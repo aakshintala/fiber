@@ -757,7 +757,7 @@ impl World {
             .collect();
         let from = lines
             .iter()
-            .rposition(|line| line.kind == "turn_started")
+            .rposition(|line| line.kind() == EventKind::TurnStarted)
             .expect("a turn started");
         lines[from..].to_vec()
     }
@@ -1057,7 +1057,7 @@ fn a_question_wait_with_a_session_message_queued_does_not_end_idle() {
     let (watcher, lines) = read_until(
         world.watched.take().unwrap(),
         "an interaction_requested line",
-        |line| line.kind == "interaction_requested",
+        |line| line.kind() == EventKind::InteractionRequested,
     );
     world.watched = Some(watcher);
     assert_eq!(lines.last().unwrap().payload["resumes"], true);
@@ -1112,7 +1112,7 @@ fn a_question_wait_with_a_session_message_queued_does_not_end_idle() {
     let lines = world.turn_lines();
     let applied: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "steering_applied")
+        .filter(|line| line.kind() == EventKind::SteeringApplied)
         .collect();
     assert_eq!(applied.len(), 1);
     assert_eq!(applied[0].payload["source"], "session");
@@ -1147,7 +1147,7 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
     let (watcher, lines) = read_until(
         world.watched.take().unwrap(),
         "a permission_requested line",
-        |line| line.kind == "permission_requested",
+        |line| line.kind() == EventKind::PermissionRequested,
     );
     world.watched = Some(watcher);
     let request = RequestId(
@@ -1203,7 +1203,7 @@ fn an_approval_wait_with_a_session_message_queued_does_not_end_idle() {
     let lines = world.turn_lines();
     let applied: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "steering_applied")
+        .filter(|line| line.kind() == EventKind::SteeringApplied)
         .collect();
     assert_eq!(applied.len(), 1);
     assert_eq!(applied[0].payload["source"], "session");
@@ -1239,7 +1239,7 @@ fn a_session_message_during_an_approval_wait_is_answered_at_once() {
     let (watcher, lines) = read_until(
         world.watched.take().unwrap(),
         "a permission_requested line",
-        |line| line.kind == "permission_requested",
+        |line| line.kind() == EventKind::PermissionRequested,
     );
     world.watched = Some(watcher);
     let request = RequestId(
@@ -1291,7 +1291,7 @@ fn a_session_message_during_an_approval_wait_is_answered_at_once() {
     let lines = world.turn_lines();
     let applied: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "steering_applied")
+        .filter(|line| line.kind() == EventKind::SteeringApplied)
         .collect();
     assert_eq!(applied.len(), 1);
     assert_eq!(applied[0].payload["source"], "session");
@@ -1325,7 +1325,7 @@ fn a_session_message_during_a_question_wait_is_answered_at_once() {
     let (watcher, _) = read_until(
         world.watched.take().unwrap(),
         "an interaction_requested line",
-        |line| line.kind == "interaction_requested",
+        |line| line.kind() == EventKind::InteractionRequested,
     );
     world.watched = Some(watcher);
     let parked = Arc::clone(&world.clock);
@@ -1363,7 +1363,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_does_not_end_idle() {
     let (watcher, lines) = read_until(
         world.watched.take().unwrap(),
         "a repository_code_offered line",
-        |line| line.kind == "repository_code_offered",
+        |line| line.kind() == EventKind::RepositoryCodeOffered,
     );
     world.watched = Some(watcher);
     let request = RequestId(
@@ -1429,7 +1429,7 @@ fn an_offer_wait_holding_a_session_message_that_arrived_during_it_does_not_end_i
     let (watcher, lines) = read_until(
         world.watched.take().unwrap(),
         "a repository_code_offered line",
-        |line| line.kind == "repository_code_offered",
+        |line| line.kind() == EventKind::RepositoryCodeOffered,
     );
     world.watched = Some(watcher);
     let request = RequestId(
@@ -1488,7 +1488,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_ends_on_close_and_runs_it()
     let (_watcher, _) = read_until(
         world.watched.take().unwrap(),
         "a repository_code_offered line",
-        |line| line.kind == "repository_code_offered",
+        |line| line.kind() == EventKind::RepositoryCodeOffered,
     );
     let parked = Arc::clone(&world.clock);
     fakes::within(
@@ -1507,7 +1507,7 @@ fn an_offer_wait_with_a_session_message_in_the_input_ends_on_close_and_runs_it()
     assert!(result.is_ok(), "{result:?}");
     // The close ended the offer wait, and the turn still ran the message.
     let lines = world.turn_lines();
-    assert_eq!(lines[0].kind, "turn_started");
+    assert_eq!(lines[0].kind(), EventKind::TurnStarted);
     assert_eq!(
         lines[0].payload["input"],
         json!([{
@@ -1532,7 +1532,7 @@ fn a_required_offer_failure_with_a_held_message_fails_the_run() {
     let (_watcher, _) = read_until(
         world.watched.take().unwrap(),
         "a repository_code_offered line",
-        |line| line.kind == "repository_code_offered",
+        |line| line.kind() == EventKind::RepositoryCodeOffered,
     );
     fakes::within(
         "the offer wait parked",
@@ -1601,7 +1601,7 @@ fn a_question_wait_refuses_a_message_sent_just_after_its_last_idle_check() {
     let (watcher, _) = read_until(
         world.watched.take().unwrap(),
         "an interaction_requested line",
-        |line| line.kind == "interaction_requested",
+        |line| line.kind() == EventKind::InteractionRequested,
     );
     world.watched = Some(watcher);
     world.advance_parked(Some(origin + IDLE), IDLE);
@@ -1783,12 +1783,12 @@ fn a_non_blocking_hook_failure_still_delivers_and_logs_its_notice() {
     let (watcher, streamed) = read_until(
         world.watched.take().unwrap(),
         "a turn_completed line",
-        |line| line.kind == "turn_completed",
+        |line| line.kind() == EventKind::TurnCompleted,
     );
     world.watched = Some(watcher);
     let notice = streamed
         .iter()
-        .find(|line| line.kind == "notice")
+        .find(|line| line.kind() == EventKind::Notice)
         .expect("the soft failure is logged as a notice");
     assert!(notice.turn_id.is_none(), "an idle notice names no turn");
     assert_eq!(notice.payload["code"], "hook_failed");
@@ -1866,7 +1866,7 @@ fn a_session_message_context_joins_the_turn_as_context_added() {
     let lines = world.turn_lines();
     let added: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "context_added")
+        .filter(|line| line.kind() == EventKind::ContextAdded)
         .collect();
     assert_eq!(added.len(), 1, "the hook's context is logged");
     assert_eq!(added[0].payload["hook"], "before_message");
