@@ -1689,6 +1689,126 @@ fn the_signal_check_passes_a_signal_in_the_allowlist() {
 }
 
 #[test]
+fn the_visibility_check_fails_a_pub_crate_fn_used_only_in_its_own_module() {
+    let dir = workspace();
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (0, "visibility: ok\n".to_owned())
+    );
+    // The qualifier is built from parts so this file holds no declaration
+    // the repo scan could trip on; only the fixture carries one.
+    let vis = ["pub", "(crate)"].concat();
+    let decl = format!("{vis} fn helper() -> u32 {{ 1 }}\n");
+    dir.write(
+        "crates/b/src/only.rs",
+        &format!("//! only\n//! fixture\n{decl}"),
+    );
+    let expected_check_docs = format!(
+        "check-docs: crates/b/src/only.rs:3: helper is {vis} but no other file in b names it\n"
+    );
+    let expected_visibility = format!(
+        "visibility: crates/b/src/only.rs:3: helper is {vis} but no other file in b names it\n"
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (1, expected_check_docs.clone())
+    );
+    let standalone = xtask(&dir, &["visibility"], &[], "");
+    assert_eq!(standalone, (1, expected_visibility));
+    assert_eq!(
+        standalone.1.replace("visibility: ", ""),
+        expected_check_docs.replace("check-docs: ", "")
+    );
+    dir.write("crates/b/src/lib.rs", "//! b\nlet _ = helper();\n");
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (0, "visibility: ok\n".to_owned())
+    );
+}
+
+#[test]
+fn the_visibility_check_passes_a_pub_super_fn_named_from_a_child_module() {
+    let dir = workspace();
+    let vis = ["pub", "(super)"].concat();
+    dir.write(
+        "crates/b/src/outer.rs",
+        &format!("//! outer\n{vis} fn boost() -> u32 {{ 1 }}\n"),
+    );
+    dir.write(
+        "crates/b/src/inner_use.rs",
+        "//! inner\nfn f() { super::boost(); }\n",
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (0, "visibility: ok\n".to_owned())
+    );
+}
+
+#[test]
+fn the_visibility_check_passes_twin_cfg_seam_modules() {
+    let dir = workspace();
+    let vis = ["pub", "(crate)"].concat();
+    let opener = format!("{vis} mod seam {{\n");
+    let fire = format!("    {vis} fn fire() {{}}\n");
+    let seamed = format!(
+        "//! seamed\n#[cfg(not(test))]\n{opener}{fire}}}\n#[cfg(test)]\n{opener}{fire}}}\nfn run() {{ seam::fire(); }}\n"
+    );
+    dir.write("crates/b/src/seamed.rs", &seamed);
+    dir.write(
+        "crates/b/src/lib.rs",
+        "//! b\nfn uses_seam() { seam::setup(); }\n",
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (0, "visibility: ok\n".to_owned())
+    );
+}
+
+#[test]
+fn the_visibility_check_fails_a_lonely_inline_mod() {
+    let dir = workspace();
+    let vis = ["pub", "(crate)"].concat();
+    dir.write(
+        "crates/b/src/only.rs",
+        &format!("//! lonely\n//! fixture\n{vis} mod lonely {{\n    fn hidden() {{}}\n}}\n"),
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (
+            1,
+            format!(
+                "check-docs: crates/b/src/only.rs:3: lonely is {vis} but no other file in b names it\n"
+            )
+        )
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (
+            1,
+            format!(
+                "visibility: crates/b/src/only.rs:3: lonely is {vis} but no other file in b names it\n"
+            )
+        )
+    );
+}
+
+#[test]
 fn the_must_succeed_check_passes_a_clean_workspace_and_fails_a_short_bound() {
     let dir = workspace();
     assert_eq!(
