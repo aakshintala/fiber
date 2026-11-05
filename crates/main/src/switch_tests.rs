@@ -403,6 +403,20 @@ fn args(model: &str) -> ModelArgs {
     }
 }
 
+/// A stored key file for `provider` under `default`, with the config
+/// override declaring it: switches the provider on through
+/// `has_credential`'s own origins, while the in-memory credential map
+/// still serves the read. The switched-on set reads config origins and
+/// the process environment only, so the declaration is what counts.
+fn stored_key(fixture: &Fixture, provider: &str) -> String {
+    let key = fixture.root.path().join(format!("{provider}-key"));
+    std::fs::write(&key, format!("{provider}-key")).unwrap();
+    format!(
+        "providers.{provider}.credentials.default.file={}",
+        key.display()
+    )
+}
+
 /// A door whose `tools` answer goes nowhere.
 fn quiet() -> Door {
     Door {
@@ -722,9 +736,12 @@ fn unknown_models_are_invalid_arguments() {
 
 #[test]
 fn an_ambiguous_bare_id_lists_both_matches() {
-    // `fake/m` and `other/m` share the id.
+    // `fake/m` and `other/m` share the id, both switched on: `other`
+    // through its declared command credential, `fake` through a stored
+    // key, so the ambiguity lists both switched-on matches.
     let fixture = fixture("fiber-switch-ambiguous");
-    let switching = switching(&fixture, &[]);
+    let present = stored_key(&fixture, "fake");
+    let switching = switching(&fixture, &[present.as_str()]);
     let rejection = rejected(&switching, &args("m"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert!(
@@ -742,13 +759,16 @@ fn an_ambiguous_bare_id_lists_both_matches() {
 #[test]
 fn the_naming_list_counts_an_unloaded_lua_provider() {
     let fixture = fixture("fiber-switch-naming");
-    let config = config(&fixture, &[]);
+    let present = stored_key(&fixture, "fake");
+    let config = config(&fixture, &[present.as_str()]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
     let credentials: Credentials = [("fake", keyed("default"))]
         .into_iter()
         .map(|(name, entry)| (name.to_owned(), entry))
         .collect();
     // `lua` is unloaded: in the naming list only, sharing `m` with `fake`.
+    // The filter drops it, so only the switched-on registry holders list:
+    // `fake` through its stored key, `other` through its command.
     let naming = vec![
         ("fake".to_owned(), "m".to_owned()),
         ("lua".to_owned(), "m".to_owned()),
@@ -761,7 +781,16 @@ fn the_naming_list_counts_an_unloaded_lua_provider() {
         "{}",
         rejection.message
     );
-    assert!(rejection.message.contains("lua/m"), "{}", rejection.message);
+    assert!(
+        rejection.message.contains("other/m"),
+        "{}",
+        rejection.message
+    );
+    assert!(
+        !rejection.message.contains("lua/m"),
+        "{}",
+        rejection.message
+    );
     // A provider the registry does not hold is an unknown model.
     let unknown = rejected(&switching, &args("lua/m"), None);
     assert_eq!(unknown.code, ErrorCode::InvalidArguments);
@@ -773,10 +802,10 @@ fn the_naming_list_counts_an_unloaded_lua_provider() {
     );
     // The union is exact: no duplicate when the registry and the naming
     // list name the same reference. The fixture registry already holds
-    // `other/m`, so all three list.
+    // `other/m`, so both switched-on holders list.
     assert_eq!(
         rejected(&switching, &args("m"), None).message,
-        "The model `m` is offered by more than one provider: fake/m, lua/m, other/m. \
+        "The model `m` is offered by more than one provider: fake/m, other/m. \
          Name one as `provider/model`."
     );
 }
@@ -803,9 +832,11 @@ fn a_bare_id_only_the_naming_list_names_is_invalid_arguments() {
 #[test]
 fn a_naming_match_joins_a_resolved_match_in_ambiguity() {
     // The registry resolves bare `n` to `fake/n`; the naming list adds the
-    // unloaded `lua/n`.
+    // unloaded `lua/n`, which the filter drops: one switched-on holder
+    // resolves, so the switch prepares.
     let fixture = fixture("fiber-switch-resolved-naming");
-    let config = config(&fixture, &[]);
+    let present = stored_key(&fixture, "fake");
+    let config = config(&fixture, &[present.as_str()]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
     let credentials: Credentials = [("fake", keyed("default"))]
         .into_iter()
@@ -816,13 +847,8 @@ fn a_naming_match_joins_a_resolved_match_in_ambiguity() {
         ("lua".to_owned(), "n".to_owned()),
     ];
     let switching = over(&fixture.home, providers, naming, config, credentials);
-    let rejection = rejected(&switching, &args("n"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(
-        rejection.message,
-        "The model `n` is offered by more than one provider: fake/n, lua/n. \
-         Name one as `provider/model`."
-    );
+    let made = prepared(&switching, &args("n"), None);
+    assert_eq!(made.model.reference, "fake/n");
 }
 
 /// Adds extension `lit` naming `n` (low and high, defaulting low) and the
@@ -852,7 +878,10 @@ fn with_literal_provider(fixture: &Fixture) {
 fn a_literal_id_ending_in_a_thinking_level_matches_before_the_suffix() {
     let fixture = fixture("fiber-switch-literal");
     with_literal_provider(&fixture);
-    let config = config(&fixture, &[]);
+    // The in-memory map never counts toward the switched-on set; the
+    // stored key switches `lit` on.
+    let present = stored_key(&fixture, "lit");
+    let config = config(&fixture, &[present.as_str()]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
     let credentials: Credentials = [("lit", keyed("default"))]
         .into_iter()
@@ -879,32 +908,31 @@ fn a_literal_id_ending_in_a_thinking_level_matches_before_the_suffix() {
 fn an_unloaded_literal_id_counts_toward_ambiguity() {
     let fixture = fixture("fiber-switch-literal-ambiguity");
     with_literal_provider(&fixture);
-    let config = config(&fixture, &[]);
+    // The unloaded `lua` names the same literal `n:high`, which the filter
+    // drops: one switched-on literal holder resolves, with no level.
+    let present = stored_key(&fixture, "lit");
+    let config = config(&fixture, &[present.as_str()]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
     let credentials: Credentials = [("lit", keyed("default"))]
         .into_iter()
         .map(|(name, entry)| (name.to_owned(), entry))
         .collect();
-    // The unloaded `lua` names the same literal `n:high`.
     let naming = vec![
         ("lit".to_owned(), "n".to_owned()),
         ("lit".to_owned(), "n:high".to_owned()),
         ("lua".to_owned(), "n:high".to_owned()),
     ];
     let switching = over(&fixture.home, providers, naming, config, credentials);
-    let rejection = rejected(&switching, &args("n:high"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert_eq!(
-        rejection.message,
-        "The model `n:high` is offered by more than one provider: lit/n:high, lua/n:high. \
-         Name one as `provider/model`."
-    );
+    let made = prepared(&switching, &args("n:high"), None);
+    assert_eq!(made.model.reference, "lit/n:high");
+    assert_eq!(made.thinking, None);
 }
 
 #[test]
 fn a_literal_only_the_naming_list_names_falls_back_to_the_suffix() {
     let fixture = fixture("fiber-switch-literal-unloaded");
-    let config = config(&fixture, &[]);
+    let present = stored_key(&fixture, "fake");
+    let config = config(&fixture, &[present.as_str()]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
     // Only `lua`, which the registry does not hold, names the literal
     // `n:high`, so `fake/n` takes the `high` suffix.
@@ -939,7 +967,10 @@ fn an_unconfigured_literal_id_beats_stripped_id_ambiguity() {
             }),
         )],
     );
-    let config = config(&fixture, &[]);
+    // The in-memory map never counts toward the switched-on set; the
+    // stored key switches `lit` on.
+    let present = stored_key(&fixture, "lit");
+    let config = config(&fixture, &[present.as_str()]);
     let (providers, _) = Providers::load(&fixture.home).unwrap();
     let credentials: Credentials = [("fake", keyed("default")), ("lit", keyed("default"))]
         .into_iter()
@@ -996,7 +1027,10 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
             }),
         )],
     );
-    let config = config(&fixture, &[]);
+    // `fake` switches on through its stored key; `other` through its
+    // declared command credential.
+    let present = stored_key(&fixture, "fake");
+    let config = config(&fixture, &[present.as_str()]);
     let (mut providers, _) = Providers::load(&fixture.home).unwrap();
     let snapshot = providers.clone();
     let extensions = extensions::SessionExtensions::load(
@@ -1025,19 +1059,15 @@ fn an_unconfigured_model_counts_toward_ambiguity() {
         .map(|(name, entry)| (name.to_owned(), entry))
         .collect();
     let switching = over(&fixture.home, snapshot, naming, config, credentials);
-    // Configured `fake/m` and unconfigured `acme/m` make the bare `m`
-    // ambiguous.
+    // Configured `fake/m` and configured `other/m` are both switched on,
+    // so the bare `m` is still ambiguous; unconfigured `acme/m` is logged
+    // out and drops out of the list.
     let rejection = rejected(&switching, &args("m"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
-    assert!(
-        rejection.message.contains("fake/m"),
-        "{}",
-        rejection.message
-    );
-    assert!(
-        rejection.message.contains("acme/m"),
-        "{}",
-        rejection.message
+    assert_eq!(
+        rejection.message,
+        "The model `m` is offered by more than one provider: fake/m, other/m. \
+         Name one as `provider/model`."
     );
 }
 
@@ -1324,7 +1354,9 @@ fn a_retained_lua_provider_without_a_cache_does_not_resolve() {
 #[test]
 fn a_bare_id_one_provider_names_resolves() {
     let fixture = fixture("fiber-switch-bare-single");
-    let switching = switching(&fixture, &[]);
+    // Bare `r` still resolves: `fake` switches on through its stored key.
+    let present = stored_key(&fixture, "fake");
+    let switching = switching(&fixture, &[present.as_str()]);
     let made = prepared(&switching, &args("r"), None);
     assert_eq!(made.model.reference, "fake/r");
 }
@@ -1335,7 +1367,10 @@ fn a_bare_id_one_provider_names_resolves() {
 #[test]
 fn a_suffixed_id_without_a_literal_reports_the_stripped_ambiguity() {
     let fixture = fixture("fiber-switch-stripped-suffix");
-    let switching = switching(&fixture, &[]);
+    // Both holders stay switched on, `fake` through its stored key and
+    // `other` through its command, so the stripped id is still ambiguous.
+    let present = stored_key(&fixture, "fake");
+    let switching = switching(&fixture, &[present.as_str()]);
     let rejection = rejected(&switching, &args("m:high"), None);
     assert_eq!(rejection.code, ErrorCode::InvalidArguments);
     assert_eq!(
