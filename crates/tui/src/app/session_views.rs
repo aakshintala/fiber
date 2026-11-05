@@ -1043,13 +1043,12 @@ impl App {
                     self.session_views_rejected(&rejected);
                 }
             }
-        } else if kind == contract::events::EventKind::ToolCallCompleted {
-            if let Some(done) = super::read!(envelope, ToolCallCompleted)
-                && matches!(self.session_views.open, Some(Open::Call(_)))
-                && let Some(action) = envelope.action_id.as_ref()
-            {
-                return self.refresh_call_view(&envelope.session_id, &action.0, &done);
-            }
+        } else if kind == contract::events::EventKind::ToolCallCompleted
+            && let Some(done) = super::read!(envelope, ToolCallCompleted)
+            && matches!(self.session_views.open, Some(Open::Call(_)))
+            && let Some(action) = envelope.action_id.as_ref()
+        {
+            return self.refresh_call_view(&envelope.session_id, &action.0, &done);
         }
         Vec::new()
     }

@@ -527,14 +527,12 @@ fn rewrite_images(line: &mut Envelope, dir: &Path) {
     } else if matches!(
         kind,
         EventKind::SteeringApplied | EventKind::ToolCallCompleted
-    ) {
-        if let Some(content) = line
-            .payload
-            .get_mut("content")
-            .and_then(Value::as_array_mut)
-        {
-            rewrite_parts(content, dir);
-        }
+    ) && let Some(content) = line
+        .payload
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+    {
+        rewrite_parts(content, dir);
     }
 }
 
