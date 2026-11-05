@@ -102,8 +102,6 @@ pub(super) struct History {
     /// The hub's prompt history lines, newest first: the session that took
     /// each and its text.
     hub: Vec<(String, String)>,
-    /// The `prompt_history` command waiting for its answer.
-    pending: Option<String>,
     /// Whether the first page was asked for.
     started: bool,
     /// Where the next page ends, when older lines remain.
@@ -131,7 +129,6 @@ impl History {
             self.project = project;
             self.hub.clear();
             *self.recall.get_mut() = None;
-            self.pending = None;
             self.started = false;
             self.before = None;
             self.ended = false;
@@ -222,12 +219,14 @@ impl History {
     }
 
     /// The next `prompt_history` line, when one may go out: the link is up,
-    /// none is waiting, paging has not ended, and this is the first page or
-    /// the last answer said older lines remain.
-    fn fetch(&mut self, up: bool) -> Option<String> {
+    /// paging has not ended, and this is the first page or the last answer
+    /// said older lines remain. Returns the minted id with the line; the
+    /// caller registers the outbox tag, which is the sole record of the
+    /// waiting id and the one-out guard.
+    fn fetch(&mut self, up: bool) -> Option<(String, String)> {
         let more = !self.started || self.before.is_some();
         let project = self.project.clone()?;
-        if !up || self.pending.is_some() || self.ended || !more {
+        if !up || self.ended || !more {
             return None;
         }
         let id = mint();
@@ -236,9 +235,8 @@ impl History {
             object.insert("before".to_owned(), json!(before));
         }
         let line = json!({"id": id, "command": "prompt_history", "args": args}).to_string();
-        self.pending = Some(id);
         self.started = true;
-        Some(line)
+        Some((id, line))
     }
 
     /// Whether the draft, as `text`, is still the entry recall put there.
@@ -272,13 +270,9 @@ impl History {
         self.cover = None;
     }
 
-    /// The `prompt_history` answer for `id`: its lines join the list.
-    /// `false` when `id` is not the command waiting.
-    fn answered(&mut self, id: &str, result: Option<&Value>) -> bool {
-        if self.pending.as_deref() != Some(id) {
-            return false;
-        }
-        self.pending = None;
+    /// Folds a `prompt_history` answer's lines into the list. The caller
+    /// owns the waiting id: it checks the outbox tag before calling.
+    fn answered(&mut self, result: Option<&Value>) {
         *self.recall.get_mut() = None;
         let prompts = result
             .and_then(|result| result.get("prompts"))
@@ -296,7 +290,6 @@ impl History {
         self.before = result
             .and_then(|result| result.get("before"))
             .and_then(Value::as_u64);
-        true
     }
 }
 
@@ -467,12 +460,15 @@ impl App {
         self.history.search.take().is_some()
     }
 
-    /// Registers the history owner's id before its command leaves the app.
+    /// Registers the history owner's id before its command leaves the
+    /// app. The tag is the one-out guard: while one page waits, no second
+    /// fetch goes out.
     fn fetch_history(&mut self, up: bool) -> Option<String> {
-        let line = self.history.fetch(up)?;
-        if let Some(id) = self.history.pending.as_deref() {
-            self.outbox.wait(id, crate::app::Waiting::History);
+        if self.outbox.waiting_any(&crate::app::Waiting::History) {
+            return None;
         }
+        let (id, line) = self.history.fetch(up)?;
+        self.outbox.wait(&id, crate::app::Waiting::History);
         Some(line)
     }
 
@@ -574,9 +570,10 @@ impl App {
         id: &str,
         result: Option<&Value>,
     ) -> Option<Vec<String>> {
-        if !self.history.answered(id, result) {
+        if self.outbox.waiting(id) != Some(crate::app::Waiting::History) {
             return None;
         }
+        self.history.answered(result);
         self.outbox.settled(id);
         let mut lines = Vec::new();
         let unchanged = self.history.cover.is_none_or(|cover| cover == self.cover());
@@ -675,10 +672,9 @@ impl App {
     /// message is the notice and paging ends for this terminal run.
     /// `false` for another command.
     pub(super) fn history_rejected(&mut self, id: &str, code: ErrorCode, message: &str) -> bool {
-        if self.history.pending.as_deref() != Some(id) {
+        if self.outbox.waiting(id) != Some(crate::app::Waiting::History) {
             return false;
         }
-        self.history.pending = None;
         self.outbox.settled(id);
         self.history.ended = true;
         self.history.cancel();
