@@ -342,6 +342,36 @@ fn other_visibility_spellings_are_skipped() {
     );
 }
 
+#[test]
+fn a_pub_followed_by_a_non_paren_group_is_not_a_restricted_visibility() {
+    assert_eq!(single("pub [crate] fn f() {}\n"), Vec::<String>::new());
+    assert_eq!(single("pub {crate} fn f() {}\n"), Vec::<String>::new());
+}
+
+#[test]
+fn a_mod_name_followed_by_a_non_brace_group_is_not_an_inline_module() {
+    assert_eq!(
+        single("mod m (pub(crate) fn f() {})\n"),
+        vec!["crates/x/src/only.rs:1: f is pub(crate) but no other file in x names it"]
+    );
+    assert_eq!(
+        single("mod m [pub(crate) fn f() {}]\n"),
+        vec!["crates/x/src/only.rs:1: f is pub(crate) but no other file in x names it"]
+    );
+}
+
+#[test]
+fn a_macro_rules_header_with_an_ident_where_the_bang_belongs_is_not_a_macro_definition() {
+    // `m` sits where `!` belongs, so this is not a macro definition and the
+    // body is still checked. Kills the `is_punct` → `true` mutant, whose
+    // only call site is the `!` check: under it the header reads as a
+    // definition and the body is wrongly skipped.
+    assert_eq!(
+        single("macro_rules m foo {\n    pub(crate) fn generated() {}\n}\n"),
+        vec!["crates/x/src/only.rs:2: generated is pub(crate) but no other file in x names it"]
+    );
+}
+
 fn baseline(entries: &[&str]) -> Vec<String> {
     entries.iter().map(|entry| (*entry).to_owned()).collect()
 }

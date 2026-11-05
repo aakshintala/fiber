@@ -158,27 +158,41 @@ fn walk_items(trees: &[TokenTree], found: &mut Vec<Declaration>) {
 /// fields without ever spelling `Searched`). Structs, enums, unions,
 /// traits, type aliases, modules, imports and fields resolve to skip, which
 /// under-flags.
-fn declaration_at(trees: &[TokenTree], i: usize) -> Option<Declaration> {
-    let (visibility, mut at) = restricted_visibility(trees, i)?;
-    // `const fn`, `unsafe fn`, `async fn`, `extern "C" fn`: qualifiers
-    // before the item keyword.
-    loop {
-        if is_ident(trees.get(at), "unsafe")
-            || is_ident(trees.get(at), "async")
-            || is_ident(trees.get(at), "default")
-        {
-            at += 1;
-        } else if is_ident(trees.get(at), "extern") {
-            at += 1;
-            if matches!(trees.get(at), Some(TokenTree::Literal(_))) {
-                at += 1;
+/// The index past the `unsafe`/`async`/`default`/`extern ["lit"]`/`const
+/// fn` qualifier run opening at `at`: `const fn`, `unsafe fn`, `async fn`,
+/// `extern "C" fn` carry qualifiers before the item keyword.
+///
+/// Why an iterator: `docs/testing/mutants.md`, "Proving a test bites" — a
+/// loop that steps an index by hand can spin forever when a mutant breaks
+/// the arithmetic, and the hung mutant fails CI as a timeout. Counting the
+/// run with an iterator over `trees[at..]` and advancing once by the count
+/// turns that timeout family into plain misparses a test can catch.
+fn qualifier_end(trees: &[TokenTree], at: usize) -> usize {
+    let mut rest = trees.get(at..).unwrap_or(&[]).iter();
+    while let Some(TokenTree::Ident(word)) = rest.as_slice().first() {
+        let word = word.to_string();
+        if matches!(word.as_str(), "unsafe" | "async" | "default") {
+            rest.next();
+        } else if word.as_str() == "extern" {
+            rest.next();
+            if matches!(rest.as_slice().first(), Some(TokenTree::Literal(_))) {
+                rest.next();
             }
-        } else if is_ident(trees.get(at), "const") && is_ident(trees.get(at + 1), "fn") {
-            at += 1;
+        } else if word.as_str() == "const" && is_ident(rest.clone().nth(1), "fn") {
+            rest.next();
         } else {
             break;
         }
     }
+    trees.len() - rest.len()
+}
+
+fn declaration_at(trees: &[TokenTree], i: usize) -> Option<Declaration> {
+    let (visibility, at) = restricted_visibility(trees, i)?;
+    // `const fn`, `unsafe fn`, `async fn`, `extern "C" fn`: qualifiers
+    // before the item keyword (counted with an iterator, advanced once;
+    // see `qualifier_end`).
+    let mut at = qualifier_end(trees, at);
     if is_ident(trees.get(at), "fn") || is_ident(trees.get(at), "const") {
         at += 1;
     } else if is_ident(trees.get(at), "static") {
@@ -256,25 +270,34 @@ fn skip_macro_body(trees: &[TokenTree], i: usize) -> Option<usize> {
 /// file-granular search — while the opener line itself holds no
 /// declaration, since modules are out of scope.
 fn skip_inline_mod(trees: &[TokenTree], i: usize) -> Option<usize> {
-    let mut at = i;
-    if is_ident(trees.get(at), "pub") {
-        at += 1;
-        if matches!(trees.get(at), Some(TokenTree::Group(_))) {
-            at += 1;
+    // Why an iterator: the same hand-stepped `at += 1` timeout family as
+    // the old qualifier loop (docs/testing/mutants.md, "Proving a test
+    // bites") — the `pub`-prefix stepping is walked with an iterator over
+    // `trees[i..]` and resolved once from its remainder.
+    let mut rest = trees.get(i..).unwrap_or(&[]).iter();
+    if is_ident(rest.as_slice().first(), "pub") {
+        rest.next();
+        if matches!(rest.as_slice().first(), Some(TokenTree::Group(_))) {
+            rest.next();
         }
     }
-    if !is_ident(trees.get(at), "mod") {
+    if !is_ident(rest.as_slice().first(), "mod") {
         return None;
     }
-    at += 1;
-    if !matches!(trees.get(at), Some(TokenTree::Ident(_))) {
+    rest.next();
+    if !matches!(rest.as_slice().first(), Some(TokenTree::Ident(_))) {
         return None;
     }
-    at += 1;
-    match trees.get(at) {
-        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Brace => Some(at + 1),
-        _ => None,
+    rest.next();
+    let is_brace = matches!(
+        rest.as_slice().first(),
+        Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Brace
+    );
+    if !is_brace {
+        return None;
     }
+    rest.next();
+    Some(trees.len() - rest.len())
 }
 
 fn is_ident(tree: Option<&TokenTree>, word: &str) -> bool {
