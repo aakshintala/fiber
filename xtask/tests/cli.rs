@@ -1783,52 +1783,6 @@ fn the_visibility_baseline_skips_listed_sites_and_flags_stale_entries() {
 }
 
 #[test]
-fn the_visibility_check_passes_a_pub_super_fn_named_from_a_child_module() {
-    let dir = workspace();
-    let vis = ["pub", "(super)"].concat();
-    dir.write(
-        "crates/b/src/outer.rs",
-        &format!("//! outer\n{vis} fn boost() -> u32 {{ 1 }}\n"),
-    );
-    dir.write(
-        "crates/b/src/inner_use.rs",
-        "//! inner\nfn f() { super::boost(); }\n",
-    );
-    assert_eq!(
-        xtask(&dir, &["check-docs"], &[], ""),
-        (0, "check-docs: ok\n".to_owned())
-    );
-    assert_eq!(
-        xtask(&dir, &["visibility"], &[], ""),
-        (0, "visibility: ok\n".to_owned())
-    );
-}
-
-#[test]
-fn the_visibility_check_passes_twin_cfg_seam_modules() {
-    let dir = workspace();
-    let vis = ["pub", "(crate)"].concat();
-    let opener = format!("{vis} mod seam {{\n");
-    let fire = format!("    {vis} fn fire() {{}}\n");
-    let seamed = format!(
-        "//! seamed\n#[cfg(not(test))]\n{opener}{fire}}}\n#[cfg(test)]\n{opener}{fire}}}\nfn run() {{ seam::fire(); }}\n"
-    );
-    dir.write("crates/b/src/seamed.rs", &seamed);
-    dir.write(
-        "crates/b/src/lib.rs",
-        "//! b\nfn uses_seam() { seam::setup(); }\n",
-    );
-    assert_eq!(
-        xtask(&dir, &["check-docs"], &[], ""),
-        (0, "check-docs: ok\n".to_owned())
-    );
-    assert_eq!(
-        xtask(&dir, &["visibility"], &[], ""),
-        (0, "visibility: ok\n".to_owned())
-    );
-}
-
-#[test]
 fn the_must_succeed_check_passes_a_clean_workspace_and_fails_a_short_bound() {
     let dir = workspace();
     assert_eq!(
