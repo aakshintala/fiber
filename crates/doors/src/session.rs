@@ -869,7 +869,7 @@ impl Gate {
     }
 
     /// Waits until no driver shell is registered: each has answered.
-    pub(super) fn wait_shells(&self) {
+    fn wait_shells(&self) {
         #[cfg(test)]
         self.shells.wait(&|| self.note(tests::Probe::ShellsWaiting));
         #[cfg(not(test))]
