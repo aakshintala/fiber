@@ -91,6 +91,7 @@ impl Send {
     pub(super) fn matches(&self) -> bool {
         self.send.is_some()
     }
+    // debt: matches() duplicates is_sending(); PR #4204's merge frees the shrink to is_sending().
 
     /// Notes the `rewind` request on the wire.
     pub(super) fn begin(&mut self) {

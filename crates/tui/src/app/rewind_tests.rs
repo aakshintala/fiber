@@ -922,6 +922,36 @@ fn a_stale_send_answer_attaches_nothing_and_keeps_the_send_waiting() {
     assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
 }
 
+/// A `command_rejected` for an unknown id while a rewind send waits
+/// leaves the live send waiting: flipping the `&&` to `||` settles the
+/// unknown id and shows its refusal.
+#[test]
+fn an_unknown_send_refusal_leaves_the_live_send_waiting() {
+    use crate::app::Waiting;
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    let id = out[0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::RewindSend));
+    let before = rows(&app);
+    // The router drops an untagged id before it reaches rewind_refused,
+    // so drive the handler directly: only the tag plus the send gate
+    // together settle.
+    app.rewind_refused(&contract::events::CommandRejected {
+        command_id: Some(contract::CommandId("c_unknown".to_owned())),
+        code: ErrorCode::Busy,
+        message: "busy happened".to_owned(),
+    });
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::RewindSend));
+    assert_eq!(rows(&app), before);
+    assert!(
+        !rows(&app).iter().any(|row| row.contains("busy happened")),
+        "an unknown refusal shows no refusal"
+    );
+}
+
 /// An answer after the view closed folds nowhere: no pending entry
 /// stands, so the lingering tag is left alone.
 #[test]
