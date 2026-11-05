@@ -288,7 +288,6 @@ impl App {
         if let Some(id) = &attached
             && let Some(row) = home.sessions.feed_row(id)
             && row.left == Some(Left::Exited)
-            && !numbered.iter().any(|card| card.key == row.key)
         {
             numbered.push(row);
         }
