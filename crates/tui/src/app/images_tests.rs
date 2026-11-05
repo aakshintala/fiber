@@ -70,6 +70,28 @@ fn a_display_image_second_answer_takes_the_untagged_path() {
     assert!(app.take_image_out().items.is_empty());
 }
 
+/// An answer or rejection for an unknown id returns false with no tag
+/// touched: the live fetch still waits on its own tag.
+#[test]
+fn an_answer_or_rejection_for_an_unknown_id_returns_false() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    assert!(!app.image_answered(
+        "c_unknown",
+        Some(&accepted("c_unknown", "QUJD", "image/png"))
+    ));
+    assert!(!app.image_rejected("c_unknown", "no such file."));
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(crate::app::Waiting::ImageDisplay)
+    );
+    assert_eq!(app.notice(), None);
+    // The live fetch still answers.
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+}
+
 /// The Kitty bytes `out` queues, in order: each image's transmit chunks
 /// then its place.
 fn kitty_bytes(out: &crate::image::Out) -> Vec<u8> {
@@ -748,6 +770,14 @@ fn a_rejected_display_answer_notices_and_keeps_the_line() {
         Some("Could not show shot.png: no such file."),
         "no second notice"
     );
+    // A duplicate rejection takes the untagged path: its tag settled with
+    // the first, so it posts nothing more.
+    assert!(!app.image_rejected(&id, "no such file."));
+    assert_eq!(
+        app.notice(),
+        Some("Could not show shot.png: no such file."),
+        "no second notice"
+    );
 }
 
 /// Queues the display fetch for image `id` and returns its command id.
@@ -812,8 +842,9 @@ fn a_second_answer_for_a_shown_image_posts_nothing() {
     let answer = accepted(&id, "QUJD", "image/png");
     assert!(app.image_answered(&id, Some(&answer)));
     assert!(!app.take_image_out().items.is_empty());
-    // The duplicate answer draws nowhere.
-    assert!(app.image_answered(&id, Some(&answer)));
+    // The duplicate answer takes the untagged path: its tag settled with
+    // the first answer, so it draws nowhere.
+    assert!(!app.image_answered(&id, Some(&answer)));
     assert!(app.take_image_out().items.is_empty());
     assert_eq!(app.notice(), None);
     // The terminal holds the image, and Fiber sends nothing again on a
@@ -1216,6 +1247,67 @@ fn handover_with_nothing_retained_reasks_every_shown_image() {
     );
 }
 
+/// A handover re-ask registers exactly one tag for its new id: the
+/// settled old id stays tagless, and the new id's answer transmits.
+#[test]
+fn a_handover_reask_registers_one_tag_for_its_new_id() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+    app.images_after_handover(Vec::new());
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1);
+    let value: Value =
+        serde_json::from_str(&out.display[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    let new_id = value["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the re-ask has an id"));
+    assert_ne!(new_id, id);
+    assert_eq!(
+        app.outbox.waiting(new_id),
+        Some(crate::app::Waiting::ImageDisplay)
+    );
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert!(app.image_answered(new_id, Some(&accepted(new_id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+}
+
+/// A draw after the sizing dropped a transmit re-asks with exactly one
+/// tag for its new id: the answer transmits under the new id.
+#[test]
+fn a_redraw_after_a_dropped_transmit_reasks_with_one_tag() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    // The answer lands while the sizing is text: the transmit drops, the
+    // entry with it, and the tag settles with no notice.
+    app.attached_screen_mut().pages_mut().set_flat(true);
+    app.refresh_image_sizing();
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(app.take_image_out().items.is_empty());
+    assert_eq!(app.outbox.waiting(&id), None);
+    // Inline again, the next draw re-asks once with a fresh id and tag.
+    app.attached_screen_mut().pages_mut().set_flat(false);
+    app.refresh_image_sizing();
+    app.images_drawn(&drawn(1));
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1);
+    let value: Value =
+        serde_json::from_str(&out.display[0]).unwrap_or_else(|err| panic!("a line: {err}"));
+    let new_id = value["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the re-ask has an id"));
+    assert_ne!(new_id, id);
+    assert_eq!(
+        app.outbox.waiting(new_id),
+        Some(crate::app::Waiting::ImageDisplay)
+    );
+    assert!(app.image_answered(new_id, Some(&accepted(new_id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+}
+
 #[test]
 fn a_non_png_draw_asks_for_no_bytes() {
     let mut app = inline_app();
@@ -1372,9 +1464,9 @@ fn a_duplicate_jpeg_answer_starts_no_second_conversion() {
     let bytes = base64::engine::general_purpose::STANDARD.encode(b"jpeg-bytes");
     let answer = accepted(&id, &bytes, "image/jpeg");
     assert!(app.image_answered(&id, Some(&answer)));
-    // The duplicate answer is still ours, but draws nowhere and queues
-    // nothing more.
-    assert!(app.image_answered(&id, Some(&answer)));
+    // The duplicate answer takes the untagged path: its tag settled with
+    // the first answer, so it queues nothing more.
+    assert!(!app.image_answered(&id, Some(&answer)));
     assert_eq!(app.images.convert_queue.len(), 1);
     assert_eq!(app.notice(), None);
 }
