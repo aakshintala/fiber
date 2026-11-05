@@ -92,6 +92,10 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   model, or when model discovery refreshes, and a tool definition that changes
   during a session misses the whole prompt cache. `delegate_models` returns them
   as a tool result instead.
+- `delegate_models` lists references only from switched-on providers
+  (`docs/model-routing.md`, "Credentials"). A role targeting a logged-out
+  provider is marked ` (unavailable)`. Naming that role or the provider's
+  model in a delegate call fails before any process starts.
 - A role is a name for a model reference, for example `deep` for
   `claude:opus:high`. A role may also name a credential label, so one
   project's delegates can run on different subscriptions of one provider

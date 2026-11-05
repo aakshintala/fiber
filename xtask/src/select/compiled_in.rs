@@ -105,6 +105,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("providers/anthropic/providers/anthropic.json", "xtask"),
     ("providers/bedrock/providers/bedrock.json", "xtask"),
     ("providers/codex/providers/codex.json", "xtask"),
+    ("providers/databricks/thinking-overlay.json", "xtask"),
     ("providers/databricks/thinking.lua", "xtask"),
     ("providers/gemini/providers/gemini.json", "xtask"),
     ("providers/muse/providers/muse.json", "xtask"),

@@ -508,9 +508,45 @@ fn a_bare_id_in_two_providers_is_model_ambiguous_listing_both() {
 }
 
 #[test]
+fn closest_suggestions_filter_presence_before_ranking_and_truncation() {
+    let setup = Setup::new();
+    install(
+        &setup.home(),
+        "off",
+        "off",
+        &models(&["aaa", "aab", "aac", "aad"]),
+    );
+    install(&setup.home(), "on", "on", &models(&["zzz", "zzx", "zzy"]));
+    let error = setup.set(Layer::Global, "model", "off/aae").unwrap_err();
+    let CliError::ModelNone { closest, .. } = error else {
+        panic!("expected missing model, got {error:?}");
+    };
+    assert_eq!(closest, Vec::<String>::new());
+    config::store_credential(
+        &setup.home(),
+        "on",
+        "work",
+        &config::Secret::new("key".into()),
+    )
+    .unwrap();
+    let error = setup.set(Layer::Global, "model", "off/aae").unwrap_err();
+    let CliError::ModelNone { closest, .. } = error else {
+        panic!("expected missing model, got {error:?}");
+    };
+    assert_eq!(closest, ["on/zzx", "on/zzy", "on/zzz"]);
+}
+
+#[test]
 fn an_installed_provider_missing_the_model_is_no_model_with_the_closest() {
     let setup = Setup::new();
     install(&setup.home(), "acme", "acme", &models(&["gpt-5", "gpt-4"]));
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("key".into()),
+    )
+    .unwrap();
     let e = setup.set(Layer::Global, "model", "acme/gtp-5").unwrap_err();
     assert!(matches!(e, CliError::ModelNone { .. }), "{e:?}");
     assert_eq!(
@@ -530,6 +566,13 @@ fn the_closest_names_up_to_three_references() {
         "acme",
         &models(&["aaa", "aab", "abb", "bbb", "ccc"]),
     );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("key".into()),
+    )
+    .unwrap();
     let e = setup.set(Layer::Global, "model", "zzz").unwrap_err();
     assert!(matches!(e, CliError::ModelNone { .. }), "{e:?}");
     let refs = e.to_string().matches("`acme/").count();
@@ -903,6 +946,13 @@ fn set_model_checks_against_repository_models() {
     setup
         .set(Layer::Global, "model", "acme/repo-model")
         .unwrap();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("key".into()),
+    )
+    .unwrap();
     // A typo is rejected with the repository reference as the closest
     // match: the check runs against the merged providers.
     let result = setup.set(Layer::Global, "model", "acme/typo-model");

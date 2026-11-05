@@ -1233,7 +1233,7 @@ fn databricks_thinking_keeps_vendor_rows_and_their_defaults() {
         ),
         ("synth", &["low", "medium"], Some("medium")),
     ];
-    let output = databricks_thinking(std::slice::from_ref(&vendor)).unwrap();
+    let output = merge_databricks_thinking(std::slice::from_ref(&vendor), &[]).unwrap();
     assert_eq!(output.path, DATABRICKS_THINKING);
     assert_eq!(output.models, 2);
     assert!(
@@ -1248,7 +1248,8 @@ fn databricks_thinking_keeps_vendor_rows_and_their_defaults() {
 #[test]
 fn databricks_thinking_inherits_known_vendor_ids() {
     // The real tables: the Claude and GPT rows the extension case reads,
-    // with the `openai` row for the id `codex` also lists.
+    // with the `openai` row for the id `codex` also lists. The overlay
+    // adds `gpt-6-sol`'s default and overrides `claude-haiku-5-5`'s row.
     let output = databricks_thinking(&PACKAGES).unwrap();
     assert!(
         output.text.contains(
@@ -1259,12 +1260,18 @@ fn databricks_thinking_inherits_known_vendor_ids() {
     );
     assert!(
         output.text.contains(
-            "  [\"gpt-6-sol\"] = { levels = { \"off\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\" } },\n"
+            "  [\"gpt-6-sol\"] = { levels = { \"off\", \"low\", \"medium\", \"high\", \"xhigh\", \"max\" }, default = \"medium\" },\n"
         ),
         "{}",
         output.text
     );
-    assert!(!output.text.contains("default = "), "{}", output.text);
+    assert!(
+        output.text.contains(
+            "  [\"claude-haiku-5-5\"] = { levels = { \"off\", \"low\", \"medium\", \"high\" }, default = \"medium\" },\n"
+        ),
+        "{}",
+        output.text
+    );
 }
 
 #[test]
@@ -1274,13 +1281,13 @@ fn databricks_thinking_ignores_codex_rows() {
     // the table, while the `openai` row for the same id does.
     let mut codex = vendor_package("c", "providers/codex/providers/codex.json");
     codex.thinking = &[("gpt-6-sol", &["low"], Some("low"))];
-    let alone = databricks_thinking(std::slice::from_ref(&codex)).unwrap();
+    let alone = merge_databricks_thinking(std::slice::from_ref(&codex), &[]).unwrap();
     assert_eq!(alone.models, 0);
     assert!(!alone.text.contains("gpt-6-sol"), "{}", alone.text);
     let mut openai = vendor_package("v", "providers/openai/providers/openai.json");
     openai.thinking = &[("gpt-6-sol", &["low", "high"], None)];
     let input = [codex, openai];
-    let output = databricks_thinking(&input).unwrap();
+    let output = merge_databricks_thinking(&input, &[]).unwrap();
     assert_eq!(output.models, 1);
     assert!(
         output
@@ -1312,7 +1319,7 @@ fn databricks_thinking_rejects_a_shared_key_with_differing_rows() {
     let mut openai = vendor_package("v", "providers/openai/providers/openai.json");
     openai.thinking = &[("M", &["low"], None)];
     let input = [anthropic, openai];
-    let output = databricks_thinking(&input).unwrap();
+    let output = merge_databricks_thinking(&input, &[]).unwrap();
     assert_eq!(output.models, 1);
     assert!(
         output
@@ -1321,4 +1328,187 @@ fn databricks_thinking_rejects_a_shared_key_with_differing_rows() {
         "{}",
         output.text
     );
+}
+
+#[test]
+fn databricks_thinking_overlay_wins_on_a_shared_key() {
+    // A vendor row for an overlay-covered key loses: the overlay's
+    // `gpt-oss-120b` row replaces the vendor's differing one, with no
+    // shared-key error.
+    let mut vendor = vendor_package("v", "providers/openai/providers/openai.json");
+    vendor.thinking = &[("gpt-oss-120b", &["low"], Some("low"))];
+    let output = databricks_thinking(std::slice::from_ref(&vendor)).unwrap();
+    assert!(
+        output.text.contains(
+            "  [\"gpt-oss-120b\"] = { levels = { \"low\", \"medium\", \"high\" }, default = \"medium\" },\n"
+        ),
+        "{}",
+        output.text
+    );
+    assert!(
+        !output
+            .text
+            .contains("\"gpt-oss-120b\"] = { levels = { \"low\" }"),
+        "{}",
+        output.text
+    );
+}
+
+#[test]
+fn databricks_thinking_overlay_adds_an_uncovered_key() {
+    // No vendor package names `gpt-oss-20b`, yet the overlay adds it with
+    // its default.
+    let output = databricks_thinking(&[]).unwrap();
+    assert!(
+        output.text.contains(
+            "  [\"gpt-oss-20b\"] = { levels = { \"low\", \"medium\", \"high\" }, default = \"medium\" },\n"
+        ),
+        "{}",
+        output.text
+    );
+}
+
+#[test]
+fn thinking_overlay_rejects_an_unknown_level() {
+    match parse_thinking_overlay("overlay.json", r#"{"m": {"levels": ["low", "ultra"]}}"#) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `m` names unknown level `ultra`"
+        ),
+        Ok(_) => panic!("overlay with an unknown level unexpectedly succeeded"),
+    };
+}
+
+#[test]
+fn thinking_overlay_rejects_a_default_outside_its_levels() {
+    match parse_thinking_overlay(
+        "overlay.json",
+        r#"{"m": {"levels": ["low", "high"], "default": "max"}}"#,
+    ) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `m` names default `max` outside its levels"
+        ),
+        Ok(_) => panic!("overlay with a default outside its levels unexpectedly succeeded"),
+    };
+    // A default inside its levels parses, and a null default reads as none.
+    let overlay = parse_thinking_overlay(
+        "overlay.json",
+        r#"{"m": {"levels": ["low"], "default": null}}"#,
+    )
+    .unwrap();
+    assert_eq!(overlay.len(), 1);
+    assert_eq!(overlay[0].key, "m");
+    assert!(overlay[0].default.is_none());
+}
+
+#[test]
+fn thinking_overlay_rejects_empty_levels() {
+    match parse_thinking_overlay("overlay.json", r#"{"m": {"levels": []}}"#) {
+        Err(error) => assert_eq!(error, "databricks thinking overlay: `m` names no levels"),
+        Ok(_) => panic!("overlay with empty levels unexpectedly succeeded"),
+    };
+}
+
+#[test]
+fn thinking_overlay_rejects_a_non_object_row() {
+    // A top level that is no object, a row with no levels array, a level
+    // that is no string and a default that is no string each fail.
+    match parse_thinking_overlay("overlay.json", r#"[]"#) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay overlay.json: top level must be an object"
+        ),
+        Ok(_) => panic!("overlay with a non-object top level unexpectedly succeeded"),
+    };
+    match parse_thinking_overlay("overlay.json", r#"{"m": {"default": "low"}}"#) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `m` names no levels array"
+        ),
+        Ok(_) => panic!("overlay with no levels array unexpectedly succeeded"),
+    };
+    match parse_thinking_overlay("overlay.json", r#"{"m": {"levels": ["low", 7]}}"#) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `m` names a level that is no string"
+        ),
+        Ok(_) => panic!("overlay with a non-string level unexpectedly succeeded"),
+    };
+    match parse_thinking_overlay(
+        "overlay.json",
+        r#"{"m": {"levels": ["low"], "default": 7}}"#,
+    ) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `m` names a default that is no string"
+        ),
+        Ok(_) => panic!("overlay with a non-string default unexpectedly succeeded"),
+    };
+}
+
+#[test]
+fn thinking_overlay_rejects_a_normalized_key_collision() {
+    // `M` and `m` share the match key `m`: differing rows name both file
+    // keys, while identical rows keep the first with no error.
+    match parse_thinking_overlay(
+        "overlay.json",
+        r#"{"m": {"levels": ["low"]}, "M": {"levels": ["high"]}}"#,
+    ) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `M` and `m` share a match key with differing thinking rows"
+        ),
+        Ok(_) => panic!("overlay with a normalized-key collision unexpectedly succeeded"),
+    };
+    match parse_thinking_overlay(
+        "overlay.json",
+        r#"{"m": {"levels": ["low"], "default": "low"}, "M": {"levels": ["low"]}}"#,
+    ) {
+        Err(error) => assert_eq!(
+            error,
+            "databricks thinking overlay: `M` and `m` share a match key with differing thinking rows"
+        ),
+        Ok(_) => panic!("overlay with a default-only collision unexpectedly succeeded"),
+    };
+    let overlay = parse_thinking_overlay(
+        "overlay.json",
+        r#"{"m": {"levels": ["low"]}, "M": {"levels": ["low"]}}"#,
+    )
+    .unwrap();
+    assert_eq!(overlay.len(), 1);
+    assert_eq!(overlay[0].key, "M");
+}
+
+#[test]
+fn thinking_overlay_rejects_a_gpt_5_row() {
+    // The gpt-5.x family stays out by name, on the bare key and on a
+    // suffixed one; a lookalike without the dash still parses.
+    for raw in ["gpt-5", "gpt-5-6-sol"] {
+        let text = format!(r#"{{"{raw}": {{"levels": ["low"]}}}}"#);
+        match parse_thinking_overlay("overlay.json", &text) {
+            Err(error) => assert_eq!(
+                error,
+                format!(
+                    "databricks thinking overlay: `{raw}` names a gpt-5.x model, which keeps the openai package's row"
+                )
+            ),
+            Ok(_) => panic!("overlay with a gpt-5.x row unexpectedly succeeded"),
+        };
+    }
+    let overlay =
+        parse_thinking_overlay("overlay.json", r#"{"gpt-50": {"levels": ["low"]}}"#).unwrap();
+    assert_eq!(overlay.len(), 1);
+    assert_eq!(overlay[0].key, "gpt-50");
+}
+
+#[test]
+fn thinking_overlay_malformed_json_names_the_file_and_location() {
+    match parse_thinking_overlay("overlay.json", r#"{"m": "#) {
+        Err(error) => assert!(
+            error.starts_with("databricks thinking overlay overlay.json: "),
+            "{error}"
+        ),
+        Ok(_) => panic!("malformed overlay unexpectedly succeeded"),
+    };
 }
