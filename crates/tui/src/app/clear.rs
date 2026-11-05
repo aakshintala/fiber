@@ -137,13 +137,10 @@ impl App {
         session: SessionId,
     ) -> Option<Vec<String>> {
         let waiting = self.outbox.waiting(id);
-        let Some(pending) = self
+        let pending = self
             .clear
             .pending
-            .take_if(|_| waiting == Some(super::outbox::Waiting::ClearStart))
-        else {
-            return None;
-        };
+            .take_if(|_| waiting == Some(super::outbox::Waiting::ClearStart))?;
         self.outbox.settled(id);
         Some(self.clear_started(pending, session))
     }
