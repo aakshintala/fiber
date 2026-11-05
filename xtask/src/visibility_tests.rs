@@ -31,50 +31,88 @@ fn a_pub_crate_fn_named_in_no_other_file_is_flagged() {
 #[test]
 fn naming_the_fn_in_a_second_file_of_the_crate_passes() {
     let files = vec![
-        file("src/only.rs", "pub(crate) fn solo() -> u32 { 1 }\n"),
+        file(
+            "src/only.rs",
+            "pub(crate) fn solo() -> u32 { 1 }\npub(crate) fn lonely() {}\n",
+        ),
         file("src/lib.rs", "//! b\nfn run() { solo(); }\n"),
     ];
-    assert_eq!(failures(files), Vec::<String>::new());
+    // `solo` is named elsewhere so only the outside `lonely` reports: the
+    // pass is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_name_match_in_another_files_comment_passes() {
     let files = vec![
-        file("src/only.rs", "pub(crate) fn solo() -> u32 { 1 }\n"),
+        file(
+            "src/only.rs",
+            "pub(crate) fn solo() -> u32 { 1 }\npub(crate) fn lonely() {}\n",
+        ),
         file("src/lib.rs", "//! b\n// solo is defined elsewhere\n"),
     ];
-    assert_eq!(failures(files), Vec::<String>::new());
+    // The comment still counts as a use of `solo`; `lonely` proves the
+    // checker ran, and a no-op checker returns empty here.
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_reexport_in_another_file_passes() {
     let files = vec![
-        file("src/only.rs", "pub(crate) fn solo() -> u32 { 1 }\n"),
+        file(
+            "src/only.rs",
+            "pub(crate) fn solo() -> u32 { 1 }\npub(crate) fn lonely() {}\n",
+        ),
         file("src/lib.rs", "pub use crate::only::solo;\n"),
     ];
-    assert_eq!(failures(files), Vec::<String>::new());
+    // The re-export names `solo`; `lonely` proves the checker ran, and a
+    // no-op checker returns empty here.
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_declaration_inside_macro_rules_is_skipped() {
     let source = concat!(
+        "pub(crate) fn lonely() {}\n",
         "macro_rules! m {\n",
         "    pub(crate) fn generated() {}\n",
         "}\n",
     );
-    assert_eq!(single(source), Vec::<String>::new());
+    // `generated` is skipped but the outside `lonely` still reports: the
+    // skip is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:1: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_name_used_only_inside_a_macro_body_in_another_file_passes() {
     let files = vec![
-        file("src/only.rs", "pub(crate) fn solo() -> u32 { 1 }\n"),
+        file(
+            "src/only.rs",
+            "pub(crate) fn solo() -> u32 { 1 }\npub(crate) fn lonely() {}\n",
+        ),
         file(
             "src/macros.rs",
             "macro_rules! m {\n    ($x:expr) => { solo($x) }\n}\n",
         ),
     ];
-    assert_eq!(failures(files), Vec::<String>::new());
+    // The macro body still counts as a use of `solo`; `lonely` proves the
+    // checker ran, and a no-op checker returns empty here.
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -82,22 +120,33 @@ fn a_pub_super_fn_named_from_a_child_module_file_passes() {
     let files = vec![
         file(
             "src/outer.rs",
-            "//! outer\npub(super) fn boost() -> u32 { 1 }\n",
+            "//! outer\npub(super) fn boost() -> u32 { 1 }\npub(crate) fn lonely() {}\n",
         ),
         file("src/inner.rs", "//! inner\nfn f() { super::boost(); }\n"),
     ];
-    assert_eq!(failures(files), Vec::<String>::new());
+    // `boost` is named from the child module so only the outside `lonely`
+    // reports: the pass is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/outer.rs:3: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_pub_crate_fn_inside_a_private_inline_mod_passes() {
     let source = concat!(
+        "pub(crate) fn lonely() {}\n",
         "mod holder {\n",
         "    pub(crate) fn fire() {}\n",
         "}\n",
         "fn run() { holder::fire(); }\n",
     );
-    assert_eq!(single(source), Vec::<String>::new());
+    // `fire` hides inside the inline mod but the outside `lonely` still
+    // reports: the skip is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:1: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -112,12 +161,19 @@ fn a_twin_cfg_seam_pair_passes_when_another_file_names_it() {
         "pub(crate) mod seam {\n",
         "    pub(crate) fn fire() {}\n",
         "}\n",
+        "pub(crate) fn lonely() {}\n",
     );
     let files = vec![
         file("src/seamed.rs", seamed),
         file("src/lib.rs", "//! b\nfn uses_seam() { seam::setup(); }\n"),
     ];
-    assert_eq!(failures(files), Vec::<String>::new());
+    // Both `fire` copies hide inside the cfg seam mods but the outside
+    // `lonely` still reports: the skip is targeted, and a no-op checker
+    // returns empty here.
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/seamed.rs:10: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -125,16 +181,28 @@ fn a_lonely_inline_mod_declaration_is_skipped() {
     let source = concat!(
         "//! lonely\n",
         "//! fixture\n",
+        "pub(crate) fn outside() {}\n",
         "pub(crate) mod lonely {\n",
         "    fn hidden() {}\n",
         "}\n",
     );
-    assert_eq!(single(source), Vec::<String>::new());
+    // The `mod` opener itself is out of scope but the outside `outside`
+    // still reports: the skip is targeted, and a no-op checker returns
+    // empty here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:3: outside is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_file_with_only_private_items_passes() {
-    assert_eq!(single("//! clean\nfn main() {}\n"), Vec::<String>::new());
+    // The private items stay silent but the outside `lonely` still reports,
+    // so a no-op checker returning empty fails here.
+    assert_eq!(
+        single("//! clean\npub(crate) fn lonely() {}\nfn main() {}\n"),
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -184,12 +252,28 @@ fn type_definitions_are_skipped() {
     );
     assert_eq!(single("pub(crate) use other::*;\n"), Vec::<String>::new());
     assert_eq!(single("extern crate foo;\n"), Vec::<String>::new());
+    // Positive control: a checkable item beside a skipped type still
+    // reports, so a no-op checker returning empty fails here.
+    assert_eq!(
+        single("pub(crate) struct Solo;\npub(crate) fn lonely() {}\n"),
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_pub_crate_field_is_skipped() {
-    let source = concat!("pub(crate) struct S {\n", "    pub(crate) x: u32,\n", "}\n",);
-    assert_eq!(single(source), Vec::<String>::new());
+    let source = concat!(
+        "pub(crate) struct S {\n",
+        "    pub(crate) x: u32,\n",
+        "}\n",
+        "pub(crate) fn lonely() {}\n",
+    );
+    // The field stays skipped but the outside `lonely` still reports: the
+    // skip is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:4: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -205,11 +289,16 @@ fn a_one_line_inline_mod_hides_its_items() {
     let files = vec![
         file(
             "src/tiny_holder.rs",
-            "pub(crate) mod tiny { pub(crate) fn f() {} }\n",
+            "pub(crate) mod tiny { pub(crate) fn f() {} }\npub(crate) fn lonely() {}\n",
         ),
         file("src/lib.rs", "//! b\nfn t() { tiny::go(); }\n"),
     ];
-    assert_eq!(failures(files), Vec::<String>::new());
+    // `f` hides inside the one-line mod but the outside `lonely` still
+    // reports: the skip is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/tiny_holder.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -220,12 +309,18 @@ fn nested_inline_mods_hide_inner_items() {
         "        pub(crate) fn deep() {}\n",
         "    }\n",
         "}\n",
+        "pub(crate) fn lonely() {}\n",
     );
     let files = vec![
         file("src/outer.rs", source),
         file("src/lib.rs", "//! b\nfn o() { outer::go(); }\n"),
     ];
-    assert_eq!(failures(files), Vec::<String>::new());
+    // `deep` hides inside the nested mods but the outside `lonely` still
+    // reports: the skip is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/outer.rs:6: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -236,10 +331,15 @@ fn braces_in_strings_and_comments_do_not_close_a_region() {
         "    // }\n",
         "    pub(crate) fn f() {}\n",
         "}\n",
+        "pub(crate) fn lonely() {}\n",
     );
-    // The `mod` opener itself is out of scope; an empty result proves the
-    // region held, since a broken region would flag `f`.
-    assert_eq!(single(source), Vec::<String>::new());
+    // The `mod` opener itself is out of scope; `lonely` reporting while `f`
+    // stays hidden proves the region held, and a no-op checker returns empty
+    // here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:6: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -249,8 +349,15 @@ fn a_cfg_attributed_opener_still_opens_a_region() {
         "pub(crate) mod seam {\n",
         "    pub(crate) fn fire() {}\n",
         "}\n",
+        "pub(crate) fn lonely() {}\n",
     );
-    assert_eq!(single(source), Vec::<String>::new());
+    // `fire` hides behind the attributed opener but the outside `lonely`
+    // still reports: the skip is targeted, and a no-op checker returns empty
+    // here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:5: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -261,14 +368,31 @@ fn an_unbalanced_file_is_skipped() {
         "    // the closing brace never comes\n",
         "    pub(crate) fn g() {}\n",
     );
-    assert_eq!(single(source), Vec::<String>::new());
+    // The whole file fails to tokenise so nothing in it reports; `lonely`
+    // in the other file proves the checker ran, and a no-op checker returns
+    // empty here.
+    let files = vec![
+        file("src/broken.rs", source),
+        file("src/other.rs", "pub(crate) fn lonely() {}\n"),
+    ];
+    assert_eq!(
+        failures(files),
+        vec!["crates/x/src/other.rs:1: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_stray_close_brace_skips_the_file() {
+    // The stray brace fails the whole file so nothing in it reports;
+    // `lonely` in the other file proves the checker ran, and a no-op checker
+    // returns empty here.
+    let files = vec![
+        file("src/broken.rs", "}\n    pub(crate) fn g() {}\n"),
+        file("src/other.rs", "pub(crate) fn lonely() {}\n"),
+    ];
     assert_eq!(
-        single("}\n    pub(crate) fn g() {}\n"),
-        Vec::<String>::new()
+        failures(files),
+        vec!["crates/x/src/other.rs:1: lonely is pub(crate) but no other file in x names it"]
     );
 }
 
@@ -283,37 +407,69 @@ fn a_declaration_after_a_closed_region_is_checked() {
 
 #[test]
 fn a_file_that_does_not_tokenise_is_skipped() {
+    // The unterminated string fails the whole file so nothing in it reports;
+    // `lonely` in the other file proves the checker ran, and a no-op checker
+    // returns empty here.
+    let files = vec![
+        file(
+            "src/broken.rs",
+            "pub(crate) fn lonely() {}\n\"unterminated\n",
+        ),
+        file("src/other.rs", "pub(crate) fn lonely2() {}\n"),
+    ];
     assert_eq!(
-        single("pub(crate) fn lonely() {}\n\"unterminated\n"),
-        Vec::<String>::new()
+        failures(files),
+        vec!["crates/x/src/other.rs:1: lonely2 is pub(crate) but no other file in x names it"]
     );
 }
 
 #[test]
 fn a_paren_delimited_macro_body_is_skipped() {
     let source = concat!(
+        "pub(crate) fn lonely() {}\n",
         "macro_rules! m (\n",
         "    ($x:expr) => { pub(crate) fn generated() {} }\n",
         ")\n",
     );
-    assert_eq!(single(source), Vec::<String>::new());
+    // `generated` is skipped but the outside `lonely` still reports: the
+    // skip is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:1: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_macro_two_definition_body_is_skipped() {
-    let source = concat!("macro m {\n", "    pub(crate) fn generated() {}\n", "}\n",);
-    assert_eq!(single(source), Vec::<String>::new());
+    let source = concat!(
+        "pub(crate) fn lonely() {}\n",
+        "macro m {\n",
+        "    pub(crate) fn generated() {}\n",
+        "}\n",
+    );
+    // `generated` is skipped but the outside `lonely` still reports: the
+    // skip is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:1: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
 fn a_bare_pub_mod_opens_a_region() {
     let source = concat!(
+        "pub(crate) fn lonely() {}\n",
         "pub mod holder {\n",
         "    pub(crate) fn fire() {}\n",
         "}\n",
         "fn run() { holder::fire(); }\n",
     );
-    assert_eq!(single(source), Vec::<String>::new());
+    // `fire` hides inside the bare-`pub` mod but the outside `lonely` still
+    // reports: the skip is targeted, and a no-op checker returns empty here.
+    assert_eq!(
+        single(source),
+        vec!["crates/x/src/only.rs:1: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -344,8 +500,17 @@ fn other_visibility_spellings_are_skipped() {
 
 #[test]
 fn a_pub_followed_by_a_non_paren_group_is_not_a_restricted_visibility() {
-    assert_eq!(single("pub [crate] fn f() {}\n"), Vec::<String>::new());
-    assert_eq!(single("pub {crate} fn f() {}\n"), Vec::<String>::new());
+    // Neither bracket shape is a visibility qualifier, so nothing in the
+    // fixture reports; the outside `lonely` proves the checker ran, and a
+    // no-op checker returns empty here.
+    assert_eq!(
+        single("pub [crate] fn f() {}\npub(crate) fn lonely() {}\n"),
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
+    assert_eq!(
+        single("pub {crate} fn f() {}\npub(crate) fn lonely() {}\n"),
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
+    );
 }
 
 #[test]
@@ -378,10 +543,15 @@ fn baseline(entries: &[&str]) -> Vec<String> {
 
 #[test]
 fn a_baselined_site_is_skipped() {
-    let files = vec![file("src/only.rs", "pub(crate) fn solo() -> u32 { 1 }\n")];
+    let files = vec![file(
+        "src/only.rs",
+        "pub(crate) fn solo() -> u32 { 1 }\npub(crate) fn lonely() {}\n",
+    )];
+    // The baseline holds `solo` but the outside `lonely` still reports: the
+    // skip is targeted, and a no-op checker returns empty here.
     assert_eq!(
         super::check_with_baseline(&files, &baseline(&["crates/x/src/only.rs:solo"])),
-        Vec::<String>::new()
+        vec!["crates/x/src/only.rs:2: lonely is pub(crate) but no other file in x names it"]
     );
 }
 
