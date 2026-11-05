@@ -22,8 +22,8 @@ use fakes::{Deadline, TempDir, Watchdog, kill_group};
 use rustix::process::Signal;
 
 use super::{
-    Error, GROUP_POLL, alive, detach, kill_every_group, live, pid_alive, refused, signal,
-    signal_name, signal_process, spawn,
+    Error, GROUP_POLL, alive, detach, kill_every_group, live, refused, signal, signal_name,
+    signal_process, spawn,
 };
 
 /// How long a test waits on a child before it fails.
@@ -78,27 +78,27 @@ fn alive_sends_nothing_for_a_refused_id() {
 
 #[test]
 fn pid_alive_reads_the_callers_own_pid_as_live() {
-    assert!(pid_alive(std::process::id()));
+    assert!(super::pid_alive(std::process::id()));
 }
 
 #[test]
 fn pid_alive_reads_an_unused_pid_as_dead() {
-    assert!(!pid_alive(i32::MAX as u32));
+    assert!(!super::pid_alive(i32::MAX as u32));
 }
 
 #[test]
 fn pid_alive_sends_nothing_for_an_id_past_a_pid() {
-    assert!(!pid_alive(PAST_PID));
+    assert!(!super::pid_alive(PAST_PID));
 }
 
 #[test]
 fn pid_alive_refuses_zero_without_signalling() {
-    assert!(!pid_alive(0));
+    assert!(!super::pid_alive(0));
 }
 
 #[test]
 fn pid_alive_reads_pid_one_as_live() {
-    assert!(pid_alive(1));
+    assert!(super::pid_alive(1));
 }
 
 #[test]

@@ -84,6 +84,18 @@ fn hold(dir: &std::path::Path) -> File {
     file
 }
 
+/// Writes `label` into session `dir`'s lock file, as a session process
+/// does when it takes the lock.
+fn label(dir: &std::path::Path, label: &str) {
+    fs::write(dir.join("session.lock"), format!("{label}\n")).unwrap();
+}
+
+/// This test process's pid as a lock label, as a session process writes
+/// it when it takes the lock.
+fn own_pid_label() -> String {
+    std::process::id().to_string()
+}
+
 fn refused(hub: &Hub, value: serde_json::Value) -> DeleteRefused {
     delete(hub, &args(value)).unwrap_err()
 }
@@ -373,12 +385,14 @@ fn a_dry_run_keeps_the_refusals_and_still_removes_nothing() {
 }
 
 #[test]
-fn a_dry_run_reports_held_candidates_and_real_delete_still_refuses_without_changes() {
+fn a_dry_run_reports_held_candidates_and_removes_nothing() {
     let temp = Temp::new();
     let root = temp.session("-p", 1, None);
     let fork = temp.session("-p", 2, Some(1));
     let unrelated = temp.session("-p", 3, None);
-    let _locks = [hold(&root), hold(&fork), hold(&unrelated)];
+    let mine = own_pid_label();
+    label(&root, &mine);
+    label(&fork, &format!("keeper {mine}"));
     let hub = temp.hub();
     let before = snapshot_tree(&temp.dir);
 
@@ -389,6 +403,20 @@ fn a_dry_run_reports_held_candidates_and_real_delete_still_refuses_without_chang
     assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
     assert_eq!(held_as_set(&answer), BTreeSet::from([id(1), id(2)]));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+    for dir in [&root, &fork, &unrelated] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
+}
+
+#[test]
+fn a_real_delete_refuses_held_candidates_without_changes() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let unrelated = temp.session("-p", 3, None);
+    let _locks = [hold(&root), hold(&fork), hold(&unrelated)];
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
 
     let refused = refused(&hub, json!({"session": id(1), "cascade": true}));
     assert_eq!(refused.code(), ErrorCode::SessionHeld);
@@ -407,7 +435,7 @@ fn a_dry_run_reports_a_held_dependent_without_removing_unheld_root() {
     let temp = Temp::new();
     let root = temp.session("-p", 1, None);
     let fork = temp.session("-p", 2, Some(1));
-    let _lock = hold(&fork);
+    label(&fork, &own_pid_label());
     let hub = temp.hub();
     let before = snapshot_tree(&temp.dir);
 
@@ -418,6 +446,18 @@ fn a_dry_run_reports_a_held_dependent_without_removing_unheld_root() {
     assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
     assert_eq!(held_as_set(&answer), BTreeSet::from([id(2)]));
     assert_eq!(snapshot_tree(&temp.dir), before);
+    assert!(root.join("events.jsonl").is_file());
+    assert!(fork.join("events.jsonl").is_file());
+}
+
+#[test]
+fn a_real_delete_with_a_held_dependent_removes_nothing() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let _lock = hold(&fork);
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
 
     let refused = refused(&hub, json!({"session": id(1), "cascade": true}));
     assert_eq!(refused.code(), ErrorCode::SessionHeld);
@@ -426,12 +466,14 @@ fn a_dry_run_reports_a_held_dependent_without_removing_unheld_root() {
         before,
         "the acquired root lock is released"
     );
+    // The hub dropped the root lock it took before the refusal.
+    drop(hold(&root));
     assert!(root.join("events.jsonl").is_file());
     assert!(fork.join("events.jsonl").is_file());
 }
 
 #[test]
-fn a_dry_run_lock_path_error_is_io_failed_and_writes_nothing() {
+fn a_dry_run_with_an_unreadable_lock_reads_not_held_and_writes_nothing() {
     let temp = Temp::new();
     let root = temp.session("-p", 1, None);
     fs::remove_file(root.join("session.lock")).unwrap();
@@ -439,9 +481,8 @@ fn a_dry_run_lock_path_error_is_io_failed_and_writes_nothing() {
     let hub = temp.hub();
     let before = snapshot_tree(&temp.dir);
 
-    let refused = refused(&hub, json!({"session": id(1), "dry_run": true}));
-    assert_eq!(refused.code(), ErrorCode::IoFailed);
-    assert!(refused.message().contains(&id(1)), "{}", refused.message());
+    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before);
 }
 
@@ -450,7 +491,7 @@ fn a_dry_run_over_the_wire_answers_the_sessions_and_held_ids() {
     let temp = Temp::new();
     let root = temp.session("-p", 1, None);
     temp.session("-p", 2, Some(1));
-    let _lock = hold(&root);
+    label(&root, &own_pid_label());
     let hub = temp.hub();
     let line = json!({
         "id": "c_dry",
@@ -465,6 +506,134 @@ fn a_dry_run_over_the_wire_answers_the_sessions_and_held_ids() {
         BTreeSet::from([id(1), id(2)])
     );
     assert_eq!(answer["payload"]["result"]["held"], json!([id(1)]));
+}
+
+#[test]
+fn a_dry_run_reports_a_live_pid_label_as_held() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    label(&dir, &own_pid_label());
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(1)], "held": [id(1)]}));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+}
+
+#[test]
+fn a_dry_run_reports_a_live_keeper_label_as_held() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    label(&dir, &format!("keeper {}", own_pid_label()));
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(1)], "held": [id(1)]}));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+}
+
+#[test]
+fn a_dry_run_reports_a_dead_pid_label_as_not_held() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    // Fits a pid but names no process: the probe reports no such process.
+    label(&dir, "2147483647");
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+}
+
+#[test]
+fn a_dry_run_reports_a_dead_keeper_label_as_not_held() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    label(&dir, "keeper 2147483647");
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+}
+
+#[test]
+fn a_dry_run_reports_an_oversized_pid_label_as_not_held() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    // All digits, but past what a pid holds: no probe is sent for it.
+    label(&dir, "99999999999");
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+}
+
+#[test]
+fn a_dry_run_reports_a_negative_pid_label_as_not_held() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    label(&dir, "-1");
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+}
+
+#[test]
+fn a_dry_run_reports_a_pid_with_trailing_words_as_not_held() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let mine = own_pid_label();
+    // Live pids, but neither label form allows a third word.
+    label(&root, &format!("{mine} extra"));
+    label(&fork, &format!("keeper {mine} extra"));
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(
+        &hub,
+        json!({"session": id(1), "cascade": true, "dry_run": true}),
+    );
+    assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
+    assert_eq!(answer["held"], json!([]));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+}
+
+#[test]
+fn a_dry_run_reports_garbage_labels_as_not_held() {
+    let temp = Temp::new();
+    let root = temp.session("-p", 1, None);
+    let fork = temp.session("-p", 2, Some(1));
+    let deep = temp.session("-p", 3, Some(2));
+    label(&root, "123abc");
+    label(&fork, "keeper 42x");
+    label(&deep, "keeper");
+    let hub = temp.hub();
+    let before = snapshot_tree(&temp.dir);
+
+    let answer = dry_run(
+        &hub,
+        json!({"session": id(1), "cascade": true, "dry_run": true}),
+    );
+    assert_eq!(
+        sessions_as_set(&answer),
+        BTreeSet::from([id(1), id(2), id(3)])
+    );
+    assert_eq!(answer["held"], json!([]));
+    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
+    for dir in [&root, &fork, &deep] {
+        assert!(dir.join("events.jsonl").is_file(), "{}", dir.display());
+    }
 }
 
 /// A dry run takes no lock: an open racing its probe window succeeds. The
