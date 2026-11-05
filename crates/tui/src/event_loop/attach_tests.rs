@@ -5,7 +5,7 @@ use super::super::hub::Connection;
 use super::super::pause;
 use super::{
     DEADLINE, answers_all, counted, counting, line, opened, quit, run_queued, serve, session,
-    turn_lines,
+    shown, turn_lines,
 };
 use crate::Input;
 use crate::link::{Credits, Feed, Line, answers, read_lines};
@@ -1702,6 +1702,17 @@ fn opening(app: &mut crate::app::App, last: u64) {
         None,
         None,
         json!({"command_id": "opening", "result": {"last_seq": last}}),
+    )));
+}
+
+/// The opening boundary carrying the open's own summary id, so the
+/// accept matches the in-flight subscribe and the gate reaches `Due`.
+fn opening_as(app: &mut crate::app::App, id: &str, last: u64) {
+    app.on_line(Line::Session(line(
+        "command_accepted",
+        None,
+        None,
+        json!({"command_id": id, "result": {"last_seq": last}}),
     )));
 }
 
@@ -6525,4 +6536,365 @@ mod attach_span_tests {
         timing.emit_attach_spans();
         assert!(op_lines(home.path()).is_empty());
     }
+}
+
+// ---- #4192: exited session + multi-window log + post-exit prompt ----
+//
+// The resumed session's 319-line log crosses the 256-line
+// `HISTORY_LINES` window, so the resume replay pages: turn 42
+// (`turn_started` at seq 307) runs through `turn_completed` at seq
+// 318. Each test below drives the same resume shape through the
+// history-answer seam and asserts one observable, so a partial fix
+// cannot pass: the resumed turn starts, the screen keeps the full
+// transcript, Ctrl+C quits.
+
+/// The 319-line exited-session log: `session_started` at 0 without a
+/// fork, 41 turns with tool calls and reasoning present,
+/// `fiber_exited` at 306, then the resumed turn 42 through
+/// `turn_completed` at 318.
+fn exited_log() -> Vec<contract::Envelope> {
+    let mut lines = Vec::new();
+    let mut seq = 0u64;
+    let mut push = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
+        lines.push(line(kind, Some(seq), action, payload));
+        seq += 1;
+    };
+    let completed = || serde_json::json!({"outcome": "completed"});
+    let user = |text: &str| {
+        serde_json::json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": text}]}]})
+    };
+    let assistant = |id: &str| serde_json::json!({"action_id": id});
+    let text = |id: &str, reply: &str| serde_json::json!({"action_id": id, "text": reply});
+    push("session_started", None, serde_json::json!({}));
+    for turn in 1..=41 {
+        let action = format!("a_{turn:02}");
+        push(
+            "turn_started",
+            Some(&action),
+            user(&format!("prompt {turn}")),
+        );
+        push("step_started", Some(&action), assistant(&action));
+        push(
+            "assistant_message_started",
+            Some(&action),
+            assistant(&action),
+        );
+        if turn == 7 || turn == 21 || turn == 33 {
+            push("reasoning_started", Some(&action), assistant(&action));
+            push("reasoning_completed", Some(&action), assistant(&action));
+        }
+        if turn == 13 || turn == 29 {
+            for round in ['a', 'b'] {
+                let tool = format!("t_{turn:02}{round}");
+                push(
+                    "tool_call_requested",
+                    Some(&action),
+                    serde_json::json!({"tool_call_id": tool, "name": "read", "arguments": {}}),
+                );
+                push(
+                    "tool_call_started",
+                    Some(&action),
+                    serde_json::json!({"tool_call_id": tool}),
+                );
+                push(
+                    "tool_call_completed",
+                    Some(&action),
+                    serde_json::json!({"tool_call_id": tool}),
+                );
+            }
+        }
+        push(
+            "text_completed",
+            Some(&action),
+            text(&action, &format!("reply {turn}")),
+        );
+        push(
+            "assistant_message_completed",
+            Some(&action),
+            assistant(&action),
+        );
+        push("turn_completed", Some(&action), completed());
+        push("usage_recorded", Some(&action), serde_json::json!({}));
+    }
+    push("fiber_exited", None, serde_json::json!({}));
+    push("turn_started", Some("a_42"), user("prompt forty-two"));
+    push("step_started", Some("a_42"), assistant("a_42"));
+    push("assistant_message_started", Some("a_42"), assistant("a_42"));
+    push("reasoning_started", Some("a_42"), assistant("a_42"));
+    push("reasoning_completed", Some("a_42"), assistant("a_42"));
+    push(
+        "tool_call_requested",
+        Some("a_42"),
+        serde_json::json!({"tool_call_id": "t_42", "name": "read", "arguments": {}}),
+    );
+    push(
+        "tool_call_started",
+        Some("a_42"),
+        serde_json::json!({"tool_call_id": "t_42"}),
+    );
+    push(
+        "tool_call_completed",
+        Some("a_42"),
+        serde_json::json!({"tool_call_id": "t_42"}),
+    );
+    push(
+        "text_completed",
+        Some("a_42"),
+        text("a_42", "resumed reply forty-two"),
+    );
+    push(
+        "assistant_message_completed",
+        Some("a_42"),
+        assistant("a_42"),
+    );
+    push("usage_recorded", Some("a_42"), serde_json::json!({}));
+    push("turn_completed", Some("a_42"), completed());
+    assert_eq!(lines.len(), 319, "the log crosses the history window");
+    assert_eq!(lines[306].kind, "fiber_exited", "the exit sits at 306");
+    assert_eq!(
+        lines[318].kind, "turn_completed",
+        "the resumed turn completes the tail"
+    );
+    lines
+}
+
+/// An attached loop holding the exited session's live transcript
+/// through `fiber_exited`, ready for the opening accept: the same
+/// shape as `opened`, but the session under test exits. The home
+/// launch opens the attached session, so the hello's summary
+/// subscribe gates the resume replay: the returned id is the
+/// opening accept the tests fold, reaching `Due`.
+fn opened_exited(
+    prefix: &[contract::Envelope],
+) -> (
+    super::super::Loop<ratatui::backend::TestBackend>,
+    UnixStream,
+    mpsc::Sender<Input>,
+    mpsc::Receiver<Input>,
+    String,
+) {
+    let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: std::path::PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        hover: false,
+        version: "0.0.1".to_owned(),
+        model: None,
+        thinking: None,
+        logo_glyph: "⌇".to_owned(),
+        keys: crate::KeysSetup::default(),
+        rail_share: 15.0,
+        panel_share: 21.0,
+        panel_cards: Vec::new(),
+        open_at: crate::OpenAt::Session(contract::SessionId(super::SESSION.to_owned()), None),
+        ..Default::default()
+    });
+    app.set_size(60, 14);
+    let hello = contract::HubLine {
+        kind: "hub_hello".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    };
+    let hello_lines = app.on_line(Line::Hub(hello));
+    let summary = summary_id(&hello_lines);
+    app.attach(contract::SessionId(super::SESSION.to_owned()));
+    for envelope in prefix {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
+    let screen = super::super::Screen::new(ratatui::backend::TestBackend::new(60, 14), 60, 14)
+        .unwrap_or_else(|err| panic!("screen: {err}"));
+    let mut lp = super::super::Loop::for_test(app, screen);
+    lp.hub.store(ours);
+    let (tx, rx) = mpsc::channel();
+    (lp, theirs, tx, rx, summary)
+}
+
+/// The resumed turn starts: after the post-exit prompt the replay
+/// folds turn 42, so the screen shows its user message.
+#[test]
+fn exited_prompt_starts_the_resumed_turn() {
+    let log = exited_log();
+    let (mut lp, theirs, tx, rx, summary) = opened_exited(&log[..307]);
+    opening_as(&mut lp.app, &summary, 318);
+    let wire = Wire::new(512);
+    let _guard = CloseOnDrop(Arc::clone(&wire));
+    let (hand_tx, _hand_rx) = mpsc::channel();
+    let link = WireLink::new(Arc::clone(&wire), hand_tx);
+    let count = Arc::clone(&link.count);
+    let (observed_tx, observed) = mpsc::channel();
+    let feed = Feed::new(tx.clone(), lp.hub.credits());
+    let (reader, reader_done) = spawn_reader(link, feed);
+    let (go_tx, go_rx) = mpsc::channel();
+    let (commands, commands_done) = serve_history(
+        theirs,
+        Arc::clone(&wire),
+        go_rx,
+        log,
+        Some((count, observed_tx)),
+    );
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done_tx.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    go_tx.send(()).unwrap_or_else(|err| panic!("go: {err}"));
+    tx.send(Input::Bytes(b"take up the resumed work".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    Deadline::after(DEADLINE).recv_or_fail(&observed, "the hub to see the first history command");
+    tx.send(Input::Bytes(b"\r".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(
+        &done,
+        "the loop to quit after the replay (livelock: the resume replay never returned, keys stashed forever)",
+    );
+    assert_eq!(code, 0, "the loop quits after the replay");
+    let screen = shown(&lp);
+    assert!(
+        screen.contains("prompt forty-two"),
+        "the resumed turn started: its user message folded"
+    );
+    wire.close();
+    drop(lp);
+    reader_done.recv().unwrap_or(());
+    reader.join().unwrap_or_else(|_| panic!("join: reader"));
+    let (seen, _) = Deadline::after(DEADLINE).recv_or_fail(&commands_done, "the history count");
+    commands.join().unwrap_or_else(|_| panic!("join: history"));
+    assert!(
+        (1..=12).contains(&seen),
+        "the resume replay runs and stays bounded, saw {seen} history commands"
+    );
+    drop(_guard);
+}
+
+/// The screen keeps the full transcript: the replay reaches the log
+/// tail, so the last line is the resumed turn's reply instead of a
+/// one-window prefix install.
+#[test]
+fn exited_prompt_keeps_the_full_transcript() {
+    let log = exited_log();
+    let (mut lp, theirs, tx, rx, summary) = opened_exited(&log[..307]);
+    opening_as(&mut lp.app, &summary, 318);
+    let wire = Wire::new(512);
+    let _guard = CloseOnDrop(Arc::clone(&wire));
+    let (hand_tx, _hand_rx) = mpsc::channel();
+    let link = WireLink::new(Arc::clone(&wire), hand_tx);
+    let count = Arc::clone(&link.count);
+    let (observed_tx, observed) = mpsc::channel();
+    let feed = Feed::new(tx.clone(), lp.hub.credits());
+    let (reader, reader_done) = spawn_reader(link, feed);
+    let (go_tx, go_rx) = mpsc::channel();
+    let (commands, commands_done) = serve_history(
+        theirs,
+        Arc::clone(&wire),
+        go_rx,
+        log,
+        Some((count, observed_tx)),
+    );
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done_tx.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    go_tx.send(()).unwrap_or_else(|err| panic!("go: {err}"));
+    tx.send(Input::Bytes(b"take up the resumed work".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    Deadline::after(DEADLINE).recv_or_fail(&observed, "the hub to see the first history command");
+    tx.send(Input::Bytes(b"\r".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(
+        &done,
+        "the loop to quit after the replay (livelock: the resume replay never returned, keys stashed forever)",
+    );
+    assert_eq!(code, 0, "the loop quits after the replay");
+    let screen = shown(&lp);
+    assert!(
+        screen.contains("resumed reply forty-two"),
+        "the screen keeps the full transcript through the log tail, not a prefix"
+    );
+    wire.close();
+    drop(lp);
+    reader_done.recv().unwrap_or(());
+    reader.join().unwrap_or_else(|_| panic!("join: reader"));
+    let (seen, _) = Deadline::after(DEADLINE).recv_or_fail(&commands_done, "the history count");
+    commands.join().unwrap_or_else(|_| panic!("join: history"));
+    assert!(
+        (1..=12).contains(&seen),
+        "the resume replay runs and stays bounded, saw {seen} history commands"
+    );
+    drop(_guard);
+}
+
+/// Ctrl+C quits after a held replay: keys pressed while the first
+/// history answer waits stash, then the loop handles them after the
+/// wait and quits with code 0.
+#[test]
+fn exited_prompt_ctrl_c_quits() {
+    let log = exited_log();
+    let (mut lp, theirs, tx, rx, summary) = opened_exited(&log[..307]);
+    opening_as(&mut lp.app, &summary, 318);
+    let wire = Wire::new(512);
+    let _guard = CloseOnDrop(Arc::clone(&wire));
+    let (hand_tx, _hand_rx) = mpsc::channel();
+    let link = WireLink::new(Arc::clone(&wire), hand_tx);
+    let count = Arc::clone(&link.count);
+    let (observed_tx, observed) = mpsc::channel();
+    let feed = Feed::new(tx.clone(), lp.hub.credits());
+    let (reader, reader_done) = spawn_reader(link, feed);
+    let (go_tx, go_rx) = mpsc::channel();
+    let (commands, commands_done) = serve_history(
+        theirs,
+        Arc::clone(&wire),
+        go_rx,
+        log,
+        Some((count, observed_tx)),
+    );
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done_tx.send((code, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    tx.send(Input::Bytes(b"take up the resumed work".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    Deadline::after(DEADLINE).recv_or_fail(&observed, "the hub to see the first history command");
+    tx.send(Input::Bytes(b"\r".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    go_tx.send(()).unwrap_or_else(|err| panic!("go: {err}"));
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(
+        &done,
+        "the loop to quit after the held replay (livelock: Ctrl+C stashed in the resume replay never ran)",
+    );
+    assert_eq!(code, 0, "Ctrl+C quits after the replay");
+    assert!(
+        lp.hub.answer_stash_peak() >= 1,
+        "the held history wait stashed the key pressed during it"
+    );
+    wire.close();
+    drop(lp);
+    reader_done.recv().unwrap_or(());
+    reader.join().unwrap_or_else(|_| panic!("join: reader"));
+    let (seen, _) = Deadline::after(DEADLINE).recv_or_fail(&commands_done, "the history count");
+    commands.join().unwrap_or_else(|_| panic!("join: history"));
+    assert!(
+        (1..=12).contains(&seen),
+        "the resume replay runs and stays bounded, saw {seen} history commands"
+    );
+    drop(_guard);
 }
