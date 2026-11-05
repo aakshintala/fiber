@@ -282,7 +282,11 @@ impl Connection {
             let Some(last) = answer.last().and_then(|line| line.seq) else {
                 break;
             };
-            from = last.0.saturating_add(1);
+            // The cursor always moves past the requested window's start:
+            // an answer ending at or below it would otherwise re-request
+            // the same window forever, replaying without progress while
+            // keys pile up in `answer`.
+            from = last.0.saturating_add(1).max(from.saturating_add(1));
             lines.extend(answer);
         }
         Ok(lines)

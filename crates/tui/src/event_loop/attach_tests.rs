@@ -1633,7 +1633,8 @@ fn ten_mib_fixture() -> (Vec<Vec<u8>>, usize) {
 /// Serves `history` on the hub's end from the session's lines: the
 /// first command waits for the test's go-ahead, later ones answer at
 /// once, and the count of history commands seen returns with the
-/// thread. Ends at EOF, when the loop hangs up.
+/// thread. A window with no `from_seq` answers the latest lines up to
+/// `to_seq`, as the hub does. Ends at EOF, when the loop hangs up.
 fn serve_history(
     theirs: UnixStream,
     wire: Arc<Wire>,
@@ -1678,7 +1679,7 @@ fn serve_history(
                 let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
                 let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
                 let id = command["id"].as_str().unwrap_or_default().to_owned();
-                let result = super::history(&lines, from, to);
+                let result = super::tail_history(&lines, from, to);
                 if answered.is_empty() {
                     answered = result.clone();
                 }
@@ -6664,7 +6665,9 @@ fn exited_log() -> Vec<contract::Envelope> {
 /// shape as `opened`, but the session under test exits. The home
 /// launch opens the attached session, so the hello's summary
 /// subscribe gates the resume replay: the returned id is the
-/// opening accept the tests fold, reaching `Due`.
+/// opening accept the tests fold, reaching `Due`. The viewport fits
+/// the resumed turn's block, so the turn-start assert reads it with
+/// no scrolling.
 fn opened_exited(
     prefix: &[contract::Envelope],
 ) -> (
@@ -6693,7 +6696,7 @@ fn opened_exited(
         open_at: crate::OpenAt::Session(contract::SessionId(super::SESSION.to_owned()), None),
         ..Default::default()
     });
-    app.set_size(60, 14);
+    app.set_size(60, 24);
     let hello = contract::HubLine {
         kind: "hub_hello".to_owned(),
         ts: 0,
@@ -6707,7 +6710,7 @@ fn opened_exited(
         app.on_line(Line::Session(envelope.clone()));
     }
     let (ours, theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
-    let screen = super::super::Screen::new(ratatui::backend::TestBackend::new(60, 14), 60, 14)
+    let screen = super::super::Screen::new(ratatui::backend::TestBackend::new(60, 24), 60, 24)
         .unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = super::super::Loop::for_test(app, screen);
     lp.hub.store(ours);
@@ -6897,4 +6900,81 @@ fn exited_prompt_ctrl_c_quits() {
         "the resume replay runs and stays bounded, saw {seen} history commands"
     );
     drop(_guard);
+}
+
+/// The `fetch` cursor moves past the requested window's start even
+/// when an answer ends below it: a boundary window answered low is
+/// re-requested from past its start instead of repeated forever
+/// (#4192).
+#[test]
+fn fetch_cursor_advances_past_a_window_answered_below_its_start() {
+    use contract::Seq;
+    use std::ops::RangeInclusive;
+    let (mut lp, theirs, tx, rx) = opened();
+    let log: Vec<contract::Envelope> = (0..10u64)
+        .map(|seq| line("text_completed", Some(seq), None, json!({"text": "line"})))
+        .collect();
+    let mut low = true;
+    let seen = serve(
+        theirs,
+        tx,
+        Box::new(move |command: &serde_json::Value| {
+            if command["command"] != "history" {
+                return Vec::new();
+            }
+            let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+            let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+            let id = command["id"].as_str().unwrap_or_default().to_owned();
+            // The boundary quirk, once: answer below the requested start.
+            let result = if low {
+                low = false;
+                log.iter()
+                    .filter(|line| line.seq.is_some_and(|seq| seq.0 < from))
+                    .take(3)
+                    .cloned()
+                    .collect()
+            } else {
+                super::tail_history(&log, from, to)
+            };
+            vec![Input::Hub(Line::Session(command_answer(&id, result)))]
+        }),
+    );
+    let range: RangeInclusive<Seq> = Seq(5)..=Seq(9);
+    let lines = lp
+        .hub
+        .fetch(
+            &rx,
+            &contract::SessionId(super::SESSION.to_owned()),
+            &range,
+            &mut lp.app,
+            &lp.tick,
+            lp.clock.as_ref(),
+            lp.tick.armed(),
+        )
+        .unwrap_or_else(|err| panic!("fetch past the low answer: {err}"));
+    let seqs: Vec<u64> = lines
+        .iter()
+        .filter_map(|line| line.seq.map(|seq| seq.0))
+        .collect();
+    assert_eq!(
+        seqs,
+        vec![0, 1, 2, 6, 7, 8, 9],
+        "the low answer folds once and the replay continues past the requested start"
+    );
+    let seen = seen.lock().unwrap_or_else(|err| panic!("seen: {err}"));
+    let windows: Vec<(u64, u64)> = seen
+        .iter()
+        .map(|command| {
+            (
+                command["args"]["from_seq"].as_u64().unwrap_or(0),
+                command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    assert_eq!(
+        windows,
+        vec![(5, 9), (6, 9)],
+        "the second window starts past the first window's start"
+    );
+    drop(lp);
 }

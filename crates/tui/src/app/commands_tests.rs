@@ -2133,6 +2133,35 @@ fn an_accepted_unknown_source_import_settles_without_a_report() {
     assert!(app.outbox.pending.is_empty());
 }
 
+/// A refused prompt keeps the draft and the working loop: the refusal
+/// is one notice with its reason, the draft returns to an empty box,
+/// and the follow-up Enter sends the prompt again (#4192 failed resume).
+#[test]
+fn failed_resume_keeps_draft_and_loop() {
+    let mut app = attached();
+    let lines = sent(enter(&mut app, "take up the resumed work"));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(app.draft(), "");
+    let id = lines[0]["id"].clone();
+    let rejected = session_line(
+        "command_rejected",
+        json!({"command_id": id, "code": "session_not_found", "message": "No such session."}),
+    );
+    assert!(app.on_line(rejected).is_empty());
+    assert_eq!(app.notices().len(), 1);
+    assert!(app.notices().iter().any(|line| matches!(line, crate::app::NoticeLine::Notice{code, text, ..} if *code == ErrorCode::SessionNotFound && text == "No such session.")));
+    assert_eq!(app.draft(), "take up the resumed work");
+    // The loop still works: the follow-up Enter sends the prompt again
+    // and consumes the draft.
+    let lines = sent(app.on_key(Key::Enter, now()));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["command"], "prompt");
+    assert_eq!(lines[0]["session_id"], SESSION);
+    assert_eq!(app.draft(), "");
+}
+
 const NEW: &str = "s_nnnnnnnnnnnnnnnn";
 
 #[test]
