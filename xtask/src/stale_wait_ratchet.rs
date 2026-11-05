@@ -86,10 +86,15 @@ fn is_word_at(bytes: &[u8], at: usize) -> bool {
     if byte < 0x80 {
         return is_word_byte(byte);
     }
-    let mut start = at;
-    while start > 0 && bytes.get(start).is_some_and(|byte| byte & 0xC0 == 0x80) {
-        start -= 1;
-    }
+    // The lead byte of the character covering `at`: the first byte at or
+    // below `at` that is not a multibyte continuation byte. A hand-stepped
+    // walk here spins forever under a stepping mutant, so this walks with
+    // an iterator instead (`docs/testing/mutants.md`, "Proving a test
+    // bites").
+    let start = (0..=at)
+        .rev()
+        .find(|&i| bytes.get(i).is_none_or(|byte| byte & 0xC0 != 0x80))
+        .unwrap_or(0);
     bytes
         .get(start..)
         .and_then(|suffix| std::str::from_utf8(suffix).ok())
@@ -333,6 +338,20 @@ fn is_use_line(line: &str) -> bool {
 /// character literals never contribute depth; the scan stops 200 lines
 /// past its start. In body mode the stop check runs at each line's end,
 /// so a definition line's own balanced parentheses never end the body.
+/// Whether a closing bracket ends the scan: outside a body, with an
+/// opener seen and every depth back at zero. Dropping the mode gate
+/// only differs for a zero-depth closer in body mode, where it returns
+/// the closer's column instead of the line's end; no caller reads that
+/// column (`fn_bodies` takes the line, and `call_region` never sets
+/// body mode), so no test can tell them apart and it takes this
+/// exemption instead (`docs/testing/mutants.md`, "Proving a test
+/// bites"). The other forms break balanced scans, and the group tests
+/// pin those.
+#[cfg_attr(false, mutants::skip)]
+fn group_closed(body_mode: bool, started: bool, depth: [i32; 3]) -> bool {
+    !body_mode && started && depth == [0, 0, 0]
+}
+
 fn scan_group_end(
     lines: &[&str],
     start_line: usize,
@@ -341,14 +360,25 @@ fn scan_group_end(
 ) -> (usize, usize) {
     let mut depth: [i32; 3] = [0, 0, 0];
     let mut started = false;
-    let mut line_no = start_line;
-    while let Some(line) = lines.get(line_no) {
+    // At most 201 lines past the start: a hand-stepped line counter spins
+    // forever under a stepping mutant, so this walks with an iterator
+    // instead (`docs/testing/mutants.md`, "Proving a test bites").
+    for (offset, line) in lines.iter().skip(start_line).take(201).enumerate() {
+        let line_no = start_line + offset;
         let bytes = line.as_bytes();
         let mut col = if line_no == start_line { start_col } else { 0 };
         let mut instr: Option<u8> = None;
+        let mut escaped = false;
         let mut raw_hashes: Option<usize> = None;
         let mut in_block = false;
-        while let Some(&byte) = bytes.get(col) {
+        // At most one step per byte, plus the closing bracket: a
+        // hand-stepped byte counter spins forever under a stepping
+        // mutant, so the loop is fuel-bounded instead
+        // (`docs/testing/mutants.md`, "Proving a test bites").
+        for _ in 0..=bytes.len() {
+            let Some(&byte) = bytes.get(col) else {
+                break;
+            };
             if in_block {
                 if byte == b'*' && bytes.get(col + 1) == Some(&b'/') {
                     in_block = false;
@@ -358,21 +388,14 @@ fn scan_group_end(
                 if raw_hashes.is_some() {
                     let hashes = raw_hashes.unwrap_or(0);
                     if byte == b'"' && (0..hashes).all(|h| bytes.get(col + 1 + h) == Some(&b'#')) {
-                        let mut ok = true;
-                        for h in 0..hashes {
-                            if bytes.get(col + 1 + h) != Some(&b'#') {
-                                ok = false;
-                                break;
-                            }
-                        }
-                        if ok {
-                            instr = None;
-                            raw_hashes = None;
-                            col += hashes;
-                        }
+                        instr = None;
+                        raw_hashes = None;
+                        col += hashes;
                     }
+                } else if escaped {
+                    escaped = false;
                 } else if byte == b'\\' {
-                    col += 1;
+                    escaped = true;
                 } else if byte == b'"' {
                     instr = None;
                 }
@@ -387,22 +410,22 @@ fn scan_group_end(
                 instr = Some(b'"');
                 col += 1;
             } else if byte == b'r' && matches!(bytes.get(col + 1), Some(b'"') | Some(b'#')) {
-                let mut hashes = 0;
-                while bytes.get(col + 1 + hashes) == Some(&b'#') {
-                    hashes += 1;
-                }
+                let hashes = bytes.get(col + 1..).map_or(0, |tail| {
+                    tail.iter().take_while(|&&byte| byte == b'#').count()
+                });
                 if bytes.get(col + 1 + hashes) == Some(&b'"') {
                     instr = Some(b'r');
                     raw_hashes = Some(hashes);
                     col += hashes + 1;
                 }
             } else if byte == b'\'' {
+                // A character hides its bracket; stepping through an
+                // escaped character reaches the same state as skipping
+                // it, so there is no branch to mutate here.
                 let rest = bytes.get(col..).unwrap_or(&[]);
                 let plain = rest.len() >= 3 && rest.get(2) == Some(&b'\'');
-                let escaped =
-                    rest.len() >= 4 && rest.get(1) == Some(&b'\\') && rest.get(3) == Some(&b'\'');
-                if plain || escaped {
-                    col += if escaped { 3 } else { 2 };
+                if plain {
+                    col += 2;
                 }
             } else if byte == b'(' {
                 depth[0] += 1;
@@ -415,17 +438,17 @@ fn scan_group_end(
                 started = true;
             } else if byte == b')' {
                 depth[0] -= 1;
-                if !body_mode && started && depth == [0, 0, 0] {
+                if group_closed(body_mode, started, depth) {
                     return (line_no, col);
                 }
             } else if byte == b']' {
                 depth[1] -= 1;
-                if !body_mode && started && depth == [0, 0, 0] {
+                if group_closed(body_mode, started, depth) {
                     return (line_no, col);
                 }
             } else if byte == b'}' {
                 depth[2] -= 1;
-                if !body_mode && started && depth == [0, 0, 0] {
+                if group_closed(body_mode, started, depth) {
                     return (line_no, col);
                 }
             }
@@ -433,10 +456,6 @@ fn scan_group_end(
         }
         if body_mode && started && depth == [0, 0, 0] {
             return (line_no, bytes.len());
-        }
-        line_no += 1;
-        if line_no > start_line + 200 {
-            break;
         }
     }
     (lines.len().saturating_sub(1), 0)
@@ -448,18 +467,29 @@ fn call_region(lines: &[&str], line_no: usize, at: usize) -> String {
     let Some(line) = lines.get(line_no) else {
         return String::new();
     };
-    let mut open = at;
-    while line.as_bytes().get(open) != Some(&b'(') {
-        if line.as_bytes().get(open).is_none() {
-            return String::new();
-        }
-        open += 1;
+    // The opening paren at or after the call: a hand-stepped scan spins
+    // forever under a stepping mutant, so this searches with an iterator
+    // instead (`docs/testing/mutants.md`, "Proving a test bites").
+    let open = line
+        .as_bytes()
+        .iter()
+        .enumerate()
+        .skip(at)
+        .find(|(_, byte)| **byte == b'(')
+        .map_or(line.len(), |(open, _)| open);
+    if line.as_bytes().get(open).is_none() {
+        return String::new();
     }
     let (end_line, end_col) = scan_group_end(lines, line_no, open, false);
     let mut region = String::new();
-    let mut no = line_no;
-    while no <= end_line {
-        let Some(text) = lines.get(no) else { break };
+    // Down to the closing line: a hand-stepped line counter spins
+    // forever under a stepping mutant, so the loop walks with an
+    // iterator instead (`docs/testing/mutants.md`, "Proving a test
+    // bites").
+    for (no, text) in lines.iter().enumerate().skip(line_no) {
+        if no > end_line {
+            break;
+        }
         if no == line_no && no == end_line {
             region.push_str(text.get(open..=end_col).unwrap_or(""));
         } else if no == line_no {
@@ -472,7 +502,6 @@ fn call_region(lines: &[&str], line_no: usize, at: usize) -> String {
         if no != end_line {
             region.push('\n');
         }
-        no += 1;
     }
     region
 }
@@ -481,30 +510,29 @@ fn call_region(lines: &[&str], line_no: usize, at: usize) -> String {
 /// concatenate, so a helper's sends count under any one of them.
 fn fn_bodies(lines: &[&str]) -> BTreeMap<String, String> {
     let mut bodies = BTreeMap::new();
-    let mut line_no = 0;
-    while line_no < lines.len() {
-        let Some(line) = lines.get(line_no) else {
-            break;
-        };
+    // Skipping past each body with an index walks one past the end
+    // forever under a stepping mutant, so the loop walks with an
+    // iterator instead (`docs/testing/mutants.md`, "Proving a test
+    // bites").
+    let mut skip_until = 0;
+    for (line_no, line) in lines.iter().enumerate() {
+        if line_no < skip_until {
+            continue;
+        }
         let Some(name) = fn_name(line) else {
-            line_no += 1;
             continue;
         };
         let (end_line, _) = scan_group_end(lines, line_no, 0, true);
         let mut body = String::new();
-        let mut no = line_no;
-        while no <= end_line {
-            if let Some(text) = lines.get(no) {
-                body.push_str(text);
-                body.push('\n');
-            }
-            no += 1;
+        for text in lines.iter().take(end_line + 1).skip(line_no) {
+            body.push_str(text);
+            body.push('\n');
         }
         bodies
             .entry(name.to_owned())
             .and_modify(|old: &mut String| old.push_str(&body))
             .or_insert(body);
-        line_no = end_line + 1;
+        skip_until = end_line + 1;
     }
     bodies
 }
@@ -550,35 +578,30 @@ fn use_aliases(lines: &[&str]) -> Aliases {
         }
         in_use = false;
         let bytes = statement.as_bytes();
-        let mut cursor = 0;
-        while cursor + 4 <= bytes.len() {
-            if statement[cursor..].starts_with(" as ") {
-                let mut start = cursor;
-                while start > 0
-                    && bytes
-                        .get(start - 1)
-                        .is_some_and(|byte| is_ident_byte(*byte))
-                {
-                    start -= 1;
-                }
-                let mut end = cursor + 4;
-                while bytes.get(end).is_some_and(|byte| is_ident_byte(*byte)) {
-                    end += 1;
-                }
-                let original = statement.get(start..cursor).unwrap_or("");
-                let renamed = statement.get(cursor + 4..end).unwrap_or("");
-                if original == "until" {
-                    aliases.until.insert(renamed.to_owned());
-                }
-                if SUB_CALLS.contains(&original) {
-                    aliases.subscribe.insert(renamed.to_owned());
-                }
-                if original == "send" {
-                    aliases.send.insert(renamed.to_owned());
-                }
-                cursor = end;
-            } else {
-                cursor += 1;
+        // Each `ORIG as NAME` pair, left to right: the scan walks with
+        // iterators, since a hand-stepped cursor spins forever under a
+        // stepping mutant (`docs/testing/mutants.md`, "Proving a test
+        // bites").
+        for (cursor, _) in statement.match_indices(" as ") {
+            let start = bytes
+                .get(..cursor)
+                .and_then(|head| head.iter().rposition(|byte| !is_ident_byte(*byte)))
+                .map_or(0, |i| i + 1);
+            let end = cursor
+                + 4
+                + bytes.get(cursor + 4..).map_or(0, |tail| {
+                    tail.iter().take_while(|b| is_ident_byte(**b)).count()
+                });
+            let original = statement.get(start..cursor).unwrap_or("");
+            let renamed = statement.get(cursor + 4..end).unwrap_or("");
+            if original == "until" {
+                aliases.until.insert(renamed.to_owned());
+            }
+            if SUB_CALLS.contains(&original) {
+                aliases.subscribe.insert(renamed.to_owned());
+            }
+            if original == "send" {
+                aliases.send.insert(renamed.to_owned());
             }
         }
         statement.clear();
@@ -590,16 +613,28 @@ fn use_aliases(lines: &[&str]) -> Aliases {
 /// argument: the connection a subscribe sends on or a wait reads.
 fn socket_of_call(line: &str, at: usize, needle_len: usize) -> String {
     let bytes = line.as_bytes();
-    let mut cursor = at;
-    while cursor > 0 && matches!(bytes.get(cursor - 1), Some(b' ') | Some(b'\t')) {
-        cursor -= 1;
-    }
-    if cursor > 0 && bytes.get(cursor - 1) == Some(&b'.') {
-        let mut end = cursor - 1;
-        while end > 0 && !matches!(bytes.get(end - 1), Some(b' ' | b'\t' | b';' | b'(' | b',')) {
-            end -= 1;
-        }
-        return strip_borrow(line.get(end..cursor - 1).unwrap_or(""));
+    // The receiver just before the call, past any blanks: hand-stepped
+    // walks back spin forever under stepping mutants, so this slices
+    // with iterators instead (`docs/testing/mutants.md`, "Proving a test
+    // bites").
+    let blanks = bytes.get(..at).map_or(0, |head| {
+        head.iter()
+            .rev()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count()
+    });
+    let head = bytes.get(..at.saturating_sub(blanks)).unwrap_or(&[]);
+    if head.last() == Some(&b'.') {
+        let core = head.get(..head.len().saturating_sub(1)).unwrap_or(&[]);
+        let start = core
+            .iter()
+            .rposition(|byte| matches!(byte, b' ' | b'\t' | b';' | b'(' | b','))
+            .map_or(0, |i| i + 1);
+        return strip_borrow(
+            core.get(start..)
+                .and_then(|suffix| std::str::from_utf8(suffix).ok())
+                .unwrap_or(""),
+        );
     }
     strip_borrow(&first_argument(line, at, needle_len))
 }
@@ -607,84 +642,89 @@ fn socket_of_call(line: &str, at: usize, needle_len: usize) -> String {
 /// The callee's first argument: the text up to the top-level `,` or
 /// `)`, without nesting, strings, raw strings or character literals.
 fn first_argument(line: &str, at: usize, needle_len: usize) -> String {
-    let bytes = line.as_bytes();
-    let mut cursor = at + needle_len;
-    while matches!(bytes.get(cursor), Some(b' ') | Some(b'\t')) {
-        cursor += 1;
-    }
-    if bytes.get(cursor) != Some(&b'(') {
+    let rest = line.get(at + needle_len..).unwrap_or("");
+    let trimmed = rest.trim_start_matches([' ', '\t']);
+    if !trimmed.starts_with('(') {
         return String::new();
     }
-    first_argument_from(line, cursor + 1)
+    first_argument_from(line, line.len() - trimmed.len() + 1)
 }
 
 /// The first argument starting just past `(` at `start` in `text`: the
 /// scan crosses lines, so a call region's first argument reads even when
-/// the call spans lines.
+/// the call spans lines. Each step consumes input, and balance counts
+/// opens against closes, so a stepping mutant fails fast instead of
+/// spinning (`docs/testing/mutants.md`, "Proving a test bites").
 fn first_argument_from(text: &str, start: usize) -> String {
-    let bytes = text.as_bytes();
-    let mut cursor = start;
-    let mut depth = 0;
+    let mut rest = text.get(start..).unwrap_or("");
+    let initial = rest.len();
+    let mut opens = 0;
+    let mut closes = 0;
     let mut instr: Option<u8> = None;
     let mut raw_hashes: Option<usize> = None;
-    while let Some(byte) = bytes.get(cursor) {
+    // At most one step per byte: a stalled step spins forever under a
+    // stepping mutant, so the loop is fuel-bounded instead
+    // (`docs/testing/mutants.md`, "Proving a test bites").
+    for _ in 0..=initial {
+        let Some(&byte) = rest.as_bytes().first() else {
+            break;
+        };
+        let mut advance = 1;
         if instr.is_some() {
             if raw_hashes.is_some() {
                 let hashes = raw_hashes.unwrap_or(0);
-                if *byte == b'"' {
-                    let mut ok = true;
-                    for h in 0..hashes {
-                        if bytes.get(cursor + 1 + h) != Some(&b'#') {
-                            ok = false;
-                            break;
-                        }
-                    }
-                    if ok {
-                        instr = None;
-                        raw_hashes = None;
-                        cursor += hashes;
-                    }
+                // The verified `#`s are inert: consuming them one by one
+                // reaches the same state as skipping them, so the close
+                // takes no count to mutate here.
+                if byte == b'"' && (0..hashes).all(|h| rest.as_bytes().get(1 + h) == Some(&b'#')) {
+                    instr = None;
+                    raw_hashes = None;
                 }
-            } else if *byte == b'\\' {
-                cursor += 1;
-            } else if Some(*byte) == instr {
+            } else if byte == b'\\' {
+                advance = 2;
+            } else if Some(byte) == instr {
                 instr = None;
             }
-        } else if *byte == b'"' {
+        } else if byte == b'"' {
             instr = Some(b'"');
-        } else if *byte == b'\'' {
-            let rest = bytes.get(cursor..).unwrap_or(&[]);
+        } else if byte == b'\'' {
+            let tail = rest.as_bytes();
             let escaped =
-                rest.len() >= 4 && rest.get(1) == Some(&b'\\') && rest.get(3) == Some(&b'\'');
-            let plain = rest.len() >= 3 && rest.get(2) == Some(&b'\'');
+                tail.len() >= 4 && tail.get(1) == Some(&b'\\') && tail.get(3) == Some(&b'\'');
+            let plain = tail.len() >= 3 && tail.get(2) == Some(&b'\'');
             if escaped {
-                cursor += 3;
+                advance = 4;
             } else if plain {
-                cursor += 2;
+                advance = 3;
             }
-        } else if *byte == b'r' && matches!(bytes.get(cursor + 1), Some(b'"') | Some(b'#')) {
-            let mut hashes = 0;
-            while bytes.get(cursor + 1 + hashes) == Some(&b'#') {
-                hashes += 1;
-            }
-            if bytes.get(cursor + 1 + hashes) == Some(&b'"') {
+        } else if byte == b'r' && matches!(rest.as_bytes().get(1), Some(b'"') | Some(b'#')) {
+            let hashes = rest
+                .as_bytes()
+                .get(1..)
+                .map_or(0, |tail| tail.iter().take_while(|&&b| b == b'#').count());
+            if rest.as_bytes().get(1 + hashes) == Some(&b'"') {
                 instr = Some(b'r');
                 raw_hashes = Some(hashes);
-                cursor += hashes + 1;
+                advance = hashes + 2;
             }
-        } else if *byte == b'(' || *byte == b'[' || *byte == b'{' {
-            depth += 1;
-        } else if *byte == b')' || *byte == b']' || *byte == b'}' {
-            if depth == 0 {
+        } else if byte == b'(' || byte == b'[' || byte == b'{' {
+            opens += 1;
+        } else if byte == b')' || byte == b']' || byte == b'}' {
+            if opens == closes {
                 break;
             }
-            depth -= 1;
-        } else if *byte == b',' && depth == 0 {
+            closes += 1;
+        } else if byte == b',' && opens == closes {
             break;
         }
-        cursor += 1;
+        rest = match rest.get(advance..) {
+            Some(next) => next,
+            None => return String::new(),
+        };
     }
-    text.get(start..cursor).unwrap_or("").to_owned()
+    text.get(start..start + (initial - rest.len()))
+        .unwrap_or("")
+        .to_owned()
 }
 
 /// The first argument of a call region, which starts at its `(`.
@@ -724,18 +764,15 @@ fn wire_socket(lines: &[&str], line_no: usize) -> Option<String> {
             }
         }
     }
-    let mut floor = 0;
-    for (no, text) in lines.iter().enumerate() {
-        if no > line_no {
-            break;
-        }
-        if is_top_fn_def(text) {
-            floor = no;
-        }
-    }
-    let mut above = line_no;
-    while above > floor && line_no - above < 16 {
-        above -= 1;
+    // The enclosing top-level definition: the last one at or above the
+    // line. A hand-stepped search spins forever under a stepping mutant,
+    // so this walks with iterators instead (`docs/testing/mutants.md`,
+    // "Proving a test bites").
+    let floor = lines
+        .get(..line_no)
+        .and_then(|head| head.iter().rposition(|line| is_top_fn_def(line)))
+        .unwrap_or(0);
+    for above in (floor..line_no).rev().take(16) {
         let Some(candidate) = lines.get(above) else {
             break;
         };
@@ -765,7 +802,7 @@ fn wire_socket(lines: &[&str], line_no: usize) -> Option<String> {
 fn reset_lines(lines: &[&str]) -> Vec<usize> {
     let mut resets = Vec::new();
     for (line_no, line) in lines.iter().enumerate() {
-        if line.trim_start().starts_with("//") || is_use_line(line) || fn_name(line).is_some() {
+        if !is_executable_line(line) {
             continue;
         }
         for at in ident_ats(line, "start_session") {
@@ -794,11 +831,12 @@ fn reset_lines(lines: &[&str]) -> Vec<usize> {
 /// The event kinds a `line["kind"] == "..."` predicate names.
 fn wait_kinds(region: &str) -> Vec<String> {
     let mut kinds = Vec::new();
-    let mut cursor = 0;
-    while let Some(found) = region[cursor..].find("\"kind\"]") {
-        let mut rest = region
-            .get(cursor + found + "\"kind\"]".len()..)
-            .unwrap_or("");
+    // Every `"kind"]` match, left to right: the scan walks with an
+    // iterator, since a hand-stepped cursor spins forever under a
+    // stepping mutant (`docs/testing/mutants.md`, "Proving a test
+    // bites").
+    for (found, _) in region.match_indices("\"kind\"]") {
+        let mut rest = region.get(found + "\"kind\"]".len()..).unwrap_or("");
         rest = rest.trim_start_matches([' ', '\t', '\n']);
         if let Some(after_eq) = rest.strip_prefix("==") {
             rest = after_eq.trim_start_matches([' ', '\t', '\n']);
@@ -814,7 +852,6 @@ fn wait_kinds(region: &str) -> Vec<String> {
                 }
             }
         }
-        cursor += found + 1;
     }
     kinds
 }
@@ -824,33 +861,28 @@ fn wait_kinds(region: &str) -> Vec<String> {
 /// inside that helper.
 fn delegates_match(region: &str) -> bool {
     let bytes = region.as_bytes();
-    let mut cursor = 0;
-    while cursor < bytes.len() {
-        if bytes.get(cursor) != Some(&b'(') {
-            cursor += 1;
-            continue;
-        }
-        let mut start = cursor;
-        while start > 0
-            && bytes
-                .get(start - 1)
-                .is_some_and(|byte| is_ident_byte(*byte))
-        {
-            start -= 1;
-        }
-        let name = region.get(start..cursor).unwrap_or("");
+    // Every call, left to right: the scan walks with iterators, since a
+    // hand-stepped cursor spins forever under a stepping mutant
+    // (`docs/testing/mutants.md`, "Proving a test bites").
+    for (open, _) in region.match_indices('(') {
+        let start = bytes
+            .get(..open)
+            .and_then(|head| head.iter().rposition(|byte| !is_ident_byte(*byte)))
+            .map_or(0, |i| i + 1);
+        let name = region.get(start..open).unwrap_or("");
         if name.is_empty() || OPAQUE_EXCEPTIONS.contains(&name) {
-            cursor += 1;
             continue;
         }
         if matches!(bytes.get(start.wrapping_sub(1)), Some(b'.') | Some(b':')) {
-            cursor += 1;
             continue;
         }
-        let mut after = cursor + 1;
-        while matches!(bytes.get(after), Some(b' ') | Some(b'\t') | Some(b'\n')) {
-            after += 1;
-        }
+        let after = open
+            + 1
+            + bytes.get(open + 1..).map_or(0, |tail| {
+                tail.iter()
+                    .take_while(|b| matches!(**b, b' ' | b'\t' | b'\n'))
+                    .count()
+            });
         if region.get(after..).is_some_and(|rest| {
             rest.starts_with("line")
                 && rest
@@ -860,7 +892,6 @@ fn delegates_match(region: &str) -> bool {
         }) {
             return true;
         }
-        cursor += 1;
     }
     false
 }
@@ -907,7 +938,7 @@ fn is_drain(lines: &[&str], line_no: usize, aliases: &Aliases, expected_socket: 
     let Some(line) = lines.get(line_no) else {
         return false;
     };
-    if line.trim_start().starts_with("//") || is_use_line(line) || fn_name(line).is_some() {
+    if !is_executable_line(line) {
         return false;
     }
     let mut waited: Option<(usize, &str, usize)> = None;
@@ -978,6 +1009,31 @@ fn drain_socket(line: &str, region: &str, at: usize, needle_len: usize) -> Strin
     strip_borrow(&region_first_argument(region))
 }
 
+/// Strict line order: a subscribe never shares its wait's line, since
+/// the replay point and the action must both sit strictly between the
+/// two, and it never shares its action's line either, since each line
+/// holds one shape point at most (a subscribe line returns before the
+/// action scan). The `<=` variant therefore counts exactly the same
+/// pairs, and no test can tell them apart; it takes this exemption
+/// instead (`docs/testing/mutants.md`, "Proving a test bites"). The
+/// `==` and `>` variants break valid pairs, and the shape tests pin
+/// those.
+#[cfg_attr(false, mutants::skip)]
+fn is_before_strict(before: usize, after: usize) -> bool {
+    before < after
+}
+
+/// Executable flow, not scaffolding: a comment, a `use` line or a
+/// function definition never replays, resets or drains anything. No
+/// line is all three at once, so the `&&` forms below accept nothing
+/// and no test can tell them apart; they take this exemption instead
+/// (`docs/testing/mutants.md`, "Proving a test bites"). The `||`
+/// forms accept scaffolding as flow, and the shape tests pin those.
+#[cfg_attr(false, mutants::skip)]
+fn is_executable_line(line: &str) -> bool {
+    !(line.trim_start().starts_with("//") || is_use_line(line) || fn_name(line).is_some())
+}
+
 /// One stale wait per unbounded `until` in the admitted shape: a
 /// subscribe on the same connection before it, a replay point and the
 /// test's action between them, and no same-connection drain from the
@@ -1000,7 +1056,7 @@ fn count_shape(source: &str) -> usize {
         // Replay exposure comes from executable flow: a resumed, reopened
         // or rewound session the test runs. A comment naming one, a `use`
         // line or a function definition never replays anything.
-        if line.trim_start().starts_with("//") || is_use_line(line) || fn_name(line).is_some() {
+        if !is_executable_line(line) {
             continue;
         }
         if line.contains("resum") || line.contains("reopen") || line.contains("rewind") {
@@ -1108,7 +1164,7 @@ fn count_shape(source: &str) -> usize {
         }
         let mut counted = false;
         for subscribe in subscribes.iter().copied() {
-            if !(subscribe < wait_line) {
+            if !is_before_strict(subscribe, wait_line) {
                 continue;
             }
             if sockets.get(&subscribe).is_none_or(|known| *known != socket) {
@@ -1130,7 +1186,7 @@ fn count_shape(source: &str) -> usize {
             };
             if !actions
                 .iter()
-                .any(|action| subscribe < *action && *action < wait_line)
+                .any(|action| is_before_strict(subscribe, *action) && *action < wait_line)
             {
                 continue;
             }

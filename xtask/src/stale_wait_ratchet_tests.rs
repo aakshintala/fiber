@@ -555,3 +555,446 @@ fn shape_definitions_and_imports_establish_no_replay() {
         assert_eq!(count_stale(source), 0, "{what}");
     }
 }
+
+#[test]
+fn word_edges_span_scripts() {
+    // A multibyte letter counts beside the needle in any script; a stray
+    // continuation byte, a past-end index or a non-word byte never does.
+    assert!(is_word_at("αrecv".as_bytes(), 0));
+    assert!(is_word_at(&[0xE1, 0x80, 0x80], 1));
+    assert!(!is_word_at(b"\x80", 0));
+    assert!(!is_word_at(b"a", 1));
+    assert!(!is_word_at(b"a b", 1));
+    assert!(is_word_at(b"_", 0));
+    assert!(is_word_at(b"9", 0));
+    assert!(!is_word_at("…x".as_bytes(), 0));
+    // A trailing invalid byte never promotes an ASCII letter, and a
+    // continuation byte still asks the lead covering it.
+    assert!(is_word_at(b"A\xff", 0));
+    assert!(is_word_at("\u{400}".as_bytes(), 1));
+}
+
+#[test]
+fn identifier_starts_need_word_edges() {
+    // A match counts only between non-identifier bytes; a longer name on
+    // either side never counts.
+    assert_eq!(ident_ats("until(&client", "until"), vec![0]);
+    assert_eq!(ident_ats("xuntil(&client", "until"), Vec::<usize>::new());
+    assert_eq!(ident_ats("untilx(&client", "until"), Vec::<usize>::new());
+    assert_eq!(ident_ats("a until b until", "until"), vec![2, 10]);
+}
+
+#[test]
+fn function_names_parse_through_qualifiers() {
+    // An optional `pub(...)`, `pub`, `async` or indent prefix still names
+    // the function, while a keyword glued to an identifier never does.
+    assert_eq!(fn_name("fn flow(client: &Socket) {"), Some("flow"));
+    assert_eq!(fn_name("    fn indented() {}"), Some("indented"));
+    assert_eq!(fn_name("pub(crate) fn q() {}"), Some("q"));
+    assert_eq!(fn_name("pub fn p() {}"), Some("p"));
+    assert_eq!(fn_name("async fn a() {}"), Some("a"));
+    assert_eq!(fn_name("pubfn f() {}"), None);
+    assert_eq!(fn_name("fnx foo()"), None);
+    assert_eq!(fn_name("fn9()"), None);
+    assert_eq!(fn_name("let x = 1;"), None);
+}
+
+#[test]
+fn top_level_definitions_need_no_indent() {
+    // Only an unindented definition opens a top-level function; an
+    // indented one or a non-definition line never does.
+    assert!(is_top_fn_def("fn f() {}"));
+    assert!(!is_top_fn_def("    fn f() {}"));
+    assert!(!is_top_fn_def("let x = 1;"));
+}
+
+#[test]
+fn use_lines_name_their_keyword() {
+    // Both `use` spellings count, even indented; anything else never does.
+    assert!(is_use_line("use support::x;"));
+    assert!(is_use_line("    use support::x;"));
+    assert!(is_use_line("pub use a::b;"));
+    assert!(!is_use_line("fn f() {}"));
+    assert!(!is_use_line("usex;"));
+    assert!(!is_use_line("// use a;"));
+}
+
+#[test]
+fn first_arguments_stop_at_top_level() {
+    // The argument ends at the first top-level comma or closer; nesting,
+    // strings, raw strings and characters never end it early.
+    assert_eq!(first_argument_from("&client, \"w\"", 0), "&client");
+    assert_eq!(first_argument_from("&client)", 0), "&client");
+    assert_eq!(first_argument_from("f(a, b), c)", 0), "f(a, b)");
+    assert_eq!(first_argument_from("\"a)b\", c)", 0), "\"a)b\"");
+    assert_eq!(first_argument_from("r#\"a)b\"#, c)", 0), "r#\"a)b\"#");
+    assert_eq!(first_argument_from("r#\"a\"b\"#, c)", 0), "r#\"a\"b\"#");
+    assert_eq!(first_argument_from("r\"a(b\", c)", 0), "r\"a(b\"");
+    assert_eq!(first_argument_from("r##\"a)b\"##, c)", 0), "r##\"a)b\"##");
+    assert_eq!(first_argument_from("r#\"a##b\"#, c)", 0), "r#\"a##b\"#");
+    assert_eq!(first_argument_from("'(', c)", 0), "'('");
+    assert_eq!(first_argument_from("'\\', c)", 0), "'\\'");
+    assert_eq!(first_argument_from("&client", 0), "&client");
+    assert_eq!(first_argument_from("", 0), "");
+    assert_eq!(first_argument("until   (&client)", 0, 5), "&client");
+    assert_eq!(first_argument("until &client)", 0, 5), "");
+    assert_eq!(region_first_argument("(&client, x)"), "&client");
+    assert_eq!(region_first_argument(""), "");
+}
+
+#[test]
+fn borrows_strip_to_the_stream() {
+    // Receivers shed `&`, `&mut` and padding, so kind-matched waits and
+    // sends compare the same stream name.
+    assert_eq!(strip_borrow("&client"), "client");
+    assert_eq!(strip_borrow("&&mut client"), "client");
+    assert_eq!(strip_borrow("  &mut  client  "), "client");
+    assert_eq!(strip_borrow("client"), "client");
+    assert_eq!(strip_borrow(""), "");
+}
+
+#[test]
+fn sockets_read_receivers_then_first_arguments() {
+    // A method call names its receiver; a helper call names its first
+    // argument with borrows stripped.
+    assert_eq!(socket_of_call("    client.send(x)", 11, 4), "client");
+    assert_eq!(socket_of_call("    client. send(x)", 12, 4), "client");
+    // A separator directly against the receiver still ends the run of
+    // blanks: the name starts past it.
+    assert_eq!(socket_of_call("(client.send(x)", 8, 4), "client");
+    assert_eq!(socket_of_call("    until(&client, \"w\")", 4, 5), "client");
+    assert_eq!(
+        socket_of_call("    until(&mut client, \"w\")", 4, 5),
+        "client"
+    );
+    assert_eq!(socket_of_call(".send(x)", 1, 4), "");
+}
+
+#[test]
+fn regions_span_the_balanced_group() {
+    // A single-line call stays on its line; a spanning call joins its
+    // lines, and a call without a paren yields nothing.
+    assert_eq!(
+        call_region(&["    until(&client, \"w\", |line| true);"], 0, 4),
+        "(&client, \"w\", |line| true)"
+    );
+    assert_eq!(
+        call_region(
+            &[
+                "    support::until(",
+                "        &client,",
+                "        \"w\",",
+                "    );"
+            ],
+            0,
+            13
+        ),
+        "(\n        &client,\n        \"w\",\n    )"
+    );
+    // A closer before the call never moves the scan: the region still
+    // starts at the call's own paren.
+    assert_eq!(call_region(&["f(x) + g(y)"], 0, 7), "(y)");
+    assert_eq!(call_region(&["    until &client;"], 0, 4), "");
+    assert_eq!(call_region(&["no call here"], 0, 0), "");
+}
+
+#[test]
+fn bodies_collect_helper_sends() {
+    // Back-to-back helpers each keep their exact body, a one-line body
+    // counts whole, and a helper after a blank line is a body too; a
+    // nested definition inside a body never becomes one, and lines
+    // outside any body never count.
+    let lines = [
+        "fn a() {",
+        "    client.send(\"x\");",
+        "    fn nested() {}",
+        "}",
+        "fn b() {",
+        "    client.send(\"y\");",
+        "}",
+        "",
+        "fn c() { client.send(\"z\"); }",
+        "let x = 1;",
+    ];
+    let bodies = fn_bodies(&lines);
+    assert_eq!(
+        bodies.get("a").map(String::as_str),
+        Some("fn a() {\n    client.send(\"x\");\n    fn nested() {}\n}\n")
+    );
+    assert_eq!(
+        bodies.get("b").map(String::as_str),
+        Some("fn b() {\n    client.send(\"y\");\n}\n")
+    );
+    assert_eq!(
+        bodies.get("c").map(String::as_str),
+        Some("fn c() { client.send(\"z\"); }\n")
+    );
+    assert_eq!(bodies.get("nested"), None);
+    assert_eq!(bodies.get("x"), None);
+    // An unclosed body swallows a trailing definition: with no closing
+    // line the scan never resumes past the fallthrough line.
+    let open = ["fn a() {", "    client.send(\"x\");", "fn b() {"];
+    let open_bodies = fn_bodies(&open);
+    assert!(open_bodies.get("a").is_some());
+    assert_eq!(open_bodies.get("b"), None);
+}
+
+#[test]
+fn kinds_come_from_kind_predicates() {
+    // Only `line["kind"] == "..."` predicates name kinds, in order.
+    let region = "(&client, \"w\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });";
+    assert_eq!(wait_kinds(region), vec!["turn_completed".to_owned()]);
+    let two = "(&client, \"w\", |line| line[\"kind\"] == \"a\" || line[\"kind\"] == \"b\")";
+    assert_eq!(wait_kinds(two), vec!["a".to_owned(), "b".to_owned()]);
+    assert_eq!(wait_kinds("(&client)"), Vec::<String>::new());
+    // An empty kind never counts, even with its closing quote present.
+    let empty = "(&client, \"w\", |line| line[\"kind\"] == \"\")";
+    assert_eq!(wait_kinds(empty), Vec::<String>::new());
+}
+
+#[test]
+fn delegation_needs_a_line_taking_helper() {
+    // A helper call taking `line` delegates; a bare predicate, a quoted
+    // "line", an opaque helper, a method call or a missing `line` never
+    // does.
+    assert!(delegates_match("(is_session(line, &session))"));
+    assert!(delegates_match("(is_session( line, &session))"));
+    assert!(!delegates_match("(line[\"kind\"] == \"x\")"));
+    assert!(!delegates_match("(\"line\")"));
+    assert!(!delegates_match("(helper(noline))"));
+    assert!(!delegates_match("(if(line))"));
+    assert!(!delegates_match("(client.is_session(line))"));
+}
+
+#[test]
+fn wire_sockets_resolve_through_the_enclosing_send() {
+    // A same-line sender wins; otherwise the enclosing top-level send
+    // above the wire line names the socket, and a send in another
+    // function never does.
+    let direct = ["    client.send(&format!(\"subscribe {}\"));"];
+    assert_eq!(wire_socket(&direct, 0), Some("client".to_owned()));
+    let covered = [
+        "fn flow(client: &Socket, session: &str) {",
+        "    client.send(&format!(\"{{\\\"id\\\":\\\"c_sub\\\"\",",
+        "        \"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"subscribe\\\"}}));",
+        "}",
+    ];
+    assert_eq!(wire_socket(&covered, 2), Some("client".to_owned()));
+    let bare = [
+        "fn helper(control: &Socket) {",
+        "    control.send(&format!(\"x\"));",
+        "}",
+        "fn flow(client: &Socket, session: &str) {",
+        "    let payload = String::from(\"{\\\"command\\\":\\\"subscribe\\\"}\");",
+        "}",
+    ];
+    assert_eq!(wire_socket(&bare, 4), None);
+    // A comment naming a send never resolves the socket: the walk skips
+    // it and keeps the enclosing send above it.
+    let commented = [
+        "fn flow(client: &Socket, session: &str) {",
+        "    client.send(&format!(\"{{\\\"id\\\":\\\"c_sub\\\",",
+        "    // client.send(\"old\");",
+        "        \"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"subscribe\\\"}}));",
+    ];
+    assert_eq!(wire_socket(&commented, 3), Some("client".to_owned()));
+    // A wire line strictly inside the send region resolves too: the
+    // cover only needs to reach it, not end on it.
+    let inside = [
+        "fn flow(client: &Socket, session: &str) {",
+        "    client.send(&format!(\"{{}}\",",
+        "        \"session_id {session} command subscribe\",",
+        "        \"extra arg\"));",
+    ];
+    assert_eq!(wire_socket(&inside, 2), Some("client".to_owned()));
+}
+
+#[test]
+fn group_ends_span_lines_and_kinds() {
+    // Every bracket kind opens depth, and the scan stops 200 lines past
+    // its start when nothing closes the group.
+    assert_eq!(scan_group_end(&["f(a, b)"], 0, 1, false), (0, 6));
+    assert_eq!(scan_group_end(&["f(a, [b, {c}])"], 0, 1, false), (0, 13));
+    // A closer with depth still open never ends the scan, at any depth.
+    assert_eq!(scan_group_end(&["f((x))"], 0, 1, false), (0, 5));
+    assert_eq!(scan_group_end(&["f((x)", "y))"], 0, 1, false), (1, 1));
+    let open: Vec<&str> = vec!["f("];
+    let mut tall = open;
+    tall.extend(std::iter::repeat_n("(", 201));
+    assert_eq!(scan_group_end(&tall, 0, 1, false), (tall.len() - 1, 0));
+}
+
+#[test]
+fn group_comments_hide_brackets() {
+    // A block comment hides brackets until its closer; a line comment
+    // ends the scan of its line.
+    assert_eq!(scan_group_end(&["/* ( */ ( )"], 0, 0, false), (0, 10));
+    assert_eq!(scan_group_end(&["/* * x */ ( )"], 0, 0, false), (0, 12));
+    assert_eq!(scan_group_end(&["/*x*//(Y)"], 0, 0, false), (0, 8));
+    assert_eq!(scan_group_end(&["f(a // )", "b)"], 0, 1, false), (1, 1));
+    assert_eq!(scan_group_end(&["f(a/b)"], 0, 1, false), (0, 5));
+}
+
+#[test]
+fn group_strings_hide_brackets() {
+    // A quoted, raw or byte string hides brackets; only the raw closer
+    // with its hashes ends a raw string.
+    assert_eq!(scan_group_end(&["f(\"a)b\", c)"], 0, 1, false), (0, 10));
+    assert_eq!(scan_group_end(&["f(r#\"a)b\"#, c)"], 0, 1, false), (0, 13));
+    assert_eq!(scan_group_end(&["f(r#\"a\"b\"#, c)"], 0, 1, false), (0, 13));
+    // Content starting with the closer's hashes never ends the raw
+    // string early: the opener skips its quote and hashes together.
+    assert_eq!(scan_group_end(&["f(r#\"#x\"#, y)"], 0, 1, false), (0, 12));
+    assert_eq!(scan_group_end(&["f(b\"a)b\", c)"], 0, 1, false), (0, 11));
+    // An escaped quote never closes the string: the group runs past it
+    // to the end of the line.
+    assert_eq!(scan_group_end(&["f(\"a\\\\\"b\", c)"], 0, 1, false), (0, 0));
+    // A double-hash raw string closes only on its own quote.
+    assert_eq!(scan_group_end(&["f(r##\"a\"##, c)"], 0, 1, false), (0, 13));
+}
+
+#[test]
+fn group_chars_hide_brackets() {
+    // A plain or escaped character hides its bracket; a lone quote is
+    // no character at all.
+    assert_eq!(scan_group_end(&["f('(', c)"], 0, 1, false), (0, 8));
+    assert_eq!(scan_group_end(&["f('\\', c)"], 0, 1, false), (0, 8));
+    assert_eq!(scan_group_end(&["f(')"], 0, 1, false), (0, 3));
+    // A quote glued to an identifier is no character, so the bracket
+    // after it still opens depth and the group never closes.
+    assert_eq!(scan_group_end(&["f('x(', c)"], 0, 1, false), (0, 0));
+    // A character past the first columns still skips exactly itself: a
+    // wider jump would land past the bracket it hides.
+    assert_eq!(scan_group_end(&["abc('x'(, c)"], 0, 3, false), (0, 0));
+}
+
+#[test]
+fn group_closers_need_an_opener() {
+    // A closer with no opener and no start never ends the scan; the
+    // search falls off the end instead.
+    assert_eq!(scan_group_end(&[")", "x"], 0, 0, false), (1, 0));
+    assert_eq!(scan_group_end(&["]", "x"], 0, 0, false), (1, 0));
+    assert_eq!(scan_group_end(&["}", "x"], 0, 0, false), (1, 0));
+    assert_eq!(scan_group_end(&["(", "x)"], 0, 0, false), (1, 1));
+    assert_eq!(scan_group_end(&["[", "x]"], 0, 0, false), (1, 1));
+    assert_eq!(scan_group_end(&["fn f() {", "}"], 0, 0, true), (1, 1));
+}
+
+#[test]
+fn group_block_comments_hide_brackets() {
+    // A block comment hides brackets while it runs; the closer after it
+    // still ends the group. A group that never closes falls off the end
+    // instead of hanging the scan.
+    assert_eq!(scan_group_end(&["f(/*(*/ x)"], 0, 1, false), (0, 9));
+    assert_eq!(scan_group_end(&["f(x"], 0, 1, false), (0, 0));
+    // Adjacent block comments chain: the closer's slash never opens the
+    // next one, and an unclosed comment hides the closer for good.
+    assert_eq!(scan_group_end(&["/**//**/ ( )"], 0, 0, false), (0, 11));
+    assert_eq!(scan_group_end(&["f(/*/ )"], 0, 0, false), (0, 0));
+}
+
+#[test]
+fn drains_read_command_markers() {
+    // A wait naming a command marker drains the same socket's replay,
+    // with either marker spelling; a wait naming neither never does.
+    let waited = "    until(&client, \"w\", |line| line[\"command_id\"] == cid);";
+    assert!(is_drain(&[waited], 0, &Aliases::default(), "client"));
+    let accepted = "    until(&client, \"w\", |line| line[\"command_accepted\"]);";
+    assert!(is_drain(&[accepted], 0, &Aliases::default(), "client"));
+    let plain = "    until(&client, \"w\", |line| line[\"kind\"] == \"turn_completed\");";
+    assert!(!is_drain(&[plain], 0, &Aliases::default(), "client"));
+}
+
+#[test]
+fn resets_find_fresh_starts() {
+    // A fresh helper start and the wire `start` command both reset the
+    // session; a `--resume` start never does.
+    let lines = [
+        "fn flow(client: &Socket, session: &str) {",
+        "    start_session(\"fresh\");",
+        "    start_session(\"old --resume\");",
+        "    client.send(&format!(\"{{\\\"command\\\":\\\"start\\\"}}\"));",
+    ];
+    assert_eq!(reset_lines(&lines), vec![1, 3]);
+}
+
+#[test]
+fn aliases_rename_each_flow_call() {
+    // Every `ORIG as NAME` pair lands in its own set, wherever it sits
+    // in the statement; a statement without `as` renames nothing.
+    let lines = [
+        "use support::{until as wait_until, subscribe as sub};",
+        "use support::send as emit;",
+        "use support::{x, y};",
+    ];
+    let aliases = use_aliases(&lines);
+    assert_eq!(
+        aliases.until,
+        std::collections::BTreeSet::from(["wait_until".to_owned()])
+    );
+    assert_eq!(
+        aliases.subscribe,
+        std::collections::BTreeSet::from(["sub".to_owned()])
+    );
+    assert_eq!(
+        aliases.send,
+        std::collections::BTreeSet::from(["emit".to_owned()])
+    );
+}
+
+#[test]
+fn shape_reset_on_and_before_subscribe_passes() {
+    // A reset on the subscribe line itself is a fresh start on that
+    // same line, not a boundary before it, and a reset further above
+    // predates the subscribe: neither breaks the chain, so the wait
+    // still counts. Dropping either side of the guard would skip it.
+    let source = "fn flow(client: &Socket, session: &str) {\n    start_session(\"s0\");\n    start_session(\"s1\"); subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_rew\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"rewind\\\"}}\"));\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\"}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 1, "resets around the subscribe");
+}
+
+#[test]
+fn shape_action_before_subscribe_passes() {
+    // An action before the subscribe is outside the pair: the later
+    // action still completes it, so the wait still counts. Only an
+    // action strictly between the legs completes it.
+    let source = "fn flow(client: &Socket, session: &str) {\n    client.send(&format!(\"early\"));\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_rew\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"rewind\\\"}}\"));\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\"}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 1, "early action");
+}
+
+#[test]
+fn shape_only_early_action_passes() {
+    // With the only action before the subscribe, no action sits between
+    // the legs, so the wait never counts. Treating any action anywhere
+    // as completing the pair would count it: the replay leg here runs
+    // through a helper call, never a send.
+    let source = "fn flow(client: &Socket, session: &str) {\n    client.send(&format!(\"early\"));\n    support::subscribe(&client, &session);\n    let _ = rewind(&client);\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 0, "only an early action");
+}
+
+#[test]
+fn shape_level_tagged_subscribe_counts() {
+    // The summary exclusion needs both words: a subscribe tagged only
+    // with a level still subscribes, so the wait still counts.
+    // Loosening the guard to either word would skip it.
+    let source = "fn flow(client: &Socket, session: &str) {\n    subscribe_line(&client, \"level\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_rew\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"rewind\\\"}}\"));\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\"}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 1, "level-tagged subscribe");
+}
+
+#[test]
+fn shape_reopen_observing_wait_on_same_socket_counts() {
+    // A wait that also observes the reopened stream still waits on the
+    // replay: only a drain strictly before it breaks the chain, so it
+    // counts. Extending the drain scan onto the wait itself would find
+    // the wait's own reopen marker and skip it.
+    let source = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_rew\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"rewind\\\"}}\"));\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\"}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\" && stream_reopened\n    });\n}\n";
+    assert_eq!(count_stale(source), 1, "same-socket reopen-observing wait");
+}
+
+#[test]
+fn shape_wire_start_between_passes() {
+    // The wire `start` command between the legs breaks the chain like a
+    // fresh helper start: the later wait is on a session with no
+    // pre-subscribe history.
+    let source = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_rew\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"rewind\\\"}}\"));\n    client.send(&format!(\"{{\\\"command\\\":\\\"start\\\"}}\"));\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\"}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 0, "wire start between the legs");
+}
