@@ -80,3 +80,5 @@ crates/log/src/scan.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus
 crates/log/src/lib.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/log/src/scan_tests.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/support/src/group.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/stale_wait_ratchet.rs	fiber-4102	plan	2026-11-05T09:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/stale_wait_ratchet_tests.rs	fiber-4102	plan	2026-11-05T09:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
