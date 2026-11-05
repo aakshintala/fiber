@@ -11,6 +11,7 @@
 use std::fs;
 
 use contract::Seq;
+use contract::events::EventKind;
 use serde_json::{Value, json};
 
 use super::*;
@@ -299,13 +300,20 @@ fn lines_holds_the_point_and_nothing_past_it() {
     let (_home, dir) = chain_fixture("window");
     let root = dir.parent().unwrap().join("s_aaaaaaaaaaaaaaaa");
     let segments = history_to(&root, Seq(2)).unwrap();
-    let kinds: Vec<String> = segments[0]
+    let kinds: Vec<EventKind> = segments[0]
         .lines(0)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
-    assert_eq!(kinds, ["session_started", "turn_started", "turn_started"]);
+    assert_eq!(
+        kinds,
+        [
+            EventKind::SessionStarted,
+            EventKind::TurnStarted,
+            EventKind::TurnStarted
+        ]
+    );
 }
 
 #[test]
@@ -365,7 +373,7 @@ fn last_line_returns_the_one_line_of_a_one_line_log() {
         &[started("s_aaaaaaaaaaaaaaaa", 0, None)],
     );
     let found = last_line(&sessions.join("s_aaaaaaaaaaaaaaaa")).unwrap();
-    assert_eq!(found.kind, "session_started");
+    assert_eq!(found.kind(), EventKind::SessionStarted);
     assert_eq!(found.seq.unwrap().0, 0);
 }
 
@@ -390,7 +398,7 @@ fn last_line_drops_a_torn_tail() {
     .unwrap();
     // The fixture above holds one complete line and a torn tail.
     let found = last_line(&dir).unwrap();
-    assert_eq!(found.kind, "session_started");
+    assert_eq!(found.kind(), EventKind::SessionStarted);
 }
 
 #[test]
@@ -456,13 +464,13 @@ fn lines_past_the_point_are_never_parsed() {
     text.push_str("{\"kind\": \"turn_started\", broken\n");
     fs::write(dir.join(EVENTS), text).unwrap();
     let segments = history_to(&dir, Seq(1)).unwrap();
-    let kinds: Vec<String> = segments[0]
+    let kinds: Vec<EventKind> = segments[0]
         .lines(0)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
-    assert_eq!(kinds, ["session_started", "turn_started"]);
+    assert_eq!(kinds, [EventKind::SessionStarted, EventKind::TurnStarted]);
 }
 
 #[test]
