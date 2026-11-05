@@ -159,3 +159,4 @@ crates/log/tests/support/check.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhou
 crates/log/src/rate_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
 crates/cli/src/sessions_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
 crates/jobs/src/delegate/run_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
+crates/contract/src/events.rs	fiber-4156	grant	2026-11-05T20:38:23Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
