@@ -37,7 +37,7 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     let _gate = support::lock(&hub.resume_gate);
     let set = resolve(hub, &session, cascade, expect.as_ref())?;
     // Held until every removal ends. A dry run is a reader
-    // (docs/events.md, "One writer at a time"): it reads each candidate's
+    // (docs/events.md, "Writing"): it reads each candidate's
     // lock label and reports the ids whose pid still runs, taking no lock
     // and refusing nothing. Held is advisory; the real delete, which takes
     // the lock, decides. A real delete probes every candidate before
