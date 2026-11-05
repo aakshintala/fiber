@@ -619,8 +619,8 @@ const STALLED_PGREP_CHILD: &str = "FIBER_TEST_STALLED_PGREP_CHILD";
 const STALLED_PGREP_MARKER: &str = "FIBER_TEST_STALLED_PGREP_MARKER";
 
 /// Production `matching` with a caller-supplied bound expires inside that
-/// bound naming the `pgrep` step: the child derives a 20 s within on an
-/// injected clock, halves it for the 10 s listing, and drives the stalled
+/// bound naming the `pgrep` step: the child derives a 30 s within on an
+/// injected clock, halves it for the 15 s listing, and drives the stalled
 /// `pgrep` shadow into it. The parent re-executes this test under a 30 s
 /// wall deadline with a `PATH`-shadowed `pgrep` that blocks on a FIFO only
 /// for the run's unique marker and execs the real `pgrep` otherwise
@@ -660,7 +660,7 @@ fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
     crate::script(dir.path(), "pgrep", &body);
     // Held open read+write across the rerun, so the shadow's open succeeds
     // and its read parks: the stall holds reliably past child startup, and
-    // the 10 s wall expiry carries margin for loaded-host scheduling.
+    // the 15 s wall expiry carries margin for loaded-host scheduling.
     // Dropping it releases a shadow the expiry left behind, which then
     // exits at once.
     let held = std::fs::OpenOptions::new()
@@ -683,8 +683,8 @@ fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
             ("PATH", path.as_str()),
             (STALLED_PGREP_MARKER, marker.as_str()),
         ],
-        // A 30 s wall bound: the re-executed child's expected ≈16 s wall
-        // (boot plus setup plus the 10 s stall) fits inside the exit wait
+        // A 30 s wall bound: the re-executed child's expected ≈21 s wall
+        // (boot plus setup plus the 15 s stall) fits inside the exit wait
         // with margin, and a production body discarding the derived bound
         // still expires inside it — worst case 60 s stays well under the
         // 120 s mutant timeout.
@@ -704,20 +704,20 @@ fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
     stall_guard.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
-/// The re-executed child: a 20 s within on an injected clock halves to the
-/// exact nonzero 10 s listing bound production must expire inside of.
+/// The re-executed child: a 30 s within on an injected clock halves to the
+/// exact nonzero 15 s listing bound production must expire inside of.
 #[track_caller]
 fn stalled_pgrep_child() {
     let marker = std::env::var(STALLED_PGREP_MARKER).expect("the parent sets the stall marker");
     let clock: &'static std::sync::Arc<crate::clock::FakeClock> =
         Box::leak(Box::new(crate::clock::FakeClock::new()));
-    let wait = Deadline::on(&**clock).within(Duration::from_secs(20));
+    let wait = Deadline::on(&**clock).within(Duration::from_secs(30));
     // The inner step is half the enclosing wait, nonzero and exact: a
     // production body discarding `bound` cannot show this budget.
     let bound = wait.left() / 2;
     assert_eq!(
         bound,
-        Duration::from_secs(10),
+        Duration::from_secs(15),
         "the listing step halves the enclosing wait"
     );
     let error = matching(&marker, bound).expect_err("the stalled pgrep outlives the derived bound");
@@ -728,7 +728,7 @@ fn stalled_pgrep_child() {
     );
     assert_eq!(
         error.to_string(),
-        "pgrep did not exit within 10s",
+        "pgrep did not exit within 15s",
         "the expiry names the pgrep step with the derived bound"
     );
 }

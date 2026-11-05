@@ -232,9 +232,9 @@ const STALLED_LISTING_MARKER: &str = "FIBER_TEST_STALLED_LISTING_MARKER";
 
 /// The support `kill_matching` wrapper funds its listing step from its
 /// enclosing cleanup wait: the child sets an injected clock with exactly
-/// 20 s of cleanup, drives the wrapper into a stalled `pgrep` shadow,
+/// 30 s of cleanup, drives the wrapper into a stalled `pgrep` shadow,
 /// and asserts the returned error (never a panic) names the `pgrep` step
-/// with the exact derived 10 s budget. The parent re-executes this test
+/// with the exact derived 15 s budget. The parent re-executes this test
 /// under a 30 s wall deadline with a `PATH`-shadowed `pgrep` that blocks
 /// on a FIFO only for the run's unique marker and execs the real `pgrep`
 /// otherwise (per-test processes, so no other test's listing can block on
@@ -276,7 +276,7 @@ fn kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_c
     fakes::script(dir.path(), "pgrep", &body);
     // Held open read+write across the rerun, so the shadow's open succeeds
     // and its read parks: the stall holds reliably past child startup, and
-    // the 10 s wall expiry carries margin for loaded-host scheduling.
+    // the 15 s wall expiry carries margin for loaded-host scheduling.
     // Dropping it releases a shadow the expiry left behind, which then
     // exits at once.
     let held = fs::OpenOptions::new()
@@ -300,7 +300,7 @@ fn kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_c
             (STALLED_LISTING_MARKER, marker.as_str()),
         ],
         // A 30 s wall bound, the same as Task 1's proof: the re-executed
-        // child's expected ≈16 s wall fits inside the exit wait with
+        // child's expected ≈21 s wall fits inside the exit wait with
         // margin, and a wrapper discarding the derived step still expires
         // inside it — worst case 60 s stays well under the 120 s mutant
         // timeout.
@@ -320,18 +320,18 @@ fn kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_c
     stall_guard.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
-/// The re-executed child: a 20 s cleanup wait on an injected clock halves
-/// to the exact nonzero 10 s listing step the wrapper must fund.
+/// The re-executed child: a 30 s cleanup wait on an injected clock halves
+/// to the exact nonzero 15 s listing step the wrapper must fund.
 #[track_caller]
 fn stalled_listing_child() {
     let marker = std::env::var(STALLED_LISTING_MARKER).expect("the parent sets the stall marker");
     let clock: &'static Arc<fakes::clock::FakeClock> =
         Box::leak(Box::new(fakes::clock::FakeClock::new()));
-    // Exactly 20 s of cleanup on a clock that never advances: the
+    // Exactly 30 s of cleanup on a clock that never advances: the
     // wrapper's outer wait is this cleanup phase, and its listing step is
     // half of it. The outer `within` receives on the wall clock through
     // this deadline, with margin for loaded-host scheduling.
-    let wait = Deadline::on(&**clock).within(Duration::from_secs(20));
+    let wait = Deadline::on(&**clock).within(Duration::from_secs(30));
     let error = match kill_matching(wait, &marker) {
         Ok(()) => panic!("the stalled listing outlives the derived cleanup budget"),
         Err(error) => error,
@@ -343,7 +343,7 @@ fn stalled_listing_child() {
     );
     assert_eq!(
         error.to_string(),
-        "pgrep did not exit within 10s",
+        "pgrep did not exit within 15s",
         "the expiry names the pgrep step with the derived budget"
     );
 }
