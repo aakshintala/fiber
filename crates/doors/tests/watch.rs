@@ -91,7 +91,7 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
             .expect("the watch attached");
         let saw_clients = loop {
             match watcher.recv_timeout(deadline.left()) {
-                Some(Ok(Some(line))) if line.kind == "clients" => break true,
+                Some(Ok(Some(line))) if line.kind() == EventKind::Clients => break true,
                 Some(Ok(_)) => {}
                 Some(Err(error)) => panic!("the watcher failed: {error}"),
                 None => break false,
@@ -109,7 +109,7 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
         .run(Vec::new(), Arc::new(|| false), |_inbox| {
             let mut lines = Vec::new();
             let watched = doors::watch(&home, &id, &mut |line: &Envelope| {
-                if line.kind == "clients" {
+                if line.kind() == EventKind::Clients {
                     let _sent = attached_tx.send(());
                 }
                 lines.push(line.clone());
@@ -119,8 +119,8 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
             // The fold first, in seq order, then the live lines.
             assert_eq!(envelope_seqs(&lines), vec![0, 1, 2, 3]);
             assert_eq!(
-                lines.last().map(|line| line.kind.as_str()),
-                Some("fiber_exited")
+                lines.last().map(|line| line.kind()),
+                Some(EventKind::FiberExited)
             );
             seen.clone_from(&lines);
             Ok(())
@@ -135,9 +135,9 @@ fn a_watch_folds_then_streams_then_returns_at_fiber_exited() {
     // line its own attach wrote.
     for line in &seen {
         assert!(
-            line.seq.is_some() || line.kind == "clients",
+            line.seq.is_some() || line.kind() == EventKind::Clients,
             "unexpected line: {}",
-            line.kind
+            line.kind().name()
         );
     }
     opened.close();
@@ -220,7 +220,8 @@ fn two_runs(opened: &Opened) -> u64 {
     text.lines()
         .map(|line| serde_json::from_str::<Envelope>(line).expect("a log line parses"))
         .find_map(|line| {
-            (line.kind == "fiber_exited").then(|| line.seq.expect("a durable line carries seq").0)
+            (line.kind() == EventKind::FiberExited)
+                .then(|| line.seq.expect("a durable line carries seq").0)
         })
         .expect("the earlier fiber_exited")
 }
@@ -256,8 +257,8 @@ fn watch_after_skips_every_line_at_or_before_its_boundary() {
     );
     assert_eq!(
         seen.last()
-            .map(|line| (line.kind.as_str(), line.seq.map(|seq| seq.0))),
-        Some(("fiber_exited", Some(*durable.last().unwrap()))),
+            .map(|line| (line.kind(), line.seq.map(|seq| seq.0))),
+        Some((EventKind::FiberExited, Some(*durable.last().unwrap()))),
         "the later fiber_exited ends the watch"
     );
     opened.close();
@@ -290,8 +291,8 @@ fn watch_after_one_before_the_boundary_returns_at_the_old_fiber_exited() {
         .collect();
     assert_eq!(
         seen.last()
-            .map(|line| (line.kind.as_str(), line.seq.map(|seq| seq.0))),
-        Some(("fiber_exited", Some(boundary))),
+            .map(|line| (line.kind(), line.seq.map(|seq| seq.0))),
+        Some((EventKind::FiberExited, Some(boundary))),
         "the old fiber_exited ends the watch: {at:?}"
     );
     opened.close();
@@ -367,10 +368,11 @@ fn a_kind_from_a_newer_build_neither_ends_the_watch_nor_loses_its_name() {
     .expect("the watch held past the unknown kind to fiber_exited");
     assert_eq!(watched, Watched::Exited);
     assert_eq!(
-        seen.iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["kind_from_a_newer_build", "fiber_exited"]
+        seen.iter().map(|line| line.kind()).collect::<Vec<_>>(),
+        [
+            EventKind::Unknown("kind_from_a_newer_build".into()),
+            EventKind::FiberExited
+        ]
     );
     assert_eq!(
         EventKind::from_name("kind_from_a_newer_build"),
