@@ -3335,17 +3335,44 @@ fn lived_home_twenty_five_shadowed_notices_show_once_per_run() {
             // second session's absence is observable without waiting for
             // the fade.
             focus_notice(&mut run, "skills are shadowed");
-            let grid = run.wait_screen("the notice focused", |grid| {
+            run.wait_screen("the notice focused", |grid| {
                 grid.rows
                     .iter()
                     .any(|row| row.contains("25 skills are shadowed"))
             });
-            let before = reversed_cells(&grid);
             run.write(b"\x1b[B");
-            run.wait_screen("the dismiss cross focused", |next| {
-                reversed_cells(next) != before
+            // The cross's own look, or the row already gone: the ✕ cell
+            // alone reversed (the box look reverses the whole row, so a
+            // full row never counts). Any other whole-grid move — an
+            // overlay close or a fade paints transient frames — is not
+            // the cross, and Enter on the box would reopen the overlay.
+            // A fading row clears on its own, so only Enter on a focused
+            // cross.
+            let mut cross = false;
+            run.wait_screen("the dismiss cross focused or the row gone", |grid| {
+                if !grid.contents.contains("skills are shadowed") {
+                    return true;
+                }
+                cross = grid
+                    .text_at("25 skills are shadowed")
+                    .is_some_and(|(_, y)| {
+                        let (cols, _) = grid.size();
+                        let mut found = false;
+                        for x in 0..cols {
+                            if grid.cell(x, y).inverse {
+                                if x <= 1 || found {
+                                    return false;
+                                }
+                                found = true;
+                            }
+                        }
+                        found
+                    });
+                cross
             });
-            run.write(b"\r");
+            if cross {
+                run.write(b"\r");
+            }
             run.wait_screen("the dismissed row clears", |grid| {
                 !grid.contents.contains("skills are shadowed")
             });
