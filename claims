@@ -144,3 +144,4 @@ crates/bench/examples/bench/busy.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundh
 crates/bench/examples/bench/linux.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
 crates/bench/examples/bench/run.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
 crates/bench/examples/bench/wheel.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
+scripts/test-bug-red	fiber-4102	grant	2026-11-05T12:05:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
