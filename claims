@@ -276,7 +276,6 @@ crates/tui/src/working.rs	fiber-4142	grant	2026-11-05T12:28:13Z	Amoghs-MacBook-P
 crates/tui/tests/support/paging_args.rs	fiber-4142	grant	2026-11-05T12:28:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/.claude/jobs/d4bb759a/tmp	
 crates/main/src/delegates_tests.rs	fiber-4190	grant	2026-11-05T12:50:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4190-switched-on-gate	
 research/overalls/README.md	fiber-3882	plan	2026-11-05T12:54:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tools.md	fiber-3808	grant	2026-11-05T13:20:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/tui/src/app/session_views.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/rewind_tests.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/session_views_tests.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
