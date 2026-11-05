@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 use contract::Envelope;
-use contract::events::{Event, UsageRecorded};
+use contract::events::{Event, EventKind, UsageRecorded};
 
 /// The bytes-to-tokens rate of the last preamble build (`docs/tools.md`,
 /// "Seeing the tools").
@@ -51,45 +51,40 @@ pub struct RateFold {
 impl RateFold {
     /// Folds one appended or replayed line.
     pub fn fold(&mut self, line: &Envelope) {
-        match line.kind.as_str() {
-            "preamble_built" => {
-                self.rate = Rate::default();
-                self.model = line
-                    .payload
-                    .get("model")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned);
-                self.started.clear();
+        let kind = line.kind();
+        if kind == EventKind::PreambleBuilt {
+            self.rate = Rate::default();
+            self.model = line
+                .payload
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            self.started.clear();
+        } else if kind == EventKind::AssistantMessageStarted {
+            if self.rate.input_tokens.is_none()
+                && let Some(action) = &line.action_id
+            {
+                self.started.insert(action.0.clone());
             }
-            "assistant_message_started" => {
-                if self.rate.input_tokens.is_none()
-                    && let Some(action) = &line.action_id
-                {
-                    self.started.insert(action.0.clone());
-                }
-            }
-            "usage_recorded" => {
-                if self.rate.input_tokens.is_none()
-                    && line
-                        .action_id
-                        .as_ref()
-                        .is_some_and(|action| self.started.contains(&action.0))
-                    && let Ok(Some(Event::UsageRecorded(recorded))) = Event::from_envelope(line)
-                    && recorded.extension.is_none()
-                    && recorded.origin_session_id.is_none()
-                    && self.model.as_deref() == Some(recorded.model.as_str())
-                    && recorded.input_media != Some(true)
-                    && recorded.input_bytes > 0
-                    && input_tokens(&recorded) > 0
-                {
-                    self.rate = Rate {
-                        input_tokens: Some(input_tokens(&recorded)),
-                        input_bytes: recorded.input_bytes,
-                    };
-                    self.started.clear();
-                }
-            }
-            _ => {}
+        } else if kind == EventKind::UsageRecorded
+            && self.rate.input_tokens.is_none()
+            && line
+                .action_id
+                .as_ref()
+                .is_some_and(|action| self.started.contains(&action.0))
+            && let Ok(Some(Event::UsageRecorded(recorded))) = Event::from_envelope(line)
+            && recorded.extension.is_none()
+            && recorded.origin_session_id.is_none()
+            && self.model.as_deref() == Some(recorded.model.as_str())
+            && recorded.input_media != Some(true)
+            && recorded.input_bytes > 0
+            && input_tokens(&recorded) > 0
+        {
+            self.rate = Rate {
+                input_tokens: Some(input_tokens(&recorded)),
+                input_bytes: recorded.input_bytes,
+            };
+            self.started.clear();
         }
     }
 
@@ -97,8 +92,10 @@ impl RateFold {
     /// fully parses only these and the latest-wins kinds.
     pub(crate) fn reads(kind: &str) -> bool {
         matches!(
-            kind,
-            "preamble_built" | "assistant_message_started" | "usage_recorded"
+            EventKind::from_name(kind),
+            EventKind::PreambleBuilt
+                | EventKind::AssistantMessageStarted
+                | EventKind::UsageRecorded
         )
     }
 

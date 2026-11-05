@@ -731,8 +731,12 @@ struct Head<'a> {
 /// the rate fold reads.
 fn latest_wins(kind: &str) -> bool {
     matches!(
-        kind,
-        "session_status" | "extensions_loaded" | "steering_queue" | "clients" | "extension_ui"
+        contract::events::EventKind::from_name(kind),
+        contract::events::EventKind::SessionStatus
+            | contract::events::EventKind::ExtensionsLoaded
+            | contract::events::EventKind::SteeringQueue
+            | contract::events::EventKind::Clients
+            | contract::events::EventKind::ExtensionUi
     )
 }
 
@@ -744,7 +748,11 @@ fn folded(kind: &str) -> bool {
 
 /// The event kinds that maintain the pending repository offer.
 fn offer_kind(kind: &str) -> bool {
-    matches!(kind, "repository_code_offered" | "repository_code_resolved")
+    matches!(
+        contract::events::EventKind::from_name(kind),
+        contract::events::EventKind::RepositoryCodeOffered
+            | contract::events::EventKind::RepositoryCodeResolved
+    )
 }
 
 /// Fully parses one line open folds. The one full-parse helper on the open
@@ -794,14 +802,14 @@ fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
             }
             _ => {}
         }
-    } else if line.kind == "preamble_built" {
+    } else if line.kind() == contract::events::EventKind::PreambleBuilt {
         latest.remove("repository_code_offered");
     }
-    if latest_wins(line.kind.as_str()) && line.kind.as_str() != "extension_ui" {
+    if latest_wins(&line.kind) && line.kind() != contract::events::EventKind::ExtensionUi {
         latest.insert(line.kind.clone(), line.clone());
         return;
     }
-    if line.kind.as_str() == "extension_ui" {
+    if line.kind() == contract::events::EventKind::ExtensionUi {
         let ui: Result<contract::events::ExtensionUi, _> =
             serde_json::from_value(serde_json::Value::Object(line.payload.clone()));
         let Ok(ui) = ui else { return };

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread::{self, ThreadId};
 
-use contract::events::{CommandRejected, Event};
+use contract::events::{CommandRejected, Event, EventKind};
 use contract::{CommandId, Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
 
@@ -352,10 +352,13 @@ pub(super) fn write_counted(
     flight: Option<&Flight>,
 ) -> std::io::Result<()> {
     if let Some(flight) = flight
-        && matches!(line.kind.as_str(), "command_accepted" | "command_rejected")
+        && matches!(
+            line.kind(),
+            EventKind::CommandAccepted | EventKind::CommandRejected
+        )
         && let Some(id) = line.payload.get("command_id").and_then(Value::as_str)
     {
-        let code = (line.kind == "command_rejected")
+        let code = (line.kind() == EventKind::CommandRejected)
             .then(|| line.payload.get("code").and_then(Value::as_str))
             .flatten();
         if flight.gate.accepted.answered(flight.reader, id, code) == Answered::Skip {
@@ -372,8 +375,11 @@ pub(super) fn write_counted(
 
 fn summary_line(kind: &str) -> bool {
     matches!(
-        kind,
-        "session_status" | "extensions_loaded" | "command_accepted" | "command_rejected"
+        EventKind::from_name(kind),
+        EventKind::SessionStatus
+            | EventKind::ExtensionsLoaded
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
     )
 }
 

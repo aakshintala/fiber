@@ -829,7 +829,7 @@ impl Watcher {
         let result = (self.watch)(&self.session_id, after, &mut |envelope: &Envelope| {
             // Adoption takes the child's share before its log opens. A full
             // subscription replays this durable line even after late attach.
-            let kind = classify_job_kind(EventKind::from_name(&envelope.kind));
+            let kind = classify_job_kind(envelope.kind());
             if kind == Some(JobEventKind::SessionStarted)
                 && envelope.session_id == self.session_id
                 && let Some(guard) = &self.worktree_guard
@@ -969,9 +969,7 @@ impl Watcher {
             let Ok(envelope) = serde_json::from_str::<contract::Envelope>(raw) else {
                 continue;
             };
-            if classify_job_kind(EventKind::from_name(&envelope.kind))
-                != Some(JobEventKind::UsageRecorded)
-            {
+            if classify_job_kind(envelope.kind()) != Some(JobEventKind::UsageRecorded) {
                 continue;
             }
             let Some(seq) = envelope.seq.map(|seq| seq.0) else {
@@ -1114,9 +1112,7 @@ fn fiber_exited_of_line(line: &str) -> Option<FiberExited> {
     let object = value.as_object()?;
     if object.contains_key("session_id") {
         let envelope: Envelope = serde_json::from_value(value).ok()?;
-        if classify_job_kind(EventKind::from_name(&envelope.kind))
-            != Some(JobEventKind::FiberExited)
-        {
+        if classify_job_kind(envelope.kind()) != Some(JobEventKind::FiberExited) {
             return None;
         }
         return fiber_exited_of(&envelope.payload);
