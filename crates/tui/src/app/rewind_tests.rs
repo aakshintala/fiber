@@ -2743,20 +2743,26 @@ fn wheel_over_rewind_moves_the_list_not_the_conversation() {
     accept(&mut app, &lines[0]["id"], history);
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
-    // Two steps off the resting row: the window moves under a selection
-    // that stays on screen.
+    // Down to the tail, then five steps back up: the selection sits
+    // mid-window with room above, so one wheel step up moves the full
+    // three rows without clamping at the end the reseat starts near.
+    app.on_key(crate::keys::Key::Down, clock.now());
+    app.on_key(crate::keys::Key::Down, clock.now());
+    app.on_key(crate::keys::Key::Up, clock.now());
+    app.on_key(crate::keys::Key::Up, clock.now());
+    app.on_key(crate::keys::Key::Up, clock.now());
     app.on_key(crate::keys::Key::Up, clock.now());
     app.on_key(crate::keys::Key::Up, clock.now());
     let frame = app.session_view_screen(80).expect("the view is open");
     let before = frame.list.selected();
     assert!(frame.rows.len() >= before + 4, "the list fits three steps");
     let shown_top = frame.list.top();
-    app.on_wheel(&wheel(10, 5, true));
+    app.on_wheel(&wheel(10, 5, false));
     assert_eq!(app.top(), top, "the wheel left the conversation");
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(
         frame.list.top(),
-        shown_top + 3,
+        shown_top - 3,
         "one wheel step shifts the visible rows three"
     );
     assert_eq!(
@@ -3022,6 +3028,45 @@ fn enter_on_a_scrolled_turn_opens_it_without_an_overflow() {
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(frame.list.selected(), at);
     assert_eq!(frame.list.top(), top);
+}
+
+/// An older page keeps a scrolled selection visible: paging in older
+/// turns reseats the Rewind row through the real height so it stays on
+/// screen.
+#[test]
+fn an_older_page_reseats_a_scrolled_selection_into_view() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let all = many_turns(25);
+    // The newer slice holds turns 5..25 (seq 13..75) at a clean turn
+    // boundary: no seq 0, so the chain is not done and exactly one
+    // `history` request goes back on the wire (`docs/tui.md`,
+    // "History and paging").
+    let next = accept(&mut app, &lines[0]["id"], all[13..].to_vec());
+    assert_eq!(next.len(), 1);
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(rows(&app).len(), 23);
+    // Down to the Rewind row, past the first screenful, so the list has scrolled.
+    let last = rows(&app).len() - 1;
+    goto(&mut app, &clock, last);
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert!(frame.list.top() > 0, "setup scrolled the list");
+    // The older slice holds seq 0..12, contiguous with the newer slice
+    // (12 + 1 == 13): it starts at seq 0 with no parent, so the chain
+    // ends and nothing more goes out (`docs/tui.md`, "History and paging").
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    let done = accept(&mut app, &asked["id"], all[..13].to_vec());
+    assert!(done.is_empty());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(rows(&app).len(), 27);
+    let frame = app.session_view_screen(80).expect("the view is open");
+    let (selected, top) = (frame.list.selected(), frame.list.top());
+    assert_eq!(rows(&app)[selected], ACTION);
+    assert!(
+        selected - top < crate::swapped::rows_height(&frame, app.conversation_height()),
+        "reseat kept the selection visible"
+    );
 }
 
 /// A fork's accept attaches without a send match, while any other wait
