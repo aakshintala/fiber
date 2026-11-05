@@ -74,4 +74,3 @@ crates/tui/src/mcp_view_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse
 crates/tui/src/app/home/prompt/exit.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
 crates/tui/src/app/images.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
 crates/tui/src/app/offer.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
-crates/new1200.md	fiber-1200	plan	2026-11-05T09:11:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
