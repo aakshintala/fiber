@@ -53,7 +53,7 @@ type Key = (&'static str, Option<String>);
 pub(crate) type Running = Box<dyn Fn() -> Vec<JobId> + Send>;
 
 /// Reads the workspace's branch: `None` outside a git repository.
-pub(crate) type Branch = Box<dyn Fn() -> Option<Git> + Send>;
+type Branch = Box<dyn Fn() -> Option<Git> + Send>;
 
 /// Reads the `full` connections attached now.
 pub(crate) type Count = Box<dyn Fn() -> u32 + Send>;

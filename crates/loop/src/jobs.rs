@@ -596,7 +596,7 @@ impl Orphans {
 /// ending notice, or the jobs check. It is logged as its turn's `message`
 /// item, which a resume renders as it does any message
 /// (`docs/prompt-cache.md`).
-pub(crate) fn pending_text(job_ids: &[JobId], reason: PendingReason) -> String {
+fn pending_text(job_ids: &[JobId], reason: PendingReason) -> String {
     let ids: Vec<&str> = job_ids.iter().map(|id| id.0.as_str()).collect();
     fill(
         message(match reason {
