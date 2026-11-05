@@ -15,6 +15,7 @@ mod support;
 
 use std::sync::mpsc;
 
+use contract::events::EventKind;
 use contract::inbox::{Ack, Answer, Delivery, SessionMessage};
 use contract::provider::Input;
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
@@ -67,8 +68,8 @@ fn drop_of(command: &str) -> (Delivery, mpsc::Receiver<Answer>) {
     (Delivery::SteerDrop(CommandId(command.into()), ack), answers)
 }
 
-fn plain() -> Vec<&'static str> {
-    vec![
+fn plain() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -82,6 +83,9 @@ fn plain() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// The user messages `request` sends, in order.
@@ -199,7 +203,13 @@ fn a_session_message_mid_turn_is_applied_as_steering_at_the_next_step() {
         "assistant_message_completed",
         "turn_completed",
     ];
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let queued: Vec<&Envelope> = lines
         .iter()
         .filter(|line| line.kind == "steering_queue")

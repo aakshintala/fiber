@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::commands::{Reply, ReplyAnswer};
-use contract::events::{Decision, TurnOutcome};
+use contract::events::{Decision, EventKind, TurnOutcome};
 
 use fakes::Deadline;
 use support::{
@@ -50,6 +50,7 @@ fn cancel_mid_stream_writes_no_completion_and_ends_interrupted() {
             "usage_recorded",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
     // The steer queued before the cancel starts the next turn at once, as
@@ -67,6 +68,7 @@ fn cancel_mid_stream_writes_no_completion_and_ends_interrupted() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = next.iter().find(|l| l.kind == "turn_started").unwrap();
     let input: Vec<&str> = started.payload["input"]
@@ -126,6 +128,7 @@ fn a_cancel_landing_between_steps_sends_no_request() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         lines
@@ -216,6 +219,7 @@ fn a_running_call_completes_cancelled_and_a_denied_call_behind_it_does_too() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 2);
@@ -293,6 +297,7 @@ fn a_call_returning_an_error_after_cancel_keeps_failed() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -353,6 +358,7 @@ fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let requested: Vec<&contract::Envelope> = lines
         .iter()
@@ -444,6 +450,7 @@ fn a_cancelled_review_completes_cancelled() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The review keeps its resolved line, decided by the cancel.
     let resolved: Vec<&contract::Envelope> = lines
@@ -515,6 +522,7 @@ fn an_approved_call_cancelled_while_a_later_call_waits_never_starts() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The approved call never started: no `tool_call_started`, and neither
     // tool ran.
@@ -606,6 +614,7 @@ fn a_reply_queued_ahead_of_the_cancel_wake_is_rejected() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The approval resolved deny by cancel, the call never ran, and the
     // turn ends interrupted.
@@ -646,6 +655,7 @@ fn a_cancel_after_the_last_reply_interrupts_the_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(session.requests().len(), 1);
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
@@ -679,6 +689,7 @@ fn a_cancel_after_a_failed_reply_leaves_the_turn_failed() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let last = lines.last().unwrap();
     assert_eq!(last.payload["outcome"], "failed");
@@ -749,6 +760,7 @@ fn a_stale_cancel_wake_does_not_end_a_later_approval() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The person's reply still decided: allowed by the person, and the
     // call ran.
@@ -813,6 +825,7 @@ fn kept_steering_starts_the_next_turn_without_waiting() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The kept steer starts the next turn at once, with nothing new sent:
     // the inbox is empty, so waiting on it would hang the turn instead.
@@ -832,6 +845,7 @@ fn kept_steering_starts_the_next_turn_without_waiting() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
     let input: Vec<&str> = started.payload["input"]
@@ -898,6 +912,7 @@ fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let request_id = Deadline::after(DEADLINE)
         .recv(&request_rx)
@@ -985,6 +1000,7 @@ fn a_kept_steer_with_a_clean_inbox_starts_the_next_turn_without_blocking() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The inbox is empty with its sender alive, so a `wait_for_turn` that
     // blocked would hang: `Session::turn` fails at `DEADLINE` instead.
@@ -1004,6 +1020,7 @@ fn a_kept_steer_with_a_clean_inbox_starts_the_next_turn_without_blocking() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
     let input: Vec<&str> = started.payload["input"]
@@ -1039,6 +1056,7 @@ fn a_shutdown_mid_stream_ends_the_turn_interrupted_and_starts_no_other() {
             "usage_recorded",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
     // The steer that arrived during the call starts no turn.
@@ -1078,10 +1096,10 @@ fn a_shutdown_during_an_approval_wait_leaves_the_request_pending() {
         .filter(contract::Envelope::is_durable)
         .collect();
     let kinds = kinds(&lines);
-    assert_eq!(kinds.last(), Some(&"permission_requested"));
-    assert!(!kinds.contains(&"permission_resolved"));
-    assert!(!kinds.contains(&"tool_call_completed"));
-    assert!(!kinds.contains(&"turn_completed"));
+    assert_eq!(kinds.last(), Some(&EventKind::PermissionRequested));
+    assert!(!kinds.contains(&EventKind::PermissionResolved));
+    assert!(!kinds.contains(&EventKind::ToolCallCompleted));
+    assert!(!kinds.contains(&EventKind::TurnCompleted));
     assert!(ask.ran.lock().unwrap().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
 
@@ -1268,9 +1286,9 @@ fn a_reply_sent_after_the_shutdown_is_never_applied() {
         .filter(contract::Envelope::is_durable)
         .collect();
     let kinds = kinds(&lines);
-    assert_eq!(kinds.last(), Some(&"permission_requested"));
-    assert!(!kinds.contains(&"permission_resolved"));
-    assert!(!kinds.contains(&"turn_completed"));
+    assert_eq!(kinds.last(), Some(&EventKind::PermissionRequested));
+    assert!(!kinds.contains(&EventKind::PermissionResolved));
+    assert!(!kinds.contains(&EventKind::TurnCompleted));
     assert!(ask.ran.lock().unwrap().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
 
@@ -1341,6 +1359,7 @@ fn a_cancel_after_one_result_is_written_keeps_it_and_cancels_the_running_call() 
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The written result stays completed with its own text; the running
     // call ends cancelled, carrying its tool's content too.
@@ -1433,6 +1452,7 @@ fn a_result_held_behind_a_running_call_completes_cancelled_with_its_content() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // Both calls ran, both were cancelled, and each keeps its tool's
     // own content: even the call that had already returned.
@@ -1506,6 +1526,7 @@ fn a_cancel_as_the_next_request_is_made_keeps_the_written_result() {
             "usage_recorded",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The step's only result was written before the cancel, so it stays
     // completed with its own text: one completion, nothing cancelled.

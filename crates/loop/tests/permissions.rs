@@ -127,7 +127,7 @@ fn a_call_touching_the_credentials_is_refused_and_never_runs() {
     assert_eq!(done.payload["reason"], "credentials");
     assert_eq!(resolved.action_id, done.action_id);
     assert!(
-        !kinds(&lines).contains(&"tool_call_started"),
+        !kinds(&lines).contains(&EventKind::ToolCallStarted),
         "a denied call never starts"
     );
     assert!(tool.ran().is_empty(), "a denied call never runs");
@@ -185,7 +185,7 @@ fn assert_file_refused(configured: &std::path::Path, read: &std::path::Path) {
     assert_eq!(done.payload["status"], "denied");
     assert_eq!(done.payload["reason"], "credentials");
     assert!(
-        !kinds(&lines).contains(&"tool_call_started"),
+        !kinds(&lines).contains(&EventKind::ToolCallStarted),
         "a denied call never starts"
     );
     assert!(tool.ran().is_empty(), "a denied call never runs");
@@ -222,7 +222,7 @@ fn assert_refused_as_credentials(subject: &str, paths: &[&str]) {
     assert_eq!(done.payload["status"], "denied", "{subject}");
     assert_eq!(done.payload["reason"], "credentials", "{subject}");
     assert!(
-        !kinds(&lines).contains(&"tool_call_started"),
+        !kinds(&lines).contains(&EventKind::ToolCallStarted),
         "a denied call never starts: {subject}"
     );
     assert!(tool.ran().is_empty(), "a denied call never runs: {subject}");
@@ -288,7 +288,7 @@ fn a_standing_deny_refuses_and_never_runs() {
         text_first(done),
         "A standing rule refuses this call. It did not run."
     );
-    assert!(!kinds(&lines).contains(&"tool_call_started"));
+    assert!(!kinds(&lines).contains(&EventKind::ToolCallStarted));
     assert!(tool.ran().is_empty());
 }
 
@@ -552,11 +552,11 @@ fn a_message_sent_while_waiting_steers_the_next_step() {
     let sequence = kinds(&lines);
     let resolved_at = sequence
         .iter()
-        .position(|k| *k == "permission_resolved")
+        .position(|k| *k == EventKind::PermissionResolved)
         .unwrap();
     let steering_at = sequence
         .iter()
-        .position(|k| *k == "steering_applied")
+        .position(|k| *k == EventKind::SteeringApplied)
         .unwrap();
     assert!(
         steering_at > resolved_at,
@@ -588,7 +588,7 @@ fn an_unanswerable_session_denies_a_standing_ask_without_asking() {
         kinds(&lines),
         kinds_with(&["permission_resolved", "tool_call_completed"])
     );
-    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "standing_rule");
@@ -820,35 +820,48 @@ fn known_hosts_prompt_fast_paths_but_unknown_missing_and_subdomain_hosts_are_rev
     }
 }
 
-fn network_steps(middles: &[(usize, &[&str])]) -> Vec<String> {
-    let mut expected = vec![
+fn network_steps(middles: &[(usize, &[&str])]) -> Vec<EventKind> {
+    let mut expected: Vec<EventKind> = [
         "session_started",
         "preamble_built",
         "opening_message",
         "turn_started",
-    ];
+    ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect();
     for (calls, middle) in middles {
-        expected.extend([
+        expected.extend(
+            [
+                "step_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+            ]
+            .map(EventKind::from_name),
+        );
+        expected.extend(
+            std::iter::repeat_n("tool_call_arguments_delta", *calls).map(EventKind::from_name),
+        );
+        expected
+            .extend(std::iter::repeat_n("tool_call_requested", *calls).map(EventKind::from_name));
+        expected
+            .extend(["usage_recorded", "assistant_message_completed"].map(EventKind::from_name));
+        expected.extend(middle.iter().map(|name| EventKind::from_name(name)));
+    }
+    expected.extend(
+        [
             "step_started",
             "assistant_message_started",
             "assistant_message_delta",
-        ]);
-        expected.extend(std::iter::repeat_n("tool_call_arguments_delta", *calls));
-        expected.extend(std::iter::repeat_n("tool_call_requested", *calls));
-        expected.extend(["usage_recorded", "assistant_message_completed"]);
-        expected.extend(*middle);
-    }
-    expected.extend([
-        "step_started",
-        "assistant_message_started",
-        "assistant_message_delta",
-        "assistant_message_delta",
-        "text_completed",
-        "usage_recorded",
-        "assistant_message_completed",
-        "turn_completed",
-    ]);
-    expected.into_iter().map(str::to_owned).collect()
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+        .map(EventKind::from_name),
+    );
+    expected
 }
 
 #[test]

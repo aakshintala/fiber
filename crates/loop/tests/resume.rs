@@ -18,7 +18,7 @@ use support::{
 };
 use support::{completed_event, requested, standing_request, started, user_turn};
 
-use contract::events::{Empty, Environment, Event, OpeningMessage};
+use contract::events::{Empty, Environment, Event, EventKind, OpeningMessage};
 use contract::provider::Input;
 use contract::shapes::DeclaredEffects;
 use contract::{ActionId, Envelope, SessionId};
@@ -3034,7 +3034,10 @@ fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
     let looped = history.resume(Vec::new());
     // Written on open, before any turn, in start order.
     let marked = history.new_lines();
-    assert_eq!(kinds_of(&marked), ["job_completed", "job_completed"]);
+    assert_eq!(
+        kinds_of(&marked),
+        ["job_completed", "job_completed"].map(EventKind::from_name)
+    );
     assert_orphaned(&marked[0], "j_a");
     assert_orphaned(&marked[1], "j_c");
     let last = history.lines()[history.history_len - 1].seq.unwrap().0;
@@ -3112,7 +3115,10 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
 
     let looped = history.resume_headless(Vec::new());
     let marked = history.new_lines();
-    assert_eq!(kinds_of(&marked), ["job_completed"]);
+    assert_eq!(
+        kinds_of(&marked),
+        ["job_completed"].map(EventKind::from_name)
+    );
     assert_orphaned(&marked[0], "j_a");
     let (looped, outcome) = history.step(looped);
     assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
@@ -4375,6 +4381,9 @@ fn resumed_folds_model_credential_and_thinking_from_the_last_switch() {
             "model_changed",
             "model_changed"
         ]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect::<Vec<EventKind>>()
     );
     let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.model.as_deref(), Some("fake/third"));
@@ -4391,6 +4400,9 @@ fn resumed_keeps_the_switch_thinking_as_the_session_choice() {
     assert_eq!(
         kinds_of(&history.lines()),
         vec!["session_started", "preamble_built", "model_changed"]
+            .into_iter()
+            .map(EventKind::from_name)
+            .collect::<Vec<EventKind>>()
     );
     let resumed = r#loop::resumed(&history.dir).unwrap();
     assert_eq!(resumed.thinking.as_deref(), Some("high"));
@@ -4501,6 +4513,9 @@ fn resumed_thinking_seeds_the_session_choice_for_the_next_switch() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect::<Vec<EventKind>>()
     );
 }
 

@@ -23,7 +23,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use contract::commands::{Reply, ReplyAnswer, RewindArgs};
 use contract::events::{
-    Clients, CommandResult, Event, NamedBy, Parent, SessionNamed, SessionStarted,
+    Clients, CommandResult, Event, EventKind, NamedBy, Parent, SessionNamed, SessionStarted,
     ToolCallRequested, TurnOutcome, Variables, VariablesSource,
 };
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
@@ -244,7 +244,7 @@ fn a_rewound_session_holds_only_its_own_first_line_before_its_prompt() {
         vec![Scripted::text("three-done")],
     );
     let lines = log::read(&dir).unwrap();
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
     let first = session_started(&lines);
     assert_eq!(
         first.payload["forked_from"],
@@ -296,7 +296,7 @@ fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
         vec![Scripted::text("three-done")],
     );
     let lines = log::read(&dir).unwrap();
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
     let _b = run_turn(b, &tx, "three");
     let lines = log::read(&dir).unwrap();
     assert!(
@@ -497,6 +497,7 @@ fn a_summary_is_one_turn_on_the_old_session_before_rewound() {
             "turn_completed",
             "rewound"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         tail[0].payload["input"],
@@ -546,7 +547,10 @@ fn a_summary_follows_history_before_the_note_live_and_resumed() {
         Some("the summary".into()),
     );
     let logged = log::read(&dir).unwrap();
-    assert_eq!(kinds(&logged), ["session_started"]);
+    assert_eq!(
+        kinds(&logged),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert_eq!(logged[0].payload["rewind"]["summary"], "the summary");
     let b = run_turn(b, &tx, "three");
     let request = &provider.requests()[0];
@@ -1715,7 +1719,7 @@ fn a_budget_or_hook_stop_sends_no_summary_request() {
         let lines = log::read(&session.dir).unwrap();
         assert_eq!(
             kinds(&lines[before..]),
-            ["turn_started", "step_started", "turn_completed"]
+            ["turn_started", "step_started", "turn_completed"].map(EventKind::from_name)
         );
         assert_eq!(lines.last().unwrap().payload["outcome"], "failed");
         assert_eq!(
@@ -1818,7 +1822,13 @@ fn failed_summaries_keep_usage_but_never_change_the_next_conversation() {
         let mut expected = vec!["turn_started", "step_started"];
         expected.extend(body);
         expected.push("turn_completed");
-        assert_eq!(kinds(&lines[before..=summary_end]), expected);
+        assert_eq!(
+            kinds(&lines[before..=summary_end]),
+            expected
+                .iter()
+                .map(|name| EventKind::from_name(name))
+                .collect::<Vec<_>>()
+        );
         assert_eq!(lines[summary_end].payload["outcome"], outcome);
         assert!(lines.iter().all(|line| line.kind != "rewound"));
         let mut conversation = last.conversation.to_vec();
@@ -2162,6 +2172,7 @@ fn a_summary_retry_is_one_turn_with_two_billed_attempts() {
             "turn_completed",
             "rewound"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         tail[0].payload["input"],
@@ -2323,6 +2334,7 @@ fn a_summary_builds_the_preamble_in_a_resumed_process_before_its_turn() {
             "turn_completed",
             "rewound"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(provider.requests().len(), 1);
 }
@@ -3751,6 +3763,7 @@ fn known_hosts_rewind_retains_hosts_before_the_point_and_reviews_later_hosts() {
             "assistant_message_completed",
             "turn_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(reviewer.requests().len(), 1);
     let resolved = lines

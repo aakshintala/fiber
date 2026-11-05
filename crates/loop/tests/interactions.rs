@@ -22,7 +22,8 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    Answer, CacheLifetime, Event, Interaction, InteractionRequested, Progress, TurnOutcome,
+    Answer, CacheLifetime, Event, EventKind, Interaction, InteractionRequested, Progress,
+    TurnOutcome,
 };
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
@@ -1007,7 +1008,7 @@ fn two_calls_ask_at_once_and_each_gets_its_own_answer() {
     // that window before comparing.
     let mut ordered = kinds(&lines);
     let prefix = OPENING.len() + STEP.len() + TWO_CALLS.len();
-    ordered[prefix + 4..prefix + 8].sort_unstable();
+    ordered[prefix + 4..prefix + 8].sort_by(|a, b| a.name().cmp(b.name()));
     assert_eq!(
         ordered,
         [
@@ -1027,6 +1028,9 @@ fn two_calls_ask_at_once_and_each_gets_its_own_answer() {
             DONE,
         ]
         .concat()
+        .iter()
+        .map(|name| EventKind::from_name(name))
+        .collect::<Vec<EventKind>>()
     );
     // Each call's own resolution still precedes its own completion.
     for asked in of_kind(&lines, "interaction_requested") {

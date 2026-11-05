@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::emit::Emit;
-use contract::events::TurnOutcome;
+use contract::events::{EventKind, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::{Input, Provider};
 use contract::rules::{Rule, RuleDecision, StandingRules};
@@ -160,8 +160,8 @@ fn users(conversation: &[Input]) -> usize {
 
 /// A first turn answering with text: session setup, the opening message,
 /// one step with a two-delta reply, and the turn's end.
-fn first_text_turn() -> Vec<&'static str> {
-    vec![
+fn first_text_turn() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -175,11 +175,14 @@ fn first_text_turn() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// A later turn answering with text and no changes.
-fn later_text_turn() -> Vec<&'static str> {
-    vec![
+fn later_text_turn() -> Vec<EventKind> {
+    [
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -190,13 +193,16 @@ fn later_text_turn() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// A first turn answering with text through the resumed harness, whose
 /// lines are read from the log file: the ephemeral deltas never reach
 /// it.
-fn resumed_first_text_turn() -> Vec<&'static str> {
-    vec![
+fn resumed_first_text_turn() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -208,12 +214,15 @@ fn resumed_first_text_turn() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// A later turn answering with text through the resumed harness: as
 /// [`later_text_turn`], without the ephemeral deltas.
-fn resumed_later_text_turn() -> Vec<&'static str> {
-    vec![
+fn resumed_later_text_turn() -> Vec<EventKind> {
+    [
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -222,6 +231,9 @@ fn resumed_later_text_turn() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 #[test]
@@ -247,7 +259,10 @@ fn a_new_instruction_file_is_created_at_the_next_turn_start() {
     session.turn();
     let lines = session.lines();
     // After the first turn's opening message, before the turn starts.
-    let mut created = vec!["instruction_file"];
+    let mut created: Vec<EventKind> = ["instruction_file"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     created.extend(later_text_turn());
     assert_eq!(kinds(&lines), created);
     let created = lines
@@ -292,7 +307,10 @@ fn two_new_shadowed_skills_group_at_the_next_turn_start() {
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    let mut expected = vec!["notice", "skills_changed"];
+    let mut expected: Vec<EventKind> = ["notice", "skills_changed"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     expected.extend(later_text_turn());
     assert_eq!(kinds(&lines), expected);
     let notices: Vec<_> = lines.iter().filter(|line| line.kind == "notice").collect();
@@ -324,7 +342,10 @@ fn a_changed_file_sends_a_diff_then_a_deletion() {
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    let mut changed = vec!["instruction_file"];
+    let mut changed: Vec<EventKind> = ["instruction_file"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     changed.extend(later_text_turn());
     assert_eq!(kinds(&lines), changed);
     assert_eq!(lines[0].payload["reason"], "changed");
@@ -342,7 +363,10 @@ fn a_changed_file_sends_a_diff_then_a_deletion() {
     session.inbox.send(delivery("once more")).unwrap();
     session.turn();
     let lines = session.lines();
-    let mut deleted = vec!["instruction_file"];
+    let mut deleted: Vec<EventKind> = ["instruction_file"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     deleted.extend(later_text_turn());
     assert_eq!(kinds(&lines), deleted);
     assert_eq!(lines[0].payload["reason"], "deleted");
@@ -397,6 +421,7 @@ fn an_own_edit_is_recorded_after_the_call_and_sends_nothing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let own = lines
         .iter()
@@ -464,6 +489,7 @@ fn an_own_edit_outside_the_workspace_is_recorded_and_sends_nothing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let own = lines
         .iter()
@@ -560,6 +586,7 @@ fn an_own_write_to_a_section_file_sends_nothing_at_the_next_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let own = lines
         .iter()
@@ -596,7 +623,10 @@ fn an_outside_edit_to_a_section_file_sends_a_diff_at_the_next_turn() {
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    let mut changed = vec!["instruction_file"];
+    let mut changed: Vec<EventKind> = ["instruction_file"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     changed.extend(later_text_turn());
     assert_eq!(kinds(&lines), changed);
     assert_eq!(lines[0].payload["reason"], "changed");
@@ -627,7 +657,10 @@ fn an_outside_deletion_of_a_section_file_sends_one_line() {
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    let mut deleted = vec!["instruction_file"];
+    let mut deleted: Vec<EventKind> = ["instruction_file"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     deleted.extend(later_text_turn());
     assert_eq!(kinds(&lines), deleted);
     assert_eq!(lines[0].payload["reason"], "deleted");
@@ -653,7 +686,10 @@ fn an_outside_creation_of_a_section_file_sends_its_full_text() {
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    let mut created = vec!["instruction_file"];
+    let mut created: Vec<EventKind> = ["instruction_file"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     created.extend(later_text_turn());
     assert_eq!(kinds(&lines), created);
     assert_eq!(lines[0].payload["reason"], "created");
@@ -746,6 +782,7 @@ fn an_over_budget_write_ends_its_result_with_the_prune_line() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = lines
         .iter()
@@ -822,6 +859,7 @@ fn a_tool_declaring_a_write_gets_the_prune_line_whatever_its_name() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = lines
         .iter()
@@ -888,6 +926,7 @@ fn a_tool_named_write_declaring_only_a_read_gets_no_prune_line() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = lines
         .iter()
@@ -956,6 +995,7 @@ fn an_under_budget_write_has_no_prune_line() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = lines
         .iter()
@@ -1022,6 +1062,7 @@ fn a_write_touching_no_section_file_has_no_prune_line() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = lines
         .iter()
@@ -1089,6 +1130,7 @@ fn a_failed_write_over_budget_has_no_prune_line() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = lines
         .iter()
@@ -1154,6 +1196,7 @@ fn a_subdirectory_file_is_queued_for_the_next_step() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let opening = lines
         .iter()
@@ -1197,7 +1240,10 @@ fn a_later_date_appends_one_line() {
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    let mut dated = vec!["date_changed"];
+    let mut dated: Vec<EventKind> = ["date_changed"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     dated.extend(later_text_turn());
     assert_eq!(kinds(&lines), dated);
     assert_eq!(lines[0].payload["date"], "2023-11-15");
@@ -1382,6 +1428,7 @@ fn a_resume_detects_an_outside_change_with_a_diff() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines[0].payload["reason"], "resume");
     assert_eq!(lines[1].kind, "instruction_file");
@@ -1432,7 +1479,10 @@ fn a_skill_added_between_turns_is_announced_before_turn_started() {
     session.turn();
     let lines = session.lines();
     // The check's line, directly before the turn's own input.
-    let mut announced = vec!["skills_changed"];
+    let mut announced: Vec<EventKind> = ["skills_changed"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     announced.extend(later_text_turn());
     assert_eq!(kinds(&lines), announced);
     let changed = lines
@@ -1499,7 +1549,10 @@ fn switching_a_skill_off_and_on_is_removed_then_added() {
     let looped = session.resume(rx2);
     session.drive(looped, &tx2, "again");
     let second = session.new_lines();
-    let mut resumed = vec!["preamble_built"];
+    let mut resumed: Vec<EventKind> = ["preamble_built"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     resumed.extend(resumed_later_text_turn());
     assert_eq!(kinds(&second), resumed);
     // Switched off: one removed line at the next turn start.
@@ -1508,7 +1561,10 @@ fn switching_a_skill_off_and_on_is_removed_then_added() {
     let looped = session.resume(rx3);
     session.drive(looped, &tx3, "third");
     let third = session.new_lines();
-    let mut removed = vec!["preamble_built", "skills_changed"];
+    let mut removed: Vec<EventKind> = ["preamble_built", "skills_changed"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     removed.extend(resumed_later_text_turn());
     assert_eq!(kinds(&third), removed);
     // Switched back on: one added line.
@@ -1517,7 +1573,10 @@ fn switching_a_skill_off_and_on_is_removed_then_added() {
     let looped = session.resume(rx4);
     session.drive(looped, &tx4, "fourth");
     let fourth = session.new_lines();
-    let mut added = vec!["preamble_built", "skills_changed"];
+    let mut added: Vec<EventKind> = ["preamble_built", "skills_changed"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     added.extend(resumed_later_text_turn());
     assert_eq!(kinds(&fourth), added);
     let lines = session.lines();
@@ -1584,7 +1643,10 @@ fn a_resumed_turn_replays_the_live_conversation_and_checks_silently() {
     let looped = session.resume(rx2);
     session.drive(looped, &tx2, "again");
     // Turn 2 announces the added skill, directly before its own input.
-    let mut announced = vec!["preamble_built", "skills_changed"];
+    let mut announced: Vec<EventKind> = ["preamble_built", "skills_changed"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     announced.extend(resumed_later_text_turn());
     assert_eq!(kinds(&session.new_lines()), announced);
     let live = session.provider.requests();
@@ -1597,7 +1659,10 @@ fn a_resumed_turn_replays_the_live_conversation_and_checks_silently() {
     let lines = session.new_lines();
     // The resumed turn replays the same shape, with no `skills_changed`:
     // the resume folded the live baseline, so the check stays silent.
-    let mut silent = vec!["preamble_built"];
+    let mut silent: Vec<EventKind> = ["preamble_built"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     silent.extend(resumed_later_text_turn());
     assert_eq!(kinds(&lines), silent);
     let requests = session.provider.requests();
@@ -1633,7 +1698,10 @@ fn a_prompt_naming_a_skill_added_this_turn_is_sent_as_written_then_expands() {
     session.inbox.send(delivery("/late 1")).unwrap();
     session.turn();
     let lines = session.lines();
-    let mut announced = vec!["skills_changed"];
+    let mut announced: Vec<EventKind> = ["skills_changed"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     announced.extend(later_text_turn());
     assert_eq!(kinds(&lines), announced);
     assert_eq!(turn_input(&lines), "/late 1");

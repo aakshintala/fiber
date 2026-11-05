@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::events::{TextDelta, ToolCallArgumentsDelta, TurnOutcome};
+use contract::events::{EventKind, TextDelta, ToolCallArgumentsDelta, TurnOutcome};
 use contract::provider::{CallError, CallUsage, Delta, InputSize};
 use contract::shapes::Failure;
 use fakes::Deadline;
@@ -171,6 +171,7 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1]);
     let failed_message = &lines[5];
@@ -262,6 +263,7 @@ fn three_failures_then_success_waits_2_4_8s() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1, 2, 3]);
     assert_eq!(
@@ -325,6 +327,7 @@ fn four_failures_exhaust_the_retries_with_the_last_error() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1, 2, 3, 4]);
     // No `retry_scheduled` after the last attempt.
@@ -367,6 +370,7 @@ fn a_never_retried_code_fails_at_once() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1]);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
@@ -396,6 +400,7 @@ fn x_should_retry_false_stops_a_5xx_at_once() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1]);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
@@ -436,6 +441,7 @@ fn x_should_retry_true_retries_an_invalid_request() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(scheduled(&lines), [(2, 0)]);
     assert_scheduled_attempts(&lines);
@@ -487,6 +493,7 @@ fn an_asked_wait_within_the_cap_waits_the_larger() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(scheduled(&lines), [(2, 30_000)]);
     assert_scheduled_attempts(&lines);
@@ -512,6 +519,7 @@ fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1]);
     let completed = &lines[7].payload;
@@ -581,6 +589,7 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The finished tool call never runs, and the partial text never reaches
     // the conversation: the retry's request holds neither.
@@ -613,6 +622,7 @@ fn zero_attempts_never_retries() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1]);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
@@ -656,6 +666,7 @@ fn a_cancel_during_the_wait_ends_the_turn_interrupted() {
             "retry_scheduled",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1]);
     assert_eq!(scheduled(&lines), [(2, 2000)]);
@@ -686,6 +697,7 @@ fn a_cancel_during_the_failing_call_is_interrupted_with_no_wait() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1]);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
@@ -747,6 +759,7 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(attempts(&lines), [1]);
     assert_eq!(scheduled(&lines), [(2, 2000)]);
@@ -795,6 +808,7 @@ fn a_retried_failure_after_its_generation_writes_one_usage_per_attempt() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let starts: Vec<_> = lines
         .iter()

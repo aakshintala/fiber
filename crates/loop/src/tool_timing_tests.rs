@@ -1992,7 +1992,7 @@ fn a_fast_read_times_one_permission_without_a_decision_line() {
     assert_eq!(records[0].ms, 0);
     assert_tool_wire(&records, "atlas");
     assert!(
-        !kinds(&world).contains(&"permission_resolved".to_owned()),
+        !kinds(&world).contains(&EventKind::PermissionResolved),
         "a fast path writes no decision line"
     );
 }
@@ -2159,7 +2159,7 @@ fn an_unknown_tool_enters_no_phase() {
     assert_eq!(tool.ran(), 0);
     assert!(tool_records(&world).is_empty(), "{:?}", op_records(&world));
     assert!(
-        !kinds(&world).contains(&"tool_call_started".to_owned()),
+        !kinds(&world).contains(&EventKind::ToolCallStarted),
         "the unknown call never started"
     );
 }
@@ -2268,7 +2268,7 @@ fn a_hook_refusal_never_enters_permission() {
     assert_eq!(ops(&world, "tool.hooks").len(), 1);
     assert!(ops(&world, "tool.permission").is_empty());
     assert!(
-        !kinds(&world).contains(&"permission_requested".to_owned()),
+        !kinds(&world).contains(&EventKind::PermissionRequested),
         "a refused call asks nobody"
     );
 }
@@ -2546,7 +2546,7 @@ fn a_cancel_while_waiting_ends_cancelled_with_one_record() {
     assert_eq!(records.len(), 1);
     assert_tool_wire(&records, "atlas");
     assert!(
-        kinds(&world).contains(&"tool_call_completed".to_owned()),
+        kinds(&world).contains(&EventKind::ToolCallCompleted),
         "the cancelled call still completes"
     );
 }
@@ -2642,7 +2642,7 @@ fn an_idle_wait_suspends_with_the_abandoned_segment_record() {
     assert_eq!(records.len(), 1, "abandonment still closes the segment");
     assert_tool_wire(&records, "atlas");
     assert!(
-        !kinds(&world).contains(&"tool_call_completed".to_owned()),
+        !kinds(&world).contains(&EventKind::ToolCallCompleted),
         "an idle approval completes nothing"
     );
 }
@@ -2682,7 +2682,7 @@ fn a_shutdown_while_waiting_abandons_with_one_record() {
     assert_eq!(records.len(), 1);
     assert_tool_wire(&records, "atlas");
     assert!(
-        !kinds(&world).contains(&"tool_call_started".to_owned()),
+        !kinds(&world).contains(&EventKind::ToolCallStarted),
         "the abandoned call never started"
     );
 }
@@ -2806,7 +2806,7 @@ fn a_resumed_allow_starts_a_fresh_segment() {
     assert_eq!(
         kinds(&world)
             .iter()
-            .filter(|kind| *kind == "permission_requested")
+            .filter(|kind| **kind == EventKind::PermissionRequested)
             .count(),
         2,
         "the request is raised once per process"
@@ -3109,7 +3109,7 @@ fn a_failed_commit_on_resume_settles_nothing() {
         "only the abandoned live segment closed"
     );
     assert!(
-        !kinds(&world).contains(&"permission_resolved".to_owned()),
+        !kinds(&world).contains(&EventKind::PermissionResolved),
         "the unsettled refusal writes no decision"
     );
 }
@@ -3171,7 +3171,7 @@ fn a_resumed_schema_failure_completes_unchecked() {
         "no resumed segment"
     );
     assert!(
-        kinds(&world).contains(&"tool_call_completed".to_owned()),
+        kinds(&world).contains(&EventKind::ToolCallCompleted),
         "the call completes with the check's failure"
     );
 }
@@ -3604,7 +3604,7 @@ fn cancelling_a_stage_ends_cancelled_with_its_record() {
     assert_eq!(records.len(), 1, "the entered stage is timed");
     assert_tool_wire(&records, "atlas");
     assert!(
-        kinds(&world).contains(&"tool_call_completed".to_owned()),
+        kinds(&world).contains(&EventKind::ToolCallCompleted),
         "the cancelled call still completes"
     );
 }
@@ -3661,7 +3661,7 @@ fn a_cancel_before_the_hold_stores_its_release_still_ends_the_hold() {
     assert_eq!(records.len(), 1, "the entered stage is timed");
     assert_tool_wire(&records, "atlas");
     assert!(
-        kinds(&world).contains(&"tool_call_completed".to_owned()),
+        kinds(&world).contains(&EventKind::ToolCallCompleted),
         "the cancelled call still completes"
     );
 }
@@ -4593,7 +4593,7 @@ fn a_job_bearing_result_reaches_one_after_dispatch() {
         "before, check and the one shared after dispatch"
     );
     assert!(
-        kinds(&world).contains(&"job_completed".to_owned()),
+        kinds(&world).contains(&EventKind::JobCompleted),
         "the job record is written with the result"
     );
 }
@@ -4640,7 +4640,7 @@ fn an_autonomous_job_end_writes_no_tool_timer() {
         "no tool ran, so no tool phase"
     );
     assert!(
-        kinds(&world).contains(&"job_completed".to_owned()),
+        kinds(&world).contains(&EventKind::JobCompleted),
         "the autonomous end still completes"
     );
 }
@@ -4814,7 +4814,7 @@ fn a_cancel_before_the_run_check_times_no_run() {
     assert_eq!(tool.ran(), 0, "no run was entered");
     assert!(ops(&world, "tool.run").is_empty());
     assert!(
-        !kinds(&world).contains(&"tool_call_started".to_owned()),
+        !kinds(&world).contains(&EventKind::ToolCallStarted),
         "nothing started"
     );
 }
@@ -5019,7 +5019,7 @@ fn an_admitted_inner_call_times_permission_and_run() {
     assert_eq!(outer.ran(), 1);
     assert_eq!(inner.ran(), 1, "the inner call ran");
     assert!(
-        !kinds(&world).contains(&"permission_requested".to_owned()),
+        !kinds(&world).contains(&EventKind::PermissionRequested),
         "no reviewer and no person meet an inner call"
     );
     let permission = ops(&world, "tool.permission");
@@ -5677,7 +5677,7 @@ fn info_runs_outer_work_with_no_timer() {
             .exists(),
         "no diagnostic file is written at info"
     );
-    assert!(kinds(&world).contains(&"tool_call_completed".to_owned()));
+    assert!(kinds(&world).contains(&EventKind::ToolCallCompleted));
 }
 
 // At `info` the same inner work runs with no timer and no worker context.
@@ -5919,8 +5919,8 @@ fn three_first_stages_fly_together_and_resolve_in_request_order() {
             "turn_completed",
         ]
         .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>(),
+        .map(EventKind::from_name)
+        .collect::<Vec<EventKind>>(),
         "resolutions stay in request order before any start",
     );
 }
@@ -6153,8 +6153,8 @@ fn a_second_blocks_count_lands_the_escalation_on_the_third_call() {
             "turn_completed",
         ]
         .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>(),
+        .map(EventKind::from_name)
+        .collect::<Vec<EventKind>>(),
         "each call applies in request order with its own usages",
     );
     let requested: Vec<&contract::Envelope> = lines
@@ -6231,7 +6231,10 @@ fn a_mixed_batch_matches_the_serial_event_stream() {
         prompt(&world, "hi");
         let outcome = turn(&mut world).unwrap();
         assert_eq!(outcome, Some(TurnOutcome::Completed));
-        let kinds = kinds(&world);
+        let kinds: Vec<String> = kinds(&world)
+            .into_iter()
+            .map(|kind| kind.name().to_owned())
+            .collect();
         let lines = log::read(&world.home.path().join("s_test")).unwrap();
         let resolved: Vec<(String, String)> = lines
             .iter()

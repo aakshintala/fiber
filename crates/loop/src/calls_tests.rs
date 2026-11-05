@@ -1066,6 +1066,7 @@ fn a_calls_job_lines_are_written_before_its_completion_and_render_nothing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         kinds(&without.lines),
@@ -1089,6 +1090,7 @@ fn a_calls_job_lines_are_written_before_its_completion_and_render_nothing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_job_triplet(&with.lines, id, "completed");
     assert_eq!(with.requests.len(), 2);
@@ -1208,6 +1210,7 @@ fn two_calls_write_their_job_lines_in_request_order() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let first_at = lines
@@ -1287,6 +1290,7 @@ fn a_cancelled_call_still_writes_its_job_lines() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_job_triplet(&ran.lines, id, "cancelled");
 }
@@ -1375,6 +1379,7 @@ fn a_calls_server_failed_is_written_under_its_action_before_its_completion() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let index = lines
@@ -1450,6 +1455,7 @@ fn a_calls_server_lines_are_written_in_order_under_its_action() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let index = lines
@@ -1531,6 +1537,7 @@ fn a_call_that_returns_an_error_after_its_turn_is_cancelled_ends_failed() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let completed = lines
@@ -1599,6 +1606,7 @@ fn a_call_settle_is_written_before_its_jobs_under_its_action() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let at = lines
@@ -1688,6 +1696,7 @@ fn a_call_settle_writes_a_foreign_action_under_that_action_and_its_own_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let at = lines
@@ -1920,6 +1929,7 @@ fn a_call_whose_settle_returns_nothing_writes_only_its_jobs() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_job_triplet(&ran.lines, id, "completed");
 }
@@ -2096,6 +2106,7 @@ fn a_cancelled_call_still_runs_its_settle_before_its_completion() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let at = lines
@@ -2193,7 +2204,7 @@ fn a_completed_call_preserves_its_protected_paths_report() {
     // docs/loop.md, "One step": one call, then a reply without calls ends
     // the turn. Compare kinds with counts, without imposing an order.
     let mut actual = kinds(&ran.lines);
-    let mut expected = vec![
+    let mut expected: Vec<EventKind> = [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -2212,9 +2223,12 @@ fn a_completed_call_preserves_its_protected_paths_report() {
         "usage_recorded",
         "assistant_message_completed",
         "turn_completed",
-    ];
-    actual.sort_unstable();
-    expected.sort_unstable();
+    ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect();
+    actual.sort_by(|a, b| a.name().cmp(b.name()));
+    expected.sort_by(|a, b| a.name().cmp(b.name()));
     assert_eq!(actual, expected);
 
     // docs/events.md, "tool_call_completed": the report survives into
@@ -2265,6 +2279,7 @@ fn a_completed_search_carries_its_loaded_names() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let completed = searched_completed(&ran);
     assert_eq!(completed.payload["status"], "completed");
@@ -2359,6 +2374,7 @@ fn a_cancelled_search_completes_with_the_cancel_line() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let completed = searched_completed(&ran);
     assert_eq!(completed.payload["status"], "cancelled");

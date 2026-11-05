@@ -15,8 +15,8 @@ mod support;
 use std::sync::Arc;
 
 use contract::events::{
-    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested, TurnOutcome,
-    UsageRecorded,
+    CacheLifetime, EventKind, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
+    TurnOutcome, UsageRecorded,
 };
 use contract::inbox::Delivery;
 use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
@@ -47,10 +47,10 @@ fn assistant(text: &str) -> Input {
 }
 
 /// The durable kinds of `lines`, in order.
-fn durable(lines: &[contract::Envelope]) -> Vec<&str> {
+fn durable(lines: &[contract::Envelope]) -> Vec<EventKind> {
     kinds(lines)
         .into_iter()
-        .filter(|k| !k.ends_with("_delta"))
+        .filter(|k| !k.name().ends_with("_delta"))
         .collect()
 }
 
@@ -81,6 +81,7 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let input: Vec<&str> = lines[3].payload["input"]
         .as_array()
@@ -187,6 +188,7 @@ fn a_call_that_sent_media_records_input_media() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert_eq!(usage.payload["input_bytes"], 2048);
@@ -224,6 +226,7 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let steering = lines.iter().find(|l| l.kind == "steering_applied").unwrap();
     assert_eq!(steering.payload["content"][0]["text"], "also this");
@@ -250,12 +253,18 @@ fn a_message_waiting_at_a_step_boundary_is_applied_by_that_step() {
     session.turn();
     let lines = session.lines();
     let kinds = kinds(&lines);
-    let second_step = kinds.iter().rposition(|k| *k == "step_started").unwrap();
-    assert_eq!(kinds[second_step + 1], "steering_queue");
-    assert_eq!(kinds[second_step + 2], "steering_queue");
-    assert_eq!(kinds[second_step + 3], "steering_applied");
+    let second_step = kinds
+        .iter()
+        .rposition(|k| *k == EventKind::StepStarted)
+        .unwrap();
+    assert_eq!(kinds[second_step + 1], EventKind::SteeringQueue);
+    assert_eq!(kinds[second_step + 2], EventKind::SteeringQueue);
+    assert_eq!(kinds[second_step + 3], EventKind::SteeringApplied);
     assert_eq!(
-        kinds.iter().filter(|k| **k == "steering_applied").count(),
+        kinds
+            .iter()
+            .filter(|k| **k == EventKind::SteeringApplied)
+            .count(),
         1
     );
 }
@@ -510,6 +519,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let arguments = lines
         .iter()
@@ -575,6 +585,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let call = &lines[7].payload;
     assert_eq!(call["outcome"], "failed");
@@ -652,6 +663,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
             "tool_call_completed",
             "step_started",
         ]
+        .map(EventKind::from_name)
     );
     let texts: Vec<&str> = span
         .iter()
@@ -904,11 +916,11 @@ fn spend_at_the_budget_refuses_the_next_request() {
     assert_eq!(
         kinds(&lines)
             .iter()
-            .filter(|kind| **kind == "assistant_message_started")
+            .filter(|kind| **kind == EventKind::AssistantMessageStarted)
             .count(),
         1
     );
-    assert!(kinds(&lines).contains(&"steering_applied"));
+    assert!(kinds(&lines).contains(&EventKind::SteeringApplied));
     let completed = lines.last().unwrap();
     assert_eq!(completed.payload["outcome"], "failed");
     assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
@@ -937,14 +949,14 @@ fn a_call_that_crosses_the_budget_completes_and_the_next_is_refused() {
     assert_eq!(
         kinds(&lines)
             .iter()
-            .filter(|kind| **kind == "usage_recorded")
+            .filter(|kind| **kind == EventKind::UsageRecorded)
             .count(),
         2
     );
     assert_eq!(
         kinds(&lines)
             .iter()
-            .filter(|kind| **kind == "assistant_message_started")
+            .filter(|kind| **kind == EventKind::AssistantMessageStarted)
             .count(),
         2
     );
@@ -1029,6 +1041,7 @@ fn a_zero_budget_refuses_the_first_request() {
             "step_started",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         lines.last().unwrap().payload["error"]["message"],
@@ -1118,6 +1131,7 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The failed turn ends without a last drain, so the steer is still
     // waiting: no `steering_applied` names it.
@@ -1139,6 +1153,7 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
     let input: Vec<&str> = started.payload["input"]
@@ -1200,6 +1215,7 @@ fn queued_steers_are_each_applied_in_order_and_listed_while_queued() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let queues: Vec<Vec<&str>> = lines
         .iter()
@@ -1272,6 +1288,7 @@ fn a_dropped_steer_leaves_the_queue_listing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let queues: Vec<Vec<&str>> = lines
         .iter()
@@ -1316,6 +1333,7 @@ fn a_reply_reporting_searches_records_their_count() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert_eq!(usage.payload["web_searches"], 3);
@@ -1340,6 +1358,7 @@ fn a_reply_reporting_searches_records_their_count() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert!(usage.payload.get("web_searches").is_none());
@@ -1384,6 +1403,7 @@ fn a_reply_carrying_an_inline_cost_records_it_instead_of_the_declared_price() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let usages: Vec<_> = lines
         .iter()
@@ -1974,6 +1994,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(cut.last().unwrap().payload["outcome"], "interrupted");
     // No stop reached the registry: neither the delegates nor the job.
@@ -2007,6 +2028,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = lines
         .iter()

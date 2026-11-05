@@ -201,6 +201,7 @@ fn an_open_extension_ask_is_declined_at_exit() {
             "interaction_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -292,6 +293,7 @@ fn two_open_extension_asks_are_declined_in_log_order() {
             "interaction_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -413,7 +415,10 @@ fn a_log_ending_in_rewound_writes_no_fiber_exited() {
     // Nothing is written: no `fiber_exited`, and the open extension ask is
     // left as it is, not declined.
     assert_eq!(session.kinds(), before);
-    assert_eq!(session.kinds().last().map(String::as_str), Some("rewound"));
+    assert_eq!(
+        session.kinds().last().map(|kind| kind.name()),
+        Some("rewound")
+    );
     assert!(session.resolved().is_empty());
 }
 
@@ -438,7 +443,10 @@ fn a_log_ending_in_rewound_reports_the_loops_error_without_writing() {
     .unwrap();
     assert_eq!(exited.code, 1);
     assert_eq!(exited.error, Some(failure));
-    assert_eq!(session.kinds().last().map(String::as_str), Some("rewound"));
+    assert_eq!(
+        session.kinds().last().map(|kind| kind.name()),
+        Some("rewound")
+    );
 }
 
 fn failure(code: ErrorCode, message: &str) -> Failure {
@@ -817,6 +825,7 @@ fn fiber_exited_names_the_unresolved_request() {
             "interaction_requested",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -838,6 +847,7 @@ fn fiber_exited_has_no_suspended_on_once_the_request_is_resolved() {
             "permission_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -859,6 +869,7 @@ fn fiber_exited_keeps_the_request_that_was_not_resolved() {
             "permission_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 
     let mut later = Session::new();
@@ -877,6 +888,7 @@ fn fiber_exited_keeps_the_request_that_was_not_resolved() {
             "permission_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -919,6 +931,7 @@ fn fiber_exited_keeps_the_question_that_was_not_resolved() {
                 "interaction_resolved",
                 "fiber_exited",
             ]
+            .map(EventKind::from_name)
         );
     }
 }
@@ -1019,6 +1032,7 @@ fn fiber_exited_ignores_a_request_from_the_previous_process() {
             "fiber_started",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 

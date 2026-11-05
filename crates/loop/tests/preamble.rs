@@ -11,7 +11,7 @@
 
 mod support;
 
-use contract::events::CacheLifetime;
+use contract::events::{CacheLifetime, EventKind};
 use fakes::Scripted;
 use serde_json::Value;
 
@@ -31,6 +31,7 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
             "opening_message",
             "turn_started"
         ]
+        .map(EventKind::from_name)
     );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["reason"], "start");
@@ -126,6 +127,7 @@ fn an_unreadable_instruction_file_is_a_notice_after_the_opening_message() {
             "notice",
             "turn_started",
         ]
+        .map(EventKind::from_name)
     );
     let notice = lines.iter().find(|l| l.kind == "notice").unwrap();
     assert_eq!(notice.payload["code"], "io_failed");
@@ -182,7 +184,7 @@ fn a_tool_registered_twice_records_what_it_replaced() {
 fn a_loop_that_takes_no_turn_writes_no_preamble() {
     let session = Session::new(vec![Scripted::text("Done.")], None);
     let lines: Vec<contract::Envelope> = log::read(&session.dir).unwrap();
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
 }
 
 #[test]
@@ -249,6 +251,7 @@ fn trigger_at_is_absent_when_automatic_handoff_is_off() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert!(built.payload.get("trigger_at").is_none());
@@ -280,6 +283,7 @@ fn trigger_at_follows_the_configured_tokens() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["trigger_at"], 1_234);
@@ -327,6 +331,7 @@ fn an_extension_section_is_logged_and_sent_after_the_instruction_files() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
     assert_eq!(
@@ -398,6 +403,7 @@ fn a_section_whose_files_are_all_missing_has_no_entry() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
     // The missing file sends nothing, and the all-missing extension has
@@ -441,6 +447,7 @@ fn over_budget_ends_the_section_with_the_prune_line_and_under_does_not() {
                 "assistant_message_completed",
                 "turn_completed",
             ]
+            .map(EventKind::from_name)
         );
         let text = opening_text(&session);
         if over {
@@ -479,6 +486,7 @@ fn a_five_minute_input_reaches_the_preamble_and_the_requests() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["cache_lifetime"], "5m");
@@ -516,6 +524,7 @@ fn a_thinking_level_is_recorded_and_sent_on_every_request() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["thinking"], "high");
@@ -574,7 +583,10 @@ fn tool_turn(window: u64) -> (Vec<String>, Vec<Value>) {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    let kinds = kinds(&lines).into_iter().map(str::to_owned).collect();
+    let kinds: Vec<String> = kinds(&lines)
+        .into_iter()
+        .map(|kind| kind.name().to_owned())
+        .collect();
     let notices = lines
         .into_iter()
         .filter(|line| line.kind == "notice")
@@ -621,7 +633,10 @@ fn an_oversize_notice_on_a_deferring_model_without_a_search_factory_says_deferra
     let lines = session.lines();
     // The full stream as a multiset, so a missing or duplicated
     // non-notice event fails (`docs/testing.md`, "Event streams").
-    let mut stream = kinds(&lines);
+    let mut stream: Vec<String> = kinds(&lines)
+        .into_iter()
+        .map(|kind| kind.name().to_owned())
+        .collect();
     stream.sort_unstable();
     let mut expected = TURN_KINDS.to_vec();
     expected.push("notice");
@@ -656,7 +671,7 @@ fn a_budget_reaches_preamble_built() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    assert_eq!(kinds(&lines), TURN_KINDS);
+    assert_eq!(kinds(&lines), TURN_KINDS.map(EventKind::from_name));
     let built = lines
         .into_iter()
         .find(|line| line.kind == "preamble_built")
@@ -670,7 +685,7 @@ fn budget_is_absent_when_none_is_set() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    assert_eq!(kinds(&lines), TURN_KINDS);
+    assert_eq!(kinds(&lines), TURN_KINDS.map(EventKind::from_name));
     let built = lines
         .into_iter()
         .find(|line| line.kind == "preamble_built")

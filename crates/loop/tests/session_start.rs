@@ -168,7 +168,7 @@ fn allow_on_reraise(session: &Session) -> thread::JoinHandle<()> {
 fn new_kinds(session: &Session, before: usize) -> Vec<String> {
     support::kinds(&log::read(&session.dir).unwrap()[before..])
         .into_iter()
-        .map(str::to_owned)
+        .map(|kind| kind.name().to_owned())
         .collect()
 }
 

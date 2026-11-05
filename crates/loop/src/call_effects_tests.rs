@@ -279,7 +279,10 @@ fn an_outer_call_receives_the_exact_prepared_effects() {
         &mut watcher,
     );
     // No `tool_call_requested`: the call arrived pre-decided, past review.
-    assert_eq!(kinds(&lines), ["tool_call_started", "tool_call_completed"]);
+    assert_eq!(
+        kinds(&lines),
+        ["tool_call_started", "tool_call_completed"].map(EventKind::from_name)
+    );
     started_confined(&lines, "a_1");
     completed_failed(&lines, "a_1");
     assert_eq!(tool.seen(), vec![confined_effects()]);
@@ -313,6 +316,7 @@ fn an_inner_call_receives_the_exact_prepared_effects() {
             "tool_call_completed",
             "tool_call_completed",
         ]
+        .map(EventKind::from_name)
     );
     started_confined(&lines, "a_1");
     completed_failed(&lines, "a_1");
@@ -340,6 +344,7 @@ fn an_inner_call_receives_the_exact_prepared_effects() {
             "tool_call_started",
             "tool_call_completed"
         ]
+        .map(EventKind::from_name)
     );
     started_confined(&lines, &inner_action.0);
     completed_failed(&lines, &inner_action.0);
@@ -360,7 +365,10 @@ fn a_capped_call_receives_the_exact_prepared_effects() {
     let (mut looped, _home, log) = start(wrapped);
     let mut watcher = log.watch();
     let lines = run_decided(&mut looped, "a_1", capped, confined_effects(), &mut watcher);
-    assert_eq!(kinds(&lines), ["tool_call_started", "tool_call_completed"]);
+    assert_eq!(
+        kinds(&lines),
+        ["tool_call_started", "tool_call_completed"].map(EventKind::from_name)
+    );
     started_confined(&lines, "a_1");
     completed_failed(&lines, "a_1");
     assert_eq!(tool.seen(), vec![confined_effects()]);

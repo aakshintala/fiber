@@ -166,7 +166,10 @@ fn a_cancel_landing_before_the_take_declines_the_ask() {
     let calls = [(&action, Some(stream.as_ref()))];
     looped.serve_interactions(&calls, Some(&turn)).unwrap();
     let lines = durable(&home);
-    assert_eq!(kinds(&lines), ["session_started", "interaction_resolved"]);
+    assert_eq!(
+        kinds(&lines),
+        ["session_started", "interaction_resolved"].map(EventKind::from_name)
+    );
     let resolved = &lines[1];
     assert_eq!(resolved.payload["by"], "fiber");
     assert_eq!(resolved.payload["declined"], true);

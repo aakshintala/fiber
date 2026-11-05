@@ -747,6 +747,7 @@ fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let contexts: Vec<&Envelope> = all
         .iter()
@@ -1184,6 +1185,7 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let input = started_input(&all);
     assert_eq!(input.len(), 1);
@@ -1283,6 +1285,7 @@ fn two_non_blocking_failures_write_one_grouped_notice() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 }
 

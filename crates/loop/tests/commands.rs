@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use contract::commands::{Reply, ReplyAnswer};
-use contract::events::{Decision, TurnOutcome};
+use contract::events::{Decision, EventKind, TurnOutcome};
 use contract::inbox::{Ack, Answer, Delivery};
 use contract::provider::ToolDefinition;
 use contract::rules::{Rule, RuleDecision, StandingRules};
@@ -79,8 +79,8 @@ fn allow_with_feedback() -> ReplyAnswer {
     }
 }
 
-fn plain() -> Vec<&'static str> {
-    vec![
+fn plain() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -94,29 +94,32 @@ fn plain() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// `tool_turn` with `steering_applied` at the start of its last step: the
 /// drain lists the queued steer, the step clears the queue, then applies
 /// the claimed snapshot.
-fn applied(middle: &[&str]) -> Vec<String> {
+fn applied(middle: &[&str]) -> Vec<EventKind> {
     let mut kinds = tool_turn(middle);
     let step = kinds
         .iter()
-        .rposition(|kind| kind == "step_started")
+        .rposition(|kind| *kind == EventKind::StepStarted)
         .unwrap();
     for (at, kind) in ["steering_queue", "steering_queue", "steering_applied"]
         .into_iter()
         .enumerate()
     {
-        kinds.insert(step + 1 + at, kind.to_owned());
+        kinds.insert(step + 1 + at, EventKind::from_name(kind));
     }
     kinds
 }
 
 /// A turn whose first reply calls `once` and whose second says "Done.", with
 /// `middle` between the reply and the next step.
-fn tool_turn(middle: &[&str]) -> Vec<String> {
+fn tool_turn(middle: &[&str]) -> Vec<EventKind> {
     let mut out = vec![
         "session_started",
         "preamble_built",
@@ -141,7 +144,7 @@ fn tool_turn(middle: &[&str]) -> Vec<String> {
         "assistant_message_completed",
         "turn_completed",
     ]);
-    out.into_iter().map(str::to_owned).collect()
+    out.into_iter().map(EventKind::from_name).collect()
 }
 
 /// One call's send, run once the tool is joined and before the next drain.
@@ -240,14 +243,14 @@ fn ask_session(tool: Arc<TestTool>) -> Session {
 }
 
 /// An approval that was answered, then the call ran.
-fn asked(after: &[&str]) -> Vec<String> {
+fn asked(after: &[&str]) -> Vec<EventKind> {
     let mut middle = vec!["permission_requested", "permission_resolved"];
     middle.extend(after);
     tool_turn(&middle)
 }
 
 /// Two asks in one reply, both denied without a second request, then "Done.".
-fn denied_pair() -> Vec<String> {
+fn denied_pair() -> Vec<EventKind> {
     [
         "session_started",
         "preamble_built",
@@ -277,15 +280,15 @@ fn denied_pair() -> Vec<String> {
         "turn_completed",
     ]
     .into_iter()
-    .map(str::to_owned)
+    .map(EventKind::from_name)
     .collect()
 }
 
 /// A text reply continued by a second step: a steer taken at the end of
 /// the turn lists the queue, and its drop on the next step lists it empty
 /// again, with nothing applied.
-fn continued() -> Vec<&'static str> {
-    vec![
+fn continued() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -308,12 +311,15 @@ fn continued() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// `close` during the final reply, then a steer into the turn still in
 /// flight: the steer is applied on the step that continues it.
-fn closed_and_steered() -> Vec<&'static str> {
-    vec![
+fn closed_and_steered() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -337,10 +343,13 @@ fn closed_and_steered() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// A steer applied on the second step, then a later drop that is too late.
-fn applied_then_dropped() -> Vec<String> {
+fn applied_then_dropped() -> Vec<EventKind> {
     [
         "session_started",
         "preamble_built",
@@ -377,7 +386,7 @@ fn applied_then_dropped() -> Vec<String> {
         "turn_completed",
     ]
     .into_iter()
-    .map(str::to_owned)
+    .map(EventKind::from_name)
     .collect()
 }
 
@@ -701,10 +710,10 @@ fn a_steer_then_its_drop_in_one_drain_apply_nothing_and_both_are_accepted() {
     let mut expected = tool_turn(&["tool_call_started", "tool_call_completed"]);
     let at = expected
         .iter()
-        .rposition(|kind| kind == "step_started")
+        .rposition(|kind| *kind == EventKind::StepStarted)
         .unwrap();
-    expected.insert(at + 1, "steering_queue".to_owned());
-    expected.insert(at + 2, "steering_queue".to_owned());
+    expected.insert(at + 1, EventKind::from_name("steering_queue"));
+    expected.insert(at + 2, EventKind::from_name("steering_queue"));
     assert_eq!(kinds(&session.lines()), expected);
 }
 
@@ -790,10 +799,10 @@ fn a_steer_held_during_an_approval_can_be_dropped() {
     let mut expected = asked(&["tool_call_started", "tool_call_completed"]);
     let at = expected
         .iter()
-        .position(|kind| kind == "permission_requested")
+        .position(|kind| *kind == EventKind::PermissionRequested)
         .unwrap();
-    expected.insert(at + 1, "steering_queue".to_owned());
-    expected.insert(at + 2, "steering_queue".to_owned());
+    expected.insert(at + 1, EventKind::from_name("steering_queue"));
+    expected.insert(at + 2, EventKind::from_name("steering_queue"));
     assert_eq!(kinds(&lines), expected);
     assert!(lines.iter().all(|line| line.kind != "steering_applied"));
     assert_eq!(tool.ran().len(), 1);
@@ -1091,10 +1100,10 @@ fn a_shutdown_that_closes_the_inbox_during_a_standing_ask_leaves_the_request_pen
     // timeouts").
     let lines: Vec<contract::Envelope> = log::read(&session.dir).unwrap();
     let kinds = kinds(&lines);
-    assert_eq!(kinds.last(), Some(&"permission_requested"));
-    assert!(!kinds.contains(&"permission_resolved"));
-    assert!(!kinds.contains(&"tool_call_completed"));
-    assert!(!kinds.contains(&"turn_completed"));
+    assert_eq!(kinds.last(), Some(&EventKind::PermissionRequested));
+    assert!(!kinds.contains(&EventKind::PermissionResolved));
+    assert!(!kinds.contains(&EventKind::ToolCallCompleted));
+    assert!(!kinds.contains(&EventKind::TurnCompleted));
     assert!(tool.ran().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
     let written = r#loop::fiber_exited(
@@ -1148,6 +1157,7 @@ fn a_skill_written_after_the_first_lookup_is_sent_as_written() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines
         .iter()

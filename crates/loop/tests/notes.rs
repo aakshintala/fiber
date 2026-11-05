@@ -178,7 +178,10 @@ fn read_only_notes_render_an_eligible_entry_without_a_request_or_usage() {
         "shell.read_only.\"acme-cli query\".flags = [\"--json\"]"
     );
     assert_eq!(proposed[0].cites(), [1]);
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 
@@ -205,7 +208,10 @@ fn read_only_notes_with_an_answer_are_invalid_arguments() {
     assert_eq!(error.code, ErrorCode::InvalidArguments);
     assert_eq!(error.message, "read-only notes take no answer");
     assert_eq!(evidence, vec![files]);
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 
@@ -232,7 +238,10 @@ fn read_only_notes_with_earlier_lines_are_invalid_arguments() {
     assert_eq!(error.code, ErrorCode::InvalidArguments);
     assert_eq!(error.message, "read-only notes take no earlier lines");
     assert_eq!(evidence, vec![files]);
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 
@@ -251,7 +260,10 @@ fn read_only_notes_with_empty_earlier_are_accepted_as_omitted() {
     };
     assert!(error.is_none());
     assert_eq!(proposed.len(), 1);
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 
@@ -278,7 +290,10 @@ fn read_only_notes_withhold_an_ambiguous_tally() {
             "words after the command: an entry would cover other subcommands"
         )]
     );
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 

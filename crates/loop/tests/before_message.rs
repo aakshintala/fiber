@@ -17,7 +17,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use contract::events::TurnOutcome;
+use contract::events::{EventKind, TurnOutcome};
 use contract::hook::{
     BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall,
     CheckAnswer, CheckOutcome, Context, Hooks, Replaced,
@@ -402,6 +402,7 @@ fn a_replaced_steer_applies_hooked_with_its_context_after_it() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -430,7 +431,7 @@ fn the_request_after_a_replaced_prompt_carries_the_replacement_then_its_context(
     assert_eq!(
         kinds(&lines)
             .into_iter()
-            .filter(|kind| kind == &"context_added")
+            .filter(|kind| *kind == EventKind::ContextAdded)
             .count(),
         1
     );
@@ -460,6 +461,7 @@ fn the_request_after_a_replaced_prompt_carries_the_replacement_then_its_context(
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 
     let requests = session.requests();

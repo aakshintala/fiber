@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::commands::{Reply, ReplyAnswer};
-use contract::events::Decision;
+use contract::events::{Decision, EventKind};
 use contract::inbox::{Ack, Delivery};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::tool::Tool;
@@ -144,6 +144,7 @@ fn a_queued_prompt_starts_a_turn_even_at_a_zero_delay() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -436,6 +437,7 @@ fn a_reply_before_the_deadline_resolves_the_approval() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines.last().unwrap().payload["outcome"], "completed");
 }

@@ -388,8 +388,8 @@ fn a_retry_then_a_later_call_records_one_two_then_one() {
     // Session ids are one world apart, so compare kinds only.
     let mut observed_kinds = kinds(&observed);
     let mut plain_kinds = kinds(&plain);
-    observed_kinds.retain(|kind| kind != "session_started");
-    plain_kinds.retain(|kind| kind != "session_started");
+    observed_kinds.retain(|kind| *kind != EventKind::SessionStarted);
+    plain_kinds.retain(|kind| *kind != EventKind::SessionStarted);
     assert_eq!(observed_kinds, plain_kinds);
 }
 

@@ -13,7 +13,7 @@ mod support;
 
 use std::sync::Arc;
 
-use contract::events::{TurnOutcome, UsageRecorded};
+use contract::events::{EventKind, TurnOutcome, UsageRecorded};
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, SessionId};
 use fakes::{Scripted, call_usage, unnamed_usage};
@@ -59,6 +59,7 @@ fn a_call_failed_after_its_generation_writes_its_usage_before_failing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines
         .iter()
@@ -102,6 +103,7 @@ fn a_call_cancelled_after_its_generation_writes_its_usage_before_the_turn_ends()
             "usage_recorded",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert!(
         lines
@@ -150,6 +152,7 @@ fn a_call_failed_before_any_generation_writes_a_minted_usage() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines
         .iter()
@@ -182,6 +185,7 @@ fn a_call_cancelled_before_its_generation_writes_a_minted_usage() {
             "usage_recorded",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines
         .iter()
@@ -313,6 +317,7 @@ fn a_failed_review_after_its_generation_writes_its_usage() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let review = &lines[11];
     assert_eq!(review.kind, "usage_recorded");
@@ -366,7 +371,13 @@ fn only_record(session: &mut Session, expected: &[&str]) -> UsageRecorded {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let recorded: Vec<_> = lines
         .iter()
         .filter(|l| l.kind == "usage_recorded")
@@ -430,6 +441,7 @@ fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
             "turn_completed",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
     let exited = all.last().unwrap();
     // The parent's call and the delegate's, each once.
@@ -700,6 +712,7 @@ fn a_one_hour_write_costs_twice_input_through_the_session() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert_eq!(recorded.payload["cost"].as_f64(), Some(4.0));

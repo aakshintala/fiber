@@ -1834,7 +1834,15 @@ pub(crate) const ENDED: &[&str] = &["turn_completed"];
 /// streams"). Every segment together must name every line; never a
 /// subset.
 pub(crate) fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
-    assert_eq!(kinds(lines), parts.concat());
+    assert_eq!(
+        kinds(lines),
+        parts
+            .iter()
+            .copied()
+            .flatten()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
 }
 
 /// The `{"city": "Paris"}` arguments every weather-tool test calls with.

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::events::{
-    Control, Event, FileChange, Progress, TextDelta, ToolCallStarted, TurnOutcome,
+    Control, Event, EventKind, FileChange, Progress, TextDelta, ToolCallStarted, TurnOutcome,
 };
 use contract::provider::{Finish, Input};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process};
@@ -70,7 +70,11 @@ fn a_reads_call_runs_and_its_result_goes_to_the_model() {
             "tool_call_completed"
         ]
     );
-    assert!(!kinds(&lines).iter().any(|k| k.starts_with("permission_")));
+    assert!(
+        !kinds(&lines)
+            .iter()
+            .any(|k| k.name().starts_with("permission_"))
+    );
     let started = lines
         .iter()
         .find(|l| l.kind == "tool_call_started")
@@ -213,8 +217,9 @@ fn bad_arguments_fail_invalid_arguments_and_never_start() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    assert!(!kinds(&lines).contains(&"tool_call_started"));
+    assert!(!kinds(&lines).contains(&EventKind::ToolCallStarted));
     assert!(tool.ran().is_empty());
     let done = completed(&lines);
     assert_eq!(done.len(), 4);
@@ -363,27 +368,27 @@ fn assert_shell_fields_without_suggestion(text: &str) {
 /// do not run" and "Ending a turn"; `docs/tools.md`, "Before a call runs").
 /// Pinning the whole list pins the one completion too (`docs/testing.md`,
 /// "Event streams").
-const ONE_FAILED_CALL_TURN: &[&str] = &[
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "assistant_message_delta",
-    "tool_call_arguments_delta",
-    "tool_call_requested",
-    "usage_recorded",
-    "assistant_message_completed",
-    "tool_call_completed",
-    "step_started",
-    "assistant_message_started",
-    "assistant_message_delta",
-    "assistant_message_delta",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const ONE_FAILED_CALL_TURN: &[EventKind] = &[
+    EventKind::SessionStarted,
+    EventKind::PreambleBuilt,
+    EventKind::OpeningMessage,
+    EventKind::TurnStarted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::AssistantMessageDelta,
+    EventKind::ToolCallArgumentsDelta,
+    EventKind::ToolCallRequested,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::ToolCallCompleted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::AssistantMessageDelta,
+    EventKind::AssistantMessageDelta,
+    EventKind::TextCompleted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 #[test]
@@ -618,6 +623,7 @@ fn required_nullable_arguments_are_absent_and_replayed_as_written() {
                 "assistant_message_completed",
                 "turn_completed"
             ]
+            .map(EventKind::from_name)
         );
         let requested = lines
             .iter()
@@ -815,7 +821,7 @@ fn a_write_inside_the_workspace_runs_and_one_under_git_or_outside_does_not() {
     assert_eq!(
         kinds(&lines)
             .iter()
-            .filter(|k| **k == "tool_call_started")
+            .filter(|k| **k == EventKind::ToolCallStarted)
             .count(),
         2
     );
@@ -1669,6 +1675,7 @@ fn a_hosted_search_is_logged_in_three_lines_and_never_reviewed_or_run() {
             "tool_call_started",
             "tool_call_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(three[0].action_id, three[1].action_id);
     assert_eq!(three[1].action_id, three[2].action_id);
@@ -1681,13 +1688,13 @@ fn a_hosted_search_is_logged_in_three_lines_and_never_reviewed_or_run() {
     assert_eq!(text_first(&three[2]), "https://blog.rust-lang.org/");
     assert_eq!(three[2].payload["provider_item"], search_result_block());
     let all = kinds(&lines);
-    assert!(!all.contains(&"permission_requested"), "{all:?}");
+    assert!(!all.contains(&EventKind::PermissionRequested), "{all:?}");
     assert_eq!(
-        all.iter().filter(|k| **k == "step_started").count(),
+        all.iter().filter(|k| **k == EventKind::StepStarted).count(),
         1,
         "{all:?}"
     );
-    assert_eq!(all.last(), Some(&"turn_completed"));
+    assert_eq!(all.last(), Some(&EventKind::TurnCompleted));
     assert!(reviewer.requests().is_empty());
 }
 
@@ -1760,7 +1767,7 @@ fn a_hosted_search_in_a_reply_cut_off_by_the_output_limit_is_still_logged() {
     session.turn();
     let lines = session.lines();
     let all = kinds(&lines);
-    assert!(all.contains(&"tool_call_completed"), "{all:?}");
+    assert!(all.contains(&EventKind::ToolCallCompleted), "{all:?}");
 }
 
 /// A hosted search whose tool declares the call always reviewed keeps the
@@ -1831,6 +1838,7 @@ fn a_hosted_calls_start_keeps_the_registered_tools_always_reviewed() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines
         .iter()
@@ -1896,6 +1904,7 @@ fn known_hosts_hosted_search_surfaces_hosts_before_network_calls_are_judged() {
             "assistant_message_completed",
             "turn_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         completed(&lines)[0].payload["hosts_surfaced"],

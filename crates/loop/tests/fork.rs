@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use contract::events::{CacheLifetime, LoadedExtension};
+use contract::events::{CacheLifetime, EventKind, LoadedExtension};
 use contract::events::{Event, JobStarted, Parent, SessionNamed, TurnOutcome};
 use contract::hook::{BeforeMessageAnswer, BeforeMessageOutcome, Hooks, Replaced};
 use contract::inbox::{Ack, Delivery};
@@ -35,15 +35,15 @@ use support::{
 };
 
 const FORK: &str = "s_fork";
-const FORK_TURN: &[&str] = &[
-    "session_started",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const FORK_TURN: &[EventKind] = &[
+    EventKind::SessionStarted,
+    EventKind::TurnStarted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::TextCompleted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 fn task() -> String {
@@ -201,7 +201,7 @@ fn an_isolated_fork_records_its_effective_worktree_instead_of_the_inherited_one(
     )
     .unwrap();
     let lines = log::read(&dir).unwrap();
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
     assert_eq!(
         lines[0].payload["worktree"],
         serde_json::to_value(effective).unwrap()
@@ -311,7 +311,7 @@ fn a_fork_writes_parent_and_forked_from_and_no_rewind_before_its_prompt() {
             vec![Scripted::text("fork-done")],
         );
         let lines = log::read(&dir).unwrap();
-        assert_eq!(kinds(&lines), ["session_started"]);
+        assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
         assert_eq!(
             lines[0].payload["parent"],
             json!({"session_id":"s_test", "delegate_id":"j_fork"})
@@ -339,6 +339,7 @@ fn a_fork_writes_parent_and_forked_from_and_no_rewind_before_its_prompt() {
                 "assistant_message_completed",
                 "turn_completed"
             ]
+            .map(EventKind::from_name)
         );
         assert!(
             lines
@@ -467,6 +468,7 @@ fn a_session_start_context_sits_between_the_prefix_and_fork_task() {
             "assistant_message_completed",
             "turn_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines[1].payload["hook"], "session_start");
     assert_eq!(lines[1].payload["text"], "hook says hi");
@@ -509,6 +511,7 @@ fn an_isolated_forks_workspace_notice_follows_start_context_without_changing_the
             "assistant_message_completed",
             "turn_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines[2].payload["input"][0]["content"][0]["text"], task);
 }
@@ -671,7 +674,10 @@ fn a_before_message_refusal_sends_nothing_and_logs_nothing() {
             .unwrap(),
         None
     );
-    assert_eq!(kinds(&log::read(&dir).unwrap()), ["session_started"]);
+    assert_eq!(
+        kinds(&log::read(&dir).unwrap()),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(provider.requests().is_empty());
 }
 
@@ -705,7 +711,10 @@ fn a_job_the_parent_left_running_is_no_orphan_in_the_fork() {
         Vec::new(),
         vec![Scripted::text("fork-done")],
     );
-    assert_eq!(kinds(&log::read(&dir).unwrap()), ["session_started"]);
+    assert_eq!(
+        kinds(&log::read(&dir).unwrap()),
+        ["session_started"].map(EventKind::from_name)
+    );
     let _b = turn(b, &tx, &task());
     let lines = log::read(&dir).unwrap();
     assert_eq!(kinds(&lines), FORK_TURN);
@@ -845,6 +854,7 @@ fn a_fork_after_a_reload_sends_the_reloaded_tools_and_runs_one() {
                 "assistant_message_completed",
                 "turn_completed",
             ]
+            .map(EventKind::from_name)
         );
         let completion = lines
             .iter()

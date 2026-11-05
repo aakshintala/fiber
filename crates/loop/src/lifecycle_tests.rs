@@ -2011,6 +2011,7 @@ fn a_turn_start_context_is_logged_before_the_first_step_and_sent_after_the_promp
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let contexts: Vec<&Envelope> = all
         .iter()
@@ -2085,6 +2086,7 @@ fn a_blocking_turn_start_failure_fails_the_turn_before_any_request() {
             "turn_started",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let end = line(&all, "turn_completed");
     assert_eq!(end.payload["outcome"], "failed");
@@ -2135,6 +2137,7 @@ fn a_non_blocking_turn_start_failure_writes_a_notice_and_the_turn_goes_on() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let notice = line(&all, "notice");
     assert_eq!(notice.payload["code"], "hook_failed");
@@ -2214,6 +2217,7 @@ fn two_session_start_notices_arrive_as_one_grouped_notice() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -2259,6 +2263,7 @@ fn two_turn_start_notices_arrive_as_one_grouped_notice() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(world.provider.requests().len(), 1);
 }
@@ -2316,6 +2321,7 @@ fn two_before_model_call_notices_arrive_as_one_grouped_notice() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(world.provider.requests().len(), 1);
 }
@@ -2365,6 +2371,7 @@ fn repeated_turn_end_notices_arrive_as_one_grouped_notice() {
             "notice",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -2406,7 +2413,8 @@ fn a_cancel_or_shutdown_inside_turn_start_ends_the_turn_interrupted_with_no_cont
                 "opening_message",
                 "turn_started",
                 "turn_completed",
-            ],
+            ]
+            .map(EventKind::from_name),
             "complete ordered kinds"
         );
         assert!(
@@ -2456,7 +2464,8 @@ fn two_turn_start_contexts_are_written_in_run_order() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     let texts: Vec<&str> = all
@@ -2497,6 +2506,7 @@ fn without_hooks_the_kinds_list_is_unchanged() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -2655,7 +2665,8 @@ fn a_session_start_context_is_logged_before_turn_started_and_sent_first() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     let contexts: Vec<&Envelope> = all
@@ -2745,7 +2756,8 @@ fn a_blocking_session_start_failure_starts_no_session_and_drops_the_prompt() {
             "preamble_built",
             "opening_message",
             "notice"
-        ],
+        ]
+        .map(EventKind::from_name),
         "no turn starts and the notice is written: {all:?}"
     );
     let notice = line(&all, "notice");
@@ -2781,7 +2793,10 @@ fn a_shutdown_around_session_start_runs_no_hook_and_starts_no_turn() {
         "no hook runs"
     );
     drop(world.looped.take());
-    assert_eq!(kinds(&lines(&world)), ["session_started"]);
+    assert_eq!(
+        kinds(&lines(&world)),
+        ["session_started"].map(EventKind::from_name)
+    );
 
     // A shutdown started inside the hook's call writes no context.
     let hooks = Arc::new(FakeHooks::new());
@@ -2812,7 +2827,7 @@ fn a_shutdown_around_session_start_runs_no_hook_and_starts_no_turn() {
     let all = lines(&world);
     assert_eq!(
         kinds(&all),
-        ["session_started", "preamble_built", "opening_message"],
+        ["session_started", "preamble_built", "opening_message"].map(EventKind::from_name),
         "no context and no turn start: {all:?}"
     );
 }
@@ -2891,7 +2906,8 @@ fn a_shutdown_between_the_handoff_hook_and_its_commit_cancels_the_handoff() {
                 "assistant_message_completed",
                 "handoff_completed",
                 "turn_completed",
-            ],
+            ]
+            .map(EventKind::from_name),
             "fails: {fails}, {all:?}"
         );
         let done: Vec<&Envelope> = all
@@ -3005,7 +3021,8 @@ fn a_refusal_fails_the_turn_budget_exceeded_and_stops_the_delegates() {
             "turn_started",
             "step_started",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     let end = line(&all, "turn_completed");
@@ -3143,7 +3160,8 @@ fn a_blocking_before_model_call_failure_fails_the_turn_without_stopping_delegate
             "turn_started",
             "step_started",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     let end = line(&all, "turn_completed");
@@ -3256,7 +3274,8 @@ fn a_handoff_for_size_runs_the_hook_again_on_the_rebuilt_request() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
 }
@@ -3296,7 +3315,8 @@ fn an_over_budget_session_never_calls_the_hook() {
             "turn_started",
             "step_started",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     assert_eq!(
@@ -3376,7 +3396,8 @@ fn a_handoff_note_request_never_reaches_the_hook() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
 }
@@ -3420,7 +3441,8 @@ fn a_cancel_inside_the_hook_ends_the_turn_interrupted_even_on_a_refusal() {
             "turn_started",
             "step_started",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     assert_eq!(
@@ -3615,6 +3637,7 @@ fn a_turn_end_message_continues_the_turn_and_the_hook_runs_again() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The message is the extension's own, with no command and no rewrites.
     let steering = line(&all, "steering_applied");
@@ -3687,7 +3710,8 @@ fn a_steer_waiting_at_the_end_of_turn_drain_skips_turn_end_that_time() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     let steering: Vec<&Envelope> = all
@@ -3773,7 +3797,8 @@ fn a_cancel_inside_turn_end_drops_its_message_and_starts_no_later_turn_with_it()
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     let started: Vec<&Envelope> = all
@@ -3842,7 +3867,8 @@ fn a_turn_that_fails_or_asks_questions_never_calls_turn_end() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
 
@@ -3885,7 +3911,8 @@ fn a_turn_that_fails_or_asks_questions_never_calls_turn_end() {
             "tool_call_started",
             "tool_call_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     let end = line(&all, "turn_completed");
@@ -3934,7 +3961,8 @@ fn a_blocking_turn_end_failure_writes_nothing_and_fails_the_turn() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     assert!(
@@ -4004,7 +4032,8 @@ fn two_turn_end_messages_are_written_in_run_order_after_a_late_steer() {
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     let texts: Vec<&str> = all
@@ -4085,7 +4114,11 @@ fn a_cancel_before_the_next_steps_commit_drops_held_messages() {
     drop(world.looped.take());
 
     let all = lines(&world);
-    assert_eq!(kinds(&all), ["session_started"], "complete ordered kinds");
+    assert_eq!(
+        kinds(&all),
+        ["session_started"].map(EventKind::from_name),
+        "complete ordered kinds"
+    );
     assert!(
         !all.iter().any(|line| line.kind == "steering_applied"),
         "no held message was written: {:?}",
@@ -4114,7 +4147,11 @@ fn a_shutdown_before_the_held_write_applies_no_held_message() {
     drop(world.looped.take());
 
     let all = lines(&world);
-    assert_eq!(kinds(&all), ["session_started"], "complete ordered kinds");
+    assert_eq!(
+        kinds(&all),
+        ["session_started"].map(EventKind::from_name),
+        "complete ordered kinds"
+    );
     assert!(
         !all.iter().any(|line| line.kind == "steering_applied"),
         "no held message was written after shutdown: {all:?}"
@@ -4158,7 +4195,8 @@ fn a_shutdown_during_turn_start_from_another_thread_writes_no_context() {
             "opening_message",
             "turn_started",
             "turn_completed",
-        ],
+        ]
+        .map(EventKind::from_name),
         "complete ordered kinds"
     );
     assert!(
@@ -4191,7 +4229,11 @@ fn a_shutdown_after_the_turn_start_check_writes_no_context() {
     drop(world.looped.take());
 
     let all = lines(&world);
-    assert_eq!(kinds(&all), ["session_started"], "complete ordered kinds");
+    assert_eq!(
+        kinds(&all),
+        ["session_started"].map(EventKind::from_name),
+        "complete ordered kinds"
+    );
     assert!(
         !all.iter().any(|line| line.kind == "context_added"),
         "no context is written after the shutdown: {all:?}"
@@ -4237,7 +4279,7 @@ fn a_shutdown_after_step_started_writes_no_held_message() {
     let all = lines(&world);
     assert_eq!(
         kinds(&all),
-        ["session_started", "step_started"],
+        ["session_started", "step_started"].map(EventKind::from_name),
         "complete ordered kinds"
     );
     assert!(
@@ -4271,7 +4313,7 @@ fn a_cancel_between_a_turn_start_failure_and_end_turn_ends_interrupted() {
     let all = lines(&world);
     assert_eq!(
         kinds(&all),
-        ["session_started", "turn_completed"],
+        ["session_started", "turn_completed"].map(EventKind::from_name),
         "complete ordered kinds"
     );
     assert_eq!(
@@ -4302,7 +4344,7 @@ fn a_cancel_between_a_refusal_and_end_turn_ends_interrupted() {
     let all = lines(&world);
     assert_eq!(
         kinds(&all),
-        ["session_started", "turn_completed"],
+        ["session_started", "turn_completed"].map(EventKind::from_name),
         "complete ordered kinds"
     );
     assert_eq!(
@@ -4333,7 +4375,7 @@ fn a_cancel_between_a_turn_end_failure_and_end_turn_ends_interrupted() {
     let all = lines(&world);
     assert_eq!(
         kinds(&all),
-        ["session_started", "turn_completed"],
+        ["session_started", "turn_completed"].map(EventKind::from_name),
         "complete ordered kinds"
     );
     assert_eq!(

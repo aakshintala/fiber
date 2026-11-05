@@ -12,7 +12,7 @@ mod support;
 
 use contract::Envelope;
 use contract::emit::Emit;
-use contract::events::{CallStatus, ToolCallCompleted, TurnOutcome};
+use contract::events::{CallStatus, EventKind, ToolCallCompleted, TurnOutcome};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
@@ -172,7 +172,13 @@ fn assert_turn_events(lines: &[Envelope], inner: &[&str]) {
         "assistant_message_completed",
         "turn_completed",
     ]);
-    assert_eq!(support::kinds(lines), expected);
+    assert_eq!(
+        support::kinds(lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
 }
 
 fn inner_id(lines: &[Envelope]) -> contract::ActionId {
@@ -952,6 +958,7 @@ fn an_idle_command_runs_turnless_and_answers_with_the_logged_completion() {
             "tool_call_started",
             "tool_call_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_command_anchor(&lines);
     assert_eq!(
@@ -993,7 +1000,10 @@ fn an_ended_command_or_a_shutdown_drops_the_request_without_taking_or_logging_it
         assert!(request.answer.try_recv().is_err());
         assert!(request.taken.try_recv().is_err());
         let lines = log::read(&session.dir).unwrap();
-        assert_eq!(support::kinds(&lines), ["session_started",]);
+        assert_eq!(
+            support::kinds(&lines),
+            ["session_started"].map(EventKind::from_name)
+        );
     }
 }
 
@@ -1031,6 +1041,7 @@ fn a_command_end_cancels_its_running_inner_call_and_shutdown_runs_no_after_hook(
                 "tool_call_started",
                 "tool_call_completed"
             ]
+            .map(EventKind::from_name)
         );
         if shutdown {
             assert!(completed.content.is_empty());
@@ -1120,7 +1131,13 @@ fn a_command_chain_has_eight_inner_levels_and_turnless_outer_action_anchors() {
             expected.extend(["tool_call_requested", "tool_call_started"]);
         }
         expected.extend(std::iter::repeat_n("tool_call_completed", count));
-        assert_eq!(support::kinds(&lines), expected);
+        assert_eq!(
+            support::kinds(&lines),
+            expected
+                .iter()
+                .map(|name| EventKind::from_name(name))
+                .collect::<Vec<_>>()
+        );
     }
 }
 
@@ -1156,6 +1173,7 @@ fn an_ask_in_a_command_chain_is_declined_even_in_an_answerable_session() {
             "interaction_resolved",
             "tool_call_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines[3].payload["declined"], true);
     assert!(lines.iter().all(|line| line.turn_id.is_none()));
@@ -1305,7 +1323,13 @@ fn command_at_step_boundary(hold: StepHold, cancel: bool) {
         expected.extend_from_slice(support::REPLY);
     }
     expected.push("turn_completed");
-    assert_eq!(support::kinds(&lines), expected);
+    assert_eq!(
+        support::kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -1381,7 +1405,13 @@ fn command_inner_calls_keep_credential_and_standing_denies_but_skip_standing_ask
             assert_eq!(tool.ran.lock().unwrap().len(), 1);
         }
         kinds.push("tool_call_completed");
-        assert_eq!(support::kinds(&lines), kinds);
+        assert_eq!(
+            support::kinds(&lines),
+            kinds
+                .iter()
+                .map(|name| EventKind::from_name(name))
+                .collect::<Vec<_>>()
+        );
         assert!(lines.iter().all(|line| line.turn_id.is_none()));
         close_idle(&mut session, &done);
     }
@@ -1450,7 +1480,13 @@ fn a_command_names_the_session_only_when_its_final_completion_succeeds() {
         ];
         expected.extend(std::iter::repeat_n("session_named", names));
         expected.push("tool_call_completed");
-        assert_eq!(support::kinds(&lines), expected);
+        assert_eq!(
+            support::kinds(&lines),
+            expected
+                .iter()
+                .map(|name| EventKind::from_name(name))
+                .collect::<Vec<_>>()
+        );
         assert!(lines.iter().all(|line| line.turn_id.is_none()));
         session
             .inbox
@@ -2026,7 +2062,13 @@ fn an_inner_call_settle_is_written_at_the_inner_finish_under_its_action() {
         "assistant_message_completed",
         "turn_completed",
     ]);
-    assert_eq!(support::kinds(&lines), expected);
+    assert_eq!(
+        support::kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         action_kinds(&lines, &id),
         [

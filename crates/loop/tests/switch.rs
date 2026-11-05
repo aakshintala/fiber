@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use contract::clock::Clock as _;
-use contract::events::{CacheLifetime, Notice, TurnOutcome};
+use contract::events::{CacheLifetime, EventKind, Notice, TurnOutcome};
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::Provider;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
@@ -167,7 +167,16 @@ struct Case {
 /// Asserts the complete, ordered event kinds of `lines` for the `name`
 /// case, like support's `assert_kinds` but naming the case on failure.
 fn assert_case_kinds(name: &str, lines: &[Envelope], parts: &[&[&str]]) {
-    assert_eq!(kinds(lines), parts.concat(), "case {name}");
+    assert_eq!(
+        kinds(lines),
+        parts
+            .iter()
+            .copied()
+            .flatten()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>(),
+        "case {name}"
+    );
 }
 
 /// The switch delivery a `Switch` half sends carrying `value`: a `model`
@@ -1731,12 +1740,15 @@ fn a_notice_is_written_after_model_changed() {
     let kinds_now = kinds(&lines);
     let changed_at = kinds_now
         .iter()
-        .position(|k| *k == "model_changed")
+        .position(|k| *k == EventKind::ModelChanged)
         .unwrap();
-    let notice_at = kinds_now.iter().position(|k| *k == "notice").unwrap();
+    let notice_at = kinds_now
+        .iter()
+        .position(|k| *k == EventKind::Notice)
+        .unwrap();
     let built_at = kinds_now
         .iter()
-        .position(|k| *k == "preamble_built")
+        .position(|k| *k == EventKind::PreambleBuilt)
         .unwrap();
     assert!(changed_at < notice_at && notice_at < built_at);
 }

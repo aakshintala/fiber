@@ -875,7 +875,13 @@ fn a_message_sent_just_before_the_last_idle_check_is_run() {
     assert!(sent.load(Ordering::SeqCst));
     assert!(world.admission.admit(|| true).is_none());
     let lines = world.turn_lines();
-    assert_eq!(kinds(&lines), one_step_with(&[]));
+    assert_eq!(
+        kinds(&lines),
+        one_step_with(&[])
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         lines[0].payload["input"],
         json!([{

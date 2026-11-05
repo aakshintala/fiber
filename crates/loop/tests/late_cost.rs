@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::commands::{Reply as Answer, ReplyAnswer};
-use contract::events::{CacheLifetime, Decision, TurnOutcome};
+use contract::events::{CacheLifetime, Decision, EventKind, TurnOutcome};
 use contract::inbox::{Ack, Delivery};
 use contract::provider::{CostLookup, ModelCall, ModelRequest, Provider};
 use contract::shapes::{Effect, Failure};
@@ -208,58 +208,58 @@ fn usage_lines(lines: &[Envelope]) -> Vec<&Envelope> {
 }
 
 /// A failed call's first turn: its usage, then the failure.
-const FAILED_FIRST_KINDS: [&str; 9] = [
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const FAILED_FIRST_KINDS: [EventKind; 9] = [
+    EventKind::SessionStarted,
+    EventKind::PreambleBuilt,
+    EventKind::OpeningMessage,
+    EventKind::TurnStarted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 /// A cancelled call's first turn: its usage, then the turn ends.
-const CANCELLED_FIRST_KINDS: [&str; 8] = [
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "usage_recorded",
-    "turn_completed",
+const CANCELLED_FIRST_KINDS: [EventKind; 8] = [
+    EventKind::SessionStarted,
+    EventKind::PreambleBuilt,
+    EventKind::OpeningMessage,
+    EventKind::TurnStarted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::UsageRecorded,
+    EventKind::TurnCompleted,
 ];
 
 /// A completed reply's first turn.
-const COMPLETED_FIRST_KINDS: [&str; 12] = [
-    "session_started",
-    "preamble_built",
-    "opening_message",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "assistant_message_delta",
-    "assistant_message_delta",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const COMPLETED_FIRST_KINDS: [EventKind; 12] = [
+    EventKind::SessionStarted,
+    EventKind::PreambleBuilt,
+    EventKind::OpeningMessage,
+    EventKind::TurnStarted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::AssistantMessageDelta,
+    EventKind::AssistantMessageDelta,
+    EventKind::TextCompleted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 /// A second turn opening with the late record of the first.
-const LATE_NEXT_KINDS: [&str; 10] = [
-    "usage_recorded",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "assistant_message_delta",
-    "assistant_message_delta",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const LATE_NEXT_KINDS: [EventKind; 10] = [
+    EventKind::UsageRecorded,
+    EventKind::TurnStarted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::AssistantMessageDelta,
+    EventKind::AssistantMessageDelta,
+    EventKind::TextCompleted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 /// The first turn's one `usage_recorded`, and its lines.
@@ -336,6 +336,7 @@ fn a_failed_call_s_cost_settles_30_seconds_later_and_is_counted_once() {
             "turn_completed",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
     let exited = all.last().unwrap();
     assert_eq!(exited.kind, "fiber_exited");
@@ -402,6 +403,7 @@ fn a_lookup_returning_nothing_leaves_the_first_record_alone() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     run_to_end(&mut session);
     let all = log::read(&session.dir).unwrap();
@@ -425,6 +427,7 @@ fn a_lookup_returning_nothing_leaves_the_first_record_alone() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let failed: Vec<_> = usage_lines(&all)
         .into_iter()
@@ -496,6 +499,7 @@ fn a_cost_settled_while_idle_is_written_when_the_session_ends() {
             "turn_completed",
             "usage_recorded",
         ]
+        .map(EventKind::from_name)
     );
     let usage = usage_lines(&all);
     assert_eq!(usage.len(), 2);
@@ -542,6 +546,7 @@ fn only_a_call_without_the_vendor_s_figure_is_looked_up() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(usage_lines(&lines).len(), 1);
     settle(&session.clock, start + AFTER);
@@ -688,6 +693,7 @@ fn a_reviewer_call_s_cost_settles_with_no_action() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     answered.join().unwrap();
     let review = usage_lines(&lines)
@@ -805,6 +811,7 @@ fn a_warming_refresh_s_cost_settles_in_no_turn_and_no_action() {
             "usage_recorded",
             "usage_recorded",
         ]
+        .map(EventKind::from_name)
     );
     let warm: Vec<_> = usage_lines(&all)
         .into_iter()
@@ -871,6 +878,7 @@ fn a_cost_that_settles_mid_turn_is_written_at_the_next_step() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(seen.calls(), ["gen_failed"]);
     let steps: Vec<usize> = lines
@@ -912,6 +920,7 @@ fn a_late_cost_counts_toward_the_next_turn_s_budget() {
             "step_started",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         lines.last().unwrap().payload["error"]["code"],

@@ -721,9 +721,9 @@ fn a_search_call_completes_loaded_and_the_next_request_carries_it_natively() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -855,9 +855,9 @@ fn a_handoff_after_a_search_leaves_no_search_result_for_the_next_request() {
     // The first turn loads `a` through the search.
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let first = harness.lines();
-    assert_kinds(
-        &first,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&first),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     // The second turn hands off on `wrap` with no search in the step: the
     // handoff drops the earlier search with the turn's conversation.
@@ -1008,9 +1008,9 @@ fn a_rewritten_search_keeps_its_loaded_set_and_native_form() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     // The hook's text wins in the log, while the loaded set survives.
     let done = completed(&lines);
@@ -1054,9 +1054,9 @@ fn a_withheld_search_renders_as_a_plain_result() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -1108,9 +1108,9 @@ fn a_failed_search_renders_as_an_ordinary_error_result() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -1397,9 +1397,9 @@ fn a_denied_search_renders_as_a_plain_result() {
     });
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["permission_resolved", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"])
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -1708,9 +1708,9 @@ fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let first_lines = harness.lines();
-    assert_kinds(
-        &first_lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&first_lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     // A registered name sorting after the search name: the build merges
     // the search ahead of it.
@@ -1976,9 +1976,9 @@ fn a_rewound_session_off_deferral_renders_the_logged_search_as_text() {
     // Turn 1 defers: the search loads `a`.
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let first_lines = harness.lines();
-    assert_kinds(
-        &first_lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&first_lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     assert_eq!(deferred_names(&first_lines), ["a"]);
 

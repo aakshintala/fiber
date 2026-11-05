@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
-use contract::events::{Answer, Control, Event, Interaction, TurnOutcome};
+use contract::events::{Answer, Control, Event, EventKind, Interaction, TurnOutcome};
 use contract::inbox::{Ack, Delivery};
 use contract::jobs::Jobs;
 use contract::provider::Input;
@@ -1245,8 +1245,14 @@ fn a_headless_resume_declines_the_form_and_runs_its_prompt_next() {
         Some(TurnOutcome::Completed)
     );
     let lines = session.lines();
-    assert_eq!(kinds(&lines)[0], "turn_started");
-    assert_eq!(kinds(&lines)[1..], *DONE);
+    assert_eq!(kinds(&lines)[0], EventKind::TurnStarted);
+    assert_eq!(
+        kinds(&lines)[1..]
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>(),
+        DONE
+    );
     assert_eq!(former.runs().len(), 2);
 }
 

@@ -401,7 +401,10 @@ fn settling_drops_a_command_request_without_taking_answering_or_logging_it() {
     assert!(dropped.load(Ordering::SeqCst));
     assert_eq!(taken.load(Ordering::SeqCst), 0);
     assert_eq!(answered.load(Ordering::SeqCst), 0);
-    assert_eq!(world.held.kinds(), ["session_started"]);
+    assert_eq!(
+        world.held.kinds(),
+        ["session_started"].map(EventKind::from_name)
+    );
     watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
@@ -536,16 +539,22 @@ fn a_normal_end_does_not_wait_again_for_an_end_drained_after_its_running_snapsho
         }
         ran(&finished);
         assert!(stops.try_recv().is_err(), "no ended job is stopped");
-        let expected = if remaining {
-            vec![
+        let expected: Vec<EventKind> = if remaining {
+            [
                 "session_started",
                 "job_started",
                 "job_started",
                 "job_completed",
                 "job_completed",
             ]
+            .into_iter()
+            .map(EventKind::from_name)
+            .collect()
         } else {
-            vec!["session_started", "job_started", "job_completed"]
+            ["session_started", "job_started", "job_completed"]
+                .into_iter()
+                .map(EventKind::from_name)
+                .collect()
         };
         assert_eq!(held.kinds(), expected);
         let lines = held.durable();
@@ -681,6 +690,7 @@ fn a_normal_end_releases_running_extension_jobs_before_its_first_drain() {
             "job_completed",
             "job_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = held.durable();
     let ends: Vec<_> = lines
@@ -761,6 +771,7 @@ fn a_shutdown_writes_a_bound_end_raw_with_no_release() {
             "delegate_finished",
             "job_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines[2].payload["text"], "BOUND SENTINEL");
     assert_eq!(lines[3].payload["job_id"], "j_1");
@@ -896,6 +907,7 @@ fn abnormal_settle_redacts_only_the_extension_owned_end() {
             "delegate_finished",
             "job_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = world.held.durable();
     assert_eq!(lines[3].payload["job_id"], "j_extension");
@@ -957,7 +969,10 @@ fn a_shutdown_stops_a_running_job_and_writes_its_end_before_run_returns() {
     ran(&finished);
 
     // No turn, no ending notice: only the job's end.
-    assert_eq!(held.kinds(), ["session_started", "job_completed"]);
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "job_completed"].map(EventKind::from_name)
+    );
     let end = &held.durable()[1];
     assert_eq!(end.payload["job_id"], "j_1");
     assert_eq!(end.payload["status"], "cancelled");
@@ -1006,7 +1021,7 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
     ran(&finished);
     assert_eq!(
         held.kinds(),
-        ["session_started", "delegate_finished", "job_completed"]
+        ["session_started", "delegate_finished", "job_completed"].map(EventKind::from_name)
     );
     let lines = held.durable();
     assert_eq!(lines[1].payload["job_id"], "j_1");
@@ -1028,7 +1043,7 @@ fn settle_writes_a_delegate_finish_delivered_while_settling() {
     ran(&finished);
     assert_eq!(
         held.kinds(),
-        ["session_started", "delegate_finished", "job_completed"]
+        ["session_started", "delegate_finished", "job_completed"].map(EventKind::from_name)
     );
     let lines = held.durable();
     assert_eq!(lines[1].payload["text"], "Done.");
@@ -1055,7 +1070,7 @@ fn the_stop_is_sent_again_to_a_job_listed_after_the_first() {
 
     assert_eq!(
         held.kinds(),
-        ["session_started", "job_completed", "job_completed"]
+        ["session_started", "job_completed", "job_completed"].map(EventKind::from_name)
     );
 }
 
@@ -1148,7 +1163,10 @@ fn a_shutdown_answers_what_arrives_and_starts_nothing() {
     assert_eq!(answer(&name_answer).unwrap_err().code, ErrorCode::Closing);
     assert!(answer(&close_answer).is_ok());
     // The monitor's batch is dropped; the job's end is written.
-    assert_eq!(held.kinds(), ["session_started", "job_completed"]);
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "job_completed"].map(EventKind::from_name)
+    );
 }
 
 #[test]
@@ -1169,7 +1187,7 @@ fn a_prompt_waiting_when_the_shutdown_lands_starts_no_turn() {
         .unwrap()
         .unwrap_err();
     assert_eq!(rejected.code, ErrorCode::Closing);
-    assert_eq!(held.kinds(), ["session_started"]);
+    assert_eq!(held.kinds(), ["session_started"].map(EventKind::from_name));
 }
 
 #[test]
@@ -1187,7 +1205,7 @@ fn a_steer_whose_ack_starts_the_shutdown_writes_no_turn_started() {
     let (finished, _inbox, held) = world.spawn_run();
     ran(&finished);
 
-    assert!(!held.kinds().contains(&"turn_started".to_owned()));
+    assert!(!held.kinds().contains(&EventKind::TurnStarted));
 }
 
 #[test]
@@ -1200,7 +1218,7 @@ fn without_a_shutdown_a_closed_inbox_stops_no_job() {
     ran(&finished);
 
     assert!(stops.try_recv().is_err(), "no stop was sent");
-    assert_eq!(held.kinds(), ["session_started"]);
+    assert_eq!(held.kinds(), ["session_started"].map(EventKind::from_name));
 }
 
 #[test]
@@ -1221,7 +1239,7 @@ fn a_shutdown_ends_an_idle_wait_at_its_next_wake() {
     inbox.send(Delivery::Cancelled).unwrap();
     ran(&finished);
 
-    assert_eq!(held.kinds(), ["session_started"]);
+    assert_eq!(held.kinds(), ["session_started"].map(EventKind::from_name));
 }
 
 #[test]
@@ -1239,8 +1257,8 @@ fn a_job_end_taken_into_a_refused_turn_is_written_by_the_settle() {
     ran(&finished);
 
     let kinds = held.kinds();
-    assert!(!kinds.contains(&"turn_started".to_owned()));
-    assert_eq!(kinds.last().map(String::as_str), Some("job_completed"));
+    assert!(!kinds.contains(&EventKind::TurnStarted));
+    assert_eq!(kinds.last().map(|kind| kind.name()), Some("job_completed"));
     assert_eq!(held.durable().last().unwrap().payload["job_id"], "j_1");
 }
 
@@ -1366,7 +1384,7 @@ fn an_extension_log_delivered_after_run_returns_is_dropped() {
         message: "late".into(),
     }));
     assert!(
-        !held.kinds().contains(&"extension_log".to_owned()),
+        !held.kinds().contains(&EventKind::ExtensionLog),
         "extension_log after run returns is never saved"
     );
     let diag = held
@@ -1485,7 +1503,7 @@ fn settle_writes_an_interaction_and_its_resolution_then_acks() {
     let kinds = world.held.kinds();
     assert_eq!(
         kinds[kinds.len().saturating_sub(2)..],
-        ["interaction_requested", "interaction_resolved"],
+        ["interaction_requested", "interaction_resolved"].map(EventKind::from_name),
         "both lines are written in order"
     );
 }
@@ -1557,7 +1575,10 @@ fn after_rewound_a_shutdown_writes_nothing_and_refuses_what_waits_closing() {
         Ok(_) => panic!("the prompt is refused, got {answer:?}"),
     }
     ran(&finished);
-    assert_eq!(held.kinds(), ["session_started", "rewound"]);
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "rewound"].map(EventKind::from_name)
+    );
 }
 
 #[test]
@@ -1659,7 +1680,7 @@ fn settle_claims_a_queued_notice_before_writing_it() {
     ran(&finished);
     assert_eq!(
         held.kinds(),
-        ["session_started", "delegate_finished", "job_completed"]
+        ["session_started", "delegate_finished", "job_completed"].map(EventKind::from_name)
     );
     assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
     let lines = held.durable();
@@ -1677,7 +1698,7 @@ fn settle_writes_nothing_for_a_refused_queued_notice() {
     world.cancel.shutdown(143);
     let (finished, _inbox, held) = world.spawn_run();
     ran(&finished);
-    assert_eq!(held.kinds(), ["session_started"]);
+    assert_eq!(held.kinds(), ["session_started"].map(EventKind::from_name));
     assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
 }
 
@@ -1803,6 +1824,7 @@ fn settle_writes_ahead_before_a_queued_notice() {
             "delegate_finished",
             "job_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
     assert_settled_ahead(&held.durable(), &action);
@@ -1873,6 +1895,7 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
             "delegate_finished",
             "job_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(asked.load(Ordering::SeqCst), 1, "the settle claims once");
     assert_settled_ahead(&held.durable(), &action);
@@ -2074,7 +2097,10 @@ fn shutdown_settle_waits_for_runs_before_its_final_drain() {
         .expect("settle returned");
     settled.unwrap();
     assert_eq!(hooks.waits.load(Ordering::SeqCst), 1);
-    assert_eq!(held.kinds(), ["session_started", "extension_exec"]);
+    assert_eq!(
+        held.kinds(),
+        ["session_started", "extension_exec"].map(EventKind::from_name)
+    );
     let lines = held.durable();
     assert_eq!(lines[1].payload["program"], "sh");
     assert_eq!(lines[1].payload["process"]["exit_code"], 0);
@@ -2095,7 +2121,7 @@ fn normal_settle_does_not_wait_for_runs() {
         .expect("normal settle returned");
     settled.unwrap();
     assert_eq!(hooks.waits.load(Ordering::SeqCst), 0);
-    assert_eq!(held.kinds(), ["session_started"]);
+    assert_eq!(held.kinds(), ["session_started"].map(EventKind::from_name));
 }
 
 #[test]
@@ -2112,7 +2138,7 @@ fn shutdown_settle_without_hooks_returns() {
         .recv(&result)
         .expect("unhooked settle returned");
     settled.unwrap();
-    assert_eq!(held.kinds(), ["session_started"]);
+    assert_eq!(held.kinds(), ["session_started"].map(EventKind::from_name));
 }
 
 #[test]
@@ -2159,7 +2185,7 @@ fn settle_under_shutdown_runs_no_hook_and_writes_its_end_raw() {
     assert_eq!(hooks.calls(), 0);
     assert_eq!(
         held.kinds(),
-        ["session_started", "delegate_finished", "job_completed"]
+        ["session_started", "delegate_finished", "job_completed"].map(EventKind::from_name)
     );
     let lines = held.durable();
     assert_eq!(lines[1].payload["text"], "Done.");

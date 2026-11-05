@@ -15,7 +15,7 @@ mod support;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
-use contract::events::{CacheLifetime, Control, TurnOutcome};
+use contract::events::{CacheLifetime, Control, EventKind, TurnOutcome};
 use contract::provider::{Cost, Input, ModelRequest, Provider};
 use contract::shapes::Failure;
 use contract::tool::Tool;
@@ -241,6 +241,7 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 
     let seq = turn_started_seq(&lines, "never push to main");
@@ -378,6 +379,7 @@ fn selection_prose_never_reaches_a_later_prompt() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(kept_lines(&lines).len(), 1);
     for request in reviewer.requests() {
@@ -590,6 +592,7 @@ fn a_failed_selection_keeps_every_earlier_person_message() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 
     let first = turn_started_seq(&lines, "never push to main");
@@ -714,6 +717,7 @@ fn an_unreadable_selection_is_asked_once_more() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 4);
@@ -812,6 +816,7 @@ fn an_unreadable_selection_is_asked_once_more() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(reviewer.requests().len(), 4);
     let kept = kept_lines(&lines);
@@ -871,6 +876,7 @@ fn none_keeps_nothing_and_a_second_handoff_with_no_person_message_asks_nothing()
             "reviewer_kept",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 
     let kept = kept_lines(&lines);
@@ -931,6 +937,7 @@ fn without_a_reviewer_a_handoff_writes_no_selection() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert!(kept_lines(&lines).is_empty());
 }
@@ -999,6 +1006,7 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
             "reviewer_kept",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
@@ -1066,6 +1074,7 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
             "notice",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
@@ -1378,6 +1387,7 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
             "step_started",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(reviewer.requests().len(), 1);
     let kept = kept_lines(&lines);
@@ -1470,6 +1480,7 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
@@ -1577,6 +1588,7 @@ fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         of_kind(&lines, "context_added")[0].payload["text"],

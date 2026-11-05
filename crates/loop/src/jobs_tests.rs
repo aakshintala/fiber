@@ -628,18 +628,21 @@ fn assert_notice(line: &Envelope, id: &str) {
 }
 
 /// A step whose reply is text alone, then the turn's end.
-const REPLY: [&str; 5] = [
-    "assistant_message_started",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const REPLY: [EventKind; 5] = [
+    EventKind::AssistantMessageStarted,
+    EventKind::TextCompleted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 /// `turn_started`, `step_started`, then `between`, then [`REPLY`].
-fn one_step_with<'a>(between: &[&'a str]) -> Vec<&'a str> {
-    let mut all = vec!["turn_started", "step_started"];
-    all.extend_from_slice(between);
+fn one_step_with(between: &[&str]) -> Vec<EventKind> {
+    let mut all: Vec<EventKind> = ["turn_started", "step_started"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
+    all.extend(between.iter().map(|name| EventKind::from_name(name)));
     all.extend_from_slice(&REPLY);
     all
 }
@@ -708,7 +711,10 @@ fn an_extension_end_is_claimed_hooked_and_logged_without_turn_input() {
                     .collect();
                 assert_eq!(ends.len(), if hold { 2 } else { 0 });
                 if hold {
-                    assert_eq!(kinds(&ends), ["delegate_finished", "job_completed"]);
+                    assert_eq!(
+                        kinds(&ends),
+                        ["delegate_finished", "job_completed"].map(EventKind::from_name)
+                    );
                     assert!(
                         ends.iter()
                             .all(|line| line.turn_id.is_none() && line.action_id.is_none())
@@ -1297,7 +1303,7 @@ fn delegate_mode_records_its_parent_with_or_without_a_worktree() {
     // on an inbox arrival, and none arrives here, so the opened session's
     // log holds that line alone. docs/delegates.md, "Events": a delegate's
     // session_started carries its parent.
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
     assert_eq!(
         lines[0].payload["parent"],
         serde_json::to_value(parent).unwrap()
@@ -1810,23 +1816,26 @@ fn sending(inbox: &Sender<Delivery>, during: Vec<Delivery>) -> Vec<Arc<dyn Tool>
 
 /// A turn whose first step calls `name`, then `between` at the second
 /// step's boundary, then a text reply.
-fn two_steps_with<'a>(called: &[&'a str], between: &[&'a str]) -> Vec<&'a str> {
-    let mut all = vec![
+fn two_steps_with(called: &[EventKind], between: &[EventKind]) -> Vec<EventKind> {
+    let mut all: Vec<EventKind> = [
         "turn_started",
         "step_started",
         "assistant_message_started",
         "tool_call_requested",
         "usage_recorded",
         "assistant_message_completed",
-    ];
+    ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect();
     all.extend_from_slice(called);
-    all.push("step_started");
+    all.push(EventKind::StepStarted);
     all.extend_from_slice(between);
     all.extend_from_slice(&REPLY);
     all
 }
 
-const RAN: [&str; 2] = ["tool_call_started", "tool_call_completed"];
+const RAN: [EventKind; 2] = [EventKind::ToolCallStarted, EventKind::ToolCallCompleted];
 
 #[test]
 fn a_notice_while_a_call_runs_is_written_at_the_next_step_boundary() {
@@ -1838,13 +1847,16 @@ fn a_notice_while_a_call_runs_is_written_at_the_next_step_boundary() {
     world.send(prompt("go"));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();
-    assert_eq!(kinds(&lines), two_steps_with(&RAN, &["job_completed"]));
+    assert_eq!(
+        kinds(&lines),
+        two_steps_with(&RAN, &(["job_completed"].map(EventKind::from_name)))
+    );
     assert_notice(&lines[9], JOB);
     assert_eq!(lines[0].payload["input"].as_array().unwrap().len(), 1);
     // A notice is not a steering message: the queue line never moves.
     let watched = world.watched();
     assert!(watched.iter().any(|line| line.kind == "job_completed"));
-    assert!(!kinds(&watched).contains(&"steering_queue"));
+    assert!(!kinds(&watched).contains(&EventKind::SteeringQueue));
     let requests = world.requests();
     assert_eq!(requests.len(), 2);
     assert!(!users(&requests[0]).contains(&rendered(JOB)));
@@ -1880,9 +1892,9 @@ fn a_steer_and_a_notice_are_written_in_arrival_order() {
         assert_eq!(world.turn(), Some(TurnOutcome::Completed));
         let lines = world.turn_lines();
         let between = if steer_first {
-            ["steering_applied", "job_completed"]
+            [EventKind::SteeringApplied, EventKind::JobCompleted]
         } else {
-            ["job_completed", "steering_applied"]
+            [EventKind::JobCompleted, EventKind::SteeringApplied]
         };
         assert_eq!(kinds(&lines), two_steps_with(&RAN, &between));
         let notice = if steer_first { 10 } else { 9 };
@@ -1930,7 +1942,10 @@ fn a_steer_drop_while_running_finds_the_steer_behind_a_notice() {
         Ok(true)
     );
     let lines = world.turn_lines();
-    assert_eq!(kinds(&lines), two_steps_with(&RAN, &["job_completed"]));
+    assert_eq!(
+        kinds(&lines),
+        two_steps_with(&RAN, &(["job_completed"].map(EventKind::from_name)))
+    );
     assert_notice(&lines[9], JOB);
 }
 
@@ -1959,9 +1974,12 @@ fn a_notice_during_the_final_reply_continues_the_turn() {
     world.send(prompt("go"));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();
-    let mut expected = vec!["turn_started", "step_started"];
+    let mut expected: Vec<EventKind> = ["turn_started", "step_started"]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect();
     expected.extend_from_slice(&REPLY[..4]);
-    expected.extend_from_slice(&["step_started", "job_completed"]);
+    expected.extend_from_slice(&["step_started", "job_completed"].map(EventKind::from_name));
     expected.extend_from_slice(&REPLY);
     assert_eq!(kinds(&lines), expected);
     assert_notice(&lines[7], JOB);
@@ -2024,12 +2042,15 @@ fn a_notice_during_an_approval_wait_is_written_at_the_next_boundary() {
     answered.join().unwrap();
     let lines = world.turn_lines();
     let called = [
-        "permission_requested",
-        "permission_resolved",
-        "tool_call_started",
-        "tool_call_completed",
+        EventKind::PermissionRequested,
+        EventKind::PermissionResolved,
+        EventKind::ToolCallStarted,
+        EventKind::ToolCallCompleted,
     ];
-    assert_eq!(kinds(&lines), two_steps_with(&called, &["job_completed"]));
+    assert_eq!(
+        kinds(&lines),
+        two_steps_with(&called, &(["job_completed"].map(EventKind::from_name)))
+    );
     assert_notice(&lines[11], JOB);
 }
 
@@ -2053,7 +2074,11 @@ fn a_notice_kept_by_a_cancelled_turn_starts_the_next_one() {
     assert_eq!(world.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
     let cut = world.turn_lines();
-    assert!(!kinds(&cut).contains(&"job_completed"), "{:?}", kinds(&cut));
+    assert!(
+        !kinds(&cut).contains(&EventKind::JobCompleted),
+        "{:?}",
+        kinds(&cut)
+    );
     assert_eq!(cut.last().unwrap().kind, "turn_completed");
     let _first = world.watched();
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
@@ -2067,7 +2092,7 @@ fn a_notice_kept_by_a_cancelled_turn_starts_the_next_one() {
     // A kept notice is not a kept steer: no queue line moves.
     let watched = world.watched();
     assert!(watched.iter().any(|line| line.kind == "job_completed"));
-    assert!(!kinds(&watched).contains(&"steering_queue"));
+    assert!(!kinds(&watched).contains(&EventKind::SteeringQueue));
 }
 
 #[test]
@@ -2102,7 +2127,10 @@ fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
     assert_eq!(world.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
     let cut = world.turn_lines();
-    assert!(!kinds(&cut).contains(&"steering_applied"), "{cut:?}");
+    assert!(
+        !kinds(&cut).contains(&EventKind::SteeringApplied),
+        "{cut:?}"
+    );
     assert_eq!(cut.last().unwrap().kind, "turn_completed");
     let _first = world.watched();
     // The close ends the wait for a turn; the kept message starts one
@@ -2117,9 +2145,9 @@ fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
     assert_eq!(lines[0].payload["input"], message_input("c_message"));
     // The queue moved into `turn_started`: it is listed empty first.
     let watched = world.watched();
-    assert_eq!(kinds(&watched)[0], "steering_queue");
+    assert_eq!(kinds(&watched)[0], EventKind::SteeringQueue);
     assert_eq!(watched[0].payload["messages"], json!([]));
-    assert_eq!(kinds(&watched)[1], "turn_started");
+    assert_eq!(kinds(&watched)[1], EventKind::TurnStarted);
     let requests = world.requests();
     assert_eq!(requests.len(), 2);
     assert_eq!(users(&requests[1]).last(), Some(&FRAMED.to_owned()));
@@ -2470,11 +2498,11 @@ fn ran(finished: &mpsc::Receiver<Result<(), crate::Error>>, wait: &Deadline) {
 }
 
 /// A whole session's durable kinds: its opening lines, then `turns`.
-fn session_of(turns: &[Vec<&str>]) -> Vec<String> {
+fn session_of(turns: &[Vec<EventKind>]) -> Vec<EventKind> {
     ["session_started", "preamble_built", "opening_message"]
         .into_iter()
-        .chain(turns.iter().flatten().copied())
-        .map(str::to_owned)
+        .map(EventKind::from_name)
+        .chain(turns.iter().flatten().cloned())
         .collect()
 }
 
@@ -2883,7 +2911,7 @@ fn a_steer_in_the_check_turn_arms_the_check_again() {
     let check = world.next_turn();
     let mut steered = one_step_with(&["jobs_pending_notified"]);
     steered.pop();
-    steered.extend(["step_started", "steering_applied"]);
+    steered.extend(["step_started", "steering_applied"].map(EventKind::from_name));
     steered.extend(REPLY);
     assert_eq!(kinds(&check), steered);
     assert_check(&check, &id);
@@ -3014,7 +3042,7 @@ fn a_session_message_in_the_check_turn_does_not_arm_the_check_again() {
     let check = world.next_turn();
     let mut steered = one_step_with(&["jobs_pending_notified"]);
     steered.pop();
-    steered.extend(["step_started", "steering_applied"]);
+    steered.extend(["step_started", "steering_applied"].map(EventKind::from_name));
     steered.extend(REPLY);
     assert_eq!(kinds(&check), steered);
     assert_check(&check, &id);
@@ -3121,7 +3149,10 @@ fn with_jobs_given_and_none_running_the_idle_delay_exits() {
     let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     ran(&finished, &wait);
     assert!(world.requests().is_empty());
-    assert_eq!(durable_kinds(&world), ["session_started"]);
+    assert_eq!(
+        durable_kinds(&world),
+        ["session_started"].map(EventKind::from_name)
+    );
 }
 
 #[test]
@@ -3197,6 +3228,7 @@ fn a_steer_arriving_as_the_check_turn_starts_follows_jobs_pending_notified() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         lines[from + 2].payload,
@@ -3335,7 +3367,10 @@ fn an_approval_wait_with_a_job_running_outlasts_the_idle_deadline() {
             "usage_recorded",
             "assistant_message_completed",
             "permission_requested",
-        ]])
+        ]
+        .into_iter()
+        .map(EventKind::from_name)
+        .collect::<Vec<EventKind>>()])
     );
 }
 
@@ -3490,7 +3525,7 @@ fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
         Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&answer),
         Ok(true)
     );
-    let mut expected = vec![
+    let mut expected: Vec<EventKind> = [
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -3499,7 +3534,10 @@ fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
         "assistant_message_completed",
         "step_started",
         "steering_applied",
-    ];
+    ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect();
     expected.extend_from_slice(&REPLY);
     assert_eq!(kinds(&turn), expected);
     let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
@@ -3543,7 +3581,7 @@ fn a_session_message_queued_before_close_is_applied_by_the_turn_in_flight() {
     world.send(prompt("Hello."));
     let finished = world.spawn_run();
     let turn = world.next_turn();
-    let mut expected = vec![
+    let mut expected: Vec<EventKind> = [
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -3552,7 +3590,10 @@ fn a_session_message_queued_before_close_is_applied_by_the_turn_in_flight() {
         "assistant_message_completed",
         "step_started",
         "steering_applied",
-    ];
+    ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect();
     expected.extend_from_slice(&REPLY);
     assert_eq!(kinds(&turn), expected);
     let applied = turn
@@ -3705,7 +3746,10 @@ fn a_batch_while_a_call_runs_is_written_at_the_next_step_boundary() {
     let lines = world.turn_lines();
     assert_eq!(
         kinds(&lines),
-        two_steps_with(&RAN, &["job_line", "steering_applied", "job_completed"])
+        two_steps_with(
+            &RAN,
+            &(["job_line", "steering_applied", "job_completed"].map(EventKind::from_name))
+        )
     );
     assert_eq!(lines[9].payload["lines"], "ready");
     assert_eq!(lines[9].action_id, None);
@@ -3849,14 +3893,17 @@ fn a_notice_admitted_during_an_approval_wait_is_claimed_once_at_the_next_boundar
     assert_eq!(asked.count(), 1, "the claim is asked once, at the write");
     let lines = world.turn_lines();
     let called = [
-        "permission_requested",
-        "permission_resolved",
-        "tool_call_started",
-        "tool_call_completed",
+        EventKind::PermissionRequested,
+        EventKind::PermissionResolved,
+        EventKind::ToolCallStarted,
+        EventKind::ToolCallCompleted,
     ];
     assert_eq!(
         kinds(&lines),
-        two_steps_with(&called, &["delegate_finished", "job_completed"])
+        two_steps_with(
+            &called,
+            &(["delegate_finished", "job_completed"].map(EventKind::from_name))
+        )
     );
     let finished = lines
         .iter()
@@ -3896,10 +3943,10 @@ fn a_notice_refused_at_the_write_writes_nothing() {
     assert_eq!(asked.count(), 1, "the claim is asked once, at the write");
     let lines = world.turn_lines();
     let called = [
-        "permission_requested",
-        "permission_resolved",
-        "tool_call_started",
-        "tool_call_completed",
+        EventKind::PermissionRequested,
+        EventKind::PermissionResolved,
+        EventKind::ToolCallStarted,
+        EventKind::ToolCallCompleted,
     ];
     assert_eq!(kinds(&lines), two_steps_with(&called, &[]));
 }
@@ -3927,7 +3974,11 @@ fn a_refused_notice_kept_by_a_cancelled_turn_starts_no_turn() {
     answered.join().unwrap();
     assert_eq!(asked.count(), 0, "a cancelled turn claims nothing it kept");
     let cut = world.turn_lines();
-    assert!(!kinds(&cut).contains(&"job_completed"), "{:?}", kinds(&cut));
+    assert!(
+        !kinds(&cut).contains(&EventKind::JobCompleted),
+        "{:?}",
+        kinds(&cut)
+    );
     // The next turn takes the leftover notice, refuses it, and starts
     // nothing on it.
     world.send(Delivery::Close(ignore()));
@@ -4138,21 +4189,22 @@ fn a_notice_claims_write_what_it_took_ahead_at_the_next_boundary() {
     assert_eq!(asked.count(), 1, "the claim is asked once, at the write");
     let lines = world.turn_lines();
     let called = [
-        "permission_requested",
-        "permission_resolved",
-        "tool_call_started",
-        "tool_call_completed",
+        EventKind::PermissionRequested,
+        EventKind::PermissionResolved,
+        EventKind::ToolCallStarted,
+        EventKind::ToolCallCompleted,
     ];
     assert_eq!(
         kinds(&lines),
         two_steps_with(
             &called,
-            &[
+            &([
                 "job_started",
                 "delegate_started",
                 "delegate_finished",
                 "job_completed"
             ]
+            .map(EventKind::from_name))
         )
     );
     let at = lines
@@ -4331,7 +4383,7 @@ fn a_shell_sent_during_a_turn_joins_the_next_turn_only() {
         "the running turn's last request reads no shell"
     );
     assert!(
-        durable_kinds(&world).contains(&"shell_command".to_owned()),
+        durable_kinds(&world).contains(&EventKind::ShellCommand),
         "the drain still writes the line"
     );
     world.send(prompt("again"));

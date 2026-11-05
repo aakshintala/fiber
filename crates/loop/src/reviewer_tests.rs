@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use contract::events::{
-    CacheLifetime, Event, EventKind, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
+    CacheLifetime, Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
     ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, TurnStarted,
 };
 use contract::provider::{Delta, Input, ModelCall, ModelRequest, Provider, ToolDefinition};
@@ -1069,7 +1069,7 @@ mod supervised {
     use std::time::Duration;
 
     use contract::emit::Emit;
-    use contract::events::{TurnOutcome, VariablesSource};
+    use contract::events::{EventKind, TurnOutcome, VariablesSource};
     use contract::inbox::{Ack, Delivery, Message};
     use contract::provider::{Delta, Provider, ReplyAction, ToolDefinition};
     use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
@@ -1389,7 +1389,8 @@ mod supervised {
                 "usage_recorded",
                 "assistant_message_completed",
                 "turn_completed",
-            ],
+            ]
+            .map(EventKind::from_name),
             "complete ordered kinds"
         );
         let started = lines
@@ -1406,8 +1407,8 @@ mod supervised {
         // escalation where no answer is possible writes no
         // `permission_requested`, recorded as a `permission_resolved` with
         // `decided_by: reviewer`).
-        assert!(!kinds(&lines).contains(&"permission_requested"));
-        assert!(!kinds(&lines).contains(&"notice"));
+        assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
+        assert!(!kinds(&lines).contains(&EventKind::Notice));
         let denied = resolved(&lines);
         // One judged call, one block (`docs/permissions.md`, "Supervised
         // sessions": "Its own reviewer judges every call. An escalation is
@@ -1523,7 +1524,8 @@ mod supervised {
                 "usage_recorded",
                 "assistant_message_completed",
                 "turn_completed",
-            ],
+            ]
+            .map(EventKind::from_name),
             "complete ordered kinds"
         );
         // The retry is judged again, never answered by the steer itself
@@ -1557,7 +1559,7 @@ mod supervised {
             later.iter().any(reads_grant),
             "the retry's reviews read the grant"
         );
-        assert!(!kinds(&lines).contains(&"permission_requested"));
+        assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
         let judged = resolved(&lines);
         // Two judged calls: the block, then the allowed retry
         // (`docs/permissions.md`, "Supervised sessions": "Its own reviewer
