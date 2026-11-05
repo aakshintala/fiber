@@ -319,6 +319,13 @@ fn set_model_checks_against_an_approved_repository_provider() {
         serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
             .unwrap();
     assert_eq!(written, json!({"model": "acme/big"}));
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "work",
+        &config::Secret::new("key".into()),
+    )
+    .unwrap();
     // A typo is rejected with the repository reference closest: the check
     // runs against the merged providers.
     let bad = setup.run_in_workspace(&["config", "set", "model", "acme/typo"]);
