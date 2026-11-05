@@ -3024,6 +3024,45 @@ fn enter_on_a_scrolled_turn_opens_it_without_an_overflow() {
     assert_eq!(frame.list.top(), top);
 }
 
+/// An older page keeps a scrolled selection visible: paging in older
+/// turns reseats the Rewind row through the real height so it stays on
+/// screen.
+#[test]
+fn an_older_page_reseats_a_scrolled_selection_into_view() {
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let all = many_turns(25);
+    // The newer slice holds turns 5..25 (seq 13..75) at a clean turn
+    // boundary: no seq 0, so the chain is not done and exactly one
+    // `history` request goes back on the wire (`docs/tui.md`,
+    // "History and paging").
+    let next = accept(&mut app, &lines[0]["id"], all[13..].to_vec());
+    assert_eq!(next.len(), 1);
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(rows(&app).len(), 23);
+    // Down to the Rewind row, past the first screenful, so the list has scrolled.
+    let last = rows(&app).len() - 1;
+    goto(&mut app, &clock, last);
+    let frame = app.session_view_screen(80).expect("the view is open");
+    assert!(frame.list.top() > 0, "setup scrolled the list");
+    // The older slice holds seq 0..12, contiguous with the newer slice
+    // (12 + 1 == 13): it starts at seq 0 with no parent, so the chain
+    // ends and nothing more goes out (`docs/tui.md`, "History and paging").
+    let asked: Value = serde_json::from_str(&next[0]).unwrap_or_default();
+    let done = accept(&mut app, &asked["id"], all[..13].to_vec());
+    assert!(done.is_empty());
+    // Each turn is one row, with its step boundaries (`docs/tui.md`, "Rewind").
+    assert_eq!(rows(&app).len(), 27);
+    let frame = app.session_view_screen(80).expect("the view is open");
+    let (selected, top) = (frame.list.selected(), frame.list.top());
+    assert_eq!(rows(&app)[selected], ACTION);
+    assert!(
+        selected - top < crate::swapped::rows_height(&frame, app.conversation_height()),
+        "reseat kept the selection visible"
+    );
+}
+
 /// A fork's accept attaches without a send match, while any other wait
 /// falls through: flipping the two attaches the wrong command.
 #[test]
