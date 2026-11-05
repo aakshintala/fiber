@@ -1226,10 +1226,14 @@ impl App {
     }
 
     /// Moves the open rewind view's list to `at`: the fold's selection.
-    /// A closed or missing view moves nothing.
+    /// A closed or missing view moves nothing. The height is the view's
+    /// own shown height, so a reseat below the window scrolls into view.
     pub(in crate::app) fn rewind_list_to(&mut self, at: usize, rows: usize) {
+        let Some((_, height)) = self.session_view_list_metrics() else {
+            return;
+        };
         if let Some(Open::Rewind(list)) = self.session_views.open.as_mut() {
-            list.select(at, rows, usize::MAX);
+            list.select(at, rows, height);
         }
     }
 
