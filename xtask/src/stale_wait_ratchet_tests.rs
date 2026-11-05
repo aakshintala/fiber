@@ -735,7 +735,7 @@ fn bodies_collect_helper_sends() {
     // line the scan never resumes past the fallthrough line.
     let open = ["fn a() {", "    client.send(\"x\");", "fn b() {"];
     let open_bodies = fn_bodies(&open);
-    assert!(open_bodies.get("a").is_some());
+    assert!(open_bodies.contains_key("a"));
     assert_eq!(open_bodies.get("b"), None);
 }
 
