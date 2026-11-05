@@ -514,6 +514,12 @@ fn resolve_reference(
     let Some(resolved) = providers.delegate_model(reference) else {
         return Err(unknown());
     };
+    if !providers
+        .switched_on(config)
+        .any(|name| name == resolved.provider.name)
+    {
+        return Err(unknown());
+    }
     if let Some(level) = resolved.thinking {
         let reference = resolved.reference();
         let mut notices = Vec::new();
@@ -557,7 +563,7 @@ fn catalogue(providers: &extensions::Providers, config: &config::Config) -> Stri
         .unwrap_or_default();
     roles.sort();
     let mut references: Vec<String> = Vec::new();
-    for name in providers.names() {
+    for name in providers.switched_on(config) {
         if let Some(provider) = providers.get(name) {
             for model in &provider.models {
                 let reference = format!("fiber:{name}/{}", model.id);
