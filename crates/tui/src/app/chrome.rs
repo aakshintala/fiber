@@ -85,7 +85,7 @@ impl Chrome {
     /// Lays a `width` by `height` screen out, returning whether the
     /// regions moved. The rail is wanted unless the person hid it; a
     /// rail the width sheds leaves its grip.
-    pub(crate) fn lay_out(&mut self, width: u16, height: u16, home: Option<HomeState>) -> bool {
+    fn lay_out(&mut self, width: u16, height: u16, home: Option<HomeState>) -> bool {
         let before = self.layout;
         self.floor = home.and_then(|_| layout::floor_line(width, height));
         self.layout = Self::layout_for(width, height, home, self.rail_hidden, self.panel_hidden);

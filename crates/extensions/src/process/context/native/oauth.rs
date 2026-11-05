@@ -249,7 +249,7 @@ impl NativeHostServices {
 
     /// Rests `wait` on the injected clock in slices, re-reading after
     /// each, so a fake clock the test moves ends the rest early.
-    pub(super) fn rest_for(&self, wait: Duration, callback: &CallbackContext, cancel: &dyn Cancel) {
+    fn rest_for(&self, wait: Duration, callback: &CallbackContext, cancel: &dyn Cancel) {
         let start = self.clock.now();
         loop {
             if cancel.is_cancelled() || self.ended(callback) {

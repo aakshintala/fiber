@@ -15,7 +15,7 @@ use super::{LuaExtension, Target};
 use crate::Error;
 
 /// One search backend the entry script registered: its timeout.
-pub(super) type DeclaredBackend = std::time::Duration;
+type DeclaredBackend = std::time::Duration;
 
 /// What `fiber.search_backend` registered: each backend's `run` function in
 /// a Lua table by name, and its timeout.

@@ -34,7 +34,7 @@ use support::group::{self, Listing};
 /// the child stopped reading while calls keep coming: the child counts as
 /// gone, as an MCP server's does.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
-pub(crate) const WRITER_QUEUE: usize = 64;
+const WRITER_QUEUE: usize = 64;
 
 /// How much of the child's stderr is kept, the tail: a flood cannot grow
 /// memory without bound, and the end of the log names the failure.
@@ -45,7 +45,7 @@ pub(crate) const STDERR_TAIL: usize = 64 * 1024;
 /// as flooding: backpressure when the owner stops draining, bounding the
 /// queue the reader posts to without blocking the reader.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
-pub(crate) const MAX_QUEUED_BYTES: usize = 16 << 20;
+const MAX_QUEUED_BYTES: usize = 16 << 20;
 
 /// The limits a test injects; production uses the defaults above.
 #[derive(Debug, Clone, Copy)]

@@ -161,7 +161,7 @@ pub(super) fn model_message(
 }
 
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
-pub(super) fn model_content(
+fn model_content(
     content: &Value,
 ) -> Result<Vec<contract::shapes::ContentPart>, (ErrorCode, String)> {
     match content {
@@ -183,9 +183,7 @@ pub(super) fn model_content(
 }
 
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
-pub(super) fn model_part(
-    part: &Value,
-) -> Result<contract::shapes::ContentPart, (ErrorCode, String)> {
+fn model_part(part: &Value) -> Result<contract::shapes::ContentPart, (ErrorCode, String)> {
     let part = part.as_object().ok_or((
         ErrorCode::InvalidArguments,
         "host.model: a content part is a table".to_owned(),
@@ -224,7 +222,7 @@ pub(super) fn model_part(
 /// The `host.delegate` call's parts: the spec arguments as a table with
 /// the per-call timeout and the `run` function marker.
 #[allow(dead_code, reason = "asserted by tests; the process seam exercises it")]
-pub(super) type DelegateParts = (Map<String, Value>, std::time::Duration, bool);
+type DelegateParts = (Map<String, Value>, std::time::Duration, bool);
 
 /// The `host.delegate` call: the spec arguments as a table with the
 /// per-call timeout and the `run` function marker.

@@ -41,7 +41,7 @@ pub(crate) type QuotaRead = Arc<dyn Fn(bool) -> (Vec<QuotaInfo>, f64) + Send + S
 
 /// The notice reader: only what is already cached, never fetching. The
 /// loop's notice path takes this shape, so it stays as it is.
-pub(crate) type NoticeQuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
+type NoticeQuotaRead = Arc<dyn Fn() -> (Vec<QuotaInfo>, f64) + Send + Sync>;
 
 /// The model-facing quota reader: one snapshot per call, answering from
 /// the caches at once without waiting for loading, key reads or fetches

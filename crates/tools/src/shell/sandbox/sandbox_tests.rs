@@ -896,7 +896,7 @@ fn setup_error_maps_each_case_to_its_code() {
 /// on the fixture; production passes `/`. Reports the time to the caller
 /// but never asserts it (`docs/testing.md`, "No time-based assertions").
 #[cfg(target_os = "linux")]
-pub(crate) fn measure_read_walk(
+fn measure_read_walk(
     root: &Path,
     denied: &[PathBuf],
     clock: &dyn contract::clock::Clock,

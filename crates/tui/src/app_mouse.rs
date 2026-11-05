@@ -264,7 +264,7 @@ impl App {
     }
 
     /// Handles the route without settling; the caller owns the layout pass.
-    pub(crate) fn on_wheel_inner(&mut self, mouse: &Mouse) -> Effect {
+    fn on_wheel_inner(&mut self, mouse: &Mouse) -> Effect {
         let up = match mouse.kind {
             MouseKind::WheelUp => true,
             MouseKind::WheelDown => false,

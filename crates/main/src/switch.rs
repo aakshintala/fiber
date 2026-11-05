@@ -826,7 +826,7 @@ pub(crate) fn prepare(
 }
 
 /// What `Prepared.applied` runs when the switch applies.
-pub(crate) type Applied = Box<dyn FnOnce() + Send>;
+type Applied = Box<dyn FnOnce() + Send>;
 
 /// The search after the switch, and what applying it publishes to
 /// the door's `tools` answer: the new model's hosted search when it has

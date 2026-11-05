@@ -38,7 +38,7 @@ const INDENT: &str = "  ";
 /// The working word the glimmer sweeps (`docs/tui.md`, "The working line").
 const WORD: &str = "Working";
 /// The spinner's cell: the indent wide (`docs/tui.md`, "The working line").
-pub(crate) const SPINNER_AT: usize = 2;
+const SPINNER_AT: usize = 2;
 
 /// Lays `working` out in `width` columns at wall time `now_ms`, with
 /// `spinner` in its cell: the full line, or the detail shed first, then

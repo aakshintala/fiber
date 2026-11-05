@@ -10,9 +10,9 @@ use image::codecs::png::PngEncoder;
 use image::{DynamicImage, ImageBuffer, ImageEncoder, ImageFormat, ImageReader};
 
 /// The most pixels an image may have: width times height, inclusive.
-pub(crate) const MAX_PIXELS: u64 = 50_000_000;
+const MAX_PIXELS: u64 = 50_000_000;
 /// The longest side a stored image may have, in pixels, inclusive.
-pub(crate) const MAX_SIDE: u32 = 2000;
+const MAX_SIDE: u32 = 2000;
 /// The most bytes a stored image may take as base64, inclusive.
 pub(crate) const MAX_BASE64: u64 = 1_048_576;
 /// The JPEG quality every re-encode uses.

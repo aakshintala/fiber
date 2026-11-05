@@ -36,7 +36,7 @@ pub type WorktreeRecord = Arc<
 
 /// Why starting the resumed run failed: nothing was started, nothing
 /// queued.
-pub(crate) enum StartFailed {
+enum StartFailed {
     /// The log's worktree record or last line could not be read; the reason names its path.
     Boundary(String),
     /// Neither the workspace nor a recorded repository is available.

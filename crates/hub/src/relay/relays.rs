@@ -17,7 +17,7 @@ use crate::retire::{AckOrder, Retire};
 
 /// One subscription replay's in-flight timer, by the session, the relay
 /// epoch and the hub-minted command id that identify it.
-pub(crate) type ReplayKey = (String, u64, String);
+type ReplayKey = (String, u64, String);
 
 /// Tests only: the one-shot fault a test arms in `route` between keeping
 /// a command as sent and writing it.
@@ -347,7 +347,7 @@ impl Relays {
 /// later attach must not reapply an earlier asked label after another
 /// client changed it. The command in flight keeps its args until
 /// answered; an absent label is a no-op.
-pub(super) fn keep_subscription(relays: &mut Relays, session: &str, line: Map<String, Value>) {
+fn keep_subscription(relays: &mut Relays, session: &str, line: Map<String, Value>) {
     let mut line = line;
     if let Some(args) = line.get_mut("args").and_then(Value::as_object_mut) {
         args.remove("credential");

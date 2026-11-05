@@ -61,7 +61,7 @@ pub(crate) use fanout::{
 pub(crate) const RUN_SCAN: Duration = Duration::from_millis(500);
 
 /// Called at the end of every scan of `run/` with the names it found.
-pub(crate) type ScanHook = Box<dyn Fn(&BTreeSet<String>) + Send + Sync>;
+type ScanHook = Box<dyn Fn(&BTreeSet<String>) + Send + Sync>;
 
 /// The feed: its registry, the scanner and the summary connections.
 pub(crate) struct Feed {

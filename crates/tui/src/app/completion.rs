@@ -31,9 +31,9 @@ pub(super) struct Completion {
     /// The id of the latest `commands` sent; only its answer fills the list.
     pub(super) commands_id: Option<String>,
     /// Esc closed the `/` panel for this draft.
-    pub(super) slash_closed: bool,
+    slash_closed: bool,
     /// Esc closed the `/theme ` panel for this draft.
-    pub(super) theme_closed: bool,
+    theme_closed: bool,
     /// The selected row of the open completion panel.
     pub(super) selected: usize,
     /// The `@` panel, while open.

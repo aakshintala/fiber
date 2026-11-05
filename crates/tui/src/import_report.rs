@@ -321,7 +321,7 @@ impl App {
     }
 
     /// Scrolls the open report by one page, holding at both edges.
-    pub(crate) fn scroll_report_page(&mut self, down: bool) {
+    fn scroll_report_page(&mut self, down: bool) {
         let area = self.report_area();
         let inner = overlay::question_inner(area.width);
         if let Some(report) = self.import_report.as_mut() {

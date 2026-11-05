@@ -1130,7 +1130,7 @@ fn shift_past(prompt_at: &mut [usize], removed: usize) {
 
 /// A shared-queue entry as the loop's queued piece: the hook verdict it
 /// staged, defaulting an unstaged move to unhooked.
-pub(crate) fn queued_piece(entry: steering::Entry) -> Queued {
+fn queued_piece(entry: steering::Entry) -> Queued {
     let staged = entry.staged.unwrap_or_default();
     Queued::Steer(
         Message {
