@@ -1,7 +1,7 @@
 //! Tests for drawing the rail: groups, times, words, colours and the
 //! card rows, read from the drawn buffer.
 
-use super::{draw, elapsed, groups, tone, word};
+use super::{cannot_attach, draw, elapsed, groups, has_x, tone, word};
 use crate::app::App;
 use crate::app::rail::Spot;
 use crate::home::{Launch, Left, Row, State};
@@ -301,6 +301,35 @@ fn word_and_tone_per_state() {
         assert_eq!(word(&card), shown, "{state:?}");
         assert_eq!(tone(&card), role, "{state:?}");
     }
+    // An exited row reads EXITED, dim, whatever its last state was:
+    // the on-screen card stays in place with its live number, and it
+    // draws no ✕ in any state.
+    for state in [
+        State::Working,
+        State::Jobs,
+        State::Retrying,
+        State::Waiting,
+        State::Idle,
+        State::Unreadable,
+    ] {
+        let mut card = row(0, "-w", "/w", 0.0, Some(Left::Exited));
+        card.state = state;
+        assert_eq!(word(&card), "EXITED", "{state:?}");
+        assert_eq!(tone(&card), Role::Muted, "{state:?}");
+        assert!(!has_x(&card), "{state:?}");
+        assert!(!cannot_attach(&card), "{state:?}");
+    }
+    // A closing status reads CLOSING while its session is live; once
+    // the session exits, the same row reads EXITED.
+    let Line::Session(envelope) = status(B, json!({"closing": true})) else {
+        panic!("a session line");
+    };
+    let mut closing = crate::home::from_status(&envelope);
+    closing.left = Some(Left::Exited);
+    assert_eq!(word(&closing), "EXITED");
+    assert_eq!(tone(&closing), Role::Muted);
+    assert!(!has_x(&closing));
+    assert!(!cannot_attach(&closing));
 }
 
 /// A row whose latest status accepted `close` reads CLOSING, dim: the
@@ -319,6 +348,193 @@ fn a_closing_status_reads_closing_dim() {
     );
     assert_eq!(word(&row), "CLOSING");
     assert_eq!(tone(&row), Role::Muted);
+}
+
+/// The on-screen session's exited row: A's last status with `fields`,
+/// folded as the hub's `session_left` folds it, so the card keeps its
+/// number, title, branch, spend and elapsed from that status.
+fn exited_a(fields: Value) -> (App, Row) {
+    let mut app = app(20.0);
+    app.on_line(status(A, fields.clone()));
+    let Line::Session(envelope) = status(A, fields) else {
+        panic!("a session line");
+    };
+    let mut row = crate::home::from_status(&envelope);
+    row.left = Some(Left::Exited);
+    (app, row)
+}
+
+/// The card's rows for `row`.
+fn exited_rows(app: &App, row: &Row, width: u16) -> Vec<super::RailRow> {
+    let mut rows = Vec::new();
+    super::card(app, row, width, &mut rows);
+    rows
+}
+
+/// The card's rows drawn into a buffer, as `draw` draws them: each
+/// text row on the card's tint, unpainted.
+fn card_buffer(rows: &[super::RailRow], width: u16) -> Buffer {
+    let card_w = width.saturating_sub(1);
+    let height = u16::try_from(rows.len()).unwrap_or(u16::MAX);
+    let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+    for (y, row) in rows.iter().enumerate() {
+        let y = u16::try_from(y).unwrap_or(u16::MAX);
+        if let Some(tint) = row.tint
+            && !crate::surface::box_fit(width)
+        {
+            buf.set_style(
+                Rect::new(0, y, card_w, 1),
+                ratatui::style::Style::new().bg(tint.color()),
+            );
+        }
+        buf.set_line(0, y, &row.line, card_w);
+    }
+    buf
+}
+
+/// The card painted in `setting` on a truecolour terminal, as
+/// `painted` paints the rail.
+fn painted_card(rows: &[super::RailRow], width: u16, setting: crate::look::ThemeSetting) -> Buffer {
+    let (look, _) = crate::look::Look::new(setting, &|name: &str| {
+        (name == "COLORTERM").then(|| "truecolor".to_owned())
+    });
+    let mut buf = card_buffer(rows, width);
+    look.paint(&mut buf);
+    buf
+}
+
+/// An exited card's first text row, with its stripe: the number dim,
+/// the glyph and word in the state's colour, the elapsed dim.
+fn exited_first(rows: &[super::RailRow]) -> String {
+    rows[1]
+        .line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// No dismiss stop anywhere in the card's rows.
+fn assert_no_cross(rows: &[super::RailRow]) {
+    assert!(
+        rows.iter()
+            .flat_map(|row| &row.spots)
+            .all(|(_, _, _, spot)| !matches!(spot, Spot::Dismiss(_))),
+        "no dismiss stop"
+    );
+}
+
+#[test]
+fn exited_card_draws_dim_without_a_cross() {
+    use ratatui::style::Modifier;
+    // Working when it exited: the word stays EXITED, proving the
+    // exited arm wins over the state arms.
+    let (app, row) = exited_a(json!({"since": WALL - 16_000, "state": "streaming"}));
+    assert_eq!(
+        app.rail_state().number(&SessionId(A.to_owned())),
+        Some(1),
+        "the on-screen card keeps its live number"
+    );
+    let rows = exited_rows(&app, &row, 40);
+    assert_eq!(rows.len(), super::CARD_ROWS, "one card draws six rows");
+    // The card keeps the ready tint, not the attached card's lift.
+    for card_row in &rows {
+        if !card_row.edge {
+            assert_eq!(card_row.tint, Some(Role::CardReady));
+        }
+    }
+    assert_no_cross(&rows);
+    let first = exited_first(&rows);
+    assert!(first.contains('1'), "{first:?}");
+    assert!(first.contains("○ EXITED"), "{first:?}");
+    assert!(first.ends_with("16s"), "{first:?}");
+    // The word draws dim: the paint marks every EXITED cell DIM.
+    let painted = painted_card(&rows, 40, crate::look::ThemeSetting::Dark);
+    let text: String = (0..painted.area.width)
+        .filter_map(|x| painted.cell((x, 1)))
+        .map(|cell| cell.symbol())
+        .collect();
+    let at = text.find("EXITED").unwrap_or_else(|| panic!("{text:?}"));
+    // EXITED is ASCII, so the columns before it are its char count:
+    // the stripe is one cell, however many bytes it takes.
+    let col = text[..at].chars().count();
+    for x in col..col + "EXITED".len() {
+        let x = u16::try_from(x).unwrap_or(u16::MAX);
+        assert!(
+            painted
+                .cell((x, 1))
+                .is_some_and(|cell| cell.modifier.contains(Modifier::DIM)),
+            "dim EXITED at column {x}"
+        );
+    }
+}
+
+#[test]
+fn exited_card_keeps_the_ready_tint_in_both_themes() {
+    for (setting, (red, green, blue)) in [
+        (crate::look::ThemeSetting::Dark, (0x12, 0x12, 0x17)),
+        (crate::look::ThemeSetting::Light, (0xe8, 0xe8, 0xed)),
+    ] {
+        let (app, row) = exited_a(json!({"since": WALL - 16_000}));
+        let rows = exited_rows(&app, &row, 40);
+        let buf = painted_card(&rows, 40, setting.clone());
+        assert_eq!(
+            body_bg(&buf, "EXITED"),
+            ratatui::style::Color::Rgb(red, green, blue),
+            "{setting:?}"
+        );
+    }
+}
+
+#[test]
+fn exited_card_in_a_box_without_colour() {
+    crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
+    let (app, row) = exited_a(json!({"since": WALL - 16_000}));
+    let rows = exited_rows(&app, &row, 40);
+    let buf = card_buffer(&rows, 40);
+    crate::surface::init(&|_: &str| None);
+    let drawn = lines(&buf);
+    assert_eq!(drawn.len(), super::CARD_ROWS);
+    assert!(drawn[0].starts_with("┌"), "{drawn:?}");
+    assert!(drawn[0].ends_with("┐"), "{drawn:?}");
+    assert!(drawn[1].starts_with("│ "), "{drawn:?}");
+    assert!(drawn[1].contains("○ EXITED"), "{drawn:?}");
+    assert!(drawn[1].ends_with('│'), "{drawn:?}");
+    assert!(
+        !drawn.iter().any(|line| line.contains('▌')),
+        "no stripe reliance: {drawn:?}"
+    );
+    assert_no_cross(&rows);
+}
+
+#[test]
+fn exited_card_at_narrow_width() {
+    let (app, row) = exited_a(json!({"since": WALL - 16_000}));
+    let rows = exited_rows(&app, &row, 22);
+    let first = exited_first(&rows);
+    assert!(first.contains("○ EXITED"), "{first:?}");
+    assert!(first.ends_with("16s"), "{first:?}");
+    assert_no_cross(&rows);
+}
+
+#[test]
+fn rail_exited_card() {
+    let (app, row) =
+        exited_a(json!({"name": "screen", "since": WALL - 16_000, "git": {"branch": "main"}}));
+    let rows = exited_rows(&app, &row, 40);
+    // Kept beside the snapshot: the number, the dim word, the elapsed
+    // and the tint the picture pins.
+    let first = exited_first(&rows);
+    assert!(first.contains('1'), "{first:?}");
+    assert!(first.contains("○ EXITED"), "{first:?}");
+    assert!(first.ends_with("16s"), "{first:?}");
+    assert!(
+        rows.iter()
+            .filter(|row| !row.edge)
+            .all(|row| row.tint == Some(Role::CardReady))
+    );
+    let buf = card_buffer(&rows, 40);
+    insta::assert_snapshot!("rail_exited_card", text(&buf));
 }
 
 /// The fill colour of `B`'s bar at `pct` percent of a 100-token window.

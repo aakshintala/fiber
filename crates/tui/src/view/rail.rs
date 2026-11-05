@@ -121,10 +121,15 @@ pub(crate) fn elapsed(since_ms: u64, now_ms: u64) -> String {
     }
 }
 
-/// A card's state word (`docs/tui.md`, "State glyphs"): a row whose
+/// A card's state word (`docs/tui.md`, "State glyphs"): an exited
+/// session keeps its card on screen, reading EXITED whatever its last
+/// state, even while its last status still says closing. A row whose
 /// latest status accepted `close` is CLOSING while it stays live, and a
 /// crashed card is CRASHED whatever its last state.
 pub(crate) fn word(row: &Row) -> &'static str {
+    if row.left == Some(Left::Exited) {
+        return "EXITED";
+    }
     if row.status.as_ref().is_some_and(|status| status.closing) {
         return "CLOSING";
     }
@@ -138,10 +143,13 @@ pub(crate) fn word(row: &Row) -> &'static str {
     }
 }
 
-/// A card's state colour (`docs/tui.md`, "State glyphs"): a closing row
-/// is dim, and a crashed card is the error colour whatever its last
-/// state.
+/// A card's state colour (`docs/tui.md`, "State glyphs"): the exited
+/// card on screen is dim, whatever its last state, like a closing row,
+/// and a crashed card is the error colour whatever its last state.
 pub(crate) fn tone(row: &Row) -> Role {
+    if row.left == Some(Left::Exited) {
+        return Role::Muted;
+    }
     if row.status.as_ref().is_some_and(|status| status.closing) {
         return Role::Muted;
     }
@@ -258,8 +266,13 @@ fn card(app: &App, row: &Row, width: u16, out: &mut Vec<RailRow>) {
     };
     // A card sits on its state's tint. A crash lives in `left` while
     // `state` can stay working, so the crash wins; jobs read as
-    // working and an unreadable row keeps the working tint.
-    let tint = if app.session() == Some(&row.id) {
+    // working and an unreadable row keeps the working tint. The
+    // exited card on screen keeps its ready tint instead of the
+    // attached card's lift, so it reads as a kept card, not the live
+    // session.
+    let tint = if row.left == Some(Left::Exited) {
+        Role::CardReady
+    } else if app.session() == Some(&row.id) {
         Role::SurfaceRaised
     } else if row.left == Some(Left::Crashed) {
         Role::CardCrashed
@@ -358,16 +371,21 @@ fn pulse(app: &App, row: &Row) -> Option<bool> {
     }
 }
 
-/// Whether a card draws a ✕: a crashed card, or a CANNOT ATTACH one
+/// Whether a card draws a ✕: a crashed card, or a CANNOT ATTACH one.
+/// The exited card on screen draws none: Delete on it does nothing
 /// (`docs/tui.md`, "The rail").
 pub(crate) fn has_x(row: &Row) -> bool {
-    row.left == Some(Left::Crashed) || row.state == State::Unreadable
+    row.left != Some(Left::Exited)
+        && (row.left == Some(Left::Crashed) || row.state == State::Unreadable)
 }
 
 /// Whether a card hides through its ✕ instead of dismissing: its status
-/// cannot be read and it has not crashed (`docs/tui.md`, "The rail").
+/// cannot be read and it has not crashed. The exited card on screen
+/// neither hides nor dismisses (`docs/tui.md`, "The rail").
 pub(crate) fn cannot_attach(row: &Row) -> bool {
-    row.state == State::Unreadable && row.left != Some(Left::Crashed)
+    row.state == State::Unreadable
+        && row.left != Some(Left::Crashed)
+        && row.left != Some(Left::Exited)
 }
 
 /// A card's first row: its number dim, the glyph and word in its state's
