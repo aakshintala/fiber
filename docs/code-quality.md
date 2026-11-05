@@ -149,10 +149,11 @@ A closed set of named cases that crosses a crate boundary, such as a notice code
 
 An item is private, or `pub(crate)`, unless another crate uses it. rustc's
 `unreachable_pub` lint enforces this. The `visibility` check
-(`cargo xtask visibility`) fails a `pub(crate)` or `pub(super)` item no
-other file of its crate names. The visibility check works one file at a
-time, so it skips items inside an inline `mod` block, whose same-file uses
-it cannot see. Review still owns those. Which crate may call which is
+(`cargo xtask visibility`) fails a `pub(crate)` or `pub(super)` function,
+const or static no other file of its crate names. The visibility check
+works one file at a time, so it skips items inside an inline `mod` block,
+whose same-file uses it cannot see. Review still owns those. Which crate
+may call which is
 `docs/architecture.md`, and the compiler enforces that
 ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).
 
