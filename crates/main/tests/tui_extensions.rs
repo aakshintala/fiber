@@ -6,6 +6,7 @@
     clippy::indexing_slicing,
     reason = "test helpers; a failure is the test's"
 )]
+mod extension_harness;
 mod support;
 use serde_json::{Value, json};
 use support::pty::Run;
@@ -21,16 +22,7 @@ fn install(setup: &Setup, name: &str, source: &str, range: Option<Value>) {
     std::fs::create_dir_all(dir.join("tui")).unwrap();
     std::fs::write(dir.join("init.lua"), "").unwrap();
     std::fs::write(dir.join("tui/init.lua"), source).unwrap();
-    extensions::plan(
-        &setup.home(),
-        &extensions::Request::Path(dir),
-        "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+    setup.install_path(&dir, "0.0.0");
 }
 fn source(text: &str) -> String {
     format!(

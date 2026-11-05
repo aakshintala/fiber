@@ -38,20 +38,42 @@ impl Setup {
         }
         crate::support::write_json(&source.join("extension.json"), &base);
         fs::write(source.join("init.lua"), init).unwrap();
-        extensions::plan(
-            &self.home(),
-            &extensions::Request::Path(source),
-            "0.1.0",
-            &extensions::Origin::github(),
-            &*fakes::clock::FakeClock::new(),
-        )
-        .unwrap()
-        .commit()
-        .unwrap();
+        self.install_path(&source, "0.1.0");
     }
 
     pub(crate) fn lua(&self, short: &str, init: &str) {
         self.lua_with(short, init, json!({}));
+    }
+
+    /// Plans and commits the extension in `source` against this home,
+    /// retrying a transient [`extensions::Error::Busy`] without sleeping on
+    /// the wall clock. A same-home process briefly holding
+    /// `extensions/.lock` (a session loading its extensions at startup, or
+    /// a forked copy of the lock outliving its owner) fails `plan` at once
+    /// under the fake clock's instant sleep, so the helper yields and
+    /// retries on the test deadline instead. An uncontended install never
+    /// waits; a lock held past the deadline still fails naming it, keeping
+    /// the helper-unwrap style.
+    pub(crate) fn install_path(&self, source: &Path, version: &str) {
+        loop {
+            let clock = fakes::clock::FakeClock::new();
+            let request = extensions::Request::Path(source.to_path_buf());
+            match extensions::plan(
+                &self.home(),
+                &request,
+                version,
+                &extensions::Origin::github(),
+                &*clock,
+            ) {
+                Err(extensions::Error::Busy) if !self.deadline.left().is_zero() => {
+                    std::thread::yield_now();
+                }
+                plan => {
+                    plan.unwrap().commit().unwrap();
+                    return;
+                }
+            }
+        }
     }
 
     pub(crate) fn socket(&self, id: &str) -> PathBuf {
