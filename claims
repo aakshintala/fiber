@@ -139,3 +139,12 @@ crates/tui/src/app/rail_tests.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-Mac
 crates/tui/src/view/rail.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/rail_tests.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_rail_tests.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/clear.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
+crates/tui/src/app/clear_tests.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
+crates/tui/src/history.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
+crates/tui/src/history_tests.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
+crates/tui/src/app/images.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
+crates/tui/src/app/images_tests.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
+crates/tui/src/app/rewind/send.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
+crates/tui/src/app/rewind/fold.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
+crates/tui/src/app/rewind_tests.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
