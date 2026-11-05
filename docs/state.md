@@ -587,16 +587,17 @@ clients connect to; the hub that binds it removes a stale one first. The process
 holding that session's `session.lock` owns the session socket while it holds
 the lock: no other process unlinks it. Before binding, `bind` in
 `crates/doors/src/socket.rs` connects first: a socket the connect reaches is
-live, and binding fails with `SocketHeld`. A failed connect removes the path
+live, and binding fails with `session_held`. A failed connect removes the path
 only when `replaceable` in the same file agrees: a refusal or a missing path is
 replaceable at once, so a dangling symlink, or one pointing at a stale socket,
-can be removed by `bind`; otherwise only a regular file is. A symlink, or a
-path whose type cannot be read, may lead to a live session, so the path stays
-and `bind` fails with `SocketIo`. Two failure paths unlink after binding: when
+can be removed by `bind`; otherwise only a regular file is. When the connect
+error is neither a refusal nor a missing path, a symlink, or a path whose type
+cannot be read, may lead to a live session, so the path stays and `bind` fails
+with `io_failed`. Two failure paths unlink after binding: when
 setting the socket to mode 0600 fails, `bind` attempts the unlink and returns
 the error, and the unlink itself can fail; and when the stdout-printer thread
 fails to start, `open_in` in `crates/doors/src/session.rs` unlinks the
-just-bound socket and returns the `ThreadSpawn` error. At exit,
+just-bound socket and returns the `io_failed` error. At exit,
 `Session::close` in the same file unlinks the socket while still holding
 `session.lock`, so a held lock does not imply a socket exists. Removing a
 socket path is implemented twice: `remove_socket` in
