@@ -86,11 +86,12 @@ fn is_word_at(bytes: &[u8], at: usize) -> bool {
         return is_word_byte(byte);
     }
     let mut start = at;
-    while start > 0 && (bytes[start] & 0xC0) == 0x80 {
+    while start > 0 && bytes.get(start).is_some_and(|byte| byte & 0xC0 == 0x80) {
         start -= 1;
     }
-    std::str::from_utf8(&bytes[start..])
-        .ok()
+    bytes
+        .get(start..)
+        .and_then(|suffix| std::str::from_utf8(suffix).ok())
         .and_then(|text| text.chars().next())
         .is_some_and(|c| c.is_alphanumeric() || c == '_')
 }
