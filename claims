@@ -286,3 +286,8 @@ providers/databricks/tests/models-thinking-overlay.json	fiber-4202	plan	2026-11-
 providers/databricks/tests/models-thinking-levels.json	fiber-4202	plan	2026-11-05T14:36:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 git grep -n "rewind_list_to" e55e507a94329fc33c264c1739c80c01835f6aee -- .	fiber-4145	plan	2026-11-05T15:08:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4145-rewind-real-height	
 git grep -n "session_view_list_metrics" e55e507a94329fc33c264c1739c80c01835f6aee -- .	fiber-4145	plan	2026-11-05T15:08:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4145-rewind-real-height	
+docs/performance.md	fiber-3895	plan	2026-11-05T15:14:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/bench/examples/bench/main.rs	fiber-3895	plan	2026-11-05T15:14:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/bench/examples/bench/keeper.rs	fiber-3895	plan	2026-11-05T15:14:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/bench/examples/bench/keeper_tests.rs	fiber-3895	plan	2026-11-05T15:14:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/bench/examples/bench/main_tests.rs	fiber-3895	plan	2026-11-05T15:14:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
