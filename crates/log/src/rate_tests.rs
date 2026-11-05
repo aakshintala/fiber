@@ -124,7 +124,7 @@ fn assert_tokens(lines: Vec<Envelope>, expected: Vec<Option<u64>>) {
     assert_eq!(lines.len(), expected.len());
     for (line, want) in lines.into_iter().zip(expected) {
         fold.fold(&line);
-        assert_eq!(fold.rate().tokens(12), want, "after {}", line.kind);
+        assert_eq!(fold.rate().tokens(12), want, "after {}", line.kind().name());
     }
 }
 
