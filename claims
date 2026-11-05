@@ -106,3 +106,4 @@ crates/main/tests/main_journeys.rs	fiber-4100	plan	2026-11-05T10:05:47Z	Amoghs-M
 crates/main/Cargo.toml	fiber-4100	plan	2026-11-05T10:05:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/tui_extensions.rs	fiber-4170	plan	2026-11-05T10:09:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_harness/mod.rs	fiber-4170	plan	2026-11-05T10:09:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/setup_tests.rs	fiber-4190	plan	2026-11-05T10:16:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
