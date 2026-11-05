@@ -647,7 +647,7 @@ pub(crate) fn prepare(
     let now = switching.reloadable();
     let resolved = switching
         .registry
-        .resolve_named(&switching.naming, &args.model)
+        .resolve_named(&switching.naming, &switching.startup_config, &args.model)
         .map_err(|error| invalid(error.to_string()))?;
     crate::scripted::label(resolved.provider, label).map_err(rejection)?;
     let reference = resolved.reference();

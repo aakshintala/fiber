@@ -8,7 +8,8 @@
 use std::collections::BTreeMap;
 
 use config::{
-    Config, CredentialFrom, ModelData, Placeholder, ProjectKey, Protocol, ProviderData, Sources,
+    Config, CredentialFrom, ModelData, Placeholder, ProjectKey, Protocol, ProviderData, Secret,
+    Sources,
 };
 use contract::ThinkingLevel;
 use serde_json::Map;
@@ -75,18 +76,41 @@ fn sorted(naming: Vec<(String, String)>) -> Vec<(String, String)> {
     naming
 }
 
+/// A configuration over a fresh home, switching on each of `holders`
+/// through a stored credential: presence comes from `has_credential`'s
+/// own origins, never a bypass seam. The temporary directory lives as
+/// long as the configuration, so the stored files stay readable.
+fn credentialed(holders: &[&str]) -> (fakes::TempDir, Config) {
+    let root = fakes::TempDir::new("fiber-naming-credentials");
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    for holder in holders {
+        config::store_credential(&home, holder, "default", &Secret::new("key".into())).unwrap();
+    }
+    let config = Config::load(Sources {
+        home: home.clone(),
+        workspace: home,
+        project: ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    (root, config)
+}
+
 #[test]
 fn an_exact_provider_model_resolves() {
     let providers = registry(&[("fake", vec![model("m")]), ("other", vec![model("m2")])]);
-    let made = providers.resolve_named(&[], "fake/m").unwrap();
+    let (_root, config) = credentialed(&[]);
+    let made = providers.resolve_named(&[], &config, "fake/m").unwrap();
     assert_eq!(made.reference(), "fake/m");
 }
 
 #[test]
 fn a_scripted_model_missing_from_the_registry_gives_start_only() {
     let providers = registry(&[("fake", vec![model("m")])]);
+    let (_root, config) = credentialed(&[]);
     let error = providers
-        .resolve_named(&[], "scripted/new.json")
+        .resolve_named(&[], &config, "scripted/new.json")
         .unwrap_err();
     assert!(matches!(error, Error::ScriptedStartOnly));
     assert_eq!(error.to_string(), START_ONLY);
@@ -95,7 +119,10 @@ fn a_scripted_model_missing_from_the_registry_gives_start_only() {
 #[test]
 fn an_unknown_reference_gives_the_registry_message() {
     let providers = registry(&[("fake", vec![model("m")])]);
-    let error = providers.resolve_named(&[], "fake/nope").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers
+        .resolve_named(&[], &config, "fake/nope")
+        .unwrap_err();
     assert!(matches!(error, Error::UnknownModel { .. }));
     assert_eq!(
         error.to_string(),
@@ -106,14 +133,16 @@ fn an_unknown_reference_gives_the_registry_message() {
 #[test]
 fn a_bare_id_one_provider_names_resolves() {
     let providers = registry(&[("fake", vec![model("m")]), ("other", vec![model("m2")])]);
-    let made = providers.resolve_named(&[], "m").unwrap();
+    let (_root, config) = credentialed(&[]);
+    let made = providers.resolve_named(&[], &config, "m").unwrap();
     assert_eq!(made.reference(), "fake/m");
 }
 
 #[test]
 fn a_bare_id_two_providers_share_is_ambiguous() {
     let providers = registry(&[("fake", vec![model("m")]), ("other", vec![model("m")])]);
-    let error = providers.resolve_named(&[], "m").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&[], &config, "m").unwrap_err();
     assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
         error.to_string(),
@@ -128,7 +157,8 @@ fn a_bare_id_only_the_naming_list_names_is_the_registry_error() {
     let naming = vec![("lua".to_owned(), "rm".to_owned())];
     // One naming-list match is not ambiguity: the message is the
     // registry's unknown-model error.
-    let error = providers.resolve_named(&naming, "rm").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&naming, &config, "rm").unwrap_err();
     assert!(matches!(error, Error::ModelMissing { .. }));
     assert_eq!(
         error.to_string(),
@@ -140,7 +170,8 @@ fn a_bare_id_only_the_naming_list_names_is_the_registry_error() {
 fn an_unknown_bare_id_is_the_registry_error_not_an_empty_ambiguity() {
     let providers = registry(&[("fake", vec![model("m")])]);
     // Nothing names `nope`: no match at all is not ambiguity.
-    let error = providers.resolve_named(&[], "nope").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&[], &config, "nope").unwrap_err();
     assert!(matches!(error, Error::ModelMissing { .. }));
 }
 
@@ -150,7 +181,8 @@ fn a_naming_match_joins_the_registry_ambiguity() {
     // The registry already finds `m` ambiguous; the naming list adds the
     // unloaded `lua/m`.
     let naming = vec![("lua".to_owned(), "m".to_owned())];
-    let error = providers.resolve_named(&naming, "m").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&naming, &config, "m").unwrap_err();
     assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
         error.to_string(),
@@ -164,7 +196,8 @@ fn a_duplicate_naming_entry_does_not_make_an_exact_match_ambiguous() {
     let providers = registry(&[("fake", vec![model("m")])]);
     // The registry and the naming list name the same reference.
     let naming = vec![("fake".to_owned(), "m".to_owned())];
-    let made = providers.resolve_named(&naming, "m").unwrap();
+    let (_root, config) = credentialed(&[]);
+    let made = providers.resolve_named(&naming, &config, "m").unwrap();
     assert_eq!(made.reference(), "fake/m");
 }
 
@@ -177,7 +210,8 @@ fn a_naming_match_joins_a_resolved_match_in_ambiguity() {
         ("fake".to_owned(), "n".to_owned()),
         ("lua".to_owned(), "n".to_owned()),
     ];
-    let error = providers.resolve_named(&naming, "n").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&naming, &config, "n").unwrap_err();
     assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
         error.to_string(),
@@ -195,7 +229,8 @@ fn a_naming_only_literal_falls_back_to_the_stripped_id() {
         ("fake".to_owned(), "n".to_owned()),
         ("lua".to_owned(), "n:high".to_owned()),
     ];
-    let made = providers.resolve_named(&naming, "n:high").unwrap();
+    let (_root, config) = credentialed(&[]);
+    let made = providers.resolve_named(&naming, &config, "n:high").unwrap();
     assert_eq!(made.reference(), "fake/n");
     assert_eq!(made.thinking, Some(ThinkingLevel::High));
 }
@@ -209,7 +244,8 @@ fn a_registry_literal_beats_the_suffix() {
     ];
     // `n:high` names the literal model, with no thinking level: it is
     // neither `n` with `high` nor ambiguous with it.
-    let made = providers.resolve_named(&naming, "n:high").unwrap();
+    let (_root, config) = credentialed(&[]);
+    let made = providers.resolve_named(&naming, &config, "n:high").unwrap();
     assert_eq!(made.model.id, "n:high");
     assert_eq!(made.thinking, None);
 }
@@ -227,7 +263,10 @@ fn an_unconfigured_literal_reports_its_message_first() {
     // The stripped id is ambiguous on its own; the unconfigured literal
     // still wins on the full id.
     let naming = vec![("lit".to_owned(), "n:high".to_owned())];
-    let error = providers.resolve_named(&naming, "n:high").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers
+        .resolve_named(&naming, &config, "n:high")
+        .unwrap_err();
     assert!(matches!(error, Error::Unconfigured { .. }));
     assert_eq!(error.to_string(), message);
 }
@@ -240,7 +279,10 @@ fn two_naming_matches_for_a_literal_are_ambiguous_on_the_full_id() {
         ("lit".to_owned(), "n:high".to_owned()),
         ("lua".to_owned(), "n:high".to_owned()),
     ];
-    let error = providers.resolve_named(&naming, "n:high").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers
+        .resolve_named(&naming, &config, "n:high")
+        .unwrap_err();
     assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
         error.to_string(),
@@ -257,7 +299,10 @@ fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
     ]);
     // The naming list holds only one of the two literals.
     let naming = vec![("lit1".to_owned(), "n:high".to_owned())];
-    let error = providers.resolve_named(&naming, "n:high").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers
+        .resolve_named(&naming, &config, "n:high")
+        .unwrap_err();
     assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
         error.to_string(),
@@ -269,13 +314,107 @@ fn two_registry_literals_sharing_one_id_are_ambiguous_on_the_full_id() {
 #[test]
 fn a_suffixed_id_without_a_literal_reports_the_stripped_ambiguity() {
     let providers = registry(&[("fake", vec![model("m")]), ("other", vec![model("m")])]);
-    let error = providers.resolve_named(&[], "m:high").unwrap_err();
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&[], &config, "m:high").unwrap_err();
     assert!(matches!(error, Error::Ambiguous { .. }));
     assert_eq!(
         error.to_string(),
         "The model `m` is offered by more than one provider: fake/m, other/m. \
          Name one as `provider/model`."
     );
+}
+
+#[test]
+fn a_bare_id_with_one_switched_on_holder_resolves_to_it() {
+    // `pa` is switched on and `pb` is logged out, both having `m`: the
+    // logged-out holder counts for nothing, so bare `m` is `pa/m`.
+    let providers = registry(&[("pa", vec![model("m")]), ("pb", vec![model("m")])]);
+    let (_root, config) = credentialed(&["pa"]);
+    let made = providers.resolve_named(&[], &config, "m").unwrap();
+    assert_eq!(made.reference(), "pa/m");
+}
+
+#[test]
+fn a_bare_id_only_a_logged_out_holder_names_is_credential_missing() {
+    // Only the logged-out `pb` has `m`: bare `m` names its holder as not
+    // logged in, with the login command.
+    let providers = registry(&[("pb", vec![model("m")])]);
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&[], &config, "m").unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Config(config::ConfigError::CredentialMissing { .. })
+    ));
+    assert_eq!(
+        error.to_string(),
+        "No credential for `pb`: `pb` has `m` but is not logged in. Run `fiber login pb`."
+    );
+}
+
+#[test]
+fn a_bare_id_with_no_switched_on_holder_names_every_logged_out_holder() {
+    // Neither holder is switched on: one error names both, sorted, each
+    // with its login command.
+    let providers = registry(&[("pb", vec![model("m")]), ("pa", vec![model("m")])]);
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&[], &config, "m").unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Config(config::ConfigError::CredentialMissing { .. })
+    ));
+    assert_eq!(
+        error.to_string(),
+        "No credential for `pa`: `pa`, `pb` have `m` but are not logged in; \
+         run `fiber login pa`, `fiber login pb`. Run `fiber login pa`."
+    );
+}
+
+#[test]
+fn a_bare_id_with_a_switched_off_unconfigured_holder_resolves() {
+    // `fake` is switched on with the configured `m`; `acme` is logged out
+    // with `m` left out with `model_unconfigured`: the logged-out entry
+    // counts for nothing, so bare `m` is `fake/m`.
+    let mut providers = registry(&[("fake", vec![model("m")]), ("acme", Vec::new())]);
+    providers.unconfigured.insert(
+        "acme".to_owned(),
+        vec![(
+            "m".to_owned(),
+            "The model `acme/m` needs the setting `workspace`.".to_owned(),
+        )],
+    );
+    let (_root, config) = credentialed(&["fake"]);
+    let made = providers.resolve_named(&[], &config, "m").unwrap();
+    assert_eq!(made.reference(), "fake/m");
+}
+
+#[test]
+fn a_literal_id_only_a_logged_out_provider_names_is_credential_missing() {
+    // Only the logged-out `pb` holds the literal `n:high`: the full-id
+    // stage reports its missing credential before any suffix strips.
+    let providers = registry(&[("pb", vec![model("n:high")])]);
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&[], &config, "n:high").unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Config(config::ConfigError::CredentialMissing { .. })
+    ));
+    assert_eq!(
+        error.to_string(),
+        "No credential for `pb`: `pb` has `n:high` but is not logged in. \
+         Run `fiber login pb`."
+    );
+}
+
+#[test]
+fn a_bare_id_with_a_thinking_suffix_keeps_the_level_on_the_switched_on_singleton() {
+    // `pa` is switched on and `pb` is logged out, both holding thinking
+    // model `n`: bare `n:high` strips to the switched-on singleton and
+    // keeps the `high` level.
+    let providers = registry(&[("pa", vec![thinking("n")]), ("pb", vec![thinking("n")])]);
+    let (_root, config) = credentialed(&["pa"]);
+    let made = providers.resolve_named(&[], &config, "n:high").unwrap();
+    assert_eq!(made.reference(), "pa/n");
+    assert_eq!(made.thinking, Some(ThinkingLevel::High));
 }
 
 #[test]

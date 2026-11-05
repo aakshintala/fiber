@@ -44,6 +44,7 @@ impl Providers {
     pub fn resolve_named<'a>(
         &'a self,
         naming: &[(String, String)],
+        _config: &config::Config,
         typed: &str,
     ) -> Result<Model<'a>, crate::Error> {
         let (rest, _) = Self::split_thinking(typed);
