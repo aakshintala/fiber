@@ -236,7 +236,11 @@ fn a_resume_against_a_newer_keeper_declines_naming_its_version_then_recovers() {
         .iter()
         .filter(|line| line["kind"] == "job_completed")
         .collect();
-    assert_eq!(ends.len(), 1);
+    assert_eq!(
+        ends.len(),
+        1,
+        "docs/tools.md, \"The keeper\": the keeper reports each exit — one job, one end"
+    );
     let end = &ends[0]["payload"];
     assert_eq!(end["job_id"], job);
     assert_eq!(end["status"], "completed");
@@ -280,7 +284,11 @@ fn a_resume_against_a_newer_keeper_declines_naming_its_version_then_recovers() {
         .iter()
         .filter(|item| item["source"] == "fiber")
         .collect();
-    assert_eq!(notices.len(), 1, "{turn}");
+    assert_eq!(
+        notices.len(),
+        1,
+        "docs/tools.md, \"The keeper\": one turn_started message item holds the notices, {turn}"
+    );
     let text = notices[0].to_string();
     assert!(text.contains(&job) && text.contains("completed"));
     assert!(fakes::matching_exits(&marker, setup.deadline.start_wait()));
