@@ -3070,3 +3070,211 @@ fn replay_empty_failed_tool_result_carries_timeout_text() {
         }),
     );
 }
+
+/// The shadow pair names the lived-in fixture writes for the
+/// grouped-notice journey: every overlay bullet names one.
+#[rustfmt::skip]
+const SHADOWED_NAMES: [&str; 25] = [
+    "dup00", "dup01", "dup02", "dup03", "dup04",
+    "dup05", "dup06", "dup07", "dup08", "dup09",
+    "dup10", "dup11", "dup12", "dup13", "dup14",
+    "dup15", "dup16", "dup17", "dup18", "dup19",
+    "dup20", "dup21", "dup22", "dup23", "dup24",
+];
+
+/// The pty rows a 120-column run needs to show the whole grouped notice:
+/// the overlay keeps the first rows and drops body rows from the bottom
+/// when the stack exceeds the area, so a short pty clips names and the
+/// journey fails. Room is 67, where greedy word wrap holds over 50 chars
+/// a row; 8 chrome slots hold the frame around the lead and bullets, and
+/// 16 slack covers the page chrome. `root_len` is the canonical fixture
+/// root length, so the height holds on any temporary directory.
+fn overlay_rows(root_len: usize) -> u16 {
+    let rows_for = |len: usize| 1 + len / 50;
+    let total = 16 + 8 + rows_for(126 + 2 * root_len) + 25 * rows_for(104 + 2 * root_len);
+    u16::try_from(total).expect("the overlay fits the pty")
+}
+
+/// Every reversed cell of `grid`, as (column, row): the focus look's
+/// snapshot, so a step can wait for it to move.
+fn reversed_cells(grid: &Grid) -> Vec<(u16, u16)> {
+    let (cols, height) = grid.size();
+    let mut cells = Vec::new();
+    for y in 0..height {
+        for x in 0..cols {
+            if grid.cell(x, y).inverse {
+                cells.push((x, y));
+            }
+        }
+    }
+    cells
+}
+
+/// The walk's step for a notice row's reversed cells, left to right:
+/// done when the box itself has focus (its run starts the row past the
+/// grip), Up from the dismiss cross's focused cell, Down otherwise. The
+/// cross sits at the conversation column's right edge, not the screen's,
+/// so any focused cell past the box's start means the cross.
+fn notice_step(row: &[bool]) -> Option<&'static [u8]> {
+    if row.get(1).is_some_and(|cell| *cell) {
+        None
+    } else if row.iter().any(|cell| *cell) {
+        Some(b"\x1b[A")
+    } else {
+        Some(b"\x1b[B")
+    }
+}
+
+/// Walks keyboard focus to the notice row carrying `code`
+/// (conversation door): Shift+Tab enters navigate mode, then each step
+/// writes Up from the notice's own dismiss cross and Down otherwise,
+/// waiting for the focus look to move each time. Returns only when the
+/// row carrying `code` has its second cell reversed, so the box spans
+/// the row past the grip and Enter opens it; never writes Enter, so it
+/// never dismisses. Every wait goes through `wait_screen` under the
+/// run's one deadline.
+#[track_caller]
+fn focus_notice(run: &mut Run, code: &str) {
+    run.write(b"\x1b[Z");
+    let mut grid = run.wait_screen("a focused row", |grid| {
+        let (cols, rows) = grid.size();
+        (0..rows).any(|y| (0..cols).any(|x| grid.cell(x, y).inverse))
+    });
+    let (_, rows) = grid.size();
+    for _ in 0..=rows {
+        let (_, y) = grid.text_at(code).expect("the notice row");
+        // Done only on the box, so Enter never dismisses.
+        let (cols, _) = grid.size();
+        let row: Vec<bool> = (0..cols).map(|x| grid.cell(x, y).inverse).collect();
+        let Some(key) = notice_step(&row) else {
+            return;
+        };
+        run.write(key);
+        let before = reversed_cells(&grid);
+        grid = run.wait_screen("the focus moved", |next| reversed_cells(next) != before);
+    }
+    panic!("the focus walk reached no notice row carrying {code}");
+}
+
+/// Twenty-five shadowed skills show one grouped row, once per terminal
+/// run: from the lived-in fixture a first session stacks the grouped
+/// row, the overlay lists all 25 names, and a second session in the same
+/// run shows no row. Evidence for #3679, whose parent showed every
+/// shadowed skill on its own row and repeated them across sessions.
+#[test]
+fn lived_home_twenty_five_shadowed_notices_show_once_per_run() {
+    run_journey(
+        "lived_home_twenty_five_shadowed_notices_show_once_per_run",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let server = ProviderServer::start([support::hello(), support::hello()]).unwrap();
+            install_fake_provider_extension(&setup, &server);
+            std::fs::create_dir_all(setup.home().join("credentials/fake")).unwrap();
+            std::fs::write(setup.home().join("credentials/fake/work"), "test-key").unwrap();
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+            );
+            support::lived_home::lived_home(setup.root.path(), 25);
+            let root_len = fs::canonicalize(setup.root.path())
+                .unwrap()
+                .to_string_lossy()
+                .len();
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                overlay_rows(root_len),
+                &bin,
+                &[],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            // Home starts no session: the first prompt opens the run's
+            // first session, whose opening stacks the grouped row.
+            let from = run.output().len();
+            run.write(b"say hi\r");
+            // One grouped row for the run's first session: the count
+            // pins the neither-zero-nor-25 edges, since a repeat or an
+            // ungrouped pass never shows exactly one grouped row.
+            run.wait_screen("the grouped shadow notice", |grid| {
+                grid.rows
+                    .iter()
+                    .filter(|row| row.contains("25 skills are shadowed"))
+                    .count()
+                    == 1
+            });
+            // A click on the row opens its whole text in the overlay
+            // (`docs/tui.md`, "Notices").
+            run.click_where("the grouped shadow notice", |grid| {
+                grid.text_at("25 skills are shadowed")
+            });
+            run.wait_screen("the overlay lists all 25", |grid| {
+                SHADOWED_NAMES.iter().all(|name| shows(grid, name))
+            });
+            // The open overlay pauses the 10 s expiry, so the slow reply
+            // cannot expire the notice before dismissal; Esc closes the
+            // overlay once the turn finished behind it.
+            run.turn_finished(from);
+            run.write(b"\x1b[27u");
+            run.wait_screen("the closed overlay", |grid| {
+                shows(grid, "25 skills are shadowed") && !shows(grid, "dup01")
+            });
+            // Dismiss the row through keyboard focus on its dismiss
+            // cross, exactly as the terminal test does: dismissal, not
+            // the overlay close, removes the stacked notice, so the
+            // second session's absence is observable without waiting for
+            // the fade.
+            focus_notice(&mut run, "skills are shadowed");
+            let grid = run.wait_screen("the notice focused", |grid| {
+                grid.rows
+                    .iter()
+                    .any(|row| row.contains("25 skills are shadowed"))
+            });
+            let before = reversed_cells(&grid);
+            run.write(b"\x1b[B");
+            run.wait_screen("the dismiss cross focused", |next| {
+                reversed_cells(next) != before
+            });
+            run.write(b"\r");
+            run.wait_screen("the dismissed row clears", |grid| {
+                !grid.contents.contains("skills are shadowed")
+            });
+            run.write(b"\x1b[27u");
+            run.wait_screen("the input box back", |grid| reversed_cells(grid).is_empty());
+            // `/new` returns home with the cursor in the input box; the
+            // next prompt starts the second session beside the first. Its
+            // identical opening notice shows no row again, since the run
+            // already showed it (`docs/tui.md`, "Notices").
+            run.write(b"/new\r");
+            run.wait_screen("home for the second session", |grid| {
+                grid.contents.contains("Enter starts a session")
+            });
+            run.write(b"say hi\r");
+            run.wait_screen("the second session's reply", |grid| {
+                grid.contents.contains("Hello.")
+            });
+            let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+            fakes::wait_until("the second session", setup.deadline, move || {
+                fs::read_dir(&dir).is_ok_and(|entries| {
+                    entries
+                        .flatten()
+                        .filter(|entry| entry.path().join("events.jsonl").is_file())
+                        .count()
+                        == 2
+                })
+            });
+            // settled: the reply painted and the session count beside it
+            // proves the second session ran, so the frame below is final.
+            let grid = run.wait_screen("a settled frame", |grid| grid.contents.contains("›"));
+            // The reply and the count above prove the session ran, so this
+            // settled: absence needs no wait of its own.
+            let repeat = grid.contents.contains("skills are shadowed");
+            assert!(!repeat, "no repeat in a second session");
+            quit_journey(run);
+        }),
+    );
+}
