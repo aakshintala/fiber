@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use contract::commands::{Remember, RememberScope, Reply, ReplyAnswer};
-use contract::events::{CacheLifetime, Decision, TurnOutcome};
+use contract::events::{CacheLifetime, Decision, EventKind, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::{Input, ModelRequest};
 use contract::rules::{Rule, RuleDecision, StandingRules};
@@ -54,18 +54,18 @@ fn usages(lines: &[Envelope]) -> Vec<&Envelope> {
 /// with no text and whose second says "Done.", with `middle` in place of
 /// the decision lines and `reviews` reviewer `usage_recorded` lines after
 /// the reply's own.
-fn kinds_with(middle: &[&str], reviews: usize) -> Vec<String> {
+fn kinds_with(middle: &[&str], reviews: usize) -> Vec<EventKind> {
     let mut kinds = vec![
-        "session_started".to_owned(),
-        "preamble_built".to_owned(),
-        "opening_message".to_owned(),
+        EventKind::from_name("session_started"),
+        EventKind::from_name("preamble_built"),
+        EventKind::from_name("opening_message"),
     ];
     kinds.extend(kinds_next(middle, reviews));
     kinds
 }
 
 /// As [`kinds_with`], for a turn after the first: no `session_started`.
-fn kinds_next(middle: &[&str], reviews: usize) -> Vec<String> {
+fn kinds_next(middle: &[&str], reviews: usize) -> Vec<EventKind> {
     let mut kinds = vec![
         "turn_started",
         "step_started",
@@ -92,7 +92,7 @@ fn kinds_next(middle: &[&str], reviews: usize) -> Vec<String> {
         .iter()
         .copied(),
     );
-    kinds.into_iter().map(str::to_owned).collect()
+    kinds.into_iter().map(EventKind::from_name).collect()
 }
 
 /// One turn whose reply calls `shell` once, reviewed with `review`: the

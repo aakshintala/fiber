@@ -17,8 +17,8 @@ use std::time::Duration;
 
 use contract::clock::Clock as _;
 use contract::events::{
-    DelegateFinished, DelegateStarted, Event, ExtensionLog, JobCompleted, JobLine, JobStarted,
-    Outcome,
+    DelegateFinished, DelegateStarted, Event, EventKind, ExtensionLog, JobCompleted, JobLine,
+    JobStarted, Outcome,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, Rejection};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
@@ -414,8 +414,8 @@ impl Held {
             .collect()
     }
 
-    fn kinds(&self) -> Vec<String> {
-        self.durable().into_iter().map(|line| line.kind).collect()
+    fn kinds(&self) -> Vec<EventKind> {
+        self.durable().into_iter().map(|line| line.kind()).collect()
     }
 }
 

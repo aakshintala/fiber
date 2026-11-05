@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::emit::Emit;
-use contract::events::{TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
+use contract::events::{EventKind, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
 use contract::hook::{
     BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall,
     BeforeToolOutcome, CheckAnswer, CheckOutcome, Hooks,
@@ -353,16 +353,16 @@ impl Ran {
 
     /// The complete, ordered kinds of the durable lines: every event the
     /// turn wrote, so a duplicated, missing or reordered event fails.
-    fn durable_kinds(&self) -> Vec<&str> {
-        self.lines.iter().map(|line| line.kind.as_str()).collect()
+    fn durable_kinds(&self) -> Vec<EventKind> {
+        self.lines.iter().map(|line| line.kind()).collect()
     }
 
     fn streamed_of_kind(&self, kind: &str) -> Vec<&Envelope> {
         self.streamed.iter().filter(|l| l.kind == kind).collect()
     }
 
-    fn kinds(&self) -> Vec<&str> {
-        self.streamed.iter().map(|l| l.kind.as_str()).collect()
+    fn kinds(&self) -> Vec<EventKind> {
+        self.streamed.iter().map(|l| l.kind()).collect()
     }
 }
 

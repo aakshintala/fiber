@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use contract::events::{
-    CacheLifetime, Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
+    CacheLifetime, Event, EventKind, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
     ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, TurnStarted,
 };
 use contract::provider::{Delta, Input, ModelCall, ModelRequest, Provider, ToolDefinition};
@@ -1315,8 +1315,8 @@ mod supervised {
         }
     }
 
-    fn kinds(lines: &[contract::Envelope]) -> Vec<&str> {
-        lines.iter().map(|line| line.kind.as_str()).collect()
+    fn kinds(lines: &[contract::Envelope]) -> Vec<EventKind> {
+        lines.iter().map(|line| line.kind()).collect()
     }
 
     fn resolved(lines: &[contract::Envelope]) -> Vec<&contract::Envelope> {

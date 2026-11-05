@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::diag::Observe;
 use contract::emit::Emit;
-use contract::events::{CacheLifetime, Control, ToolCallRequested, TurnOutcome};
+use contract::events::{CacheLifetime, Control, EventKind, ToolCallRequested, TurnOutcome};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{
     CallError, Delta, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
@@ -76,22 +76,22 @@ pub(crate) fn arm_cancel_after_subscribe() {
 }
 
 /// Fails the next stream sink write once with `Error::Log`.
-pub(crate) fn arm_fail_stream_write() {
+fn arm_fail_stream_write() {
     *lock(&FAIL_STREAM_WRITE) = Some(true);
 }
 
 /// Fails the next handoff-started record once with `Error::Log`.
-pub(crate) fn arm_fail_handoff_started() {
+fn arm_fail_handoff_started() {
     *lock(&FAIL_HANDOFF_STARTED) = Some(true);
 }
 
 /// Fails the next handoff-completed record once with `Error::Log`.
-pub(crate) fn arm_fail_handoff_completed() {
+fn arm_fail_handoff_completed() {
     *lock(&FAIL_HANDOFF_COMPLETED) = Some(true);
 }
 
 /// Fails the next handoff restart once with `Error::Log`.
-pub(crate) fn arm_fail_restarted() {
+fn arm_fail_restarted() {
     *lock(&FAIL_RESTARTED) = Some(true);
 }
 
@@ -1001,11 +1001,11 @@ fn assert_wire(records: &[OpRecord]) {
     }
 }
 
-fn kinds(world: &World) -> Vec<String> {
+fn kinds(world: &World) -> Vec<EventKind> {
     log::read(&world.home.path().join("s_test"))
         .unwrap()
         .iter()
-        .map(|line| line.kind.clone())
+        .map(|line| line.kind())
         .collect()
 }
 

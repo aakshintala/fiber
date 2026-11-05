@@ -22,7 +22,7 @@ use std::time::Duration;
 use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
-use contract::events::{Decision, TurnOutcome};
+use contract::events::{Decision, EventKind, TurnOutcome};
 use contract::hook::{
     BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, Context, Hooks, Replaced,
 };
@@ -776,8 +776,8 @@ impl World {
     }
 }
 
-fn kinds(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 /// A whole session's durable kinds: its opening lines, then `turns`.

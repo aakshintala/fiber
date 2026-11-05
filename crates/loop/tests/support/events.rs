@@ -12,8 +12,8 @@
 )]
 
 use contract::events::{
-    AskStep, CallStatus, Empty, Environment, Event, FiberStarted, InputItem, OpeningMessage,
-    PermissionRequested, RuleScope, StandingRule, SteeringApplied, TextCompleted,
+    AskStep, CallStatus, Empty, Environment, Event, EventKind, FiberStarted, InputItem,
+    OpeningMessage, PermissionRequested, RuleScope, StandingRule, SteeringApplied, TextCompleted,
     ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnStarted,
 };
 use contract::provider::Input;
@@ -115,8 +115,8 @@ pub(crate) fn message_started() -> Event {
     Event::AssistantMessageStarted(Empty {})
 }
 
-pub(crate) fn kinds_of(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|l| l.kind.as_str()).collect()
+pub(crate) fn kinds_of(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|l| l.kind()).collect()
 }
 
 pub(crate) fn steering(text: &str) -> Event {

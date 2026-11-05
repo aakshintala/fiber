@@ -15,7 +15,7 @@ use std::thread;
 
 use contract::clock::Clock as _;
 use contract::clock::Wake;
-use contract::events::Interaction;
+use contract::events::{EventKind, Interaction};
 use contract::inbox::Delivery;
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::tool::{Answered, Ask, Asking};
@@ -125,8 +125,8 @@ fn durable(home: &fakes::TempDir) -> Vec<Envelope> {
         .collect()
 }
 
-fn kinds(lines: &[Envelope]) -> Vec<String> {
-    lines.iter().map(|line| line.kind.clone()).collect()
+fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 #[test]

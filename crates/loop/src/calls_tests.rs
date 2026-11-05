@@ -19,8 +19,8 @@ use contract::clock::Wake;
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    DecidedBy, Decision, DelegateFinished, DelegateStarted, Grant, JobCompleted, JobStarted,
-    McpServerFailed, McpServerReady, Outcome, RuleOffer, ServerFailure, TextDelta,
+    DecidedBy, Decision, DelegateFinished, DelegateStarted, EventKind, Grant, JobCompleted,
+    JobStarted, McpServerFailed, McpServerReady, Outcome, RuleOffer, ServerFailure, TextDelta,
     ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced, TurnOutcome,
 };
 use contract::inbox::{Ack, Answer, Delivery, Message};
@@ -973,8 +973,8 @@ fn durable(lines: &[Envelope]) -> Vec<&Envelope> {
     lines.iter().filter(|line| line.seq.is_some()).collect()
 }
 
-fn kinds(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 /// `job_started`, `job_completed`, `tool_call_completed` for `id`, consecutive

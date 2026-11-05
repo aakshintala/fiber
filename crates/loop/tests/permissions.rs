@@ -13,7 +13,7 @@ mod support;
 
 use std::sync::Arc;
 
-use contract::events::TurnOutcome;
+use contract::events::{EventKind, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::Input;
 use contract::rules::{Rule, RuleDecision, RulesError, StandingRules};
@@ -56,7 +56,7 @@ fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
 /// The full ordered kind list of a first turn whose first reply calls once
 /// with no text and whose second says "Done.", with `middle` in place of
 /// the decision lines.
-fn kinds_with(middle: &[&str]) -> Vec<String> {
+fn kinds_with(middle: &[&str]) -> Vec<EventKind> {
     let mut kinds = vec![
         "session_started",
         "preamble_built",
@@ -87,7 +87,7 @@ fn kinds_with(middle: &[&str]) -> Vec<String> {
         .iter()
         .copied(),
     );
-    kinds.into_iter().map(str::to_owned).collect()
+    kinds.into_iter().map(EventKind::from_name).collect()
 }
 
 #[test]

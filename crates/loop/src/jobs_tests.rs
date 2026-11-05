@@ -20,8 +20,8 @@ use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    CallStatus, Clients, Decision, DelegateFinished, DelegateStarted, Event, JobCompleted,
-    JobStarted, Notice, OnFork, Outcome, Parent, RepositoryCodeOffered, ShellCommand,
+    CallStatus, Clients, Decision, DelegateFinished, DelegateStarted, Event, EventKind,
+    JobCompleted, JobStarted, Notice, OnFork, Outcome, Parent, RepositoryCodeOffered, ShellCommand,
     ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome, UsageRecorded,
 };
 use contract::hook::{
@@ -595,8 +595,8 @@ impl World {
     }
 }
 
-fn kinds(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 /// The user messages `request` sends, in order.
@@ -2478,12 +2478,12 @@ fn session_of(turns: &[Vec<&str>]) -> Vec<String> {
         .collect()
 }
 
-fn durable_kinds(world: &World) -> Vec<String> {
+fn durable_kinds(world: &World) -> Vec<EventKind> {
     log::read(&world.dir)
         .unwrap()
         .into_iter()
         .filter(Envelope::is_durable)
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect()
 }
 

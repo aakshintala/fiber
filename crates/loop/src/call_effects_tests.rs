@@ -14,7 +14,7 @@
 
 use std::sync::{Arc, Mutex, mpsc};
 
-use contract::events::{CallStatus, ToolCallCompleted, ToolCallStarted};
+use contract::events::{CallStatus, EventKind, ToolCallCompleted, ToolCallStarted};
 use contract::shapes::{ContentPart, DeclaredEffects, Failure};
 use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, ErrorCode, TurnId};
@@ -227,8 +227,11 @@ fn run_decided(
     lines
 }
 
-fn kinds(lines: &[(String, contract::Envelope)]) -> Vec<&str> {
-    lines.iter().map(|(kind, _)| kind.as_str()).collect()
+fn kinds(lines: &[(String, contract::Envelope)]) -> Vec<EventKind> {
+    lines
+        .iter()
+        .map(|(kind, _)| EventKind::from_name(kind))
+        .collect()
 }
 
 fn line_for(

@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, mpsc};
 
 use contract::emit::Emit;
-use contract::events::{CacheLifetime, TurnOutcome};
+use contract::events::{CacheLifetime, EventKind, TurnOutcome};
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeHandoffAnswer, BeforeHandoffOutcome,
     BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolOutcome, CheckAnswer,
@@ -639,7 +639,7 @@ impl Harness {
 /// The kinds of a first turn whose reply calls once with no text and whose
 /// continuation says "Done.": `middle` stands in for the decision and
 /// completion lines.
-fn kinds_with(middle: &[&'static str]) -> Vec<&'static str> {
+fn kinds_with(middle: &[&'static str]) -> Vec<EventKind> {
     let mut kinds = vec![
         "session_started",
         "preamble_built",
@@ -668,7 +668,7 @@ fn kinds_with(middle: &[&'static str]) -> Vec<&'static str> {
         .iter()
         .copied(),
     );
-    kinds
+    kinds.into_iter().map(EventKind::from_name).collect()
 }
 
 fn search_arguments(query: &str) -> Value {

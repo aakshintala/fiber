@@ -6,7 +6,7 @@
     reason = "test code"
 )]
 use super::*;
-use contract::events::PreambleReason;
+use contract::events::{EventKind, PreambleReason};
 use contract::inbox::Answer;
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::{ErrorCode, SessionId, TurnId};
@@ -247,11 +247,11 @@ fn ack() -> (Ack, mpsc::Receiver<Answer>) {
     let (tx, rx) = mpsc::channel();
     (Ack(Box::new(move |answer| tx.send(answer).unwrap())), rx)
 }
-fn kinds(looped: &Loop) -> Vec<String> {
+fn kinds(looped: &Loop) -> Vec<EventKind> {
     log::read(looped.log.dir())
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect()
 }
 

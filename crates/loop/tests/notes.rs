@@ -13,7 +13,7 @@ mod support;
 use std::sync::mpsc;
 
 use contract::ErrorCode;
-use contract::events::{CommandResult, TurnOutcome};
+use contract::events::{CommandResult, EventKind, TurnOutcome};
 use contract::inbox::{Ack, Answer, Delivery};
 use contract::notes::{AllowsTally, Evidence, NotesAsk, ProposeNotesArgs, Topic};
 use fakes::{Deadline, Scripted};
@@ -146,8 +146,8 @@ fn run_read_only(session: &mut Session, ask: NotesAsk) -> (Answer, Vec<contract:
     (result, at_ack)
 }
 
-fn kinds(lines: &[contract::Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn kinds(lines: &[contract::Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 #[test]

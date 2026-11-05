@@ -11,10 +11,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use contract::events::{
-    Answer, AskStep, AssistantMessageCompleted, DecidedBy, Decision, Empty, Event, InputItem,
-    Interaction, InteractionRequested, InteractionResolved, MessageOutcome, PermissionRequested,
-    PermissionResolved, ResolvedBy, RuleScope, StandingRule, TextCompleted, TurnCompleted,
-    TurnOutcome, TurnStarted, UsageRecorded,
+    Answer, AskStep, AssistantMessageCompleted, DecidedBy, Decision, Empty, Event, EventKind,
+    InputItem, Interaction, InteractionRequested, InteractionResolved, MessageOutcome,
+    PermissionRequested, PermissionResolved, ResolvedBy, RuleScope, StandingRule, TextCompleted,
+    TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
 use contract::shapes::{
     ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender, Tokens, True,
@@ -121,11 +121,11 @@ impl Session {
         (exited.code, Value::Object(last.payload.clone()))
     }
 
-    fn kinds(&self) -> Vec<String> {
+    fn kinds(&self) -> Vec<EventKind> {
         log::read(&self.dir)
             .unwrap()
             .into_iter()
-            .map(|line| line.kind)
+            .map(|line| line.kind())
             .collect()
     }
 

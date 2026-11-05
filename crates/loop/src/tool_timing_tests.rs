@@ -24,8 +24,8 @@ use contract::clock::{Clock, Wake};
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    AskStep, Decision, Event, FiberExited, Interaction, Notice, OnFork, PermissionRequested,
-    RuleScope, StandingRule, ToolCallRequested, TurnOutcome,
+    AskStep, Decision, Event, EventKind, FiberExited, Interaction, Notice, OnFork,
+    PermissionRequested, RuleScope, StandingRule, ToolCallRequested, TurnOutcome,
 };
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeToolAnswer, BeforeToolOutcome, CheckAnswer,
@@ -54,7 +54,7 @@ const IDLE: Duration = Duration::from_secs(60);
 static FAIL_DECISION_WRITE: Mutex<bool> = Mutex::new(false);
 
 /// Arms the one-shot decision-write fault the error test drives.
-pub(crate) fn arm_fail_decision_write() {
+fn arm_fail_decision_write() {
     *lock(&FAIL_DECISION_WRITE) = true;
 }
 
@@ -1741,11 +1741,11 @@ fn assert_tool_wire(records: &[OpRecord], tool: &str) {
     }
 }
 
-fn kinds(world: &World) -> Vec<String> {
+fn kinds(world: &World) -> Vec<EventKind> {
     log::read(&world.home.path().join("s_test"))
         .unwrap()
         .iter()
-        .map(|line| line.kind.clone())
+        .map(|line| line.kind())
         .collect()
 }
 

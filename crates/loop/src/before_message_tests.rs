@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::events::{InputItem, TurnOutcome, TurnStarted};
+use contract::events::{EventKind, InputItem, TurnOutcome, TurnStarted};
 use contract::hook::{
     BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall,
     CheckAnswer, CheckOutcome, Context, Hooks, Replaced,
@@ -419,8 +419,8 @@ fn streamed(world: &mut World) -> Vec<Envelope> {
 }
 
 /// The complete, ordered kinds of `lines`.
-fn kinds(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {

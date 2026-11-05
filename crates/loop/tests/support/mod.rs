@@ -22,7 +22,7 @@ use contract::clock::Wake;
 use contract::commands::ReplyAnswer;
 use contract::emit::Emit;
 use contract::events::{
-    CacheLifetime, Decision, Event, ReasoningCompleted, SessionStarted, TextDelta,
+    CacheLifetime, Decision, Event, EventKind, ReasoningCompleted, SessionStarted, TextDelta,
     ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome, UsageRecorded, Variables,
     VariablesSource,
 };
@@ -1798,8 +1798,8 @@ fn unpriced() -> Model {
 }
 
 /// The kinds of `lines`, in order.
-pub(crate) fn kinds(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|l| l.kind.as_str()).collect()
+pub(crate) fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|l| l.kind()).collect()
 }
 
 /// The start of every turn's event kinds: the session opens and the turn
