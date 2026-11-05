@@ -12,7 +12,12 @@ use serde_json::{Value, json};
 use support::pty::Run;
 use support::{Setup, write_json};
 
-fn install(setup: &Setup, name: &str, source: &str, range: Option<Value>) {
+fn fixture_dir(
+    setup: &Setup,
+    name: &str,
+    source: &str,
+    range: Option<Value>,
+) -> std::path::PathBuf {
     let dir = setup.root.path().join(name);
     let mut manifest = json!({"name":name,"version":"v3.0.0","fiber":"0.0.0","api":1});
     if let Some(range) = range {
@@ -22,7 +27,11 @@ fn install(setup: &Setup, name: &str, source: &str, range: Option<Value>) {
     std::fs::create_dir_all(dir.join("tui")).unwrap();
     std::fs::write(dir.join("init.lua"), "").unwrap();
     std::fs::write(dir.join("tui/init.lua"), source).unwrap();
-    setup.install_path(&dir, "0.0.0");
+    dir
+}
+fn install(setup: &Setup, name: &str, source: &str, range: Option<Value>) {
+    let dir = fixture_dir(setup, name, source, range);
+    setup.install_path(&dir, "0.0.0", None);
 }
 fn source(text: &str) -> String {
     format!(
@@ -51,19 +60,22 @@ fn transient_lock_hold_does_not_fail_install() {
     // installs: a session loading its extensions at startup, or a forked
     // copy of the lock's file outliving its owner (`installed.rs`, on the
     // lock). The install helper retries the transient `Busy` instead of
-    // failing at once, so the install below lands once the hold lifts.
+    // failing at once, so the install below lands once the hold lifts. The
+    // hold lasts exactly one observed attempt: the holder releases when the
+    // retry's first `Busy` probe arrives, with no wall-clock sleep anywhere.
     let setup = Setup::new();
-    let dir = config::extensions_dir(&setup.home());
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join(".lock");
+    let dir = fixture_dir(&setup, "alpha", &source("ALPHA-ROW"), None);
+    let lock = config::extensions_dir(&setup.home()).join(".lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
     let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (probe_tx, probe_rx) = std::sync::mpsc::channel();
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let deadline = setup.deadline;
     let holder = std::thread::spawn(move || {
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&path)
+            .open(&lock)
             .unwrap();
         while file.try_lock().is_err() {
             if deadline.left().is_zero() {
@@ -72,15 +84,14 @@ fn transient_lock_hold_does_not_fail_install() {
             std::thread::yield_now();
         }
         held_tx.send(()).unwrap();
-        // The simulated hold lasts long enough that an instant retry storm
-        // always lands inside it, then lifts so a retrying install lands.
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        deadline.recv_or_fail(&probe_rx, "the install to hit the held lock");
+        drop(file);
         done_tx.send(()).unwrap();
     });
     setup
         .deadline
         .recv_or_fail(&held_rx, "the holder to take the extensions lock");
-    install(&setup, "alpha", &source("ALPHA-ROW"), None);
+    setup.install_path(&dir, "0.0.0", Some(probe_tx));
     setup
         .deadline
         .recv_or_fail(&done_rx, "the holder to release the extensions lock");

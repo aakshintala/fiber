@@ -38,7 +38,7 @@ impl Setup {
         }
         crate::support::write_json(&source.join("extension.json"), &base);
         fs::write(source.join("init.lua"), init).unwrap();
-        self.install_path(&source, "0.1.0");
+        self.install_path(&source, "0.1.0", None);
     }
 
     pub(crate) fn lua(&self, short: &str, init: &str) {
@@ -53,8 +53,15 @@ impl Setup {
     /// under the fake clock's instant sleep, so the helper yields and
     /// retries on the test deadline instead. An uncontended install never
     /// waits; a lock held past the deadline still fails naming it, keeping
-    /// the helper-unwrap style.
-    pub(crate) fn install_path(&self, source: &Path, version: &str) {
+    /// the helper-unwrap style. Each retried `Busy` sends on `probe` when
+    /// one is given, so a test holding the lock knows its hold is what the
+    /// retry waits out.
+    pub(crate) fn install_path(
+        &self,
+        source: &Path,
+        version: &str,
+        probe: Option<mpsc::Sender<()>>,
+    ) {
         loop {
             let clock = fakes::clock::FakeClock::new();
             let request = extensions::Request::Path(source.to_path_buf());
@@ -66,6 +73,11 @@ impl Setup {
                 &*clock,
             ) {
                 Err(extensions::Error::Busy) if !self.deadline.left().is_zero() => {
+                    if let Some(probe) = probe.as_ref() {
+                        match probe.send(()) {
+                            Ok(()) | Err(_) => {}
+                        }
+                    }
                     std::thread::yield_now();
                 }
                 plan => {
