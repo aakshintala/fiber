@@ -119,45 +119,40 @@ fn calls_in(session: &Place) -> Vec<ShellCall> {
         let Some(action_id) = narrow.action_id else {
             continue;
         };
-        match narrow.kind.as_str() {
-            "tool_call_requested" => {
-                if let Ok(requested) = serde_json::from_value::<Requested>(narrow.payload) {
-                    let action = action_for(&mut actions, &mut order, &action_id);
-                    if action.name.is_none() {
-                        action.name = requested.name;
-                        action.requested =
-                            requested_command(&requested.arguments, &requested.repaired);
-                        action.ran_by = requested.ran_by.is_some();
-                    }
+        let kind = contract::events::EventKind::from_name(&narrow.kind);
+        if kind == contract::events::EventKind::ToolCallRequested {
+            if let Ok(requested) = serde_json::from_value::<Requested>(narrow.payload) {
+                let action = action_for(&mut actions, &mut order, &action_id);
+                if action.name.is_none() {
+                    action.name = requested.name;
+                    action.requested = requested_command(&requested.arguments, &requested.repaired);
+                    action.ran_by = requested.ran_by.is_some();
                 }
             }
-            "permission_requested" => {
-                if let Ok(request) = serde_json::from_value::<Request>(narrow.payload) {
-                    let action = action_for(&mut actions, &mut order, &action_id);
-                    if action.rule_subject.is_none() {
-                        action.rule_subject = request.rule.and_then(|rule| rule.subject);
-                    }
-                    action.escalated = action.escalated || request.escalation.is_some();
+        } else if kind == contract::events::EventKind::PermissionRequested {
+            if let Ok(request) = serde_json::from_value::<Request>(narrow.payload) {
+                let action = action_for(&mut actions, &mut order, &action_id);
+                if action.rule_subject.is_none() {
+                    action.rule_subject = request.rule.and_then(|rule| rule.subject);
+                }
+                action.escalated = action.escalated || request.escalation.is_some();
+            }
+        } else if kind == contract::events::EventKind::PermissionResolved {
+            if let Ok(resolved) = serde_json::from_value::<ResolvedLine>(narrow.payload) {
+                let action = action_for(&mut actions, &mut order, &action_id);
+                if action.resolved.is_none() {
+                    let (Some(decision), Some(decided_by)) =
+                        (resolved.decision, resolved.decided_by)
+                    else {
+                        continue;
+                    };
+                    action.resolved = Some(Resolved {
+                        decision,
+                        decided_by,
+                        reviewed: reviewed_command(&resolved.arguments),
+                    });
                 }
             }
-            "permission_resolved" => {
-                if let Ok(resolved) = serde_json::from_value::<ResolvedLine>(narrow.payload) {
-                    let action = action_for(&mut actions, &mut order, &action_id);
-                    if action.resolved.is_none() {
-                        let (Some(decision), Some(decided_by)) =
-                            (resolved.decision, resolved.decided_by)
-                        else {
-                            continue;
-                        };
-                        action.resolved = Some(Resolved {
-                            decision,
-                            decided_by,
-                            reviewed: reviewed_command(&resolved.arguments),
-                        });
-                    }
-                }
-            }
-            _ => {}
         }
     }
 }

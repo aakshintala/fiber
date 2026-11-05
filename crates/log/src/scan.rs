@@ -140,7 +140,9 @@ impl SessionStarted {
     /// with a payload. No newline, `ts` or `seq` is needed.
     pub(crate) fn parse(first: &[u8]) -> Option<Self> {
         let line: Value = serde_json::from_slice(first).ok()?;
-        if line.get("kind")?.as_str()? != "session_started" {
+        if contract::events::EventKind::from_name(line.get("kind")?.as_str()?)
+            != contract::events::EventKind::SessionStarted
+        {
             return None;
         }
         Some(Self::of(line.get("payload")?))
@@ -254,7 +256,7 @@ pub(crate) fn first_line(dir: &Path) -> Result<SessionStarted, Error> {
         path: path.clone(),
         reason: "the log's first line is not an event".to_owned(),
     })?;
-    if line.kind != "session_started" {
+    if line.kind() != contract::events::EventKind::SessionStarted {
         return Err(Error::Pointer {
             path,
             reason: "the log's first line is not session_started".to_owned(),
@@ -299,7 +301,12 @@ pub fn started_first(dir: &Path) -> Result<SessionStarted, FirstLineError> {
         return Err(FirstLineError::Incomplete);
     }
     let line: Value = serde_json::from_slice(&first).map_err(|_| FirstLineError::Corrupt)?;
-    if line.get("kind").and_then(Value::as_str) != Some("session_started") {
+    if line
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(contract::events::EventKind::from_name)
+        != Some(contract::events::EventKind::SessionStarted)
+    {
         return Err(FirstLineError::Corrupt);
     }
     let Some(payload) = line.get("payload") else {
