@@ -267,6 +267,12 @@ fn keeper_bound_fires_two_hours_after_the_crash_and_writes_keeper_timeout() {
     crash(&mut keeper);
 
     // No hook is set, so the watcher parks exactly one production bound past the crash.
+    // docs/tools.md, "The keeper": the keeper waits 2 hours.
+    assert_eq!(
+        super::KEEPER_BOUND,
+        Duration::from_secs(7_200),
+        "production bound is 2 hours"
+    );
     let bound_at = clock.origin() + super::KEEPER_BOUND;
     let parked = clock
         .mark_parked(bound_at, Deadline::after(Duration::from_secs(10)))
