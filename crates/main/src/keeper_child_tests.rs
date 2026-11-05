@@ -219,6 +219,26 @@ fn start_shell(keeper: &Keeper, call: &str, shell: &str) -> u32 {
     }
 }
 
+fn await_shell_ready(keeper: &Keeper, marker: &str) {
+    // The child prints the marker after installing its trap; one deadline
+    // covers every line of this single wait.
+    let deadline = Deadline::after(Duration::from_secs(10));
+    loop {
+        match deadline.recv_or_fail(&keeper.read, "shell ready") {
+            FromKeeper::Output { bytes, .. } => {
+                use base64::Engine as _;
+                let decoded = base64::engine::general_purpose::STANDARD
+                    .decode(bytes)
+                    .expect("base64");
+                if String::from_utf8_lossy(&decoded).contains(marker) {
+                    return;
+                }
+            }
+            FromKeeper::Started { .. } | FromKeeper::Failed { .. } | FromKeeper::Exit { .. } => {}
+        }
+    }
+}
+
 fn adopt_call(keeper: &Keeper, call: &str, job: &str) {
     let out = keeper.home.path().join(format!("{call}.out"));
     std::fs::write(&out, b"").expect("output file");
@@ -359,8 +379,11 @@ fn keeper_bound_ignores_term_and_completes_through_escalation() {
     let pgid = start_shell(
         &keeper,
         "stubborn",
-        "trap '' TERM; while true; do sleep 1; done",
+        "trap '' TERM; echo ready; while true; do sleep 1; done",
     );
+    // The child prints readiness only after installing its trap, so the
+    // bound's TERM cannot land before the trap exists.
+    await_shell_ready(&keeper, "ready");
     adopt_call(&keeper, "stubborn", "j_stubborn");
     crash(&mut keeper);
 
