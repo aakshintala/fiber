@@ -28,10 +28,6 @@ use super::{keeper_rss_kib, keeper_script, poll_keeper};
 use crate::linux::Counts;
 use crate::run::PROBE;
 
-/// The wall-clock bound on the test's own waits: a worker that never reads
-/// or finishes fails the test instead of hanging it.
-const WALL: Duration = Duration::from_secs(30);
-
 /// The worker's events: each injected read as it happens, then its result.
 enum Event<T> {
     Read(&'static str),
@@ -68,7 +64,7 @@ impl<T: Send + 'static> Driven<T> {
     /// Takes the next read signal, failing the test on anything else: reads
     /// happen in the order the waits run them.
     fn read(&self, which: &'static str) {
-        match Deadline::after(WALL).recv(&self.events) {
+        match Deadline::after(Duration::from_secs(30)).recv(&self.events) {
             Ok(Event::Read(got)) => assert_eq!(got, which, "reads happen in order"),
             Ok(Event::Done(_)) => panic!("the worker finished before reading {which}"),
             Err(_) => panic!("the worker never read {which}"),
@@ -77,7 +73,7 @@ impl<T: Send + 'static> Driven<T> {
 
     /// Steps the worker past its `PROBE` sleep at `at`, naming its thread.
     fn step(&self, at: Instant) {
-        let deadline = Deadline::after(WALL);
+        let deadline = Deadline::after(Duration::from_secs(30));
         self.clock
             .advance_when_parked(Some(at), Some(self.worker.thread().id()), PROBE, &deadline);
     }
@@ -85,7 +81,7 @@ impl<T: Send + 'static> Driven<T> {
     /// Takes the worker's result, failing the test on another read: a read
     /// past the last step means the wait retried instead of ending.
     fn done(self) -> Result<T, String> {
-        match Deadline::after(WALL).recv(&self.events) {
+        match Deadline::after(Duration::from_secs(30)).recv(&self.events) {
             Ok(Event::Done(result)) => {
                 self.worker.join().unwrap_or(());
                 result
