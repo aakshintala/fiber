@@ -1781,34 +1781,6 @@ fn the_visibility_check_passes_twin_cfg_seam_modules() {
 }
 
 #[test]
-fn the_visibility_check_fails_a_lonely_inline_mod() {
-    let dir = workspace();
-    let vis = ["pub", "(crate)"].concat();
-    dir.write(
-        "crates/b/src/only.rs",
-        &format!("//! lonely\n//! fixture\n{vis} mod lonely {{\n    fn hidden() {{}}\n}}\n"),
-    );
-    assert_eq!(
-        xtask(&dir, &["check-docs"], &[], ""),
-        (
-            1,
-            format!(
-                "check-docs: crates/b/src/only.rs:3: lonely is {vis} but no other file in b names it\n"
-            )
-        )
-    );
-    assert_eq!(
-        xtask(&dir, &["visibility"], &[], ""),
-        (
-            1,
-            format!(
-                "visibility: crates/b/src/only.rs:3: lonely is {vis} but no other file in b names it\n"
-            )
-        )
-    );
-}
-
-#[test]
 fn the_must_succeed_check_passes_a_clean_workspace_and_fails_a_short_bound() {
     let dir = workspace();
     assert_eq!(

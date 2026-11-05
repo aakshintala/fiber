@@ -1,17 +1,17 @@
 //! The visibility check (`docs/code-quality.md`, "Visibility"): a
-//! `pub(crate)` or `pub(super)` item no other file of its crate names is
-//! wider than any use needs. Use-search is plain text over every other file
-//! of the crate, so a match in a comment, a string, a macro body or a
-//! `#[cfg]`-gated file still counts; a match only ever hides a narrowing,
-//! never reports a false one. Items defined inside an inline `mod` block are
-//! skipped — their same-file uses stay invisible to a file-granular search —
-//! while the `mod` declaration line itself is still checked.
+//! `pub(crate)` or `pub(super)` function, const or static no other file of
+//! its crate names is wider than any use needs. Use-search is plain text
+//! over every other file of the crate, so a match in a comment, a string,
+//! a macro body or a `#[cfg]`-gated file still counts, and a match only ever
+//! hides a narrowing. Items defined inside an inline `mod` block are
+//! skipped — their same-file uses stay invisible to a file-granular search.
 
 use crate::rules::RustFile;
 
-/// A `pub(crate)` or `pub(super)` item no other file of its crate names, as
-/// `<path>:<line>: <name> is pub(crate) but no other file in <crate> names
-/// it`. Test files count on both sides; macro bodies count as use-sites.
+/// A `pub(crate)` or `pub(super)` function, const or static no other file
+/// of its crate names, as `<path>:<line>: <name> is pub(crate) but no other
+/// file in <crate> names it`. Test files count on both sides; macro bodies
+/// count as use-sites.
 pub(crate) fn check(files: &[RustFile]) -> Vec<String> {
     let mut failures = Vec::new();
     for (index, file) in files.iter().enumerate() {
@@ -44,8 +44,9 @@ struct Declaration {
     visibility: &'static str,
 }
 
-/// Every checkable `pub(crate)`/`pub(super)` declaration in `source`, in
-/// line order: at most one per line, since a line holds at most one leading
+/// Every checkable `pub(crate)`/`pub(super)` function, const or static in
+/// `source`, in line order: at most one per line, since a line holds at
+/// most one leading
 /// visibility qualifier.
 fn declarations(source: &str) -> Vec<Declaration> {
     let mut found = Vec::new();
@@ -461,10 +462,16 @@ fn opens_inline_mod(code: &str) -> bool {
 }
 
 /// The declaration a line holds, if its first token is a `pub(crate)` or
-/// `pub(super)` qualifier followed by a nameable item: the name and the
-/// visibility as written. Anything unnameable — a brace-group or glob
-/// `use`, an `extern crate`, or an unparseable line — yields `None`, which
-/// skips: a miss under-flags, while a guessed name could over-flag.
+/// `pub(super)` qualifier followed by a `fn`, `const` or `static` item:
+/// the name and the visibility as written. Only functions, consts and
+/// statics are candidates: a type's visibility is pinned by any
+/// wider-or-equal interface that mentions it (E0446), and a type's use can
+/// reach another module through inference without being spelled, so a
+/// syntactic check cannot see it (`crates/fakes/src/http_server/server.rs:150`
+/// keeps `TunnelState` visible through its `pub(crate)` field;
+/// `workers::run` in `crates/log/src/search/workers.rs:28` uses `Searched`
+/// without naming it). Structs, enums, unions, traits, type aliases,
+/// modules, imports and fields resolve to skip, which under-flags.
 fn declaration(code: &str) -> Option<(String, &'static str)> {
     let rest = code.trim_start();
     let (visibility, mut rest) = split_visibility(rest)?;
@@ -486,13 +493,8 @@ fn declaration(code: &str) -> Option<(String, &'static str)> {
             break;
         }
     }
-    for keyword in [
-        "fn", "struct", "enum", "union", "trait", "mod", "type", "const", "static",
-    ] {
+    for keyword in ["fn", "const", "static"] {
         if let Some(after) = strip_word(rest, keyword) {
-            if keyword == "mod" {
-                return mod_name(after, visibility);
-            }
             if keyword == "static" {
                 let body = strip_word(after, "mut").unwrap_or(after);
                 return leading_ident(body).map(|(name, _)| (name, visibility));
@@ -500,10 +502,7 @@ fn declaration(code: &str) -> Option<(String, &'static str)> {
             return leading_ident(after).map(|(name, _)| (name, visibility));
         }
     }
-    if let Some(after) = strip_word(rest, "use") {
-        return use_name(after).map(|name| (name, visibility));
-    }
-    field_name(rest).map(|name| (name, visibility))
+    None
 }
 
 /// The `pub(crate)` or `pub(super)` qualifier opening `s`, spelled as
@@ -555,42 +554,6 @@ fn leading_ident(s: &str) -> Option<(String, &str)> {
         .unwrap_or(body.len());
     let rest = s.get(skipped + end..)?;
     Some((body.get(..end)?.to_owned(), rest))
-}
-
-/// The `mod` declaration after its keyword: the name. The region the line
-/// may open is detected separately, so private `mod` blocks hide their
-/// items too.
-fn mod_name(after: &str, visibility: &'static str) -> Option<(String, &'static str)> {
-    leading_ident(after).map(|(name, _)| (name, visibility))
-}
-
-/// The name a `use` binds, after its keyword: the final segment, or the
-/// `as` rename. A brace group, a glob, or anything else unnameable yields
-/// `None`.
-fn use_name(after: &str) -> Option<String> {
-    let path = after.split(';').next()?.trim();
-    if path.contains(['{', '*']) {
-        return None;
-    }
-    let candidate = match path.split(" as ").last() {
-        Some(rename) if path.contains(" as ") => rename.trim(),
-        _ => path.split("::").last()?.trim(),
-    };
-    if candidate == "_" || candidate == "self" || candidate == "super" || candidate == "crate" {
-        return None;
-    }
-    let (name, rest) = leading_ident(candidate)?;
-    if rest.is_empty() { Some(name) } else { None }
-}
-
-/// A struct or variant field: an identifier and a single colon.
-fn field_name(s: &str) -> Option<String> {
-    let (name, rest) = leading_ident(s)?;
-    let rest = rest.trim_start().strip_prefix(':')?;
-    if rest.starts_with(':') {
-        return None;
-    }
-    Some(name)
 }
 
 #[cfg(test)]

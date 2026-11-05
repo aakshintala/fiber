@@ -121,7 +121,7 @@ fn a_twin_cfg_seam_pair_passes_when_another_file_names_it() {
 }
 
 #[test]
-fn a_lonely_inline_mod_declaration_is_flagged() {
+fn a_lonely_inline_mod_declaration_is_skipped() {
     let source = concat!(
         "//! lonely\n",
         "//! fixture\n",
@@ -129,18 +129,7 @@ fn a_lonely_inline_mod_declaration_is_flagged() {
         "    fn hidden() {}\n",
         "}\n",
     );
-    assert_eq!(
-        single(source),
-        vec!["crates/x/src/only.rs:3: lonely is pub(crate) but no other file in x names it"]
-    );
-}
-
-#[test]
-fn a_union_named_in_no_other_file_is_flagged() {
-    assert_eq!(
-        single("pub(crate) union Bits { a: u32, b: f32 }\n"),
-        vec!["crates/x/src/only.rs:1: Bits is pub(crate) but no other file in x names it"]
-    );
+    assert_eq!(single(source), Vec::<String>::new());
 }
 
 #[test]
@@ -150,14 +139,6 @@ fn a_file_with_only_private_items_passes() {
 
 #[test]
 fn each_plain_item_kind_is_flagged_when_lonely() {
-    assert_eq!(
-        single("pub(crate) struct Solo;\n"),
-        vec!["crates/x/src/only.rs:1: Solo is pub(crate) but no other file in x names it"]
-    );
-    assert_eq!(
-        single("pub(crate) enum Choice { A }\n"),
-        vec!["crates/x/src/only.rs:1: Choice is pub(crate) but no other file in x names it"]
-    );
     assert_eq!(
         single("pub(crate) const LIMIT: u32 = 1;\n"),
         vec!["crates/x/src/only.rs:1: LIMIT is pub(crate) but no other file in x names it"]
@@ -170,29 +151,32 @@ fn each_plain_item_kind_is_flagged_when_lonely() {
         single("pub(crate) static mut FLAG: bool = false;\n"),
         vec!["crates/x/src/only.rs:1: FLAG is pub(crate) but no other file in x names it"]
     );
-    assert_eq!(
-        single("pub(crate) type Alias = u32;\n"),
-        vec!["crates/x/src/only.rs:1: Alias is pub(crate) but no other file in x names it"]
-    );
-    assert_eq!(
-        single("pub(crate) trait Serve {}\n"),
-        vec!["crates/x/src/only.rs:1: Serve is pub(crate) but no other file in x names it"]
-    );
-    assert_eq!(
-        single("pub(crate) mod sib;\n"),
-        vec!["crates/x/src/only.rs:1: sib is pub(crate) but no other file in x names it"]
-    );
 }
 
 #[test]
-fn a_pub_crate_use_names_its_final_segment() {
+fn type_definitions_are_skipped() {
+    assert_eq!(single("pub(crate) struct Solo;\n"), Vec::<String>::new());
+    assert_eq!(
+        single("pub(crate) enum Choice { A }\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        single("pub(crate) union Bits { a: u32, b: f32 }\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(single("pub(crate) trait Serve {}\n"), Vec::<String>::new());
+    assert_eq!(
+        single("pub(crate) type Alias = u32;\n"),
+        Vec::<String>::new()
+    );
+    assert_eq!(single("pub(crate) mod sib;\n"), Vec::<String>::new());
     assert_eq!(
         single("pub(crate) use other::thing;\n"),
-        vec!["crates/x/src/only.rs:1: thing is pub(crate) but no other file in x names it"]
+        Vec::<String>::new()
     );
     assert_eq!(
         single("pub(crate) use other::thing as tool;\n"),
-        vec!["crates/x/src/only.rs:1: tool is pub(crate) but no other file in x names it"]
+        Vec::<String>::new()
     );
     assert_eq!(
         single("pub(crate) use other::{a, b};\n"),
@@ -203,15 +187,9 @@ fn a_pub_crate_use_names_its_final_segment() {
 }
 
 #[test]
-fn a_pub_crate_field_is_flagged_with_its_line() {
+fn a_pub_crate_field_is_skipped() {
     let source = concat!("pub(crate) struct S {\n", "    pub(crate) x: u32,\n", "}\n",);
-    assert_eq!(
-        single(source),
-        vec![
-            "crates/x/src/only.rs:1: S is pub(crate) but no other file in x names it",
-            "crates/x/src/only.rs:2: x is pub(crate) but no other file in x names it",
-        ]
-    );
+    assert_eq!(single(source), Vec::<String>::new());
 }
 
 #[test]
@@ -259,10 +237,9 @@ fn braces_in_strings_and_comments_do_not_close_a_region() {
         "    pub(crate) fn f() {}\n",
         "}\n",
     );
-    assert_eq!(
-        single(source),
-        vec!["crates/x/src/only.rs:1: m is pub(crate) but no other file in x names it"]
-    );
+    // The `mod` opener itself is out of scope; an empty result proves the
+    // region held, since a broken region would flag `f`.
+    assert_eq!(single(source), Vec::<String>::new());
 }
 
 #[test]
@@ -273,10 +250,7 @@ fn a_cfg_attributed_opener_still_opens_a_region() {
         "    pub(crate) fn fire() {}\n",
         "}\n",
     );
-    assert_eq!(
-        single(source),
-        vec!["crates/x/src/only.rs:2: seam is pub(crate) but no other file in x names it"]
-    );
+    assert_eq!(single(source), Vec::<String>::new());
 }
 
 #[test]
@@ -287,10 +261,7 @@ fn an_unclosed_region_skips_to_end_of_file() {
         "    // the closing brace never comes\n",
         "    pub(crate) fn g() {}\n",
     );
-    assert_eq!(
-        single(source),
-        vec!["crates/x/src/only.rs:1: m is pub(crate) but no other file in x names it"]
-    );
+    assert_eq!(single(source), Vec::<String>::new());
 }
 
 #[test]
@@ -306,9 +277,6 @@ fn a_declaration_after_a_closed_region_is_checked() {
     let source = concat!("pub(crate) mod m {\n", "}\n", "pub(crate) fn after() {}\n",);
     assert_eq!(
         single(source),
-        vec![
-            "crates/x/src/only.rs:1: m is pub(crate) but no other file in x names it",
-            "crates/x/src/only.rs:3: after is pub(crate) but no other file in x names it",
-        ]
+        vec!["crates/x/src/only.rs:3: after is pub(crate) but no other file in x names it"]
     );
 }
