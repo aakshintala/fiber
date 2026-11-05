@@ -2743,20 +2743,26 @@ fn wheel_over_rewind_moves_the_list_not_the_conversation() {
     accept(&mut app, &lines[0]["id"], history);
     let top = app.top();
     assert!(top.is_some(), "opening keeps the scrolled conversation");
-    // Two steps off the resting row: the window moves under a selection
-    // that stays on screen.
+    // Down to the tail, then five steps back up: the selection sits
+    // mid-window with room above, so one wheel step up moves the full
+    // three rows without clamping at the end the reseat starts near.
+    app.on_key(crate::keys::Key::Down, clock.now());
+    app.on_key(crate::keys::Key::Down, clock.now());
+    app.on_key(crate::keys::Key::Up, clock.now());
+    app.on_key(crate::keys::Key::Up, clock.now());
+    app.on_key(crate::keys::Key::Up, clock.now());
     app.on_key(crate::keys::Key::Up, clock.now());
     app.on_key(crate::keys::Key::Up, clock.now());
     let frame = app.session_view_screen(80).expect("the view is open");
     let before = frame.list.selected();
     assert!(frame.rows.len() >= before + 4, "the list fits three steps");
     let shown_top = frame.list.top();
-    app.on_wheel(&wheel(10, 5, true));
+    app.on_wheel(&wheel(10, 5, false));
     assert_eq!(app.top(), top, "the wheel left the conversation");
     let frame = app.session_view_screen(80).expect("the view is open");
     assert_eq!(
         frame.list.top(),
-        shown_top + 3,
+        shown_top - 3,
         "one wheel step shifts the visible rows three"
     );
     assert_eq!(
