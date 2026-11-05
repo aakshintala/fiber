@@ -118,3 +118,4 @@ crates/main/tests/keeper.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs-MacBook-
 crates/main/tests/models.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/job_timing_tests.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_tests.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/jobs_timing.rs	fiber-4110	plan	2026-11-05T10:41:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
