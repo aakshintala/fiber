@@ -17,7 +17,7 @@ use super::syntax::Word;
 
 /// The most bytes read from a git `config`: a longer file has no owners, so
 /// every `gh` read stays reviewed.
-pub(super) const MAX_CONFIG_BYTES: usize = 64 * 1024;
+const MAX_CONFIG_BYTES: usize = 64 * 1024;
 
 /// The most bytes read from a `.git` or `commondir` pointer file: the same
 /// bound the git repository guards hold (`super::git::MAX_GITFILE_BYTES`).
@@ -196,7 +196,7 @@ fn clean_segment(segment: &str) -> bool {
 /// lowercased. Any repository the walk cannot verify, any pointer it
 /// cannot bound, and any config it cannot read, bound or parse yields no
 /// owners, so every `gh` read stays reviewed.
-pub(super) fn workspace_owners(workspace: &Path) -> BTreeSet<String> {
+fn workspace_owners(workspace: &Path) -> BTreeSet<String> {
     let Some(common) = common_dir(workspace) else {
         return BTreeSet::new();
     };
