@@ -501,17 +501,11 @@ fn parse_thinking_overlay(source: &str, text: &str) -> Result<Vec<OverlayRow>, S
                         "databricks thinking overlay: `{raw}` names a default that is no string"
                     ));
                 };
-                let Some(canonical) = THINKING_VOCABULARY.iter().find(|name| **name == default)
-                else {
+                let Some(canonical) = kept.iter().find(|name| **name == default) else {
                     return Err(format!(
                         "databricks thinking overlay: `{raw}` names default `{default}` outside its levels"
                     ));
                 };
-                if !kept.contains(canonical) {
-                    return Err(format!(
-                        "databricks thinking overlay: `{raw}` names default `{default}` outside its levels"
-                    ));
-                }
                 Some(*canonical)
             }
         };
