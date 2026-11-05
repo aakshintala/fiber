@@ -348,7 +348,7 @@ impl Find {
 
     /// `page`'s position in scan order, if it has one. Counts each
     /// entry examined: requeues are rare, but their walk is still work.
-    pub(super) fn position_of(&self, page: usize) -> Option<usize> {
+    fn position_of(&self, page: usize) -> Option<usize> {
         for (pos, at) in self.order.iter().enumerate() {
             crate::work::add(|work| work.search_order_pages += 1);
             if *at == page {

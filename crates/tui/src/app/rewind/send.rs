@@ -59,12 +59,12 @@ pub(super) struct Send {
 impl Send {
     /// Whether a `rewind` may go out: none on the wire and no refusal
     /// standing.
-    pub(super) fn can_send(&self) -> bool {
+    fn can_send(&self) -> bool {
         self.send.is_none() && self.send_error.is_none()
     }
 
     /// Whether a `rewind` waits for its answer.
-    pub(super) fn is_sending(&self) -> bool {
+    fn is_sending(&self) -> bool {
         self.send.is_some()
     }
 
@@ -84,7 +84,7 @@ impl Send {
     }
 
     /// Sets the summarise checkbox.
-    pub(super) fn set_summarise(&mut self, summarise: bool) {
+    fn set_summarise(&mut self, summarise: bool) {
         self.summarise = summarise;
     }
 
