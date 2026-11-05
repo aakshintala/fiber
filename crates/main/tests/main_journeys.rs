@@ -3278,3 +3278,107 @@ fn lived_home_twenty_five_shadowed_notices_show_once_per_run() {
         }),
     );
 }
+
+/// Import leaves already-read skills behind: from the same lived-in
+/// fixture with no shadow pairs, `fiber import` copies the source-only
+/// skills, leaves the already-read ones with their reason, and a
+/// follow-up start shows no `skill_shadowed` row. Evidence for #3680,
+/// whose parent copied skills discovery already read elsewhere.
+#[test]
+fn lived_home_import_leaves_already_read_skills() {
+    run_journey(
+        "lived_home_import_leaves_already_read_skills",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let server = ProviderServer::start([support::hello()]).unwrap();
+            install_fake_provider_extension(&setup, &server);
+            std::fs::create_dir_all(setup.home().join("credentials/fake")).unwrap();
+            std::fs::write(setup.home().join("credentials/fake/work"), "test-key").unwrap();
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+            );
+            support::lived_home::lived_home(setup.root.path(), 0);
+            // Discovery logs the canonical path, which on macOS resolves
+            // the `/var` symlink to `/private/var`: canonicalize the
+            // fixture path before expecting it.
+            let agents_skill =
+                fs::canonicalize(setup.root.path().join(".agents/skills/review/SKILL.md")).unwrap();
+            let mine = format!(
+                "left behind skills/mine/SKILL.md: already read from {}",
+                agents_skill.display()
+            );
+            let review = format!(
+                "left behind skills/review/SKILL.md: already read from {}",
+                agents_skill.display()
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &["import", "claude-code"],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            // A logical line longer than 120 columns wraps across grid
+            // rows on long canonical temp paths, so the check joins the
+            // rows instead of matching one row only.
+            run.wait_screen("the import lines", |grid| {
+                let joined = grid.rows.join("");
+                joined.contains("imported skill lint")
+                    && joined.contains(mine.as_str())
+                    && joined.contains(review.as_str())
+            });
+            let exited = run.wait();
+            assert!(exited.status.success(), "import exits 0");
+            assert!(
+                server.requests().is_empty(),
+                "import makes no provider calls"
+            );
+            // Nothing is written to `skills/` in Fiber home but the two
+            // copied skills.
+            assert!(!setup.home().join("skills/review").exists());
+            assert!(!setup.home().join("skills/mine").exists());
+            assert!(setup.home().join("skills/lint/SKILL.md").is_file());
+            assert!(setup.home().join("skills/solo/SKILL.md").is_file());
+            // A follow-up start raises no `skill_shadowed`: the copied
+            // skills stand alone, with no Fiber-home copy to shadow the
+            // agents-side skills. The import wrote the receipt, so no
+            // first-run offer needs dismissing.
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            run.ready();
+            run.write(b"say hi\r");
+            run.wait_screen("the follow-up reply", |grid| {
+                grid.contents.contains("Hello.")
+            });
+            let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+            fakes::wait_until("the first session", setup.deadline, move || {
+                fs::read_dir(&dir).is_ok_and(|entries| {
+                    entries
+                        .flatten()
+                        .filter(|entry| entry.path().join("events.jsonl").is_file())
+                        .count()
+                        == 1
+                })
+            });
+            // settled: the reply painted and the session count beside it
+            // proves the session ran, so the frame below is final.
+            let grid = run.wait_screen("a settled frame", |grid| grid.contents.contains("›"));
+            // The reply and the count above prove the session ran, so this
+            // settled: absence needs no wait of its own.
+            let shadowed = grid.contents.contains("skill_shadowed");
+            assert!(!shadowed, "no skill_shadowed row after import");
+            quit_journey(run);
+        }),
+    );
+}
