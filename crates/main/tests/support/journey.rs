@@ -52,7 +52,7 @@ fn duration_len(text: &str) -> Option<usize> {
 /// width-capped caption's shortened `i_<id>…` reads `i_[id]…`, so the
 /// variable hash prefix never reaches a snapshot (`docs/tui.md`,
 /// "Images").
-pub(crate) fn image_ids(row: &str) -> String {
+fn image_ids(row: &str) -> String {
     let mut out = String::new();
     let mut rest = row;
     while let Some(at) = rest.find("i_") {
