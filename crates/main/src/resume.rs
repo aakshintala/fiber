@@ -133,6 +133,46 @@ fn keeper_held(dir: &Path, id: &SessionId) -> Option<log::Error> {
         })
 }
 
+/// The keeper's schema version: the latest complete `fiber_started`
+/// envelope's `schema_version` in the session log, read through
+/// `log::lines` without taking the lock. The keeper is spawned from the
+/// session's own binary, and every session holder appends a
+/// `fiber_started`, so the latest complete one is the keeper's version
+/// (`docs/tools.md`, "The keeper"). A torn tail ends the read; a line
+/// this build cannot parse carries no version it can name, so an earlier
+/// complete line still stands. `None` when no complete `fiber_started`
+/// line parses, which keeps the bare `Held` refusal.
+fn keeper_schema_version(dir: &Path) -> Option<u64> {
+    let mut version = None;
+    for line in log::lines(dir).ok()? {
+        let envelope = match line {
+            Ok(envelope) => envelope,
+            Err(_) => break,
+        };
+        if envelope.kind == "fiber_started" {
+            version = Some(u64::from(envelope.schema_version));
+        }
+    }
+    version
+}
+
+/// The refusal for a keeper-held lock: when the keeper runs a schema
+/// version this build cannot read, the refusal names the keeper's
+/// version (`docs/tools.md`, "The keeper"); anything else keeps the
+/// bare `Held` refusal.
+fn keeper_refusal(dir: &Path, id: &SessionId, keeper: log::Error) -> Failure {
+    match keeper_schema_version(dir) {
+        Some(version) if version != u64::from(contract::SCHEMA_VERSION) => {
+            let mismatch = doors::SessionError::VersionMismatch {
+                id: id.clone(),
+                version,
+            };
+            failed(mismatch.code(), mismatch)
+        }
+        _ => failed(keeper.code(), keeper),
+    }
+}
+
 fn open_or_attach(
     sessions: &Path,
     id: SessionId,
@@ -150,7 +190,7 @@ fn open_or_attach(
         Ok(log) => Ok(log),
         Err(error @ log::Error::Held { .. }) => {
             if let Some(keeper) = keeper_held(dir.path(), &id) {
-                Err(ask_failed(failed(keeper.code(), keeper)))
+                Err(ask_failed(keeper_refusal(dir.path(), &id, keeper)))
             } else {
                 Err(attach(error))
             }
