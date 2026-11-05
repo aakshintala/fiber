@@ -4,7 +4,6 @@
 //! a session of its own, so the workload finds it by its `keeper --id <id>`
 //! command line and reads the kernel's peak RSS for its pid.
 
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
@@ -63,7 +62,7 @@ fn poll_keeper(
     within: Duration,
     mut find_keeper: impl FnMut() -> Result<Vec<u32>, String>,
 ) -> Result<u32, String> {
-    let keeper = Cell::new(None);
+    let mut keeper = None;
     run::poll(
         clock,
         within,
@@ -71,15 +70,13 @@ fn poll_keeper(
         || match find_keeper()?.as_slice() {
             [] => Ok(false),
             [pid] => {
-                keeper.set(Some(*pid));
+                keeper = Some(*pid);
                 Ok(true)
             }
             pids => Err(format!("more than one keeper matches: {pids:?}")),
         },
     )?;
-    keeper
-        .get()
-        .ok_or_else(|| "the keeper poll ended with no keeper".to_owned())
+    keeper.ok_or_else(|| "the keeper poll ended with no keeper".to_owned())
 }
 
 /// The keeper's peak RSS: settles its threads, then reads the kernel's peak

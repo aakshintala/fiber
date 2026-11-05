@@ -1,9 +1,10 @@
 //! The keeper workload's unit tests: the script's shape and the injected
-//! core (`poll_keeper`, `keeper_rss_kib`) on a parking fake clock. Every
-//! `clock.sleep` is stepped through `FakeClock::advance_when_parked` naming
-//! the worker thread and its expected `origin + n * PROBE` instant: each
-//! injected closure signals its read first, so a step proves the worker
-//! reached the wait past its own expiry check before time moves
+//! core (`poll_keeper`, `keeper_rss_kib`) on a parking fake clock. A
+//! signaling clock reports each `sleep` on the worker's event stream before
+//! parking: the sleep follows the poll/settle expiry check, so the signal
+//! proves the worker is waiting on this clock past its own check. Each step
+//! through `FakeClock::advance_when_parked` names the worker thread and its
+//! expected `origin + n * PROBE` instant only after that sleep signal
 //! (`docs/testing.md`, "Waits and timeouts").
 #![allow(
     clippy::unwrap_used,
@@ -15,10 +16,12 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::Weak;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
+use contract::clock::{Clock, Wake};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
@@ -28,10 +31,43 @@ use super::{keeper_rss_kib, keeper_script, poll_keeper};
 use crate::linux::Counts;
 use crate::run::PROBE;
 
-/// The worker's events: each injected read as it happens, then its result.
+/// The worker's events: each injected read as it happens, each sleep past
+/// its own expiry check, then the worker's result.
 enum Event<T> {
     Read(&'static str),
+    Slept,
     Done(Result<T, String>),
+}
+
+/// A clock that reports each sleep on the worker's event stream before
+/// parking in it: the sleep follows the poll/settle expiry check, so the
+/// signal proves the worker reached the wait past its own check.
+struct SleepClock<T> {
+    inner: Arc<FakeClock>,
+    tx: mpsc::Sender<Event<T>>,
+}
+
+impl<T: Send> Clock for SleepClock<T> {
+    fn now(&self) -> Instant {
+        self.inner.now()
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.tx.send(Event::Slept).unwrap_or(());
+        self.inner.sleep(d);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        self.inner.wait_until(until, wait);
+    }
+
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.inner.subscribe(waker);
+    }
 }
 
 /// A parking clock, its worker thread and the worker's events.
@@ -42,14 +78,17 @@ struct Driven<T> {
 }
 
 impl<T: Send + 'static> Driven<T> {
-    /// Runs `run` on a worker thread with a parking clock, reporting every
-    /// injected read and its result.
+    /// Runs `run` on a worker thread with a parking clock that reports each
+    /// sleep on the event stream before parking in it.
     fn spawn(
-        run: impl FnOnce(mpsc::Sender<Event<T>>, Arc<FakeClock>) -> Result<T, String> + Send + 'static,
+        run: impl FnOnce(mpsc::Sender<Event<T>>, SleepClock<T>) -> Result<T, String> + Send + 'static,
     ) -> Self {
         let clock = FakeClock::with_sleep(Sleep::Waits);
         let (tx, events) = mpsc::channel();
-        let worker_clock = Arc::clone(&clock);
+        let worker_clock = SleepClock {
+            inner: Arc::clone(&clock),
+            tx: tx.clone(),
+        };
         let worker = thread::spawn(move || {
             let result = run(tx.clone(), worker_clock);
             tx.send(Event::Done(result)).unwrap_or(());
@@ -63,31 +102,47 @@ impl<T: Send + 'static> Driven<T> {
 
     /// Takes the next read signal, failing the test on anything else: reads
     /// happen in the order the waits run them.
-    fn read(&self, which: &'static str) {
-        match Deadline::after(Duration::from_secs(30)).recv(&self.events) {
-            Ok(Event::Read(got)) => assert_eq!(got, which, "reads happen in order"),
-            Ok(Event::Done(_)) => panic!("the worker finished before reading {which}"),
-            Err(_) => panic!("the worker never read {which}"),
+    #[track_caller]
+    fn read(&self, deadline: &Deadline, which: &'static str) {
+        match deadline.recv_or_fail(&self.events, &format!("the worker's read of {which}")) {
+            Event::Read(got) => assert_eq!(got, which, "reads happen in order"),
+            Event::Slept => panic!("the worker slept before reading {which}"),
+            Event::Done(_) => panic!("the worker finished before reading {which}"),
+        }
+    }
+
+    /// Takes the next sleep signal: the worker reached `clock.sleep` past
+    /// its own expiry check, so a step may advance the clock.
+    #[track_caller]
+    fn slept(&self, deadline: &Deadline) {
+        match deadline.recv_or_fail(&self.events, "the worker's sleep past its expiry check") {
+            Event::Slept => {}
+            Event::Read(which) => panic!("the worker read {which} instead of sleeping"),
+            Event::Done(_) => panic!("the worker finished instead of sleeping"),
         }
     }
 
     /// Steps the worker past its `PROBE` sleep at `at`, naming its thread.
+    /// Call only after `slept`: the sleep signal proves the worker is past
+    /// its own expiry check, and the park proves it is waiting.
+    #[track_caller]
     fn step(&self, at: Instant) {
         let deadline = Deadline::after(Duration::from_secs(30));
         self.clock
             .advance_when_parked(Some(at), Some(self.worker.thread().id()), PROBE, &deadline);
     }
 
-    /// Takes the worker's result, failing the test on another read: a read
-    /// past the last step means the wait retried instead of ending.
-    fn done(self) -> Result<T, String> {
-        match Deadline::after(Duration::from_secs(30)).recv(&self.events) {
-            Ok(Event::Done(result)) => {
+    /// Takes the worker's result, failing the test on another read or sleep:
+    /// either past the last step means the wait retried instead of ending.
+    #[track_caller]
+    fn done(self, deadline: &Deadline) -> Result<T, String> {
+        match deadline.recv_or_fail(&self.events, "the worker's result") {
+            Event::Done(result) => {
                 self.worker.join().unwrap_or(());
                 result
             }
-            Ok(Event::Read(which)) => panic!("the worker read {which} past the last step"),
-            Err(_) => panic!("the worker never finished"),
+            Event::Read(which) => panic!("the worker read {which} past the last step"),
+            Event::Slept => panic!("the worker slept past the last step"),
         }
     }
 }
@@ -133,33 +188,39 @@ fn the_script_runs_one_background_shell_call_then_text() {
 fn the_poll_returns_the_one_keeper_pid() {
     let driven = Driven::spawn(|tx, clock| {
         let calls = Cell::new(0);
-        poll_keeper(&*clock, 3 * PROBE, || {
+        poll_keeper(&clock, 3 * PROBE, || {
             tx.send(Event::Read("find")).unwrap_or(());
             calls.set(calls.get() + 1);
             Ok(if calls.get() == 1 { vec![] } else { vec![42] })
         })
     });
-    driven.read("find");
+    let first = Deadline::after(Duration::from_secs(30));
+    driven.read(&first, "find");
+    driven.slept(&first);
     driven.step(driven.clock.origin() + PROBE);
-    driven.read("find");
-    assert_eq!(driven.done(), Ok(42));
+    let drain = Deadline::after(Duration::from_secs(30));
+    driven.read(&drain, "find");
+    assert_eq!(driven.done(&drain), Ok(42));
 }
 
 #[test]
 fn an_empty_pid_poll_errs_at_its_bound() {
     let driven = Driven::spawn(|tx, clock| {
-        poll_keeper(&*clock, 3 * PROBE, || {
+        poll_keeper(&clock, 3 * PROBE, || {
             tx.send(Event::Read("find")).unwrap_or(());
             Ok(vec![])
         })
     });
     let origin = driven.clock.origin();
     for n in 1..=3u32 {
-        driven.read("find");
+        let wait = Deadline::after(Duration::from_secs(30));
+        driven.read(&wait, "find");
+        driven.slept(&wait);
         driven.step(origin + n * PROBE);
     }
-    driven.read("find");
-    let err = driven.done().unwrap_err();
+    let drain = Deadline::after(Duration::from_secs(30));
+    driven.read(&drain, "find");
+    let err = driven.done(&drain).unwrap_err();
     assert!(err.starts_with("timed out waiting for"), "{err}");
     assert!(err.contains("the keeper to start"), "{err}");
 }
@@ -167,15 +228,16 @@ fn an_empty_pid_poll_errs_at_its_bound() {
 #[test]
 fn two_pids_err_at_once_with_no_retry() {
     let driven = Driven::spawn(|tx, clock| {
-        poll_keeper(&*clock, 3 * PROBE, || {
+        poll_keeper(&clock, 3 * PROBE, || {
             tx.send(Event::Read("find")).unwrap_or(());
             Ok(vec![7, 9])
         })
     });
-    driven.read("find");
+    let drain = Deadline::after(Duration::from_secs(30));
+    driven.read(&drain, "find");
     // A retry would read again past the last step; the error ends the poll.
     assert_eq!(
-        driven.done().unwrap_err(),
+        driven.done(&drain).unwrap_err(),
         "more than one keeper matches: [7, 9]",
     );
 }
@@ -184,7 +246,7 @@ fn two_pids_err_at_once_with_no_retry() {
 fn settled_threads_read_the_canned_peak() {
     let driven = Driven::spawn(|tx, clock| {
         keeper_rss_kib(
-            &*clock,
+            &clock,
             3 * PROBE,
             || {
                 tx.send(Event::Read("threads")).unwrap_or(());
@@ -197,12 +259,15 @@ fn settled_threads_read_the_canned_peak() {
         )
     });
     let origin = driven.clock.origin();
-    driven.read("threads");
+    let first = Deadline::after(Duration::from_secs(30));
+    driven.read(&first, "threads");
+    driven.slept(&first);
     driven.step(origin + PROBE);
-    driven.read("threads");
-    driven.read("status");
+    let drain = Deadline::after(Duration::from_secs(30));
+    driven.read(&drain, "threads");
+    driven.read(&drain, "status");
     assert_eq!(
-        driven.done().expect("settled threads read the peak"),
+        driven.done(&drain).expect("settled threads read the peak"),
         vec![("keeper_rss_kib", json!(10840))],
     );
 }
@@ -211,7 +276,7 @@ fn settled_threads_read_the_canned_peak() {
 fn a_status_without_a_peak_errs() {
     let driven = Driven::spawn(|tx, clock| {
         keeper_rss_kib(
-            &*clock,
+            &clock,
             3 * PROBE,
             || {
                 tx.send(Event::Read("threads")).unwrap_or(());
@@ -224,10 +289,13 @@ fn a_status_without_a_peak_errs() {
         )
     });
     let origin = driven.clock.origin();
-    driven.read("threads");
+    let first = Deadline::after(Duration::from_secs(30));
+    driven.read(&first, "threads");
+    driven.slept(&first);
     driven.step(origin + PROBE);
-    driven.read("threads");
-    driven.read("status");
-    let err = driven.done().unwrap_err();
+    let drain = Deadline::after(Duration::from_secs(30));
+    driven.read(&drain, "threads");
+    driven.read(&drain, "status");
+    let err = driven.done(&drain).unwrap_err();
     assert!(err.contains("VmHWM"), "{err}");
 }
