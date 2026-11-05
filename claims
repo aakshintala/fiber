@@ -279,3 +279,7 @@ crates/bench/examples/bench/main.rs	fiber-3895	plan	2026-11-05T15:14:53Z	roundho
 crates/bench/examples/bench/keeper.rs	fiber-3895	plan	2026-11-05T15:14:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/bench/examples/bench/keeper_tests.rs	fiber-3895	plan	2026-11-05T15:14:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/bench/examples/bench/main_tests.rs	fiber-3895	plan	2026-11-05T15:14:53Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/providers/naming.rs	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
+crates/extensions/src/providers/naming_tests.rs	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
+docs/model-routing.md	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
+docs/delegates.md	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
