@@ -3,6 +3,8 @@ name = "rss-probe"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+
 [dependencies]
 mlua = { version = "0.12", features = ["lua54", "vendored"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
