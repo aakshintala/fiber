@@ -285,7 +285,8 @@ pub(crate) fn quit(
     });
     if gone.is_err() {
         let pattern = ctx.home.fiber().to_string_lossy().into_owned();
-        fakes::kill_matching(&pattern).map_err(|err| format!("killing the hub: {err}"))?;
+        fakes::kill_matching(&pattern, fakes::MUST_SUCCEED_WITHIN / 2)
+            .map_err(|err| format!("killing the hub: {err}"))?;
         notes.push("hub did not exit".to_owned());
     }
     Ok(())

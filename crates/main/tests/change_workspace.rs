@@ -402,8 +402,9 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
     // The guard's first listing must see the holder: a short wait armed
     // before the holder appears would pass with nothing to wait on,
     // instead of timing out on the live holder.
+    let wait = setup.deadline.start_wait();
     loop {
-        if fakes::matching(&held_text)
+        if fakes::matching(&held_text, wait.left() / 2)
             .unwrap_or_default()
             .contains(&group)
         {

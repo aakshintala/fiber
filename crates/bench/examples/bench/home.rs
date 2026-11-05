@@ -172,9 +172,11 @@ impl Home {
     /// at the end of the run no child of the harness remains.
     pub(crate) fn finish(mut self) -> Result<(), String> {
         let pattern = self.fiber.to_string_lossy().into_owned();
-        let left = fakes::matching(&pattern).map_err(|err| format!("listing processes: {err}"))?;
+        let left = fakes::matching(&pattern, fakes::MUST_SUCCEED_WITHIN / 2)
+            .map_err(|err| format!("listing processes: {err}"))?;
         if !left.is_empty() {
-            fakes::kill_matching(&pattern).map_err(|err| format!("killing processes: {err}"))?;
+            fakes::kill_matching(&pattern, fakes::MUST_SUCCEED_WITHIN / 2)
+                .map_err(|err| format!("killing processes: {err}"))?;
         }
         if let Some(watchdog) = self.watchdog.take() {
             watchdog.stand_down(fakes::Deadline::after(STOP));

@@ -172,7 +172,9 @@ fn clear_switches_to_a_new_empty_session_and_closes_the_old() {
     // A slow runner may move the foreground call to a job after 30 seconds;
     // either way, the live job keeps the old session open until release.
     assert!(
-        !fakes::matching("wait.sh").unwrap().is_empty(),
+        !fakes::matching("wait.sh", setup.deadline.left() / 2)
+            .unwrap()
+            .is_empty(),
         "the shell waits on the FIFO"
     );
     let a = wait_stored(&setup, 1).into_iter().next().unwrap();

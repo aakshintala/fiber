@@ -387,7 +387,8 @@ fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
 /// Reaps a world whose cases started sessions: the sessions die first,
 /// then the held hub connection drops and the hub exits on `TERM`.
 fn reap(world: World, workspace: &str, guard: SessionGuard) {
-    fakes::kill_matching(workspace).unwrap();
+    let step = guard.deadline.left() / 2;
+    fakes::kill_matching(workspace, step).unwrap();
     guard.wait_gone();
     drop(world.hub);
     world.process.kill("TERM");
