@@ -23,6 +23,15 @@ pub enum Step {
         /// A live-session exit may already have been written before the crash.
         unless_logged: bool,
     },
+    /// Append a held job's bound ending while holding the log.
+    WriteKeeperTimeout {
+        /// The hosted call.
+        id: String,
+        /// The durable job.
+        job_id: JobId,
+        /// The reaped ending, carried through so observed process details survive.
+        exit: Exit,
+    },
     /// Acquire the log before any completion is written.
     HoldLog,
     /// No watched jobs remain; release the log and exit.
@@ -41,6 +50,7 @@ enum Phase {
 struct Process {
     job: Option<JobId>,
     exit: Option<Exit>,
+    expired: bool,
 }
 
 /// Decides which processes survive lifeline EOF and which endings need writing.
@@ -63,6 +73,7 @@ impl Supervisor {
             Process {
                 job: None,
                 exit: None,
+                expired: false,
             },
         );
     }
@@ -127,6 +138,25 @@ impl Supervisor {
         steps
     }
 
+    /// Marks held jobs expired and stops every live process, shutdown-style.
+    /// Valid only while holding after a crash; any other phase returns empty
+    /// and marks nothing. Endings are written later, when each process reaps.
+    pub fn bound_elapsed(&mut self) -> Vec<Step> {
+        if !matches!(self.phase, Phase::Holding) {
+            return Vec::new();
+        }
+        let mut stops = Vec::new();
+        for (id, process) in self.processes.iter_mut() {
+            if process.job.is_some() {
+                process.expired = true;
+            }
+            if process.exit.is_none() {
+                stops.push(Step::Stop { id: id.clone() });
+            }
+        }
+        stops
+    }
+
     /// Abandons takeover when another writer already holds the log.
     pub fn lock_lost(&mut self) -> Vec<Step> {
         let mut steps = self.tool_stops();
@@ -151,12 +181,21 @@ impl Supervisor {
                 Vec::new()
             }
             Phase::Holding => {
-                let mut steps = vec![Step::WriteJobCompleted {
-                    id: id.to_owned(),
-                    job_id,
-                    exit,
-                    unless_logged: false,
-                }];
+                let write = if process.expired {
+                    Step::WriteKeeperTimeout {
+                        id: id.to_owned(),
+                        job_id,
+                        exit,
+                    }
+                } else {
+                    Step::WriteJobCompleted {
+                        id: id.to_owned(),
+                        job_id,
+                        exit,
+                        unless_logged: false,
+                    }
+                };
+                let mut steps = vec![write];
                 if !self.processes.values().any(|process| process.job.is_some()) {
                     self.phase = Phase::Gone;
                     steps.push(Step::Exit);
