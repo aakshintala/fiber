@@ -102,3 +102,5 @@ docs/code-quality/lints.md	fiber-4142	plan	2026-11-05T10:03:19Z	Amoghs-MacBook-P
 docs/ci.md	fiber-4142	plan	2026-11-05T10:03:19Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/state.md	fiber-4174	plan	2026-11-05T10:03:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests	fiber-4157	plan	2026-11-05T10:04:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/main_journeys.rs	fiber-4100	plan	2026-11-05T10:05:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/Cargo.toml	fiber-4100	plan	2026-11-05T10:05:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
