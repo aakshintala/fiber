@@ -645,8 +645,9 @@ impl App {
     ) -> Option<Vec<String>> {
         self.home.as_ref()?;
         match line {
-            Line::Hub(hub) => match hub.kind.as_str() {
-                "session_left" => {
+            Line::Hub(hub) => {
+                let kind = hub.kind();
+                if kind == contract::HubEventKind::SessionLeft {
                     let id = hub.payload.get("session_id").and_then(Value::as_str)?;
                     let how = match hub.payload.get("how").and_then(Value::as_str) {
                         Some("exited") => Left::Exited,
@@ -683,8 +684,11 @@ impl App {
                     // exit permits its one delete.
                     lines.extend(self.delete_command_session_left(&exited));
                     Some(lines)
-                }
-                "command_accepted" | "command_rejected" => {
+                } else if matches!(
+                    kind,
+                    contract::HubEventKind::CommandAccepted
+                        | contract::HubEventKind::CommandRejected
+                ) {
                     let answer = answer?;
                     let id = answer.id;
                     let accepted = answer.accepted;
@@ -831,11 +835,12 @@ impl App {
                         return None;
                     }
                     None
+                } else {
+                    None
                 }
-                _ => None,
-            },
+            }
             Line::Session(envelope) => {
-                if envelope.kind == "session_status" {
+                if envelope.kind() == contract::events::EventKind::SessionStatus {
                     // A delegate's own summary is for its parent's panel,
                     // never the session list (`docs/tui.md`, "The panel").
                     if self.delegate_status(envelope) {
@@ -907,8 +912,9 @@ impl App {
                     return None;
                 }
                 if matches!(
-                    envelope.kind.as_str(),
-                    "command_accepted" | "command_rejected"
+                    envelope.kind(),
+                    contract::events::EventKind::CommandAccepted
+                        | contract::events::EventKind::CommandRejected
                 ) {
                     let answer = answer?;
                     let accepted = answer.accepted;
@@ -1023,8 +1029,9 @@ impl App {
                 // `on_session` opens its report, or refuses it with one
                 // notice, instead of dropping it at the gate.
                 if matches!(
-                    envelope.kind.as_str(),
-                    "command_accepted" | "command_rejected"
+                    envelope.kind(),
+                    contract::events::EventKind::CommandAccepted
+                        | contract::events::EventKind::CommandRejected
                 ) && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
                     && let Some((Kind::Import(_), _)) = self.outbox.pending.get(id)
                 {
