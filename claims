@@ -92,42 +92,6 @@ crates/tui/src/app/images_tests.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-M
 crates/tui/src/app/rewind/send.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
 crates/tui/src/app/rewind/fold.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
 crates/tui/src/app/rewind_tests.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
-crates/contract/src/events.rs	fiber-4156	grant	2026-11-05T20:38:23Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/doors/src/attach.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/doors/src/client/writer.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/doors/src/hub.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/doors/src/isolation.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/doors/src/watch.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/extensions/src/case/format.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/extensions/src/case/run.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/extensions/src/case/run_tests.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/extensions/src/case/format_tests.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/hub/src/attention.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/hub/src/resume.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/hub/src/rewind.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/hub/src/sessions_stop/transport.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/hub/src/spawn.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/hub/src/start.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/jobs/src/delegate/run.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/log/src/escalations.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/log/src/escalations/reviewer_shell_calls.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/log/src/name.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/log/src/rate.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/log/src/scan.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/log/src/search/session.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/log/src/write.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/conversation.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/history.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/kept.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/resume.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/rewind.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/rewind/command.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/rewind/stop.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/rewind/workspace.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/loop/src/suspend.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/app/session_views.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/app/home.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-crates/tui/src/app/answer.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home/prompt/clear.rs	fiber-4115	plan	2026-11-05T20:41:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/home/prompt/hooks_offer.rs	fiber-4115	plan	2026-11-05T20:41:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/home/prompt/hooks_offer_tests.rs	fiber-4115	plan	2026-11-05T20:41:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
