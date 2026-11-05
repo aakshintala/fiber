@@ -129,8 +129,9 @@ pub(crate) struct ItemView {
     pub(crate) provider: Option<ProviderFailure>,
     /// What opening or steering last refused with.
     pub(crate) message: Option<String>,
-    /// Whether a transcript is swapped in: a running or completed fiber
-    /// delegate.
+    /// Whether the swapped transcript draws: a running fiber delegate,
+    /// or a finished one whose open was not refused (a refused finish
+    /// keeps `Open.stashed` while the fallback draws instead).
     pub(crate) has_transcript: bool,
     /// The job's output path.
     pub(crate) output_path: String,
@@ -252,6 +253,12 @@ impl App {
             }
         };
         let running = record.outcome.is_none();
+        // A finished delegate whose open was refused has no transcript
+        // to draw: the replay never arrives, so the refusal the open
+        // kept is the fallback's signal. A running view stays live
+        // through a refusal.
+        let finished = !running;
+        let refused = finished && open.message.is_some();
         let level = record.delegate.as_ref().and_then(|delegate| {
             self.delegate_row(&delegate.session)
                 .and_then(|row| row.status.as_ref())
@@ -266,7 +273,7 @@ impl App {
                     Some(delegate.calls),
                     delegate.started_ts,
                     Some(delegate.session.0.clone()),
-                    true,
+                    !refused,
                 ),
                 Some(delegate) => (
                     "◆",
@@ -651,6 +658,15 @@ impl App {
                     // clickable again and an open view runs again.
                     record.outcome = None;
                     let resumed = record.delegate.clone();
+                    // A resume drops a stale refusal with the outcome: the
+                    // running view draws the message beside the stop target,
+                    // so a resumed job would show "Could not open" beside a
+                    // live transcript.
+                    if let Some(open) = self.items.open.as_mut()
+                        && open.job_id == started.job_id
+                    {
+                        open.message = None;
+                    }
                     // A resume turns the replay live again: the open
                     // view of this job re-wants `full` for its session.
                     if let Some(delegate) = resumed
@@ -779,6 +795,16 @@ impl App {
     pub(super) fn item_session_line(&mut self, envelope: &Envelope) -> bool {
         if !self.is_item_session(&envelope.session_id) {
             return false;
+        }
+        // A line on the open session proves the open reached its hub, so
+        // a stale refusal clears with it: an early refusal hid the replay
+        // the hub answered after, and the gate reads the message. A
+        // refusal owns its message through `subscribe_refused`, so a
+        // `command_rejected` never clears here.
+        if envelope.kind() != EventKind::CommandRejected
+            && let Some(open) = self.items.open.as_mut()
+        {
+            open.message = None;
         }
         if envelope.kind() == EventKind::ToolCallCompleted
             && let Some(open) = self.items.open.as_ref()
