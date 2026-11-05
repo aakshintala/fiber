@@ -19,6 +19,51 @@ use fakes::{Deadline, NoLock};
 use serde_json::json;
 
 #[test]
+fn switched_on_lists_presence_without_acquiring_or_losing_identity() {
+    let setup = Setup::new();
+    let configuration = config(&setup, &[]);
+    let (empty, _) = Providers::load(&setup.home()).unwrap();
+    assert!(empty.switched_on(&configuration).next().is_none());
+    let providers = installed(
+        &setup,
+        &[("z", provider("z", &["m"])), ("a", provider("a", &["m"]))],
+    );
+    assert!(providers.switched_on(&configuration).next().is_none());
+    config::store_credential(&setup.home(), "z", "work", &Secret::new("key".into())).unwrap();
+    let configuration = config(&setup, &["providers.z.credential=default"]);
+    assert_eq!(
+        providers.switched_on(&configuration).collect::<Vec<_>>(),
+        ["z"]
+    );
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["a", "z"]);
+    assert_eq!(providers.get("a").unwrap().models.len(), 1);
+    assert_eq!(providers.get("z").unwrap().models.len(), 1);
+
+    let marker = setup.workspace().join("credential-command-ran");
+    write(
+        &setup.home().join("config.json"),
+        &json!({"providers": {"a": {"credentials": {"work": {
+            "command": ["sh", "-c", format!("touch '{}'", marker.display())]
+        }}}}})
+        .to_string(),
+    );
+    let configuration = config(&setup, &[]);
+    assert_eq!(
+        providers.switched_on(&configuration).collect::<Vec<_>>(),
+        ["a", "z"]
+    );
+    assert!(!marker.exists(), "listing must not acquire a credential");
+    let mut scripted = providers.clone();
+    scripted.add_scripted("scripted/replies.json");
+    assert_eq!(
+        scripted.switched_on(&configuration).collect::<Vec<_>>(),
+        ["a", "scripted", "z"]
+    );
+    scripted.retain_credentialed(&configuration);
+    assert!(scripted.resolve("scripted/replies.json").is_ok());
+}
+
+#[test]
 fn presentation_filter_preserves_inventory_and_unfiltered_resolution() {
     let setup = Setup::new();
     let (empty, _) = Providers::load(&setup.home()).unwrap();

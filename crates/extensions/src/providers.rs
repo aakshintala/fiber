@@ -628,6 +628,23 @@ impl Providers {
         self.by_name.keys().map(String::as_str)
     }
 
+    /// Installed names switched on by credential presence, sorted, plus
+    /// the built-in scripted provider. Listing checks presence only: it
+    /// never acquires credentials, runs commands or starts Lua. Use
+    /// [`Self::names`] for installed identity and session resolution.
+    pub fn switched_on<'a>(
+        &'a self,
+        config: &'a config::Config,
+    ) -> impl Iterator<Item = &'a str> + 'a {
+        self.by_name.iter().filter_map(move |(name, data)| {
+            (name == scripted::SCRIPTED
+                || config
+                    .credentials()
+                    .has_credential(data, &|var| std::env::var(var).ok()))
+            .then_some(name.as_str())
+        })
+    }
+
     /// Every installed extension's declared secret names, by extension
     /// then name: two extensions sharing a secret each keep their row,
     /// while [`Providers::secrets`] still lists the name once.
@@ -1147,16 +1164,12 @@ impl Providers {
     /// always stays. Use only on disposable presentation catalogues, never
     /// on a session's resolver inventory.
     pub fn retain_credentialed(&mut self, config: &config::Config) {
-        let mut off = Vec::new();
-        for (name, data) in &self.by_name {
-            if name != scripted::SCRIPTED
-                && !config
-                    .credentials()
-                    .has_credential(data, &|var| std::env::var(var).ok())
-            {
-                off.push(name.clone());
-            }
-        }
+        let on: BTreeSet<_> = self.switched_on(config).collect();
+        let off: Vec<_> = self
+            .names()
+            .filter(|name| !on.contains(name))
+            .map(str::to_owned)
+            .collect();
         for name in off {
             if let Some(data) = self.by_name.get_mut(&name) {
                 data.models.clear();
