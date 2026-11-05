@@ -17,10 +17,12 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use contract::clock::Clock;
+use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 use serde_json::json;
 
 use super::*;
@@ -463,6 +465,53 @@ fn a_dry_run_over_the_wire_answers_the_sessions_and_held_ids() {
         BTreeSet::from([id(1), id(2)])
     );
     assert_eq!(answer["payload"]["result"]["held"], json!([id(1)]));
+}
+
+/// A dry run takes no lock: an open racing its probe window succeeds. The
+/// probe holds the flock on main, so the open is refused as held and this
+/// test fails; after the fix the open takes the free lock.
+#[test]
+fn a_dry_run_takes_no_lock_while_a_concurrent_open_races_it() {
+    let temp = Temp::new();
+    let dir = temp.session("-p", 1, None);
+    let hub = temp.hub();
+    let (fired, hook_fired) = mpsc::channel::<()>();
+    let (release, release_hook) = mpsc::channel::<()>();
+    let worker = thread::spawn(move || {
+        // The seam is thread-local, so the dry-run thread arms it: the
+        // hook fires inside the probe window and waits for the release.
+        pause_dry_run(move || {
+            fired.send(()).unwrap_or(());
+            assert!(
+                Deadline::after(MUST_SUCCEED_WITHIN)
+                    .recv(&release_hook)
+                    .is_ok(),
+                "the test releases the probe"
+            );
+        });
+        delete(&hub, &args(json!({"session": id(1), "dry_run": true})))
+    });
+    assert!(
+        Deadline::after(MUST_SUCCEED_WITHIN)
+            .recv(&hook_fired)
+            .is_ok(),
+        "the dry run probed its first candidate"
+    );
+    let sessions = dir.parent().unwrap().to_path_buf();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let opened = log::Log::open(&sessions, SessionId(id(1)), clock);
+    let open_ok = opened.is_ok();
+    drop(opened);
+    release.send(()).unwrap_or(());
+    let answer = match worker.join() {
+        Ok(answer) => answer,
+        Err(_) => panic!("the dry run thread ended"),
+    };
+    assert_eq!(answer, Ok(Some(json!({"sessions": [id(1)], "held": []}))));
+    assert!(
+        open_ok,
+        "a concurrent open takes the lock the dry run must leave free"
+    );
 }
 
 /// Every path under `dir`, sorted: file bytes for files, so a comparison

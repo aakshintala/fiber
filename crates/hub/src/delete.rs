@@ -45,7 +45,10 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     let mut busy: Vec<String> = Vec::new();
     for (id, dir) in &set {
         let lock = if parsed.dry_run {
-            log::try_hold_existing(dir).map_err(|error| io_failed(id, &error))?
+            let probed = log::try_hold_existing(dir).map_err(|error| io_failed(id, &error))?;
+            #[cfg(test)]
+            fire_dry_run_pause();
+            probed
         } else {
             Some(log::try_hold(dir).map_err(|error| io_failed(id, &error))?)
         };
@@ -70,6 +73,31 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     }
     drop(locks);
     Ok(None)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fires once after the dry run's first candidate probe, so the
+    /// no-lock test can race a concurrent open inside the probe window.
+    static DRY_RUN_PAUSE: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Arms the one-shot hook fired after the dry run's first candidate
+/// probe. Test only: production has no seam there.
+#[cfg(test)]
+pub(crate) fn pause_dry_run(hook: impl FnOnce() + 'static) {
+    DRY_RUN_PAUSE.with(|slot| slot.set(Some(Box::new(hook))));
+}
+
+/// Fires the armed hook, if any, and disarms it. Test only.
+#[cfg(test)]
+fn fire_dry_run_pause() {
+    DRY_RUN_PAUSE.with(|slot| {
+        if let Some(hook) = slot.take() {
+            hook();
+        }
+    });
 }
 
 /// The sessions a delete would remove: `session` first, then every session
