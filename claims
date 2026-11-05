@@ -195,3 +195,6 @@ crates/loop/src/suspend.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010
 crates/tui/src/app/session_views.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/answer.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tui/src/app/home/prompt/clear.rs	fiber-4115	plan	2026-11-05T20:41:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/prompt/hooks_offer.rs	fiber-4115	plan	2026-11-05T20:41:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/home/prompt/hooks_offer_tests.rs	fiber-4115	plan	2026-11-05T20:41:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
