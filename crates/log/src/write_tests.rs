@@ -6,8 +6,8 @@ use std::time::Duration;
 use super::*;
 use contract::ErrorCode;
 use contract::events::{
-    Clients, Empty, Event, ExtensionsLoaded, FiberStarted, LoadedExtension, Notice, SessionState,
-    SessionStatus, TextDelta,
+    Clients, Empty, Event, EventKind, ExtensionsLoaded, FiberStarted, LoadedExtension, Notice,
+    SessionState, SessionStatus, TextDelta,
 };
 use contract::shapes::{Tokens, Usage};
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
@@ -264,7 +264,7 @@ fn a_subscribers_seed_does_not_carry_the_offer() {
     let offered = deadline
         .recv_or_fail(&seeded, "the durable offer in history")
         .unwrap();
-    assert_eq!(offered.kind, "repository_code_offered");
+    assert_eq!(offered.kind(), EventKind::RepositoryCodeOffered);
     let got = deadline
         .recv_or_fail(&seeded, "the next live line without a duplicate offer")
         .unwrap();
@@ -504,7 +504,7 @@ fn a_line_written_between_registration_and_the_read_arrives_once() {
     assert_eq!(seqs, [0, 1, between.seq.unwrap().0, later.seq.unwrap().0]);
     assert_eq!(
         got.iter()
-            .filter(|line| line.kind == "assistant_message_delta")
+            .filter(|line| line.kind() == EventKind::AssistantMessageDelta)
             .count(),
         1
     );
@@ -760,7 +760,7 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
         .recv(&rx)
         .expect("the seeded status arrives")
         .expect("open");
-    assert_eq!(first.kind, "extension_ui");
+    assert_eq!(first.kind(), EventKind::ExtensionUi);
     log.append(&ui_status("fiber.test/a", ""), None, None)
         .unwrap();
     let log2 = log;
@@ -771,7 +771,7 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
     let wait = Deadline::after(Duration::from_millis(200));
     for _ in 0..16 {
         match wait.recv(&rx) {
-            Ok(Some(line)) if line.kind == "extension_ui" => {
+            Ok(Some(line)) if line.kind() == EventKind::ExtensionUi => {
                 seen_ui = true;
                 break;
             }
@@ -788,7 +788,7 @@ fn newer_status_replaces_older_and_a_clear_removes_it() {
         .recv(&rx)
         .expect("the status after a clear arrives")
         .expect("open");
-    assert_eq!(line.kind, "extension_ui");
+    assert_eq!(line.kind(), EventKind::ExtensionUi);
 }
 
 #[test]
@@ -815,7 +815,7 @@ fn widgets_are_kept_per_extension_and_id() {
     let wait = Deadline::after(Duration::from_millis(200));
     for _ in 0..8 {
         match wait.recv(&rx) {
-            Ok(Some(line)) if line.kind == "extension_ui" => widgets.push(line),
+            Ok(Some(line)) if line.kind() == EventKind::ExtensionUi => widgets.push(line),
             Ok(_) => continue,
             Err(_) => break,
         }
@@ -849,12 +849,12 @@ fn watch_all_seeded_delivers_seeds_before_later_lines() {
         .recv(&rx)
         .expect("the first seed arrives")
         .expect("open");
-    assert_eq!(first.kind, "session_status");
+    assert_eq!(first.kind(), EventKind::SessionStatus);
     let second = wait
         .recv(&rx)
         .expect("the second seed arrives")
         .expect("open");
-    assert_eq!(second.kind, "extension_ui");
+    assert_eq!(second.kind(), EventKind::ExtensionUi);
     let payload: contract::events::ExtensionUi =
         serde_json::from_value(serde_json::Value::Object(second.payload.clone())).unwrap();
     assert_eq!(
@@ -963,7 +963,7 @@ fn range_and_count_return_while_append_is_in_its_fsync() {
     assert_eq!(count, 3);
     let range = range.unwrap();
     assert_eq!(range.len(), 3);
-    assert_eq!(range[2].kind, "assistant_message_started");
+    assert_eq!(range[2].kind(), EventKind::AssistantMessageStarted);
     release_tx.send(()).unwrap();
     let appended = wait
         .recv(&done_rx)
@@ -1338,7 +1338,7 @@ fn end_watchers_ends_a_watcher_after_its_queued_lines_and_keeps_the_lock() {
         .expect("the queued line arrives")
         .unwrap()
         .expect("the queued line first");
-    assert_eq!(queued.kind, "session_status");
+    assert_eq!(queued.kind(), EventKind::SessionStatus);
     assert!(
         watcher
             .recv_timeout(DEADLINE)
@@ -1378,8 +1378,8 @@ fn a_watcher_registered_after_end_watchers_starts_ended() {
             .expect("the first durable line arrives")
             .unwrap()
             .expect("seq 0")
-            .kind,
-        "fiber_started"
+            .kind(),
+        EventKind::FiberStarted
     );
     assert!(
         all.recv_timeout(DEADLINE)
@@ -1394,9 +1394,9 @@ fn a_watcher_registered_after_end_watchers_starts_ended() {
         .expect("the seeded lines arrive before the end")
         .unwrap()
     {
-        kinds.push(line.kind);
+        kinds.push(line.kind());
     }
-    assert_eq!(kinds, ["fiber_started", "session_status"]);
+    assert_eq!(kinds, [EventKind::FiberStarted, EventKind::SessionStatus]);
 }
 
 #[test]
@@ -1441,8 +1441,8 @@ fn an_append_after_the_end_writes_nothing_and_returns_ended() {
     assert_eq!(log.latest("session_status"), latest);
     assert_eq!(log.latest("steering_queue"), steering);
     assert_eq!(
-        watcher.recv().unwrap().expect("the line before").kind,
-        "session_status"
+        watcher.recv().unwrap().expect("the line before").kind(),
+        EventKind::SessionStatus
     );
     assert!(
         watcher
@@ -1598,7 +1598,7 @@ fn a_failed_moved_sync_keeps_its_line_without_truncation() {
     // with no truncation, so the hub starts the same child from it.
     let lines = crate::read(&dir).unwrap();
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].kind, "moved");
+    assert_eq!(lines[0].kind(), EventKind::Moved);
     drop(log);
     after_sync(|| None);
     Log::open(
