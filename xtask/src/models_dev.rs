@@ -425,6 +425,114 @@ struct ThinkingRow<'a> {
     default: Option<&'a str>,
 }
 
+/// Every thinking level name a table may use, in vocabulary order
+/// (`xtask/src/models_dev_table.rs:51`).
+const THINKING_VOCABULARY: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// The hand-maintained Databricks thinking overlay, from the repository
+/// root: compiled in, never read at run time.
+pub(crate) const DATABRICKS_THINKING_OVERLAY: &str = "providers/databricks/thinking-overlay.json";
+
+/// One validated overlay row: the file key with its levels and default.
+pub(crate) struct OverlayRow {
+    /// The file key, naming the row in errors.
+    key: String,
+    /// The row's levels, in vocabulary order.
+    levels: Vec<&'static str>,
+    /// The row's default, when it names one.
+    default: Option<&'static str>,
+}
+
+/// Parses overlay `text` from `source`: each row holds `levels` and an
+/// optional `default`. Every level is a vocabulary name, a default sits
+/// inside its levels, levels are never empty, and each key normalizes
+/// with `databricks_model_key`. A normalized-key collision keeps the
+/// first row when both rows match and fails naming both file keys when
+/// they differ; a `gpt-5` or `gpt-5-*` key fails, as those rows keep the
+/// openai package's. A syntax error has no key to name, so it reports
+/// the file and the parse location instead.
+fn parse_thinking_overlay(source: &str, text: &str) -> Result<Vec<OverlayRow>, String> {
+    let value: Value = serde_json::from_str(text)
+        .map_err(|error| format!("databricks thinking overlay {source}: {error}"))?;
+    let Some(rows) = value.as_object() else {
+        return Err(format!(
+            "databricks thinking overlay {source}: top level must be an object"
+        ));
+    };
+    let mut overlay = Vec::new();
+    let mut seen: std::collections::BTreeMap<String, (String, Vec<&str>, Option<&str>)> =
+        std::collections::BTreeMap::new();
+    for (raw, row) in rows {
+        let key = databricks_model_key(raw);
+        if key == "gpt-5" || key.starts_with("gpt-5-") {
+            return Err(format!(
+                "databricks thinking overlay: `{raw}` names a gpt-5.x model, which keeps the openai package's row"
+            ));
+        }
+        let Some(levels) = row.get("levels").and_then(Value::as_array) else {
+            return Err(format!(
+                "databricks thinking overlay: `{raw}` names no levels array"
+            ));
+        };
+        let mut kept: Vec<&'static str> = Vec::with_capacity(levels.len());
+        for level in levels {
+            let Some(level) = level.as_str() else {
+                return Err(format!(
+                    "databricks thinking overlay: `{raw}` names a level that is no string"
+                ));
+            };
+            let Some(canonical) = THINKING_VOCABULARY.iter().find(|name| **name == level) else {
+                return Err(format!(
+                    "databricks thinking overlay: `{raw}` names unknown level `{level}`"
+                ));
+            };
+            kept.push(canonical);
+        }
+        if kept.is_empty() {
+            return Err(format!(
+                "databricks thinking overlay: `{raw}` names no levels"
+            ));
+        }
+        let default = match row.get("default") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let Some(default) = value.as_str() else {
+                    return Err(format!(
+                        "databricks thinking overlay: `{raw}` names a default that is no string"
+                    ));
+                };
+                let Some(canonical) = THINKING_VOCABULARY.iter().find(|name| **name == default)
+                else {
+                    return Err(format!(
+                        "databricks thinking overlay: `{raw}` names default `{default}` outside its levels"
+                    ));
+                };
+                if !kept.contains(canonical) {
+                    return Err(format!(
+                        "databricks thinking overlay: `{raw}` names default `{default}` outside its levels"
+                    ));
+                }
+                Some(*canonical)
+            }
+        };
+        if let Some((first, first_levels, first_default)) = seen.get(&key) {
+            if *first_levels != kept || *first_default != default {
+                return Err(format!(
+                    "databricks thinking overlay: `{first}` and `{raw}` share a match key with differing thinking rows"
+                ));
+            }
+            continue;
+        }
+        seen.insert(key, (raw.clone(), kept.clone(), default));
+        overlay.push(OverlayRow {
+            key: raw.clone(),
+            levels: kept,
+            default,
+        });
+    }
+    Ok(overlay)
+}
+
 /// The `thinking.lua` module for the databricks package from `packages`'
 /// thinking rows: one row per match key (`databricks_model_key`) of the
 /// four thinking-vendor packages (`is_thinking_vendor`), so a discovered
@@ -433,6 +541,21 @@ struct ThinkingRow<'a> {
 /// sorted for stable bytes. A key two ids share with differing rows is
 /// an error naming both ids, as silent wrong levels would be worse.
 pub(crate) fn databricks_thinking(packages: &[Package]) -> Result<Output, String> {
+    let overlay = parse_thinking_overlay(
+        DATABRICKS_THINKING_OVERLAY,
+        include_str!("../../providers/databricks/thinking-overlay.json"),
+    )?;
+    merge_databricks_thinking(packages, &overlay)
+}
+
+/// `databricks_thinking` over `packages` with `overlay` applied after the
+/// vendor-vs-vendor check: the overlay wins on a shared key, with no
+/// error. Unit tests call this directly with an explicit overlay, so no
+/// vendor-behavior test pins the compiled-in rows.
+pub(crate) fn merge_databricks_thinking(
+    packages: &[Package],
+    overlay: &[OverlayRow],
+) -> Result<Output, String> {
     let mut rows: std::collections::BTreeMap<String, ThinkingRow<'_>> =
         std::collections::BTreeMap::new();
     for package in packages
@@ -460,13 +583,25 @@ pub(crate) fn databricks_thinking(packages: &[Package]) -> Result<Output, String
             );
         }
     }
+    for row in overlay {
+        rows.insert(
+            databricks_model_key(&row.key),
+            ThinkingRow {
+                id: row.key.as_str(),
+                levels: &row.levels,
+                default: row.default,
+            },
+        );
+    }
     let mut text = String::from(
         "-- Never hand-edit: `cargo xtask models-dev` regenerates this module\n\
          -- from the thinking rows of the `anthropic`, `gemini`, `openai`\n\
          -- and `muse` packages (`docs/model-routing.md`, \"What a provider\n\
-         -- extension declares\"). A discovered `databricks` model takes the\n\
-         -- row its bare service name's match key names; a service with no\n\
-         -- row keeps no levels.\n\
+         -- extension declares\"), overlaid by\n\
+         -- `providers/databricks/thinking-overlay.json`, which wins on a\n\
+         -- shared key. A discovered `databricks` model takes the row its\n\
+         -- bare service name's match key names; a service with no row keeps\n\
+         -- no levels.\n\
          return {\n",
     );
     for (key, row) in &rows {
