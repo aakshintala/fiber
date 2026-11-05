@@ -60,11 +60,11 @@ const FIRST_TURN_KINDS: [&str; 14] = [
     "turn_completed",
 ];
 
-/// The complete stream the resumed turn collects, asserted as a set: the
-/// exited process's `fiber_exited`, already forwarded before the exit the
-/// test closed on, then the resumed process's start through its
-/// `turn_completed`. Deltas are live-only lines, so the resumed stream
-/// carries none: the hub replays what the log holds.
+/// The replayed prefix the resumed stream opens with, asserted as a set:
+/// the exited process's `fiber_exited`, already forwarded before the exit
+/// the test closed on, then the resumed process's start through the
+/// replayed run-1 `turn_completed`. Deltas are live-only lines, so the
+/// replay carries none: the hub replays what the log holds.
 const SECOND_TURN_KINDS: [&str; 14] = [
     "fiber_exited",
     "stream_reopened",
@@ -166,7 +166,7 @@ fn debug_times_hub_start_resume_listing_replay_and_socket() {
 
     // Hub start, accepted subscription and first turn.
     let session = start_session(&client, &workspace, PROBE);
-    subscribe(&client, &session);
+    let sub = subscribe(&client, &session);
     let first = until(&client, "the first turn to complete", |line| {
         line["kind"] == "turn_completed"
     });
@@ -190,7 +190,7 @@ fn debug_times_hub_start_resume_listing_replay_and_socket() {
     let resumed_ack = recv_answer(&client, "c_p2", "the resumed prompt acknowledgement");
     assert_eq!(resumed_ack["kind"], "command_accepted", "{resumed_ack}");
     seen.push(resumed_ack);
-    let second = until(&client, "the resumed turn to complete", |line| {
+    let second = until_after_reopen(&client, &sub, "the resumed turn to complete", |line| {
         line["kind"] == "turn_completed"
     });
     seen.extend(second.iter().cloned());
@@ -230,7 +230,27 @@ fn debug_times_hub_start_resume_listing_replay_and_socket() {
     // missing or duplicated; the turn prefixes hold no promised order, so
     // each is asserted as a set.
     support::assert_kinds_multiset(&first, &FIRST_TURN_KINDS, &[], None, COUNT_DOC);
-    support::assert_kinds_multiset(&second, &SECOND_TURN_KINDS, &[], None, COUNT_DOC);
+    // The reopen-aware bound returns the replayed lines too, ending on
+    // the live event: the prefix through the replayed run-1 completion
+    // proves the resumed stream replays the kept subscription, and the
+    // live half proves the wait ran past the replay to the live turn-2
+    // end.
+    let replayed_end = second
+        .iter()
+        .position(|line| line["kind"] == "turn_completed")
+        .expect("the resumed stream replays the first turn's completion");
+    let (replayed, live) = second.split_at(replayed_end + 1);
+    support::assert_kinds_multiset(replayed, &SECOND_TURN_KINDS, &[], None, COUNT_DOC);
+    let live_completed = live
+        .iter()
+        .filter(|line| line["kind"] == "turn_completed")
+        .collect::<Vec<_>>();
+    assert_eq!(live_completed.len(), 1, "the live turn ends once: {live:?}");
+    let live_text = live
+        .iter()
+        .find(|line| line["kind"] == "text_completed")
+        .expect("the live turn completes its text");
+    assert_eq!(live_text["payload"]["text"], json!("Hello."), "{live_text}");
     // The resumed stream opens with the exited process's goodbye.
     let exited = second
         .iter()
