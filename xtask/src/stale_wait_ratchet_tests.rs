@@ -494,10 +494,64 @@ fn shape_other_socket_bound_wait_drains_nothing() {
         0,
         "same-socket until_after"
     );
-    let split = "    until(\n        &client,\n        \"the resumed fiber_started\",\n        |line| line[\"kind\"] == \"fiber_started\" && line[\"payload\"][\"resumed\"] == true,\n    );\n";
+    let split = "    support::until(\n        &client,\n        \"the resumed fiber_started\",\n        |line| line[\"kind\"] == \"fiber_started\" && line[\"payload\"][\"resumed\"] == true,\n    );\n";
     assert_eq!(
         count_stale(&format!("{prefix}{split}{tail}")),
         0,
         "multiline same-socket drain"
     );
+}
+
+#[test]
+fn shape_named_drain_reasons_pass() {
+    // Each drain reason stands alone: a wait matching only through one
+    // disjunct still consumes the replay, so dropping that disjunct
+    // would count a stale wait here.
+    let prefix = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{}}}\"));\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n";
+    let tail = "    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let cases: &[(&str, &str)] = &[
+        (
+            "    until(&client, \"the stream_reopened line\", |line| {\n        done(line)\n    });\n",
+            "stream_reopened-only drain",
+        ),
+        (
+            "    until(&client, \"the new session\", |line| {\n        line[\"payload\"][\"session_resumed\"] == true\n    });\n",
+            "session_resumed-only drain",
+        ),
+        (
+            "    until_resumed(&client, \"the marker\");\n",
+            "until_resumed-only drain",
+        ),
+        (
+            "    until(&client, \"the accepted turn\", |line| {\n        line[\"kind\"] == \"turn_completed\" && line[\"payload\"][\"command_id\"] == \"c_p2\"\n    });\n",
+            "command_id-only drain",
+        ),
+    ];
+    for (drain, what) in cases {
+        assert_eq!(count_stale(&format!("{prefix}{drain}{tail}")), 0, "{what}");
+    }
+}
+
+#[test]
+fn shape_rewind_only_defect_counts() {
+    // Each replay spelling stands alone: a flow replayed only through a
+    // `rewind` command still counts, so dropping that disjunct would
+    // miss a stale wait here.
+    let source = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_rew\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"rewind\\\",\\\"args\\\":{}}}\"));\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{}}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 1, "rewind-only replay");
+}
+
+#[test]
+fn shape_definitions_and_imports_establish_no_replay() {
+    // Like comments, a function definition and a `use` line never replay
+    // anything, even when they name a resume: only executed lines do.
+    let defined = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{}}}\"));\n    fn resume_helper() {}\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let imported = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    use support::{until_after_reopen};\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{}}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let cases: &[(&str, &str)] = &[
+        (defined, "nested definition names a resume"),
+        (imported, "import names a reopen"),
+    ];
+    for (source, what) in cases {
+        assert_eq!(count_stale(source), 0, "{what}");
+    }
 }
