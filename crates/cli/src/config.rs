@@ -323,7 +323,7 @@ fn check_model(
             Ok(notices)
         }
         Err(extensions::Error::UnknownModel { .. } | extensions::Error::ModelMissing { .. }) => {
-            Err(no_model(&providers, typed))
+            Err(no_model(&providers, &config, typed))
         }
         Err(e @ extensions::Error::Ambiguous { .. }) => Err(CliError::ModelAmbiguous(e)),
         Err(e) => Err(CliError::from(e)),
@@ -332,20 +332,20 @@ fn check_model(
 
 /// The `no_model` failure: what was typed, the closest installed
 /// references, and where to list them.
-fn no_model(providers: &Providers, typed: &str) -> CliError {
+fn no_model(providers: &Providers, config: &Config, typed: &str) -> CliError {
     CliError::ModelNone {
         typed: typed.to_owned(),
-        closest: closest(providers, typed),
+        closest: closest(providers, config, typed),
     }
 }
 
 /// Up to 3 installed `provider/model` references nearest the typed text,
 /// with any `:<level>` suffix stripped, nearest first and ties in sorted
 /// reference order.
-fn closest(providers: &Providers, typed: &str) -> Vec<String> {
+fn closest(providers: &Providers, config: &Config, typed: &str) -> Vec<String> {
     let (base, _) = Providers::split_thinking(typed);
     let mut refs: Vec<String> = providers
-        .names()
+        .switched_on(config)
         .flat_map(|name| {
             providers.get(name).into_iter().flat_map(move |provider| {
                 provider
