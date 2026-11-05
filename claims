@@ -124,3 +124,10 @@ crates/log/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/
 crates/contract/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/visibility.rs	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
+xtask/src/visibility_tests.rs	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
+xtask/src/main.rs	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
+xtask/tests/cli.rs	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
+docs/code-quality.md	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
+docs/code-quality/lints.md	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
+docs/ci.md	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
