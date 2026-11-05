@@ -475,6 +475,8 @@ network (`docs/testing.md`).
   report jobs is missing from the verdict job's `needs`, or the report
   jobs named in "The merge gate" differ from the check's own list
   (`cargo xtask ci-needs`)
+- a `pub(crate)` or `pub(super)` item no other file of its crate names
+  (`cargo xtask visibility`)
 
 `xtask/doc-citations.allow` lists, per file, each such citation still allowed and how many times. A citation beyond its count fails, and so does an entry whose citation the code no longer holds, so the list only shrinks. `cargo xtask doc-citations --print` prints it. The check reads every text file under those three directories except the allow table itself, whose own entries would otherwise read as citations.
 
