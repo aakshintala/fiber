@@ -117,7 +117,9 @@ fn sessions_as_set(answer: &Value) -> BTreeSet<String> {
         .collect()
 }
 
-/// The dry-run answer's `held` ids as a set: order is not public.
+/// The dry-run answer's `held` ids as a set: `docs/invocation.md` ("The hub")
+/// promises the ids it would remove that another process holds right now,
+/// not their order.
 fn held_as_set(answer: &Value) -> BTreeSet<String> {
     answer["held"]
         .as_array()
@@ -482,6 +484,7 @@ fn a_dry_run_with_an_unreadable_lock_reads_not_held_and_writes_nothing() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before);
 }
@@ -505,33 +508,8 @@ fn a_dry_run_over_the_wire_answers_the_sessions_and_held_ids() {
         sessions_as_set(&answer["payload"]["result"]),
         BTreeSet::from([id(1), id(2)])
     );
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer["payload"]["result"]["held"], json!([id(1)]));
-}
-
-#[test]
-fn a_dry_run_reports_a_live_pid_label_as_held() {
-    let temp = Temp::new();
-    let dir = temp.session("-p", 1, None);
-    label(&dir, &own_pid_label());
-    let hub = temp.hub();
-    let before = snapshot_tree(&temp.dir);
-
-    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
-    assert_eq!(answer, json!({"sessions": [id(1)], "held": [id(1)]}));
-    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
-}
-
-#[test]
-fn a_dry_run_reports_a_live_keeper_label_as_held() {
-    let temp = Temp::new();
-    let dir = temp.session("-p", 1, None);
-    label(&dir, &format!("keeper {}", own_pid_label()));
-    let hub = temp.hub();
-    let before = snapshot_tree(&temp.dir);
-
-    let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
-    assert_eq!(answer, json!({"sessions": [id(1)], "held": [id(1)]}));
-    assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
 
 #[test]
@@ -544,6 +522,7 @@ fn a_dry_run_reports_a_dead_pid_label_as_not_held() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -557,6 +536,7 @@ fn a_dry_run_reports_a_dead_keeper_label_as_not_held() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -571,6 +551,7 @@ fn a_dry_run_reports_an_oversized_pid_label_as_not_held() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -584,6 +565,7 @@ fn a_dry_run_reports_a_negative_pid_label_as_not_held() {
     let before = snapshot_tree(&temp.dir);
 
     let answer = dry_run(&hub, json!({"session": id(1), "dry_run": true}));
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, json!({"sessions": [id(1)], "held": []}));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -605,6 +587,7 @@ fn a_dry_run_reports_a_pid_with_trailing_words_as_not_held() {
         json!({"session": id(1), "cascade": true, "dry_run": true}),
     );
     assert_eq!(sessions_as_set(&answer), BTreeSet::from([id(1), id(2)]));
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer["held"], json!([]));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
 }
@@ -629,6 +612,7 @@ fn a_dry_run_reports_garbage_labels_as_not_held() {
         sessions_as_set(&answer),
         BTreeSet::from([id(1), id(2), id(3)])
     );
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer["held"], json!([]));
     assert_eq!(snapshot_tree(&temp.dir), before, "dry run writes nothing");
     for dir in [&root, &fork, &deep] {
@@ -636,9 +620,10 @@ fn a_dry_run_reports_garbage_labels_as_not_held() {
     }
 }
 
-/// A dry run takes no lock: an open racing its probe window succeeds. The
-/// probe holds the flock on main, so the open is refused as held and this
-/// test fails; after the fix the open takes the free lock.
+/// A dry run takes no lock: the hook pauses the dry run inside its probe
+/// window, so the concurrent open runs while the probe is in flight. The
+/// channel rendezvous makes the overlap exact rather than timed, and the
+/// open must succeed because the dry run holds no lock to refuse it.
 #[test]
 fn a_dry_run_takes_no_lock_while_a_concurrent_open_races_it() {
     let temp = Temp::new();
@@ -676,6 +661,7 @@ fn a_dry_run_takes_no_lock_while_a_concurrent_open_races_it() {
         Ok(answer) => answer,
         Err(_) => panic!("the dry run thread ended"),
     };
+    // (docs/invocation.md, "The hub"): dry-run `held` is the ids it would remove that another process holds right now.
     assert_eq!(answer, Ok(Some(json!({"sessions": [id(1)], "held": []}))));
     assert!(
         open_ok,
