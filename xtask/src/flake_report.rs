@@ -45,7 +45,7 @@ pub(crate) struct IssueNumber(pub u64);
 
 /// A GitHub event id. Never an issue number.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct EventId(pub u64);
+struct EventId(pub u64);
 
 /// Which lookup failed, carried on unknown decisions so the summary
 /// names it instead of collapsing to a generic failure.
