@@ -103,6 +103,20 @@ fn identifier_edges_count_only_whole_recv_reply() {
 }
 
 #[test]
+fn identifier_edges_count_nothing_for_unicode_adjacency() {
+    // The ticket's acceptance: "`recv_reply` has 0 uses." A Unicode
+    // identifier character beside the needle (letter in any script) is
+    // still a boundary, so neither adjacency counts.
+    let cases: &[(&str, usize)] = &[
+        ("    \u{3b1}recv_reply(&client, \"x\");\n", 0),
+        ("    recv_reply\u{3b2}(&client, \"x\");\n", 0),
+    ];
+    for (source, expected) in cases {
+        assert_eq!(count_stale(source), *expected, "source: {source:?}");
+    }
+}
+
+#[test]
 fn a_multiline_use_import_counts_its_recv_reply_line() {
     // The ticket's acceptance: "`recv_reply` has 0 uses." The import's
     // own line counts even when the `use` spans lines.

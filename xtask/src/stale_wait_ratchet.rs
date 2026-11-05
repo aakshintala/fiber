@@ -75,9 +75,24 @@ fn is_word_byte(byte: u8) -> bool {
 }
 
 /// Whether the byte at `at` in `bytes` is an identifier character: past
-/// either end never is, so an edge match keeps its outer side.
+/// either end never is, so an edge match keeps its outer side. A
+/// non-ASCII byte belongs to a multibyte character, so decode it and ask
+/// whether it is a letter, a digit or `_` in any script.
 fn is_word_at(bytes: &[u8], at: usize) -> bool {
-    bytes.get(at).is_some_and(|byte| is_word_byte(*byte))
+    let Some(&byte) = bytes.get(at) else {
+        return false;
+    };
+    if byte < 0x80 {
+        return is_word_byte(byte);
+    }
+    let mut start = at;
+    while start > 0 && (bytes[start] & 0xC0) == 0x80 {
+        start -= 1;
+    }
+    std::str::from_utf8(&bytes[start..])
+        .ok()
+        .and_then(|text| text.chars().next())
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// The occurrences of the identifier `needle` in `line`: a match counts

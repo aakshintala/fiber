@@ -26,7 +26,7 @@ fail() {
 bug_red="$top/scripts/bug-red"
 record="$tmp/filter-args.txt"
 export BUG_RED_RECORD="$record"
-real_cargo=$(rustup which cargo 2>/dev/null || command -v cargo || { echo "scripts/test-bug-red: no cargo found via rustup or PATH" >&2; exit 1; })
+real_cargo=$(rustup which cargo 2>/dev/null || command -v cargo || true); if [ ! -f "$real_cargo" ] || [ ! -x "$real_cargo" ] || grep -q "cargo-slot shim" "$real_cargo" 2>/dev/null; then echo "scripts/test-bug-red: no toolchain cargo (resolved ${real_cargo:-nothing})" >&2; exit 1; fi
 
 mkdir -p "$tmp/bin"
 ln -s "$top/scripts/test-bug-red-cargo" "$tmp/bin/cargo"
