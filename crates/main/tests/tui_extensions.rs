@@ -53,6 +53,52 @@ fn configure(setup: &Setup, winner: Option<&str>) {
     }
     write_json(&setup.home().join("config.json"), &config);
 }
+#[test]
+fn transient_lock_hold_does_not_fail_install() {
+    // A same-home process briefly holds `extensions/.lock` while this test
+    // installs: a session loading its extensions at startup, or a forked
+    // copy of the lock's file outliving its owner (`installed.rs`, on the
+    // lock). The install helper retries the transient `Busy` instead of
+    // failing at once, so the install below lands once the hold lifts.
+    let setup = Setup::new();
+    let dir = config::extensions_dir(&setup.home());
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(".lock");
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let deadline = setup.deadline;
+    let holder = std::thread::spawn(move || {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        while file.try_lock().is_err() {
+            if deadline.left().is_zero() {
+                panic!("the holder never took the extensions lock");
+            }
+            std::thread::yield_now();
+        }
+        held_tx.send(()).unwrap();
+        // The simulated hold lasts long enough that an instant retry storm
+        // always lands inside it, then lifts so a retrying install lands.
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        done_tx.send(()).unwrap();
+    });
+    setup
+        .deadline
+        .recv_or_fail(&held_rx, "the holder to take the extensions lock");
+    install(&setup, "alpha", &source("ALPHA-ROW"), None);
+    setup
+        .deadline
+        .recv_or_fail(&done_rx, "the holder to release the extensions lock");
+    holder.join().unwrap();
+    assert!(
+        config::extensions_dir(&setup.home()).join("alpha").is_dir(),
+        "the install committed alpha once the hold lifted"
+    );
+}
+
 fn turn(setup: &Setup) -> Run {
     let mut run = Run::spawn(setup, 160, 48, &[], &[]);
     run.ready(); // Existing mode/first-frame signal, not a grid match.
