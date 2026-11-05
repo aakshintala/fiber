@@ -3071,28 +3071,110 @@ fn replay_empty_failed_tool_result_carries_timeout_text() {
     );
 }
 
-/// The shadow pair names the lived-in fixture writes for the
-/// grouped-notice journey: every overlay bullet names one.
-#[rustfmt::skip]
-const SHADOWED_NAMES: [&str; 25] = [
-    "dup00", "dup01", "dup02", "dup03", "dup04",
-    "dup05", "dup06", "dup07", "dup08", "dup09",
-    "dup10", "dup11", "dup12", "dup13", "dup14",
-    "dup15", "dup16", "dup17", "dup18", "dup19",
-    "dup20", "dup21", "dup22", "dup23", "dup24",
-];
+/// Rows one overlay line wraps to at `room` columns: the
+/// `wrap_joined_runs` rule (`tui/src/view/notice_rows.rs`) — greedy
+/// words, a word wider than the row breaking at the edge, consecutive
+/// spaces reading as one. ASCII-only here, so one char is one column
+/// and no cut splits a char.
+fn wrapped_rows(line: &str, room: usize) -> usize {
+    let room = room.max(1);
+    let mut rows = 1;
+    let mut taken = 0;
+    for word in line.split(' ') {
+        if word.is_empty() {
+            continue;
+        }
+        let mut rest = word;
+        let mut leading = taken > 0;
+        while !rest.is_empty() {
+            let gap = usize::from(leading);
+            if taken + gap + rest.len() <= room {
+                taken += gap + rest.len();
+                break;
+            }
+            if taken > 0 {
+                rows += 1;
+                taken = 0;
+            }
+            let take = rest.len().min(room);
+            rest = &rest[take..];
+            if rest.is_empty() {
+                taken += take;
+            } else {
+                rows += 1;
+            }
+            leading = false;
+        }
+    }
+    rows
+}
+
+/// One shadow pair's overlay paths with the lengths discovery logs:
+/// `/.agents/skills/<name>/SKILL.md` beside the home copy under
+/// `/h/skills/<name>/SKILL.md`, both under the canonical root.
+fn shadowed_paths(name: &str, root_len: usize) -> (String, String) {
+    let root = "r".repeat(root_len);
+    (
+        format!("{root}/.agents/skills/{name}/SKILL.md"),
+        format!("{root}/h/skills/{name}/SKILL.md"),
+    )
+}
+
+/// The grouped journey's overlay text in shape: the lead naming the
+/// first shadow pair, then one `- ` bullet per pair (`group_notices`
+/// with `grouped_lead` in `contract/src/events/context.rs`, shadow
+/// message in `loop/src/skills.rs`). Only word lengths reach the wrap
+/// count, so the stand-in paths carry the logged lengths.
+fn overlay_text(root_len: usize) -> String {
+    let message = |index: usize| {
+        let name = format!("dup{index:02}");
+        let (agents, home) = shadowed_paths(&name, root_len);
+        format!("Skill {name} at {agents} is shadowed by {home}, which is used.")
+    };
+    let bullets: Vec<String> = (0..25)
+        .map(|index| format!("- {}", message(index)))
+        .collect();
+    format!(
+        "25 skills are shadowed: {}\n{}",
+        message(0),
+        bullets.join("\n")
+    )
+}
 
 /// The pty rows a 120-column run needs to show the whole grouped notice:
 /// the overlay keeps the first rows and drops body rows from the bottom
 /// when the stack exceeds the area, so a short pty clips names and the
-/// journey fails. Room is 67, where greedy word wrap holds over 50 chars
-/// a row; 8 chrome slots hold the frame around the lead and bullets, and
-/// 16 slack covers the page chrome. `root_len` is the canonical fixture
-/// root length, so the height holds on any temporary directory.
+/// journey fails. The count replays the overlay's own wrap over the
+/// overlay text, so it holds on any temporary directory: `root_len` is
+/// the canonical fixture root length. `room` stays at the width the old
+/// divisor assumed (the overlay wraps wider): a narrower room only adds
+/// rows, so the count never underfits, and a taller pty changes no wait.
+/// 8 chrome slots hold the frame around the lead and bullets, and 16
+/// slack covers the page chrome.
 fn overlay_rows(root_len: usize) -> u16 {
-    let rows_for = |len: usize| 1 + len / 50;
-    let total = 16 + 8 + rows_for(126 + 2 * root_len) + 25 * rows_for(104 + 2 * root_len);
-    u16::try_from(total).expect("the overlay fits the pty")
+    const ROOM: usize = 50;
+    let body: usize = overlay_text(root_len)
+        .split('\n')
+        .map(|line| wrapped_rows(line, ROOM))
+        .sum();
+    u16::try_from(16 + 8 + body).expect("the overlay fits the pty")
+}
+
+/// `wrapped_rows` replays the overlay's wrap: one row for a short
+/// line, consecutive spaces reading as one, a word wider than the
+/// row breaking at the edge.
+#[test]
+fn wrapped_rows_replays_the_overlay_wrap() {
+    assert_eq!(wrapped_rows("ab cd", 50), 1);
+    assert_eq!(wrapped_rows("ab  cd", 50), 1);
+    assert_eq!(wrapped_rows("ab cdefgh", 5), 3);
+}
+
+/// The overlay height fits the wrap it replays: at `root_len` 41 the
+/// lead takes 5 rows and each bullet 5, for 16 + 8 + 130.
+#[test]
+fn overlay_rows_fits_the_replayed_wrap() {
+    assert_eq!(overlay_rows(41), 154);
 }
 
 /// Every reversed cell of `grid`, as (column, row): the focus look's
@@ -3133,6 +3215,12 @@ fn notice_step(row: &[bool]) -> Option<&'static [u8]> {
 /// the row past the grip and Enter opens it; never writes Enter, so it
 /// never dismisses. Every wait goes through `wait_screen` under the
 /// run's one deadline.
+///
+/// Enter on that focused box opens the overlay exactly as a click does:
+/// `app_focus.rs` `open_focused` runs `on_click_inner` on the focused
+/// id, whose `Notice` arm (`app_mouse.rs`) calls `open_notice`; the
+/// binding table (`bindings.rs` `open_focused`, other path "click it")
+/// binds it to `enter`.
 #[track_caller]
 fn focus_notice(run: &mut Run, code: &str) {
     run.write(b"\x1b[Z");
@@ -3154,6 +3242,20 @@ fn focus_notice(run: &mut Run, code: &str) {
         grid = run.wait_screen("the focus moved", |next| reversed_cells(next) != before);
     }
     panic!("the focus walk reached no notice row carrying {code}");
+}
+
+/// Sessions under `dir` with an events file: an unreadable directory
+/// counts none, so the `wait_until` poll keeps waiting, as the inline
+/// `is_ok_and` it replaces did.
+fn opened_sessions(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().join("events.jsonl").is_file())
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// Twenty-five shadowed skills show one grouped row, once per terminal
@@ -3207,13 +3309,17 @@ fn lived_home_twenty_five_shadowed_notices_show_once_per_run() {
                     .count()
                     == 1
             });
-            // A click on the row opens its whole text in the overlay
-            // (`docs/tui.md`, "Notices").
-            run.click_where("the grouped shadow notice", |grid| {
-                grid.text_at("25 skills are shadowed")
-            });
+            // Enter on the focused box opens its whole text in the
+            // overlay (`docs/tui.md`, "Notices"): a pointer click would
+            // target a row the still-running turn can move, while the
+            // focus walk re-reads the row each step and waits the focus
+            // look per step, so it is readiness-safe. `focus_notice`
+            // returns only on the box, and Enter there opens (see its
+            // doc); Enter on the cross would dismiss instead.
+            focus_notice(&mut run, "skills are shadowed");
+            run.write(b"\r");
             run.wait_screen("the overlay lists all 25", |grid| {
-                SHADOWED_NAMES.iter().all(|name| shows(grid, name))
+                (0..25).all(|index| shows(grid, &format!("dup{index:02}")))
             });
             // The open overlay pauses the 10 s expiry, so the slow reply
             // cannot expire the notice before dismissal; Esc closes the
@@ -3259,13 +3365,7 @@ fn lived_home_twenty_five_shadowed_notices_show_once_per_run() {
             });
             let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
             fakes::wait_until("the second session", setup.deadline, move || {
-                fs::read_dir(&dir).is_ok_and(|entries| {
-                    entries
-                        .flatten()
-                        .filter(|entry| entry.path().join("events.jsonl").is_file())
-                        .count()
-                        == 2
-                })
+                opened_sessions(&dir) == 2
             });
             // settled: the reply painted and the session count beside it
             // proves the second session ran, so the frame below is final.
@@ -3363,13 +3463,7 @@ fn lived_home_import_leaves_already_read_skills() {
             });
             let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
             fakes::wait_until("the first session", setup.deadline, move || {
-                fs::read_dir(&dir).is_ok_and(|entries| {
-                    entries
-                        .flatten()
-                        .filter(|entry| entry.path().join("events.jsonl").is_file())
-                        .count()
-                        == 1
-                })
+                opened_sessions(&dir) == 1
             });
             // settled: the reply painted and the session count beside it
             // proves the session ran, so the frame below is final.
