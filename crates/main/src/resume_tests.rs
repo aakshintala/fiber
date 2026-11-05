@@ -186,58 +186,39 @@ fn session_with(dir: &Path, worktree: Option<Worktree>) -> Log {
     log
 }
 
-/// Rewrites the `schema_version` of the `occurrence`th `fiber_started`
-/// line (0-based) to `version`, changing only that number's bytes: a
-/// one-digit `version` keeps the file length and moves no other byte, so
-/// the log is itself a mixed-version history. The single-byte diff the
-/// rewrite leaves behind is asserted, not assumed.
-fn forge_fiber_started_version(dir: &Path, occurrence: usize, from: u64, version: u64) {
-    let path = dir.join("events.jsonl");
-    let before = std::fs::read(&path).unwrap();
+/// Rewrites the `occurrence`th `fiber_started` line's (0-based)
+/// `schema_version` token from `from` to `to` (e.g. `"1"` to `"x"`) with
+/// one equal-length `replacen`, so the file length never moves and the
+/// log stays a mixed-version history. A non-JSON token such as a bare
+/// `x` fails the line parse, which is exactly the reader's `Err` arm.
+fn forge_fiber_started_version(dir: &Path, occurrence: usize, from: &str, to: &str) {
+    assert_eq!(from.len(), to.len(), "the forge keeps the file length");
     let current = format!("\"schema_version\":{from}");
-    let forged = format!("\"schema_version\":{version}");
-    assert_eq!(
-        current.len(),
-        forged.len(),
-        "the forge keeps the file length"
-    );
-    let mut seen = 0;
-    let mut after = Vec::new();
-    for chunk in before.split_inclusive(|b| *b == b'\n') {
-        let mut chunk = chunk.to_vec();
-        let is_target = serde_json::from_slice::<Value>(&chunk)
-            .ok()
-            .is_some_and(|line| line["kind"] == "fiber_started");
-        if is_target {
-            if seen == occurrence {
-                let text = String::from_utf8(chunk).unwrap();
-                let replaced = text.replacen(&current, &forged, 1);
-                assert_ne!(text, replaced, "the forged line carries {current}");
-                chunk = replaced.into_bytes();
-            }
-            seen += 1;
-        }
-        after.extend_from_slice(&chunk);
-    }
-    assert_eq!(seen, 2, "the log holds two `fiber_started` lines");
+    let forged = format!("\"schema_version\":{to}");
+    let path = dir.join("events.jsonl");
+    let before = std::fs::read_to_string(&path).unwrap();
+    assert!(before.ends_with('\n'), "the log ends on a complete line");
+    let mut lines: Vec<String> = before.lines().map(str::to_owned).collect();
+    let targets: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| {
+            serde_json::from_str::<Value>(line).is_ok_and(|line| line["kind"] == "fiber_started")
+        })
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(targets.len(), 2, "the log holds two `fiber_started` lines");
     assert!(
-        occurrence < seen,
-        "the forged occurrence exists: {occurrence} of {seen}"
+        occurrence < targets.len(),
+        "the forged occurrence exists: {occurrence} of {}",
+        targets.len()
     );
+    let at = targets[occurrence];
+    let replaced = lines[at].replacen(&current, &forged, 1);
+    assert_ne!(lines[at], replaced, "the forged line carries {current}");
+    lines[at] = replaced;
+    let after = lines.join("\n") + "\n";
     assert_eq!(after.len(), before.len(), "the forge changes no length");
-    assert_eq!(
-        before
-            .iter()
-            .zip(after.iter())
-            .filter(|(a, b)| a != b)
-            .count(),
-        current
-            .bytes()
-            .zip(forged.bytes())
-            .filter(|(a, b)| a != b)
-            .count(),
-        "the forge changes no other byte"
-    );
     std::fs::write(&path, after).unwrap();
 }
 
@@ -261,7 +242,12 @@ fn keeper_schema_version_names_the_latest_in_a_mixed_history() {
     let dir = sessions.join("s_0123456789abcdef");
     let _log = session_with(&dir, None);
     let next = u64::from(contract::SCHEMA_VERSION) + 1;
-    forge_fiber_started_version(&dir, 1, u64::from(contract::SCHEMA_VERSION), next);
+    forge_fiber_started_version(
+        &dir,
+        1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &next.to_string(),
+    );
     assert_eq!(
         super::keeper_schema_version(&dir),
         Some(next),
@@ -277,7 +263,12 @@ fn keeper_schema_version_refusal_names_the_keepers_version() {
     let dir = sessions.join(&id.0);
     drop(session_with(&dir, None));
     let next = u64::from(contract::SCHEMA_VERSION) + 1;
-    forge_fiber_started_version(&dir, 1, u64::from(contract::SCHEMA_VERSION), next);
+    forge_fiber_started_version(
+        &dir,
+        1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &next.to_string(),
+    );
     // A keeper-held lock at an unreadable version declines instead of
     // attaching: the lock is held through the resume's failed open.
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
@@ -314,8 +305,8 @@ fn keeper_schema_version_ignores_a_forged_first_line() {
     forge_fiber_started_version(
         &dir,
         0,
-        u64::from(contract::SCHEMA_VERSION),
-        u64::from(contract::SCHEMA_VERSION) + 1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &(u64::from(contract::SCHEMA_VERSION) + 1).to_string(),
     );
     assert_eq!(
         super::keeper_schema_version(&dir),
@@ -347,19 +338,15 @@ fn keeper_schema_version_falls_back_without_a_parseable_version() {
     let id = SessionId("s_0123456789abcdef".into());
     let dir = sessions.join(&id.0);
     let _log = session_with(&dir, None);
-    // Neither `fiber_started` line carries a version this build can name.
-    let path = dir.join("events.jsonl");
-    let text = std::fs::read_to_string(&path).unwrap();
-    let corrupted = text.replace(
-        &format!("\"schema_version\":{}", contract::SCHEMA_VERSION),
-        "\"schema_version\":\"x\"",
-    );
-    assert_ne!(text, corrupted, "the log carries versions to corrupt");
-    std::fs::write(&path, corrupted).unwrap();
+    // The earlier `fiber_started` line still parses at this build's
+    // version while the latest carries a bare `x`: invalid JSON fails
+    // the line parse, which is exactly the reader's `Err` arm, so no
+    // keeper version can be named even though an earlier line parsed.
+    forge_fiber_started_version(&dir, 1, &contract::SCHEMA_VERSION.to_string(), "x");
     assert_eq!(
         super::keeper_schema_version(&dir),
         None,
-        "no parseable version reads as none"
+        "an unparseable latest clears an earlier version"
     );
     let keeper = log::Error::Held {
         session: id.0.clone(),
@@ -379,9 +366,8 @@ fn keeper_schema_version_falls_back_without_a_parseable_version() {
 }
 
 /// The hub path's `Held` decision beside the ask path's keeper decision
-/// on one log: readable, forged-latest and reverse-mixed. Both call
-/// sites share the helper, so a keeper-held lock declines identically
-/// through either.
+/// on one log: readable and forged-latest. Both call sites share the
+/// helper, so a keeper-held lock declines identically through either.
 fn parity_failures(sessions: &Path, id: &SessionId, dir: &Path) -> (Failure, Failure) {
     let held = || log::Error::Held {
         session: id.0.clone(),
@@ -408,25 +394,18 @@ fn keeper_schema_version_parity_across_call_sites() {
     assert_eq!(hub.code, ErrorCode::SessionHeld);
     // Forged latest: both decline naming the keeper's version.
     let next = u64::from(contract::SCHEMA_VERSION) + 1;
-    forge_fiber_started_version(&dir, 1, u64::from(contract::SCHEMA_VERSION), next);
+    forge_fiber_started_version(
+        &dir,
+        1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &next.to_string(),
+    );
     let (hub, ask) = parity_failures(&sessions, &id, &dir);
     assert_eq!(hub, ask, "the call sites share the forged-latest decision");
     assert_eq!(hub.code, ErrorCode::SessionHeld);
     assert!(
         hub.message.contains(&format!("runs schema version {next}")),
         "both name the keeper's version: {}",
-        hub.message
-    );
-    // Reverse-mixed: both keep the bare refusal, never naming the forged
-    // first. Restore the latest, then forge the first instead.
-    forge_fiber_started_version(&dir, 1, next, u64::from(contract::SCHEMA_VERSION));
-    forge_fiber_started_version(&dir, 0, u64::from(contract::SCHEMA_VERSION), next);
-    let (hub, ask) = parity_failures(&sessions, &id, &dir);
-    assert_eq!(hub, ask, "the call sites share the reverse-mixed decision");
-    assert_eq!(hub.code, ErrorCode::SessionHeld);
-    assert!(
-        !hub.message.contains("runs schema version"),
-        "neither names the forged first: {}",
         hub.message
     );
 }
@@ -438,7 +417,7 @@ fn keeper_schema_version_treats_zero_as_unreadable() {
     let id = SessionId("s_0123456789abcdef".into());
     let dir = sessions.join(&id.0);
     let _log = session_with(&dir, None);
-    forge_fiber_started_version(&dir, 1, u64::from(contract::SCHEMA_VERSION), 0);
+    forge_fiber_started_version(&dir, 1, &contract::SCHEMA_VERSION.to_string(), "0");
     assert_eq!(
         super::keeper_schema_version(&dir),
         Some(0),

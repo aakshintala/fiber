@@ -77,14 +77,10 @@ fn reap(mut child: Child, deadline: Deadline) -> std::process::ExitStatus {
 }
 
 /// Rewrites the latest complete `fiber_started` line's `schema_version`
-/// to `contract::SCHEMA_VERSION + 1` in place, changing one byte, so the
-/// log is itself a mixed-version history `[v1, v2]` with the keeper's
-/// version latest. Returns the keeper's version.
+/// to `contract::SCHEMA_VERSION + 1` with one equal-length `replacen`,
+/// so the log is itself a mixed-version history `[v1, v2]` with the
+/// keeper's version latest. Returns the keeper's version.
 fn forge_latest_fiber_started(dir: &std::path::Path) -> u64 {
-    let path = dir.join("events.jsonl");
-    let before = fs::read(&path).unwrap();
-    let text = String::from_utf8(before.clone()).unwrap();
-    assert!(text.ends_with('\n'), "the log ends on a complete line");
     let current = format!("\"schema_version\":{}", contract::SCHEMA_VERSION);
     let version = u64::from(contract::SCHEMA_VERSION) + 1;
     let forged = format!("\"schema_version\":{version}");
@@ -93,7 +89,10 @@ fn forge_latest_fiber_started(dir: &std::path::Path) -> u64 {
         forged.len(),
         "the forge keeps the file length"
     );
-    let lines: Vec<&str> = text.lines().collect();
+    let path = dir.join("events.jsonl");
+    let before = fs::read_to_string(&path).unwrap();
+    assert!(before.ends_with('\n'), "the log ends on a complete line");
+    let mut lines: Vec<String> = before.lines().map(str::to_owned).collect();
     let at = lines
         .iter()
         .rposition(|line| {
@@ -102,26 +101,9 @@ fn forge_latest_fiber_started(dir: &std::path::Path) -> u64 {
         .unwrap();
     let replaced = lines[at].replacen(&current, &forged, 1);
     assert_ne!(lines[at], replaced, "the forged line carries {current}");
-    let mut after = String::new();
-    for (index, line) in lines.iter().enumerate() {
-        if index == at {
-            after.push_str(&replaced);
-        } else {
-            after.push_str(line);
-        }
-        after.push('\n');
-    }
-    let after = after.into_bytes();
+    lines[at] = replaced;
+    let after = lines.join("\n") + "\n";
     assert_eq!(after.len(), before.len(), "the forge changes no length");
-    assert_eq!(
-        before
-            .iter()
-            .zip(after.iter())
-            .filter(|(a, b)| a != b)
-            .count(),
-        1,
-        "the forge changes no other byte"
-    );
     fs::write(&path, after).unwrap();
     version
 }

@@ -139,16 +139,19 @@ fn keeper_held(dir: &Path, id: &SessionId) -> Option<log::Error> {
 /// `log::lines` without taking the lock. The keeper is spawned from the
 /// session's own binary, and every session holder appends a
 /// `fiber_started`, so the latest complete one is the keeper's version
-/// (`docs/tools.md`, "The keeper"). A torn tail ends the read; a line
-/// this build cannot parse carries no version it can name, so an earlier
-/// complete line still stands. `None` when no complete `fiber_started`
-/// line parses, which keeps the bare `Held` refusal.
+/// (`docs/tools.md`, "The keeper"). A torn tail ends the read through
+/// the iterator's `None`, so an earlier complete line still stands; a
+/// complete line this build cannot parse, or an I/O error, carries no
+/// keeper version to name, so the read returns `None`, which keeps the
+/// bare `Held` refusal. The clear covers any unreadable line: without a
+/// parse there is no `kind` to restrict it to `fiber_started`, and the
+/// fail-safe direction is the bare refusal.
 fn keeper_schema_version(dir: &Path) -> Option<u64> {
     let mut version = None;
     for line in log::lines(dir).ok()? {
         let envelope = match line {
             Ok(envelope) => envelope,
-            Err(_) => break,
+            Err(_) => return None,
         };
         if envelope.kind() == EventKind::FiberStarted {
             version = Some(u64::from(envelope.schema_version));
