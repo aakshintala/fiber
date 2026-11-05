@@ -651,6 +651,9 @@ fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
     assert!(!real.is_empty(), "a real pgrep resolves before shadowing");
     // The production call passes the pattern form, so the shadow matches
     // the pattern literally: the raw marker never appears contiguously.
+    // debt: this stall shadow duplicates support's stalled-listing shadow
+    // (two copies), share them on the third: sharing needs a public fakes
+    // helper used only by tests, widening the surface this ticket narrows.
     let body = format!(
         "for arg in \"$@\"; do\n  case \"$arg\" in\n    *'{}'*)\n      read line < '{}'\n      exit 0\n      ;;\n  esac\ndone\nexec '{}' \"$@\"\n",
         pattern(&marker),

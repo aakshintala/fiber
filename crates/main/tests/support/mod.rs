@@ -266,6 +266,10 @@ fn kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_c
     // the pattern literally: the raw marker never appears contiguously.
     // The marker is alphanumeric plus hyphens, so `fakes` wraps only the
     // first character in brackets.
+    // debt: this stall shadow duplicates fakes' stalled-pgrep shadow (two
+    // copies), and `[s]...` hand-rolls `pattern`, which stays `pub(crate)`
+    // and unreachable here: share both on the third, once a public helper
+    // used only by tests stops widening the surface this ticket narrows.
     let listing = format!("[{}]{}", &marker[..1], &marker[1..]);
     let body = format!(
         "for arg in \"$@\"; do\n  case \"$arg\" in\n    *'{}'*)\n      read line < '{}'\n      exit 0\n      ;;\n  esac\ndone\nexec '{}' \"$@\"\n",
