@@ -998,3 +998,139 @@ fn shape_wire_start_between_passes() {
     let source = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_rew\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"rewind\\\"}}\"));\n    client.send(&format!(\"{{\\\"command\\\":\\\"start\\\"}}\"));\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\"}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     assert_eq!(count_stale(source), 0, "wire start between the legs");
 }
+
+#[test]
+fn drain_sockets_read_receivers_past_blanks() {
+    // A drain on the subscribed connection reads its receiver, past any
+    // blanks around the dot; a bare wait reads its first argument.
+    // Skipping the blanks kills the cursor-guard (`>`), step (`-=`) and
+    // dot-guard (`>`) mutants, and the dot offset (`-`) mutants.
+    let line = "    client.until(&other, \"w\")";
+    let at = line.find("until").unwrap();
+    assert_eq!(drain_socket(line, "(&other, \"w\")", at, 5), "client");
+    let spaced = "    client. until(&other, \"w\")";
+    let at_spaced = spaced.find("until").unwrap();
+    assert_eq!(
+        drain_socket(spaced, "(&other, \"w\")", at_spaced, 5),
+        "client"
+    );
+    let bare = "    until(&client, \"w\")";
+    let at_bare = bare.find("until").unwrap();
+    assert_eq!(drain_socket(bare, "(&client, \"w\")", at_bare, 5), "client");
+}
+
+#[test]
+fn shape_reset_on_wait_line_breaks_nothing() {
+    // A reset on the wait's own line is not between the legs: the
+    // subscribe still pairs with the wait, so loosening the upper guard
+    // to `<=` would wrongly break the chain here.
+    let source = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"rewind\"));\n    client.send(&format!(\"prompt\"));\n    let _ = start_session(&client, \"fresh\"); until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 1, "reset on the wait line");
+}
+
+#[test]
+fn shape_subscribe_line_replay_is_not_between() {
+    // A replay marker on the subscribe's own line is not between the
+    // legs: with no other marker the wait never counts, so loosening
+    // the lower guard to `<=` would wrongly admit it here.
+    let source = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &resumed);\n    client.send(&format!(\"prompt\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 0, "replay only on the subscribe line");
+}
+
+#[test]
+fn delegation_needs_a_line_prefix_and_boundary() {
+    // Both halves matter: a short argument starts with no `line` but
+    // ends the name, so loosening `&&` to `||` would wrongly delegate
+    // here; a `line`-prefixed name with more identifier after it never
+    // delegates either.
+    assert!(!delegates_match("(f(x))"));
+    assert!(!delegates_match("(helper(lineage))"));
+}
+
+#[test]
+fn aliases_ignore_non_use_statements() {
+    // Only `use` statements rename: a plain line naming `until as ...`
+    // renames nothing, so dropping the `!` gate would wrongly alias it.
+    let lines = ["let waiter = until as wait_for;"];
+    let aliases = use_aliases(&lines);
+    assert!(aliases.until.is_empty());
+    assert!(aliases.subscribe.is_empty());
+    assert!(aliases.send.is_empty());
+}
+
+#[test]
+fn group_lone_star_keeps_the_block_open() {
+    // A `*` without its `/` never closes the block: the bracket after
+    // it stays hidden, so loosening `&&` to `||` would wrongly expose
+    // it here.
+    assert_eq!(scan_group_end(&["f(/* * ( */ )"], 0, 1, false), (0, 12));
+}
+
+#[test]
+fn group_raw_zero_hash_hides_brackets() {
+    // A zero-hash raw string hides its brackets like any string: the
+    // opener must advance past its quote, so stagnating there would
+    // close immediately on that quote and expose the bracket.
+    assert_eq!(scan_group_end(&["f(r\"a(b\", c)"], 0, 1, false), (0, 11));
+}
+
+#[test]
+fn first_arguments_hide_commas_in_escaped_chars() {
+    // An escaped character hides its comma: the four-byte `'\,'`
+    // reads as one argument, so shortening the length guard or flipping
+    // either byte check would end the argument at that comma.
+    assert_eq!(first_argument_from(r"'\,', c)", 0), r"'\,'");
+}
+
+#[test]
+fn first_arguments_need_a_plain_closing_quote() {
+    // A quote without its closing quote is no character: the bracket
+    // after it still nests, so loosening the plain guard to `||`
+    // would skip over it and miss that nesting here.
+    assert_eq!(first_argument_from("'a(b, c)", 0), "'a(b, c)");
+}
+
+#[test]
+fn first_arguments_need_r_for_raw_strings() {
+    // Only an `r` opens a raw string: an `x#"` opener never does, so
+    // loosening that guard to `||` would wrongly hide the quote that
+    // ends the normal string here.
+    assert_eq!(first_argument_from("x#\"a\"b\"#, c)", 0), "x#\"a\"b\"#, c)");
+}
+
+#[test]
+fn first_arguments_track_square_brackets() {
+    // Brackets nest like parens: the comma inside `[...]` never ends
+    // the argument, so narrowing either opener or closer to only `()`
+    // would end it there or run past it here.
+    assert_eq!(first_argument_from("a[1, 2], c)", 0), "a[1, 2]");
+}
+
+#[test]
+fn first_arguments_track_curly_brackets() {
+    // Braces nest like parens too: the comma inside `{...}` never ends
+    // the argument, so narrowing either opener or closer to only `()`
+    // would end it there or run past it here.
+    assert_eq!(first_argument_from("a{1, 2}, c)", 0), "a{1, 2}");
+}
+
+#[test]
+fn aliases_wait_for_the_closing_brace() {
+    // A `;` inside the braces does not end the statement: the full
+    // statement still yields both renames, so ending early on that `;`
+    // (either half of the guard) would lose the second one.
+    let lines = [
+        "use support::{",
+        "    until as wait_until;",
+        "    subscribe as sub};",
+    ];
+    let aliases = use_aliases(&lines);
+    assert_eq!(
+        aliases.until,
+        std::collections::BTreeSet::from(["wait_until".to_owned()])
+    );
+    assert_eq!(
+        aliases.subscribe,
+        std::collections::BTreeSet::from(["sub".to_owned()])
+    );
+}

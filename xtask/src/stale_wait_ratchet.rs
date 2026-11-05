@@ -999,10 +999,17 @@ fn is_drain(lines: &[&str], line_no: usize, aliases: &Aliases, expected_socket: 
 /// when the call spans lines.
 fn drain_socket(line: &str, region: &str, at: usize, needle_len: usize) -> String {
     let bytes = line.as_bytes();
-    let mut cursor = at;
-    while cursor > 0 && matches!(bytes.get(cursor - 1), Some(b' ') | Some(b'\t')) {
-        cursor -= 1;
-    }
+    // The blanks just before the call: a hand-stepped cursor stalls
+    // forever under a stepping mutant, so this walks with an iterator
+    // as socket_of_call does (`docs/testing/mutants.md`, "Proving a
+    // test bites").
+    let blanks = bytes.get(..at).map_or(0, |head| {
+        head.iter()
+            .rev()
+            .take_while(|byte| matches!(byte, b' ' | b'\t'))
+            .count()
+    });
+    let cursor = at.saturating_sub(blanks);
     if cursor > 0 && bytes.get(cursor - 1) == Some(&b'.') {
         return socket_of_call(line, at, needle_len);
     }
@@ -1184,21 +1191,17 @@ fn count_shape(source: &str) -> usize {
             else {
                 continue;
             };
-            if !actions
-                .iter()
-                .any(|action| is_before_strict(subscribe, *action) && *action < wait_line)
-            {
+            if !actions.iter().any(|action| {
+                is_before_strict(subscribe, *action) && is_before_strict(*action, wait_line)
+            }) {
                 continue;
             }
-            let mut drained = false;
-            let mut drained_line = replay;
-            while drained_line < wait_line {
-                if is_drain(&lines, drained_line, &aliases, &socket) {
-                    drained = true;
-                    break;
-                }
-                drained_line += 1;
-            }
+            // From the replay point to the wait: a hand-stepped line
+            // counter stalls forever under a stepping mutant, so this
+            // walks the range with an iterator instead
+            // (`docs/testing/mutants.md`, "Proving a test bites").
+            let drained = (replay..wait_line)
+                .any(|drained_line| is_drain(&lines, drained_line, &aliases, &socket));
             if drained {
                 continue;
             }
