@@ -574,6 +574,7 @@ impl App {
             return None;
         }
         self.history.answered(result);
+        self.outbox.answered(id);
         self.outbox.settled(id);
         let mut lines = Vec::new();
         let unchanged = self.history.cover.is_none_or(|cover| cover == self.cover());
