@@ -134,3 +134,8 @@ crates/tui/src/app/commands.rs	fiber-4192	plan	2026-11-05T11:47:18Z	Amoghs-MacBo
 crates/tui/src/app/outbox.rs	fiber-4192	plan	2026-11-05T11:47:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/resume.rs	fiber-4192	plan	2026-11-05T11:47:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/delegate_replay.rs	fiber-4186	grant	2026-11-05T11:57:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
+crates/main/tests/completion.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
+crates/main/tests/changed_files_remote.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
+crates/main/tests/hub_remote_terminal.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
+crates/main/tests/support/pty.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
+crates/main/tests/workspace_picker.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
