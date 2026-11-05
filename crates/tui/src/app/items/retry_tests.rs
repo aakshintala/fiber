@@ -362,6 +362,38 @@ fn finished_open_refused_log_corrupt_draws_one_dim_fallback() {
 }
 
 #[test]
+fn a_resume_clears_the_open_refusal() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let out = open(&mut app, "j_1");
+    let id = subscribes(&out)
+        .into_iter()
+        .next()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("an id"));
+    app.on_line(session_refused(DELEGATE_A, &id, "log_corrupt"));
+    let running = crate::view::text(&rendered(&mut app));
+    assert!(
+        running.contains("Could not open"),
+        "the refusal shows while running:\n{running}"
+    );
+    // A resume under the same job id turns the view live again, so the
+    // stale refusal clears with the outcome.
+    app.on_line(session_line(
+        "job_started",
+        json!({"job_id": "j_1", "description": "task j_1",
+            "output_path": "/tmp/out"}),
+    ));
+    let view = crate::view::text(&rendered(&mut app));
+    assert!(
+        !view.contains("Could not open"),
+        "the resume clears it:\n{view}"
+    );
+    assert!(view.contains("■ stop"), "the view runs again:\n{view}");
+}
+
+#[test]
 fn running_open_refused_keeps_live_view() {
     let mut app = home();
     opened(&mut app);

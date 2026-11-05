@@ -643,6 +643,43 @@ fn finished_other_harness_draws_its_fallback() {
     assert!(view.contains("claude"), "the card stays:\n{view}");
 }
 
+#[test]
+fn a_job_view_draws_no_fallback() {
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1", "task j_1");
+    app.on_line(session_line(
+        "job_delta",
+        json!({"job_id": "j_1", "text": "row one\n"}),
+    ));
+    match app.on_click(TargetId::Panel(PanelSpot::Job(job_serial(&app)))) {
+        Effect::None => {}
+        Effect::Send(_)
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("a job opens with nothing to send"),
+    }
+    assert!(app.item_open());
+    let view = rendered(&mut app);
+    assert!(
+        view.contains("Output since this terminal attached"),
+        "the job body draws:\n{view}"
+    );
+    assert!(view.contains("row one"), "its output draws:\n{view}");
+    assert!(
+        !view.contains("No transcript"),
+        "a job is not a delegate:\n{view}"
+    );
+}
+
 /// The `subscribe` lines among `out`.
 fn subscribes(out: &[Value]) -> Vec<Value> {
     out.iter()
