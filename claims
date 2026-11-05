@@ -279,3 +279,8 @@ research/overalls/README.md	fiber-3882	plan	2026-11-05T12:54:12Z	Amoghs-MacBook-
 crates/tui/src/app/session_views.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/rewind_tests.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/session_views_tests.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper.rs	fiber-3891	plan	2026-11-05T13:48:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_child.rs	fiber-3891	plan	2026-11-05T13:48:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_child_tests.rs	fiber-3891	plan	2026-11-05T13:48:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_tests.rs	fiber-3891	plan	2026-11-05T13:48:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/keeper.rs	fiber-3891	plan	2026-11-05T13:48:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
