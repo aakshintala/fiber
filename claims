@@ -152,7 +152,6 @@ feed_row	fiber-4121	plan	2026-11-05T20:48:01Z	roundhouse-7010-plus-1:/home/aaksh
 rail_waiting	fiber-4121	plan	2026-11-05T20:48:01Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/local_time.rs	fiber-4158	plan	2026-11-05T20:55:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app_tests.rs	fiber-4176	plan	2026-11-05T21:03:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop/hub.rs	fiber-4192	plan	2026-11-05T21:31:11Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/shell_look.rs	fiber-4176	grant	2026-11-05T22:03:02Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4176-shell-row	
 crates/main/src/keeper_child_tests.rs	fiber-3891	plan	2026-11-05T22:22:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3891-keeper-timeout	4213
 crates/jobs/src/keeper_tests.rs	fiber-3891	plan	2026-11-05T22:22:48Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3891-keeper-timeout	4213
