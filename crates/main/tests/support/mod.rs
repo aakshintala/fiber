@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 
 pub(crate) mod hold;
 pub(crate) mod journey;
+pub(crate) mod lived_home;
 pub(crate) mod package;
 pub(crate) mod pty;
 pub(crate) mod repo_provider;
