@@ -2,6 +2,7 @@
 //! "Search"): opening from the bar and the count, moving, jumping and
 //! closing, against the app and the view it draws.
 
+use contract::ErrorCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use serde_json::{Value, json};
@@ -293,8 +294,10 @@ fn esc_closes_the_notice_overlay_before_the_results() {
     let mut app = turned(40, 10, &["needle one", "needle two"]);
     scan(&mut app, "needle");
     open(&mut app);
-    app.notices.push("extension_failed", "first".to_owned());
-    app.notices.push("extension_failed", "second".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "first".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "second".to_owned());
     app.open_more_notices();
     assert!(app.notice_overlay().is_some());
     // Esc closes the overlay first, the results staying open.

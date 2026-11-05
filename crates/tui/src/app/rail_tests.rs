@@ -10,6 +10,7 @@ use crate::keyset::Context;
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use crate::stroke::{Code, Mods, Stroke};
+use contract::ErrorCode;
 use contract::SessionId;
 use contract::clock::Clock;
 use serde_json::{Value, json};
@@ -642,7 +643,7 @@ fn an_unreadable_card_gives_the_notice_and_sends_nothing() {
     assert!(app.notices().iter().any(|line| matches!(
         line,
         crate::app::NoticeLine::Notice { code, text, .. }
-        if code == "session_held"
+        if *code == ErrorCode::SessionHeld
             && text == "Cannot attach: its status did not parse."
     )));
     assert_eq!(on_screen(&app), Some(A));

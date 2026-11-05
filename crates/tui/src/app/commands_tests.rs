@@ -9,6 +9,7 @@ use super::commands_testkit::{
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::link::Line;
+use contract::ErrorCode;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -125,7 +126,7 @@ fn reload_rebuilds_renderer_and_installs_an_empty_replacement() {
         ),
         crate::ext::SlotSelection::Draw { .. }
     ));
-    assert!(app.notices().iter().any(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="extension_failed" && text.contains("load fixture notice"))));
+    assert!(app.notices().iter().any(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if *code == ErrorCode::ExtensionFailed && text.contains("load fixture notice"))));
     loader.enabled.store(false, Ordering::SeqCst);
     enter(&mut app, "/reload");
     assert_eq!(loader.calls.load(Ordering::SeqCst), 2);
@@ -742,9 +743,9 @@ fn a_command_with_no_session_says_so() {
 }
 
 /// Whether the notices hold `text` under `code`.
-fn notice_with(app: &App, code: &str, text: &str) -> bool {
+fn notice_with(app: &App, code: ErrorCode, text: &str) -> bool {
     app.notices().iter().any(|notice| {
-        matches!(notice, crate::app::NoticeLine::Notice { code: got, text: message, .. } if got == code && message == text)
+        matches!(notice, crate::app::NoticeLine::Notice { code: got, text: message, .. } if *got == code && message == text)
     })
 }
 
@@ -772,7 +773,10 @@ fn pwd_shows_the_recorded_session_workspace() {
         app.on_line(started_with_workspace("/worktree"));
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");
         assert_eq!(app.draft(), "", "{command}");
-        assert!(notice_with(&app, "workspace", "/worktree"), "{command}");
+        assert!(
+            notice_with(&app, ErrorCode::Workspace, "/worktree"),
+            "{command}"
+        );
         assert!(app.outbox.pending.is_empty(), "{command}");
     }
 }
@@ -786,7 +790,7 @@ fn pwd_on_home_shows_no_session() {
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");
         assert_eq!(app.draft(), "", "{command}");
         assert!(
-            notice_with(&app, "session_not_found", "No session on screen."),
+            notice_with(&app, ErrorCode::SessionNotFound, "No session on screen."),
             "{command}"
         );
     }
@@ -803,7 +807,10 @@ fn pwd_with_the_link_down_shows_the_recorded_workspace() {
         app.disconnected();
         assert_eq!(enter(&mut app, command), Effect::None, "{command}");
         assert_eq!(app.draft(), "", "{command}");
-        assert!(notice_with(&app, "workspace", "/worktree"), "{command}");
+        assert!(
+            notice_with(&app, ErrorCode::Workspace, "/worktree"),
+            "{command}"
+        );
         assert!(app.outbox.pending.is_empty(), "{command}");
     }
 }
@@ -835,9 +842,12 @@ fn pwd_before_the_first_fold_shows_on_session_started() {
         assert!(app.pwd_pending, "{command}");
         app.on_line(started_with_workspace("/worktree"));
         assert!(!app.pwd_pending, "{command}");
-        assert!(notice_with(&app, "workspace", "/worktree"), "{command}");
         assert!(
-            !notice_with(&app, "session_not_found", "No session on screen."),
+            notice_with(&app, ErrorCode::Workspace, "/worktree"),
+            "{command}"
+        );
+        assert!(
+            !notice_with(&app, ErrorCode::SessionNotFound, "No session on screen."),
             "{command}"
         );
     }
@@ -878,8 +888,11 @@ fn pwd_after_a_switch_waits_for_the_new_sessions_root() {
             }),
         ));
         assert!(!app.pwd_pending, "{command}");
-        assert!(notice_with(&app, "workspace", "/new"), "{command}");
-        assert!(!notice_with(&app, "workspace", "/old"), "{command}");
+        assert!(notice_with(&app, ErrorCode::Workspace, "/new"), "{command}");
+        assert!(
+            !notice_with(&app, ErrorCode::Workspace, "/old"),
+            "{command}"
+        );
     }
 }
 
@@ -1781,8 +1794,8 @@ fn credential_usage(app: &mut App) {
     })));
 }
 
-fn credential_notice(app: &App, code: &str, text: &str) -> bool {
-    app.notices().iter().any(|notice| matches!(notice, crate::app::NoticeLine::Notice { code: got, text: message, .. } if got == code && message == text))
+fn credential_notice(app: &App, code: ErrorCode, text: &str) -> bool {
+    app.notices().iter().any(|notice| matches!(notice, crate::app::NoticeLine::Notice { code: got, text: message, .. } if *got == code && message == text))
 }
 
 #[test]
@@ -1798,7 +1811,7 @@ fn credential_picker_switches_saves_on_acceptance_and_names_the_admitted_provide
         assert_eq!(lines[0]["args"], json!({"label":"work"}));
         assert!(credential_notice(
             &app,
-            "cache_rebuild",
+            ErrorCode::CacheRebuild,
             &format!(
                 "switching rebuilds the cache: about {} tokens",
                 crate::swapped::about(84_000)
@@ -1833,7 +1846,7 @@ fn credential_current_label_or_missing_usage_skips_rebuild_but_still_saves() {
         let lines = sent(app.on_key(Key::Enter, now()));
         assert_eq!(lines.len(), 1);
         assert!(!app.notices().iter().any(
-            |n| matches!(n, crate::app::NoticeLine::Notice { code, .. } if code == "cache_rebuild")
+            |n| matches!(n, crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::CacheRebuild)
         ));
         credential_accept(&mut app, &lines[0]["id"], Some("fake"));
         assert_eq!(seam.writes()[0].3, if down { "work" } else { "home" });
@@ -1863,7 +1876,11 @@ fn credential_refusals_clear_the_waiting_save() {
             json!({"command_id":lines[0]["id"],"code":code,"message":"refused"}),
         ));
         if code == "credential_missing" {
-            assert!(credential_notice(&app, code, "refused"));
+            assert!(credential_notice(
+                &app,
+                ErrorCode::from_name(code),
+                "refused"
+            ));
         }
         credential_accept(&mut app, &lines[0]["id"], Some("fake"));
         assert!(seam.writes().is_empty());
@@ -1902,7 +1919,7 @@ fn credential_missing_seam_and_missing_provider_warn_without_saving() {
     credential_accept(&mut app, &lines[0]["id"], None);
     assert!(credential_notice(
         &app,
-        "io_failed",
+        ErrorCode::IoFailed,
         "Saving is not available; the switch is for this session only."
     ));
     assert!(seam.writes().is_empty());
@@ -1917,7 +1934,7 @@ fn credential_disconnected_pick_stays_open_and_shortcut_keeps_draft() {
     assert!(app.config_view_open());
     assert!(credential_notice(
         &app,
-        "connection_failed",
+        ErrorCode::ConnectionFailed,
         "The hub is not connected; nothing changed."
     ));
     assert!(seam.writes().is_empty());
@@ -1928,7 +1945,7 @@ fn credential_disconnected_pick_stays_open_and_shortcut_keeps_draft() {
     assert_eq!(enter(&mut home, "/credential"), Effect::None);
     assert!(credential_notice(
         &home,
-        "session_not_found",
+        ErrorCode::SessionNotFound,
         "No session on screen."
     ));
     assert!(home.draft().is_empty());
@@ -1951,7 +1968,7 @@ fn credential_shortcuts_replace_queries_and_save_the_trimmed_label() {
     assert_eq!(switch["args"], json!({"label":"home"}));
     assert!(credential_notice(
         &app,
-        "cache_rebuild",
+        ErrorCode::CacheRebuild,
         &format!(
             "switching rebuilds the cache: about {} tokens",
             crate::swapped::about(84_000)
@@ -1985,15 +2002,15 @@ fn credential_rejected_query_restores_draft_and_picker_rejection_shows_message()
     let query = sent(enter(&mut app, "/credential work"));
     app.on_line(session_line(
         "command_rejected",
-        json!({"command_id":query[0]["id"],"code":"closing","message":"ending"}),
+        json!({"command_id":query[0]["id"],"code":ErrorCode::Closing,"message":"ending"}),
     ));
     assert_eq!(app.draft(), "/credential work");
-    assert!(credential_notice(&app, "closing", "ending"));
+    assert!(credential_notice(&app, ErrorCode::Closing, "ending"));
     app.draft.clear();
     let query = sent(enter(&mut app, "/credential"));
     app.on_line(session_line(
         "command_rejected",
-        json!({"command_id":query[0]["id"],"code":"closing","message":"ended"}),
+        json!({"command_id":query[0]["id"],"code":ErrorCode::Closing,"message":"ended"}),
     ));
     assert_eq!(app.config_view_screen().unwrap().below, ["ended"]);
     assert!(seam.writes().is_empty());
@@ -2010,7 +2027,7 @@ fn credential_shortcut_without_seam_and_failed_write_show_notices() {
     credential_accept(&mut app, &switch["id"], Some("fake"));
     assert!(credential_notice(
         &app,
-        "io_failed",
+        ErrorCode::IoFailed,
         "Saving providers.\"fake\".credential failed: disk full"
     ));
 }

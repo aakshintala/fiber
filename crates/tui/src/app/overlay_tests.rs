@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use contract::ErrorCode;
 use contract::{ActionId, JobId, SessionId};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -484,7 +485,7 @@ fn renderer_replacement_preserves_failure_memo_and_notice_across_fold_recount() 
         app.drawn(&[]),
         "the replacement failure requests immediate redraw"
     );
-    assert_eq!(app.notices().iter().filter(|line| matches!(line, crate::app::NoticeLine::Notice {code,text,..} if code == "hook_failed" && text.contains("session-test"))).count(), 1);
+    assert_eq!(app.notices().iter().filter(|line| matches!(line, crate::app::NoticeLine::Notice {code,text,..} if *code == ErrorCode::HookFailed && text.contains("session-test"))).count(), 1);
     assert!(
         !app.drawn(&[]),
         "docs/tui.md: one failure notice per extension and slot"

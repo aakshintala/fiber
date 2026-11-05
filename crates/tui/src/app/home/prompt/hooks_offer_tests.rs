@@ -188,7 +188,7 @@ fn notices(app: &App) -> Vec<(String, String)> {
     app.notices()
         .into_iter()
         .filter_map(|line| match line {
-            NoticeLine::Notice { code, text, .. } => Some((code, text)),
+            NoticeLine::Notice { code, text, .. } => Some((code.name().to_owned(), text)),
             NoticeLine::More(_) => None,
         })
         .collect()
@@ -803,6 +803,41 @@ fn install_failure_replaces_the_offer_and_blocks_retry() {
     );
     assert!(app.session().is_none());
     assert_eq!(notices(&app).len(), 1);
+}
+
+#[test]
+fn an_install_error_with_an_empty_code_notices_io_failed() {
+    // A hub refusal with an empty code reads as Other(""): the install
+    // notice falls back to io_failed, as on main.
+    let mut app = home(fake());
+    app.on_line(hello());
+    let old = refuse_start(&mut app, "hi");
+    let ticket = match app.take_hooks_job().expect("the query waits") {
+        crate::install_worker::HooksJob::Query(query) => query.ticket,
+        crate::install_worker::HooksJob::Install(_) => panic!("the refusal queues names"),
+    };
+    app.on_hooks_offer_names(ticket, Ok(vec!["fmt".to_owned()]));
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(matches!(
+        app.take_hooks_job(),
+        Some(crate::install_worker::HooksJob::Install(_))
+    ));
+    let lines = app.on_hooks_installed(
+        ticket,
+        Err(ConfigureError {
+            code: ErrorCode::Other(String::new()),
+            message: "blank".to_owned(),
+        }),
+    );
+    assert!(lines.is_empty(), "a failure sends no start");
+    assert_eq!(
+        notices(&app),
+        [(
+            "io_failed".to_owned(),
+            "blank. Run `fiber extension install hooks`.".to_owned()
+        )]
+    );
+    assert!(!app.outbox.pending.contains_key(&old));
 }
 
 /// A worker connection loss that folds before the disconnect: the

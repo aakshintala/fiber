@@ -78,3 +78,55 @@ fn an_unknown_code_is_kept_as_it_was_written() {
     assert_eq!(parsed, ErrorCode::Other("disk_on_fire".into()));
     assert_eq!(serde_json::to_string(&parsed).unwrap(), "\"disk_on_fire\"");
 }
+
+#[test]
+fn names_match_their_serde_spellings() {
+    for code in KNOWN {
+        let json = serde_json::to_string(code).unwrap();
+        assert_eq!(code.name(), json.trim_matches('"'), "{code:?}");
+    }
+}
+
+#[test]
+fn from_name_maps_every_declared_label_to_its_variant() {
+    for code in KNOWN {
+        let parsed = ErrorCode::from_name(code.name());
+        assert_eq!(&parsed, code, "{:?}", code.name());
+    }
+}
+
+#[test]
+fn from_name_keeps_unknown_empty_and_non_ascii_text() {
+    for label in [
+        "disk_on_fire",
+        "",
+        "échec_inconnu",
+        "CONNECTION_FAILED",
+        "connection failed",
+    ] {
+        assert_eq!(
+            ErrorCode::from_name(label),
+            ErrorCode::Other(label.to_owned()),
+            "{label:?}"
+        );
+        assert_eq!(ErrorCode::from_name(label).name(), label, "{label:?}");
+    }
+}
+
+#[test]
+fn names_round_trip_through_from_name() {
+    for code in KNOWN {
+        assert_eq!(ErrorCode::from_name(code.name()), code.clone());
+    }
+    let other = ErrorCode::Other("disk_on_fire".to_owned());
+    assert_eq!(other.name(), "disk_on_fire");
+    assert_eq!(ErrorCode::from_name(other.name()), other);
+}
+
+#[test]
+fn every_known_name_matches_its_doc_table_label() {
+    let docs = doc_codes();
+    for code in KNOWN {
+        assert!(docs.contains(code.name()), "{code:?} is in no doc");
+    }
+}

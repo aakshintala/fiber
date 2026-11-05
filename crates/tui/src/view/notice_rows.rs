@@ -79,7 +79,15 @@ pub(super) fn draw(
         match line {
             NoticeLine::Notice { id, code, text } => {
                 if let Some(keys) = paint_replacement(
-                    bound, *id, code, text, area, buf, targets, &mut noted, bottom,
+                    bound,
+                    *id,
+                    code.name(),
+                    text,
+                    area,
+                    buf,
+                    targets,
+                    &mut noted,
+                    bottom,
                 ) {
                     painted.extend(keys);
                     continue;
@@ -87,7 +95,7 @@ pub(super) fn draw(
                 let Some(row) = bottom.checked_sub(1).filter(|row| *row >= area.y) else {
                     break;
                 };
-                let (drawn, copied) = notice_row_and_copy(code, text, width);
+                let (drawn, copied) = notice_row_and_copy(code.name(), text, width);
                 buf.set_line(area.x, row, &drawn, area.width);
                 noted.push(crate::app::SpanRow {
                     y: row,
@@ -250,7 +258,7 @@ pub(super) fn overlay(
                 body.push(blank_row());
                 joins.push(crate::rows::Join::Break);
             }
-            for (row, join) in paragraph(code, text, room) {
+            for (row, join) in paragraph(code.name(), text, room) {
                 body.push(row);
                 joins.push(join);
             }
@@ -264,7 +272,7 @@ pub(super) fn overlay(
             body.push(row);
             joins.push(join);
         }
-        format!("Notice · {code}")
+        format!("Notice · {}", code.name())
     };
     let framed = overlay::Overlay {
         title: Some((title, Some(Span::raw("✕")))),

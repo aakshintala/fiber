@@ -9,6 +9,7 @@ use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashSet;
 
+use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::InputItem;
 use contract::shapes::{ContentPart, Origin};
@@ -673,7 +674,7 @@ impl App {
     /// A `command_rejected` for `id`: when it rejects `prompt_history`, its
     /// message is the notice and paging ends for this terminal run.
     /// `false` for another command.
-    pub(super) fn history_rejected(&mut self, id: &str, code: &str, message: &str) -> bool {
+    pub(super) fn history_rejected(&mut self, id: &str, code: ErrorCode, message: &str) -> bool {
         if self.history.pending.as_deref() != Some(id) {
             return false;
         }

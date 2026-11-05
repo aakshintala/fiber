@@ -3,6 +3,7 @@
 //! `/copy`, which copies the newest reply the same way (`docs/tui.md`,
 //! "Look", "Selection and copy").
 
+use contract::ErrorCode;
 use std::ops::Range;
 
 use super::{App, Effect, Target};
@@ -106,8 +107,10 @@ impl App {
         // A job's view, or a delegate's with no transcript, leaves the
         // parent's conversation behind it, hidden.
         if self.item_open() && !self.item_transcript() {
-            self.notices
-                .push("copy", "No reply to copy in this view.".to_owned());
+            self.notices.push(
+                ErrorCode::Other("copy".to_owned()),
+                "No reply to copy in this view.".to_owned(),
+            );
             return Effect::None;
         }
         if self.pass_open() {
@@ -138,14 +141,16 @@ impl App {
             }
             LastReply::PagedOut => {
                 self.notices.push(
-                    "copy",
+                    ErrorCode::Other("copy".to_owned()),
                     "The last reply is paged out; jump to the end, then /copy again.".to_owned(),
                 );
                 None
             }
             LastReply::NoReply => {
-                self.notices
-                    .push("copy", "No reply to copy yet.".to_owned());
+                self.notices.push(
+                    ErrorCode::Other("copy".to_owned()),
+                    "No reply to copy yet.".to_owned(),
+                );
                 None
             }
         }

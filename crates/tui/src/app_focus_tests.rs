@@ -8,6 +8,7 @@ use crate::focus::Regions;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target as Hit, TargetId};
+use contract::ErrorCode;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
@@ -391,7 +392,8 @@ fn a_notice_above_the_working_line_is_a_stop_before_its_cross() {
     while app.top() != Some(0) {
         key(&mut app, Key::PageUp);
     }
-    app.notices.push("extension_failed", "Saved.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "Saved.".to_owned());
     frame(&mut app);
     key(&mut app, Key::BackTab);
     // Up to the turn, whose stop is clipped to row 0 and drawn before
@@ -548,7 +550,8 @@ fn esc_returns_focus_without_interrupting_then_esc_interrupts() {
 #[test]
 fn esc_closes_the_notice_overlay_before_leaving_navigate_mode() {
     let mut app = attached(60, 24);
-    app.notices.push("extension_failed", "Saved.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "Saved.".to_owned());
     app.open_notice(0);
     let badge = Hit {
         id: TargetId::Badge,
@@ -920,7 +923,8 @@ fn y_on_a_paste_token_copies_its_text() {
 #[test]
 fn y_on_a_notice_or_a_steering_row_copies_its_text() {
     let mut app = attached(60, 24);
-    app.notices.push("extension_failed", "Saved.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "Saved.".to_owned());
     app.on_line(steering_queue(&[("fix it", Some("c_1"))]));
     let targets = vec![
         Hit {
@@ -1054,7 +1058,8 @@ fn y_on_a_code_blocks_copy_copies_its_code() {
 #[test]
 fn the_overlay_cross_closes_the_key_map_first() {
     let mut app = attached(60, 12);
-    app.notices.push("extension_failed", "Saved.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "Saved.".to_owned());
     app.open_notice(0);
     key(&mut app, Key::F1);
     assert!(app.keymap_top().is_some());
@@ -1069,7 +1074,8 @@ fn the_overlay_cross_closes_the_key_map_first() {
 #[test]
 fn the_overlay_cross_closes_the_notice_overlay() {
     let mut app = attached(60, 12);
-    app.notices.push("extension_failed", "Saved.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "Saved.".to_owned());
     app.open_notice(0);
     assert!(app.notice_overlay().is_some());
     app.on_click(TargetId::CloseOverlay);
@@ -1364,7 +1370,8 @@ fn enter_on_a_turn_does_nothing() {
 #[test]
 fn the_notice_overlay_hides_the_turn_stops() {
     let mut app = groups(2, 60, 24);
-    app.notices.push("extension_failed", "All.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "All.".to_owned());
     app.open_notice(0);
     let stops = frame(&mut app);
     assert!(
@@ -1738,7 +1745,8 @@ fn the_overlay_cross_closes_the_key_map_before_the_search_panel() {
 #[test]
 fn the_overlay_cross_closes_the_search_panel_before_the_notice_overlay() {
     let mut app = searching("fi");
-    app.notices.push("extension_failed", "Saved.".to_owned());
+    app.notices
+        .push(ErrorCode::ExtensionFailed, "Saved.".to_owned());
     app.open_notice(0);
     assert!(app.notice_overlay().is_some());
     app.on_click(TargetId::CloseOverlay);
@@ -1921,8 +1929,14 @@ fn turn_end_clears_switch_pending_notices() {
         session: contract::SessionId(SESSION.to_owned()),
         busy: true,
     };
-    app.push_notice("switch_pending", "a applies when this turn ends".to_owned());
-    app.push_notice("switch_pending", "b applies when this turn ends".to_owned());
+    app.push_notice(
+        ErrorCode::SwitchPending,
+        "a applies when this turn ends".to_owned(),
+    );
+    app.push_notice(
+        ErrorCode::SwitchPending,
+        "b applies when this turn ends".to_owned(),
+    );
     assert_eq!(app.notices().len(), 2);
     // Staying busy, or already idle, ends nothing.
     app.set_busy(true);
@@ -1956,7 +1970,9 @@ fn one_frames_queued_notices_group_by_code() {
         .notices()
         .into_iter()
         .filter_map(|line| match line {
-            crate::app::NoticeLine::Notice { code, text, .. } => Some((code, text)),
+            crate::app::NoticeLine::Notice { code, text, .. } => {
+                Some((code.name().to_owned(), text))
+            }
             crate::app::NoticeLine::More(_) => None,
         })
         .collect();
@@ -1983,7 +1999,7 @@ fn a_notice_undrawn_at_a_session_switch_still_shows() {
     // another session keeps the undrawn row, which has had no display
     // yet and so marks nothing seen.
     let mut app = groups(1, 80, 24);
-    app.push_notice("skill_shadowed", "gone".to_owned());
+    app.push_notice(ErrorCode::SkillShadowed, "gone".to_owned());
     app.attach(contract::SessionId("s_other".to_owned()));
     assert_eq!(app.notices().len(), 1);
 }

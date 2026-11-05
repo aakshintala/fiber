@@ -7,6 +7,7 @@ use crate::home::{Launch, Spot};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::look::Depth;
+use contract::ErrorCode;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
@@ -3986,7 +3987,7 @@ fn home_seamed(
 ) -> (String, std::rc::Rc<crate::ext::tests::SlotRenderer>) {
     use std::rc::Rc;
     let mut app = home(80, 24);
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     let fake = Rc::new(crate::ext::tests::SlotRenderer::filling(
         &["notice"],
         script,
@@ -4066,7 +4067,7 @@ impl crate::ext::Renderer for Halved {
 fn a_home_range_bound_notice_stays_inert_without_notice() {
     use std::rc::Rc;
     let mut app = home(80, 24);
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     let renderer: Rc<dyn crate::ext::Renderer> = Rc::new(Halved);
     app.install_renderer(renderer);
     let shown = screen(&app, 80, 24);

@@ -15,7 +15,7 @@ use contract::events::{
     ShellCommand, SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{Envelope, HubLine, Seq, SessionId};
+use contract::{Envelope, ErrorCode, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::layout::Rect;
 use serde_json::{Map, Value};
@@ -414,7 +414,7 @@ pub(crate) struct App {
     /// its code and identity, so a dropped connection upgrades it to
     /// the connection-loss text instead of leaving the worker's raw
     /// error beside the link's own notice.
-    hooks_failed: Option<(String, String)>,
+    hooks_failed: Option<(ErrorCode, String)>,
     /// What moves on screen, and when it next moves (`docs/tui.md`,
     /// "The working line").
     motion: crate::motion::Motion,
@@ -524,7 +524,8 @@ impl App {
         self.switch_session(&session);
         // Another session's stale rows end with the attachment; the open
         // session's own notice stands until `stream_reopened` ends it.
-        self.notices.clear_code_except("stream_closed", &session.0);
+        self.notices
+            .clear_code_except(ErrorCode::StreamClosed, &session.0);
         // A fresh attachment supersedes an exit that arrived after the
         // last one: opening resumes the session, and its live update has
         // yet to land.
@@ -850,7 +851,7 @@ impl App {
     }
 
     /// Shows `text` as a notice under `code`.
-    pub(crate) fn push_notice(&mut self, code: &str, text: String) {
+    pub(crate) fn push_notice(&mut self, code: ErrorCode, text: String) {
         self.notices.push(code, text);
     }
 
@@ -874,7 +875,7 @@ impl App {
     pub(crate) fn connect_failed_inner(&mut self, notice: String) {
         self.outbox.link = Link::Down;
         if self.notice_due() {
-            self.notices.push("connection_failed", notice);
+            self.notices.push(ErrorCode::ConnectionFailed, notice);
         }
         self.outbox.held.clear();
         if let Phase::Pending { command_id } = &self.phase {
@@ -903,7 +904,7 @@ impl App {
         if self.outbox.is_up() {
             self.outbox.link = Link::Down;
             self.notices
-                .push("connection_failed", "Connection lost.".to_owned());
+                .push(ErrorCode::ConnectionFailed, "Connection lost.".to_owned());
         }
         self.delete_command_link_lost();
         // A lost connection closes an open item view first, swapping the
@@ -987,7 +988,7 @@ impl App {
         }
         self.pwd_pending = false;
         if let Some(workspace) = self.panel_state.workspace() {
-            self.push_notice("workspace", workspace.to_owned());
+            self.push_notice(ErrorCode::Workspace, workspace.to_owned());
         }
     }
 
@@ -1423,8 +1424,10 @@ impl App {
             self.screen.pages_mut().clear_anchor();
         }
         self.cancel_pending_turn();
-        self.notices
-            .push("io_failed", format!("Could not load history: {message}"));
+        self.notices.push(
+            ErrorCode::IoFailed,
+            format!("Could not load history: {message}"),
+        );
     }
 
     /// Scrolls so `row` is the top row, as dragging the scroll bar does.
@@ -1650,12 +1653,12 @@ impl App {
                     let id = answer.id;
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
                     let code = hub_code(&hub.payload);
-                    if self.intercept_hooks_offer(id, &code, &message) {
+                    if self.intercept_hooks_offer(id, code.name(), &message) {
                         return Vec::new();
                     }
                     match &answer.waiting {
                         Some(Waiting::ClearStart) => {
-                            if self.clear_rejected(id, &code, &message) {
+                            if self.clear_rejected(id, code.clone(), &message) {
                                 return Vec::new();
                             }
                         }
@@ -1666,17 +1669,17 @@ impl App {
                             }
                         }
                         Some(waiting @ (Waiting::Fork | Waiting::RewindSend)) => {
-                            if self.rewind_hub_refused(id, &code, &message, waiting) {
+                            if self.rewind_hub_refused(id, code.clone(), &message, waiting) {
                                 return Vec::new();
                             }
                         }
                         Some(Waiting::History) => {
-                            if self.history_rejected(id, &code, &message) {
+                            if self.history_rejected(id, code.clone(), &message) {
                                 return Vec::new();
                             }
                         }
                         Some(Waiting::ChangeWorkspace(_)) => {
-                            self.change_workspace_hub_refused(id, &code);
+                            self.change_workspace_hub_refused(id, code.name());
                         }
                         Some(Waiting::Dismiss(_)) => {}
                         Some(Waiting::RewindHistory) => {}
@@ -1719,13 +1722,8 @@ impl App {
                         ) => {}
                         None => {}
                     }
-                    self.offer.file_refused(
-                        id,
-                        &serde_json::from_value(Value::String(code.clone()))
-                            .unwrap_or_else(|_| contract::ErrorCode::Other(code.clone())),
-                        &message,
-                    );
-                    self.rejected(id, &code, message);
+                    self.offer.file_refused(id, &code, &message);
+                    self.rejected(id, code, message);
                     // The panel's refusal clears its query next, so the
                     // generic refusal still seeing it proves it settled
                     // first.
@@ -1759,7 +1757,7 @@ impl App {
                     && let Some(session) = closed
                 {
                     self.notices.push_identified(
-                        "stream_closed",
+                        ErrorCode::StreamClosed,
                         session,
                         STREAM_CLOSED.to_owned(),
                     );
@@ -1785,7 +1783,7 @@ impl App {
     /// A command the terminal sent was rejected: a notice, and its draft
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
-    fn rejected(&mut self, id: &str, code: &str, message: String) {
+    fn rejected(&mut self, id: &str, code: ErrorCode, message: String) {
         // Order seam: the panel's refusal clears `asked` next, so the
         // generic refusal still seeing it proves it settled first.
         #[cfg(test)]
@@ -1863,7 +1861,7 @@ impl App {
             });
             if !opened {
                 self.notices
-                    .push(&refusal_code(&envelope.payload), refusal(&envelope.payload));
+                    .push(refusal_code(&envelope.payload), refusal(&envelope.payload));
             }
         }
         entry
@@ -2149,8 +2147,7 @@ impl App {
             }
             "notice" => {
                 if let Some(notice) = read!(envelope, Notice) {
-                    let code = crate::format::code(&notice.code);
-                    self.notices.push(&code, notice.message);
+                    self.notices.push(notice.code.clone(), notice.message);
                 }
             }
             "repository_code_offered" | "repository_code_resolved" => {
@@ -2185,7 +2182,7 @@ impl App {
             if ending {
                 // The turn applied every pending choice: the applied
                 // shares go with it.
-                self.notices.clear_code_all("switch_pending");
+                self.notices.clear_code_all(ErrorCode::SwitchPending);
             }
         }
     }
@@ -2220,8 +2217,11 @@ fn hub_string(payload: &Map<String, Value>, key: &str) -> Option<String> {
 
 /// A hub `command_rejected`'s code: `malformed` when its answer carries
 /// none the terminal can read as a command answer.
-fn hub_code(payload: &Map<String, Value>) -> String {
-    hub_string(payload, "code").unwrap_or_else(|| "malformed".to_owned())
+fn hub_code(payload: &Map<String, Value>) -> ErrorCode {
+    match hub_string(payload, "code") {
+        Some(code) => ErrorCode::from_name(&code),
+        None => ErrorCode::Malformed,
+    }
 }
 
 #[cfg(test)]

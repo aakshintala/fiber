@@ -11,6 +11,7 @@ use super::super::{
 };
 use super::{refusal, refusal_code};
 use crate::home::{Row, Sessions, recent_rows};
+use contract::ErrorCode;
 
 /// The home feed and recent-page requests waiting for their answers.
 #[derive(Default)]
@@ -53,7 +54,7 @@ pub(super) enum Outcome {
 /// A refusal notice from a correlated recent answer.
 pub(super) struct Notice {
     /// The stable refusal code.
-    pub(super) code: String,
+    pub(super) code: ErrorCode,
     /// The refusal text shown to the person.
     pub(super) message: String,
 }
@@ -431,7 +432,7 @@ impl App {
         match answer {
             Outcome::Feed(notice) => {
                 if let Some(notice) = notice {
-                    self.notices.push(&notice.code, notice.message);
+                    self.notices.push(notice.code, notice.message);
                 }
                 Some(Vec::new())
             }
@@ -466,7 +467,7 @@ impl App {
                     Some(lines)
                 }
                 Err(notice) => {
-                    self.notices.push(&notice.code, notice.message);
+                    self.notices.push(notice.code, notice.message);
                     self.list_answered(first, false);
                     Some(Vec::new())
                 }
@@ -502,7 +503,7 @@ impl App {
                     Some(lines)
                 }
                 Err(notice) => {
-                    self.notices.push(&notice.code, notice.message);
+                    self.notices.push(notice.code, notice.message);
                     Some(Vec::new())
                 }
             },

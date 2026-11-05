@@ -10,6 +10,7 @@ use contract::events::EventKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use contract::ErrorCode;
 use contract::events::UsageRecorded;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult};
 use contract::{Envelope, SessionId};
@@ -228,7 +229,7 @@ impl App {
             // A failed remote read already pushed its notice; a local
             // terminal with no workspace says the view is unavailable.
             if self.remote().is_none() {
-                self.push_notice("io_failed", UNAVAILABLE.to_owned());
+                self.push_notice(ErrorCode::IoFailed, UNAVAILABLE.to_owned());
             }
             return Effect::None;
         };
@@ -237,7 +238,10 @@ impl App {
             .map(|name| (*name).to_owned())
             .chain(seam.themes(&workspace));
         if !known.into_iter().any(|known| known == name) {
-            self.push_notice("invalid_arguments", format!("Unknown theme \"{name}\"."));
+            self.push_notice(
+                ErrorCode::InvalidArguments,
+                format!("Unknown theme \"{name}\"."),
+            );
             return Effect::None;
         }
         let text = Value::String(name.to_owned()).to_string();
@@ -245,7 +249,7 @@ impl App {
             Some(Ok(_)) => self.config_act(Act::Theme(seam.theme(&workspace, name))),
             Some(Err(error)) => {
                 self.push_notice(
-                    "io_failed",
+                    ErrorCode::IoFailed,
                     format!("Could not save {THEME}: {}", error.message),
                 );
                 Effect::None
@@ -268,11 +272,11 @@ impl App {
         match result {
             Ok(saved) => {
                 for warning in saved.warnings {
-                    self.push_notice("config_invalid", warning);
+                    self.push_notice(ErrorCode::ConfigInvalid, warning);
                 }
             }
             Err(error) => self.push_notice(
-                "io_failed",
+                ErrorCode::IoFailed,
                 format!("Could not save {key}: {}", error.message),
             ),
         }
@@ -284,7 +288,7 @@ impl App {
     /// none.
     fn view_workspace(&mut self) -> Option<PathBuf> {
         if self.installing() {
-            self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
+            self.push_notice(ErrorCode::IoFailed, Self::INSTALLING_TEXT.to_owned());
             return None;
         }
         match self.workspace() {
@@ -295,7 +299,7 @@ impl App {
                     Ok(parent) => Some(parent),
                     Err(error) => {
                         self.push_notice(
-                            "io_failed",
+                            ErrorCode::IoFailed,
                             format!("Could not load configuration: {}", error.message),
                         );
                         None
@@ -342,7 +346,7 @@ impl App {
     /// and install-guard rules as `open_config_view`.
     pub(crate) fn open_login_on(&mut self, provider: &str) -> Effect {
         if self.installing() {
-            self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
+            self.push_notice(ErrorCode::IoFailed, Self::INSTALLING_TEXT.to_owned());
             return Effect::None;
         }
         self.draft.clear();
@@ -364,7 +368,7 @@ impl App {
     /// Opens `view`, closing any open, its unsaved edit dropped.
     pub(crate) fn open_config_view(&mut self, view: ConfigView) -> Effect {
         if self.installing() {
-            self.push_notice("io_failed", Self::INSTALLING_TEXT.to_owned());
+            self.push_notice(ErrorCode::IoFailed, Self::INSTALLING_TEXT.to_owned());
             return Effect::None;
         }
         self.draft.clear();
@@ -378,13 +382,13 @@ impl App {
             // a capture failure keeps a notice and opens nothing.
             ConfigView::Doctor => match self.config_views.doctor.clone() {
                 None => {
-                    self.push_notice("io_failed", UNAVAILABLE.to_owned());
+                    self.push_notice(ErrorCode::IoFailed, UNAVAILABLE.to_owned());
                     return Effect::None;
                 }
                 Some(reader) => match reader() {
                     Ok(report) => Open::Doctor(doctor_view::Doctor::open(&report)),
                     Err(text) => {
-                        self.push_notice("io_failed", text);
+                        self.push_notice(ErrorCode::IoFailed, text);
                         return Effect::None;
                     }
                 },
@@ -768,7 +772,7 @@ impl App {
                         })
                     }
                     Err(message) => {
-                        self.notices.push("io_failed", message);
+                        self.notices.push(ErrorCode::IoFailed, message);
                         Effect::None
                     }
                 }
@@ -975,7 +979,7 @@ impl App {
                 result
             };
         if let Err(message) = result {
-            self.notices.push("io_failed", message);
+            self.notices.push(ErrorCode::IoFailed, message);
         }
         let seam = self.configure_seam();
         let Some(workspace) = self.view_workspace() else {

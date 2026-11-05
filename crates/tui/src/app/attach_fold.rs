@@ -4,6 +4,7 @@
 //! transitions with their landing, and the pass boundaries that open
 //! and close them.
 
+use contract::ErrorCode;
 use contract::HubEventKind;
 use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandResult};
@@ -106,7 +107,7 @@ impl App {
             if tail.prepend(lines).is_err() {
                 tail.end();
                 self.notices.push(
-                    "io_failed",
+                    ErrorCode::IoFailed,
                     "Could not load history: the answer was out of order".to_owned(),
                 );
                 return;
@@ -123,7 +124,10 @@ impl App {
             tail.end();
         }
         if let Some(notice) = notice {
-            notices.push("io_failed", format!("Could not load history: {notice}"));
+            notices.push(
+                ErrorCode::IoFailed,
+                format!("Could not load history: {notice}"),
+            );
         }
     }
 
@@ -209,7 +213,7 @@ impl App {
         if tail.prepend(lines).is_err() {
             tail.end();
             self.notices.push(
-                "io_failed",
+                ErrorCode::IoFailed,
                 "Could not load history: the answer was out of order".to_owned(),
             );
         }
@@ -533,7 +537,7 @@ impl App {
                 match line.kind() {
                     HubEventKind::StreamReopened => {
                         // The cause ended for this session: its notice goes.
-                        self.notices.clear_code("stream_closed", &session.0);
+                        self.notices.clear_code(ErrorCode::StreamClosed, &session.0);
                         self.passes.retain(|(held, _)| held != &session);
                         if let Some(last) = line.payload.get("last_seq").and_then(Value::as_u64) {
                             self.passes.push((session.clone(), Pass::Until(Seq(last))));

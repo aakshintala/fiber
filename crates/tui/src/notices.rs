@@ -8,6 +8,8 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
+use contract::ErrorCode;
+
 use super::App;
 use crate::ext::Bound;
 
@@ -30,55 +32,55 @@ enum Kind {
 /// Every notice code's class: conditions stay until their cause ends,
 /// events fade after [`FADE`]. A code the table does not name — hub
 /// refusals and session notices carrying any code — is an event.
-const KINDS: &[(&str, Kind)] = &[
-    ("cache_rebuild", Kind::Event),
-    ("closing", Kind::Event),
-    ("command_conflict", Kind::Event),
-    ("config_invalid", Kind::Event),
-    ("config_key_ignored", Kind::Event),
-    ("connection_failed", Kind::Condition),
-    ("credential_failed", Kind::Event),
-    ("credential_missing", Kind::Event),
-    ("extension_failed", Kind::Event),
-    ("extension_incompatible", Kind::Event),
-    ("extension_missing", Kind::Event),
-    ("extension_shadowed", Kind::Event),
-    ("history_loading", Kind::Condition),
-    ("hook_failed", Kind::Event),
-    ("hub_version", Kind::Event),
-    ("indeterminate", Kind::Event),
-    ("instructions_large", Kind::Event),
-    ("invalid_arguments", Kind::Event),
-    ("io_failed", Kind::Event),
-    ("login_url", Kind::Condition),
-    ("malformed", Kind::Event),
-    ("model_invalid", Kind::Event),
-    ("model_unconfigured", Kind::Event),
-    ("models_loading", Kind::Condition),
-    ("no_jobs_running", Kind::Event),
-    ("no_model", Kind::Event),
-    ("notes_unchanged", Kind::Event),
-    ("protected_paths_restored", Kind::Event),
-    ("repository_code_skipped", Kind::Event),
-    ("reviewer_selection_failed", Kind::Event),
-    ("session_held", Kind::Event),
-    ("session_not_found", Kind::Event),
-    ("skill_invalid", Kind::Event),
-    ("skill_shadowed", Kind::Event),
-    ("skills_large", Kind::Event),
-    ("stale_request", Kind::Event),
-    ("stream_closed", Kind::Condition),
-    ("switch_pending", Kind::Condition),
-    ("tool_definitions_large", Kind::Event),
-    ("web_search_unavailable", Kind::Event),
-    ("workspace", Kind::Event),
+const KINDS: &[(ErrorCode, Kind)] = &[
+    (ErrorCode::CacheRebuild, Kind::Event),
+    (ErrorCode::Closing, Kind::Event),
+    (ErrorCode::CommandConflict, Kind::Event),
+    (ErrorCode::ConfigInvalid, Kind::Event),
+    (ErrorCode::ConfigKeyIgnored, Kind::Event),
+    (ErrorCode::ConnectionFailed, Kind::Condition),
+    (ErrorCode::CredentialFailed, Kind::Event),
+    (ErrorCode::CredentialMissing, Kind::Event),
+    (ErrorCode::ExtensionFailed, Kind::Event),
+    (ErrorCode::ExtensionIncompatible, Kind::Event),
+    (ErrorCode::ExtensionMissing, Kind::Event),
+    (ErrorCode::ExtensionShadowed, Kind::Event),
+    (ErrorCode::HistoryLoading, Kind::Condition),
+    (ErrorCode::HookFailed, Kind::Event),
+    (ErrorCode::HubVersion, Kind::Event),
+    (ErrorCode::Indeterminate, Kind::Event),
+    (ErrorCode::InstructionsLarge, Kind::Event),
+    (ErrorCode::InvalidArguments, Kind::Event),
+    (ErrorCode::IoFailed, Kind::Event),
+    (ErrorCode::LoginUrl, Kind::Condition),
+    (ErrorCode::Malformed, Kind::Event),
+    (ErrorCode::ModelInvalid, Kind::Event),
+    (ErrorCode::ModelUnconfigured, Kind::Event),
+    (ErrorCode::ModelsLoading, Kind::Condition),
+    (ErrorCode::NoJobsRunning, Kind::Event),
+    (ErrorCode::NoModel, Kind::Event),
+    (ErrorCode::NotesUnchanged, Kind::Event),
+    (ErrorCode::ProtectedPathsRestored, Kind::Event),
+    (ErrorCode::RepositoryCodeSkipped, Kind::Event),
+    (ErrorCode::ReviewerSelectionFailed, Kind::Event),
+    (ErrorCode::SessionHeld, Kind::Event),
+    (ErrorCode::SessionNotFound, Kind::Event),
+    (ErrorCode::SkillInvalid, Kind::Event),
+    (ErrorCode::SkillShadowed, Kind::Event),
+    (ErrorCode::SkillsLarge, Kind::Event),
+    (ErrorCode::StaleRequest, Kind::Event),
+    (ErrorCode::StreamClosed, Kind::Condition),
+    (ErrorCode::SwitchPending, Kind::Condition),
+    (ErrorCode::ToolDefinitionsLarge, Kind::Event),
+    (ErrorCode::WebSearchUnavailable, Kind::Event),
+    (ErrorCode::Workspace, Kind::Event),
 ];
 
 /// The code's class from [`KINDS`]: unlisted codes are events.
-fn kind(code: &str) -> Kind {
+fn kind(code: &ErrorCode) -> Kind {
     KINDS
         .iter()
-        .find(|(name, _)| *name == code)
+        .find(|entry| &entry.0 == code)
         .map(|(_, kind)| *kind)
         .unwrap_or(Kind::Event)
 }
@@ -87,7 +89,7 @@ fn kind(code: &str) -> Kind {
 #[derive(Debug)]
 struct Notice {
     id: usize,
-    code: String,
+    code: ErrorCode,
     /// What dedupes repeats while stacked: the session for `stream_closed`,
     /// one share per sent command for `switch_pending`, else the text.
     identity: String,
@@ -113,7 +115,7 @@ pub(crate) struct NoticeOverlay {
     /// True for the list form.
     pub(crate) all: bool,
     /// `(code, text)`, newest first.
-    pub(crate) entries: Vec<(String, String)>,
+    pub(crate) entries: Vec<(ErrorCode, String)>,
 }
 
 /// The notices, oldest first, and the overlay.
@@ -146,7 +148,7 @@ pub(crate) enum NoticeLine {
         /// The notice it shows.
         id: usize,
         /// Its registry code (`docs/errors.md`, "Registry").
-        code: String,
+        code: ErrorCode,
         /// Its message.
         text: String,
     },
@@ -160,8 +162,8 @@ impl Notices {
     /// `switch_pending` choice is one notice worth of state even beside
     /// an identical choice, so each push stacks its own row; an identical
     /// choice shown before still shows no row again.
-    pub(crate) fn push(&mut self, code: &str, text: String) {
-        let identity = if code == "switch_pending" {
+    pub(crate) fn push(&mut self, code: ErrorCode, text: String) {
+        let identity = if code == ErrorCode::SwitchPending {
             format!("{}#{}", text, self.next)
         } else {
             text.clone()
@@ -175,8 +177,8 @@ impl Notices {
     /// `stream_closed`, the full text otherwise, so a second message
     /// with another identity stacks beside the first, but a repeat of a
     /// shown notice never does.
-    pub(crate) fn push_identified(&mut self, code: &str, identity: String, text: String) {
-        if self.seen.contains(&(code.to_owned(), text.clone())) {
+    pub(crate) fn push_identified(&mut self, code: ErrorCode, identity: String, text: String) {
+        if self.seen.contains(&(code.name().to_owned(), text.clone())) {
             return;
         }
         if self
@@ -190,7 +192,7 @@ impl Notices {
         self.next = self.next.saturating_add(1);
         self.stack.push(Notice {
             id,
-            code: code.to_owned(),
+            code,
             identity,
             text,
             born: None,
@@ -215,7 +217,8 @@ impl Notices {
                 notice.born = Some(now);
                 // Shown once in this run: the code and full text join
                 // the seen set on first display, never on push.
-                self.seen.insert((notice.code.clone(), notice.text.clone()));
+                self.seen
+                    .insert((notice.code.name().to_owned(), notice.text.clone()));
             }
         }
         let overlay = self.overlay;
@@ -279,7 +282,7 @@ impl Notices {
     /// Drops every notice under `code`, closing a single overlay on a
     /// dropped row. The turn-end fold clears `switch_pending` this way:
     /// every share standing applied when the turn ended.
-    pub(crate) fn clear_code_all(&mut self, code: &str) {
+    pub(crate) fn clear_code_all(&mut self, code: ErrorCode) {
         self.drop_where(|notice| notice.code == code);
     }
 
@@ -288,14 +291,14 @@ impl Notices {
     /// `connection_failed` this way — both connection texts go, never the
     /// search-incomplete text — and attaching clears `stream_closed`
     /// this way: only other sessions' stale rows go.
-    pub(crate) fn clear_code_except(&mut self, code: &str, keep_identity: &str) {
+    pub(crate) fn clear_code_except(&mut self, code: ErrorCode, keep_identity: &str) {
         self.drop_where(|notice| notice.code == code && notice.identity != keep_identity);
     }
 
     /// Drops the notice under `code` and `identity`, closing a single
     /// overlay showing it, as [`Notices::dismiss`] does. Clearing an
     /// absent notice changes nothing, and either order with ✕ ends the same.
-    pub(crate) fn clear_code(&mut self, code: &str, identity: &str) {
+    pub(crate) fn clear_code(&mut self, code: ErrorCode, identity: &str) {
         self.drop_where(|notice| notice.code == code && notice.identity == identity);
     }
 
@@ -374,7 +377,7 @@ impl Notices {
     /// built-in row.
     fn hidden(&self, bound: &Bound, width: u16, notice: &Notice) -> bool {
         matches!(
-            bound.notice_lines(notice.id, &notice.code, &notice.text, width),
+            bound.notice_lines(notice.id, notice.code.name(), &notice.text, width),
             Some(lines) if lines.is_empty()
         )
     }
@@ -424,7 +427,7 @@ impl Notices {
             .take(SHOWN)
             .fold(usize::from(shown.len() > SHOWN), |rows, notice| {
                 let lines = bound
-                    .notice_lines(notice.id, &notice.code, &notice.text, width)
+                    .notice_lines(notice.id, notice.code.name(), &notice.text, width)
                     .map_or(1, |lines| lines.len());
                 rows.saturating_add(lines)
             })

@@ -10,20 +10,21 @@ use super::notice_row;
 use crate::app::App;
 use crate::format;
 use crate::mouse::TargetId;
+use contract::ErrorCode;
 use contract::clock::Clock;
 
 /// An app with one notice under `code`.
-fn app_with_notice(code: &str, message: &str) -> App {
+fn app_with_notice(code: ErrorCode, message: &str) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(30, 24);
-    app.push_notice(code, message.to_owned());
+    app.push_notice(code.clone(), message.to_owned());
     app
 }
 
 /// The row `draw` draws for the app's notice at width 30, and the
 /// targets it leaves: the row is 30 cells with the ✕ in the last
 /// column, and the dismiss target sits over that same cell.
-fn drawn(code: &str, message: &str) -> (Buffer, Vec<crate::mouse::Target>) {
+fn drawn(code: ErrorCode, message: &str) -> (Buffer, Vec<crate::mouse::Target>) {
     let app = app_with_notice(code, message);
     let area = Rect::new(0, 0, 30, 24);
     let mut buf = Buffer::empty(area);
@@ -46,7 +47,7 @@ fn a_wide_cut_keeps_the_cross_in_the_last_column() {
     // Ten double-width glyphs: the message is cut, and the cut leaves
     // a one-cell gap the pad fills, so the visible ✕ lands where its
     // dismiss target sits.
-    let (buf, targets) = drawn("io_failed", &"界".repeat(10));
+    let (buf, targets) = drawn(ErrorCode::IoFailed, &"界".repeat(10));
     let row = row_text(&buf, 23);
     // The row ends in the cross; the cell assertion below is what
     // bites, since joined cell text counts a wide glyph's filler.
@@ -124,19 +125,19 @@ const SINGLE_TEXT: &str = "Two actions share the key Ctrl+F: `search` and `searc
 
 /// The four prototype `notices`, oldest first, so the overlay lists
 /// them newest first.
-fn four() -> [(&'static str, &'static str); 4] {
+fn four() -> [(ErrorCode, &'static str); 4] {
     [
-        ("key_clash", SINGLE_TEXT),
+        (ErrorCode::Other("key_clash".to_owned()), SINGLE_TEXT),
         (
-            "stream_closed",
+            ErrorCode::StreamClosed,
             "this session's log can't be read past here; reopen the session to try again",
         ),
         (
-            "config_invalid",
+            ErrorCode::ConfigInvalid,
             "a configuration file is invalid: one extension key is set under both its full and short name",
         ),
         (
-            "extension_failed",
+            ErrorCode::ExtensionFailed,
             "an extension failed to start or missed its deadline, so loading skipped it",
         ),
     ]
@@ -144,11 +145,11 @@ fn four() -> [(&'static str, &'static str); 4] {
 
 /// An app at `width` by `height` with `notices` pushed oldest first and
 /// the overlay open: the single form, or every notice for `all`.
-fn overlay_app(width: u16, height: u16, notices: &[(&str, &str)], all: bool) -> App {
+fn overlay_app(width: u16, height: u16, notices: &[(ErrorCode, &str)], all: bool) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
     for (code, text) in notices {
-        app.push_notice(code, (*text).to_owned());
+        app.push_notice(code.clone(), (*text).to_owned());
     }
     if all {
         app.open_more_notices();
@@ -189,7 +190,12 @@ fn buf_rows(buf: &Buffer, width: u16, height: u16) -> Vec<String> {
 
 #[test]
 fn notice_overlay() {
-    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let app = overlay_app(
+        100,
+        30,
+        &[(ErrorCode::Other("key_clash".to_owned()), SINGLE_TEXT)],
+        false,
+    );
     let (shown, _) = overlay_screen(&app, 100, 30);
     insta::assert_snapshot!("notice_overlay", shown);
 }
@@ -204,7 +210,12 @@ fn notice_overlay_list() {
 
 #[test]
 fn the_single_overlay_titles_and_foots_itself() {
-    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let app = overlay_app(
+        100,
+        30,
+        &[(ErrorCode::Other("key_clash".to_owned()), SINGLE_TEXT)],
+        false,
+    );
     let (shown, _) = overlay_screen(&app, 100, 30);
     assert!(shown.contains("Notice · key_clash"), "{shown}");
     assert!(shown.contains("Esc closes"), "{shown}");
@@ -224,10 +235,28 @@ fn the_list_overlay_titles_itself_notices() {
 }
 
 #[test]
+fn an_unknown_code_shows_its_label_and_text() {
+    // The notice codes are an open set: a code the macro never
+    // declares keeps its text on the row and in the overlay, under
+    // its own label.
+    let code = ErrorCode::Other("disk_on_fire".to_owned());
+    let text = "Boom.";
+    let (buf, _) = drawn(code.clone(), text);
+    let row = row_text(&buf, 23);
+    assert!(row.contains("disk_on_fire"), "{row:?}");
+    assert!(row.contains("Boom."), "{row:?}");
+    let app = overlay_app(100, 30, &[(code, text)], false);
+    let (shown, _) = overlay_screen(&app, 100, 30);
+    assert!(shown.contains("Notice · disk_on_fire"), "{shown}");
+    assert!(shown.contains("Boom."), "{shown}");
+}
+
+#[test]
 fn text_rows_keep_the_two_blank_edge_columns() {
     let owned = four();
     for all in [false, true] {
-        let notices: &[(&str, &str)] = if all { &owned } else { &[owned[0]] };
+        let single = [owned[0].clone()];
+        let notices: &[(ErrorCode, &str)] = if all { &owned } else { &single };
         let app = overlay_app(100, 30, notices, all);
         let (buf, _) = overlay_only(&app, 100, 30);
         for y in 0..30 {
@@ -254,23 +283,24 @@ fn list_paragraphs_start_dim_and_read_plain_after() {
     // Newest first: each paragraph starts below the last.
     let mut at = 0;
     for (code, _) in owned.iter().rev() {
+        let label = code.name();
         let (y, line) = rows
             .iter()
             .enumerate()
-            .find(|(i, row)| *i >= at && row.contains(code))
-            .unwrap_or_else(|| panic!("{code} not drawn"));
+            .find(|(i, row)| *i >= at && row.contains(label))
+            .unwrap_or_else(|| panic!("{label} not drawn"));
         // ASCII throughout, so byte indices are cell columns.
-        let col = line.find(code).unwrap();
+        let col = line.find(label).unwrap();
         let row = u16::try_from(y).expect("a row");
-        for (k, ch) in code.chars().enumerate() {
+        for (k, ch) in label.chars().enumerate() {
             let cell = &buf[(u16::try_from(col + k).expect("a column"), row)];
-            assert_eq!(cell.symbol(), &ch.to_string(), "{code} moved");
-            assert!(cell.modifier.contains(Modifier::DIM), "{code} not dim");
+            assert_eq!(cell.symbol(), &ch.to_string(), "{label} moved");
+            assert!(cell.modifier.contains(Modifier::DIM), "{label} not dim");
         }
-        let after = u16::try_from(col + code.len() + " · ".chars().count()).expect("a column");
+        let after = u16::try_from(col + label.len() + " · ".chars().count()).expect("a column");
         assert!(
             !buf[(after, row)].modifier.contains(Modifier::DIM),
-            "{code} text dim"
+            "{label} text dim"
         );
         at = y + 1;
     }
@@ -285,11 +315,12 @@ fn list_paragraphs_keep_one_blank_row_between() {
     let blank = |y: usize| rows[y].trim().is_empty();
     let mut starts = Vec::new();
     for (code, _) in owned.iter().rev() {
+        let label = code.name();
         let (y, _) = rows
             .iter()
             .enumerate()
-            .find(|(i, row)| !starts.contains(i) && row.contains(code))
-            .unwrap_or_else(|| panic!("{code} not drawn"));
+            .find(|(i, row)| !starts.contains(i) && row.contains(label))
+            .unwrap_or_else(|| panic!("{label} not drawn"));
         starts.push(y);
     }
     assert_eq!(starts.len(), 4);
@@ -316,7 +347,12 @@ fn list_paragraphs_keep_one_blank_row_between() {
 fn short_texts_shrink_and_narrow_areas_keep_the_floor() {
     // Content narrower than the floor centres a 40-column slab.
     for width in [41u16, 40] {
-        let app = overlay_app(width, 24, &[("x", "Saved.")], false);
+        let app = overlay_app(
+            width,
+            24,
+            &[(ErrorCode::Other("x".to_owned()), "Saved.")],
+            false,
+        );
         let (buf, _) = overlay_only(&app, width, 24);
         let edge = buf_rows(&buf, width, 24)
             .into_iter()
@@ -325,7 +361,12 @@ fn short_texts_shrink_and_narrow_areas_keep_the_floor() {
         assert_eq!(edge.chars().filter(|ch| *ch == '▄').count(), 40);
     }
     // Below 40 columns the overlay is the area wide.
-    let app = overlay_app(39, 24, &[("x", "Saved.")], false);
+    let app = overlay_app(
+        39,
+        24,
+        &[(ErrorCode::Other("x".to_owned()), "Saved.")],
+        false,
+    );
     let (buf, _) = overlay_only(&app, 39, 24);
     let edge = buf_rows(&buf, 39, 24)
         .into_iter()
@@ -341,7 +382,8 @@ fn every_listed_notice_shows_past_the_row_cap() {
         let app = overlay_app(100, 30, &owned[..count], true);
         let (shown, _) = overlay_screen(&app, 100, 30);
         for (code, _) in &owned[..count] {
-            assert!(shown.contains(code), "{count} notices: {code} missing");
+            let label = code.name();
+            assert!(shown.contains(label), "{count} notices: {label} missing");
         }
     }
 }
@@ -349,7 +391,12 @@ fn every_listed_notice_shows_past_the_row_cap() {
 #[test]
 fn short_areas_keep_the_title_and_footer_until_the_chrome_gives() {
     // The chrome takes 8 rows, so one body row shows at 9.
-    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let app = overlay_app(
+        100,
+        30,
+        &[(ErrorCode::Other("key_clash".to_owned()), SINGLE_TEXT)],
+        false,
+    );
     let first = format::wrap(SINGLE_TEXT, 67).remove(0);
     let second = format::wrap(SINGLE_TEXT, 67).remove(1);
     let (buf, _) = overlay_only(&app, 100, 9);
@@ -373,7 +420,12 @@ fn short_areas_keep_the_title_and_footer_until_the_chrome_gives() {
 
 #[test]
 fn no_overlay_target_over_a_zero_row_area() {
-    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let app = overlay_app(
+        100,
+        30,
+        &[(ErrorCode::Other("key_clash".to_owned()), SINGLE_TEXT)],
+        false,
+    );
     let (_, targets) = overlay_only(&app, 100, 0);
     assert!(targets.is_empty(), "{targets:?}");
 }
@@ -382,7 +434,12 @@ fn no_overlay_target_over_a_zero_row_area() {
 fn the_cross_closes_and_esc_closes() {
     use crate::app::Effect;
     use crate::keys::Key;
-    let mut app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let mut app = overlay_app(
+        100,
+        30,
+        &[(ErrorCode::Other("key_clash".to_owned()), SINGLE_TEXT)],
+        false,
+    );
     let area = Rect::new(0, 0, 100, 30);
     let mut buf = Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
@@ -403,7 +460,12 @@ fn the_cross_closes_and_esc_closes() {
     assert_eq!(app.on_click(TargetId::CloseOverlay), Effect::None);
     assert_eq!(app.notice_overlay(), None);
     // Esc closes it too, with the same click target drawn first.
-    let mut app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let mut app = overlay_app(
+        100,
+        30,
+        &[(ErrorCode::Other("key_clash".to_owned()), SINGLE_TEXT)],
+        false,
+    );
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Esc, now), Effect::None);
     assert_eq!(app.notice_overlay(), None);
@@ -434,7 +496,10 @@ fn the_overlay_hides_the_conversation_targets() {
             .any(|target| matches!(target.id, TargetId::FindResult(_))),
         "needs a FindResult target: {targets:?}"
     );
-    app.push_notice("key_clash", SINGLE_TEXT.to_owned());
+    app.push_notice(
+        ErrorCode::Other("key_clash".to_owned()),
+        SINGLE_TEXT.to_owned(),
+    );
     app.open_notice(0);
     let mut buf = Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
@@ -449,7 +514,12 @@ fn the_overlay_hides_the_conversation_targets() {
 #[test]
 fn the_single_overlay_draws_its_thin_box_without_colour() {
     crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
-    let app = overlay_app(100, 30, &[("key_clash", SINGLE_TEXT)], false);
+    let app = overlay_app(
+        100,
+        30,
+        &[(ErrorCode::Other("key_clash".to_owned()), SINGLE_TEXT)],
+        false,
+    );
     let (shown, _) = overlay_screen(&app, 100, 30);
     assert!(shown.contains('┌'), "{shown}");
     assert!(shown.contains('└'), "{shown}");
@@ -610,7 +680,7 @@ fn wrapped_rows_join_as_the_source_reads() {
 /// Draws the app's single notice through `script`: the buffer, the
 /// targets, the fake, and how many rows `bottom` moved.
 fn seamed(
-    code: &str,
+    code: ErrorCode,
     message: &str,
     script: crate::ext::tests::SlotScript,
     flat: bool,
@@ -639,7 +709,7 @@ fn seamed(
 fn a_notice_replacement_draws_instead_of_the_row() {
     use crate::ext::tests::{SlotScript, raw};
     let (buf, targets, fake, moved) = seamed(
-        "io_failed",
+        ErrorCode::IoFailed,
         "a read failed",
         SlotScript::Replace(vec![vec![raw("custom")]]),
         false,
@@ -690,7 +760,7 @@ fn a_notice_replacement_fills_the_last_available_rows() {
     use crate::ext::tests::{SlotRenderer, SlotScript, raw};
     use std::rc::Rc;
 
-    let app = app_with_notice("io_failed", "a read failed");
+    let app = app_with_notice(ErrorCode::IoFailed, "a read failed");
     let fake = Rc::new(SlotRenderer::filling(
         &["notice"],
         SlotScript::Replace(vec![vec![raw("first")], vec![raw("last")]]),
@@ -721,7 +791,7 @@ fn a_three_line_notice_replacement_clips_to_available_rows_and_dismisses() {
     use crate::ext::tests::{SlotRenderer, SlotScript, raw};
     use std::rc::Rc;
 
-    let mut app = app_with_notice("io_failed", "a read failed");
+    let mut app = app_with_notice(ErrorCode::IoFailed, "a read failed");
     let fake = Rc::new(SlotRenderer::filling(
         &["notice"],
         SlotScript::Replace(vec![
@@ -756,7 +826,7 @@ fn a_three_line_notice_replacement_clips_to_available_rows_and_dismisses() {
 fn a_notice_decorator_draws_the_built_in_row_under_its_badge() {
     use crate::ext::tests::{SlotScript, raw};
     let (buf, targets, fake, _) = seamed(
-        "io_failed",
+        ErrorCode::IoFailed,
         "a read failed",
         SlotScript::Decorate {
             badge: vec![vec![raw("BADGE")]],
@@ -797,7 +867,7 @@ fn a_notice_error_falls_back_with_one_failure() {
     use crate::ext::FailureKind;
     use crate::ext::tests::{SlotRenderer, SlotScript};
     use std::rc::Rc;
-    let app = app_with_notice("io_failed", "a read failed");
+    let app = app_with_notice(ErrorCode::IoFailed, "a read failed");
     let fake = Rc::new(SlotRenderer::filling(
         &["notice"],
         SlotScript::Fail {
@@ -840,12 +910,12 @@ fn a_flat_notice_replacement_drops_every_style() {
             ..crate::ext::RawSpan::default()
         }]])
     };
-    let (styled, _, _, _) = seamed("io_failed", "a read failed", script(), false);
+    let (styled, _, _, _) = seamed(ErrorCode::IoFailed, "a read failed", script(), false);
     let cell = &styled[(0, 23)];
     assert!(cell.modifier.contains(Modifier::BOLD), "bold lost");
     assert_ne!(cell.fg, Color::Reset, "accent lost");
     // Flat drops both: the same replacement draws plain.
-    let (buf, _, _, moved) = seamed("io_failed", "a read failed", script(), true);
+    let (buf, _, _, moved) = seamed(ErrorCode::IoFailed, "a read failed", script(), true);
     // (`docs/tui.md`, "The slots": a notice replacement paints its fitting lines and reserves those rows.)
     assert_eq!(moved, 1);
     assert!(row_text(&buf, 23).starts_with("custom"));
@@ -860,7 +930,7 @@ fn a_flat_notice_replacement_drops_every_style() {
 fn a_width_1_row_still_draws_its_cross() {
     // One column holds no text: the dismiss cross still draws, and its
     // target sits over that same cell.
-    let mut app = app_with_notice("io_failed", "a read failed");
+    let mut app = app_with_notice(ErrorCode::IoFailed, "a read failed");
     app.set_size(1, 24);
     let area = Rect::new(0, 0, 1, 24);
     let mut buf = Buffer::empty(area);
@@ -883,7 +953,7 @@ fn a_width_1_row_still_draws_its_cross() {
 fn an_extension_failed_notice_ignores_the_renderer() {
     use crate::ext::tests::{SlotScript, raw};
     let (buf, _, _, _) = seamed(
-        "extension_failed",
+        ErrorCode::ExtensionFailed,
         "switched off",
         SlotScript::Replace(vec![vec![raw("custom")]]),
         false,
@@ -896,7 +966,7 @@ fn an_extension_failed_notice_ignores_the_renderer() {
 /// An app with one notice and an animated `notice` renderer installed,
 /// drawing `rows` lines a frame.
 fn animated_app(rows: usize) -> (App, std::rc::Rc<crate::ext::tests::AnimatedRenderer>) {
-    let mut app = app_with_notice("io_failed", "x");
+    let mut app = app_with_notice(ErrorCode::IoFailed, "x");
     let fake = std::rc::Rc::new(crate::ext::tests::AnimatedRenderer::filling(
         "notice",
         std::time::Duration::from_millis(500),
@@ -948,7 +1018,7 @@ fn draw_returns_exactly_the_painted_replacement_rows_keys() {
 #[test]
 fn draw_drops_rows_past_the_top_without_their_keys() {
     use crate::ext::tests::AnimatedRenderer;
-    let mut app = app_with_notice("io_failed", "x");
+    let mut app = app_with_notice(ErrorCode::IoFailed, "x");
     let fake = std::rc::Rc::new(AnimatedRenderer::growing(
         "notice",
         std::time::Duration::from_millis(500),
@@ -978,7 +1048,7 @@ fn draw_drops_rows_past_the_top_without_their_keys() {
 #[test]
 fn draw_ignores_builtin_rows() {
     // No renderer installed: the built-in row draws, carrying no key.
-    let app = app_with_notice("io_failed", "x");
+    let app = app_with_notice(ErrorCode::IoFailed, "x");
     let t0 = fakes::clock::FakeClock::new().origin();
     let (_, keys) = draw_keys(&app, 30, 24, t0);
     assert!(keys.is_empty());
@@ -987,7 +1057,7 @@ fn draw_ignores_builtin_rows() {
 #[test]
 fn an_empty_replacement_hides_the_notice_without_a_key() {
     use crate::ext::tests::{SlotRenderer, SlotScript};
-    let mut app = app_with_notice("io_failed", "x");
+    let mut app = app_with_notice(ErrorCode::IoFailed, "x");
     let fake = std::rc::Rc::new(SlotRenderer::filling(
         &["notice"],
         SlotScript::Replace(vec![]),

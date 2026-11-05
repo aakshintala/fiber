@@ -1,5 +1,6 @@
 //! `/clear`'s pending start and close lifecycle (`docs/tui.md`, "Clearing").
 
+use contract::ErrorCode;
 use contract::SessionId;
 use serde_json::json;
 
@@ -205,7 +206,7 @@ impl App {
     /// the phase staying attached to the old session, its draft
     /// untouched, and no `close` sent. True when `id` was the clear
     /// `start`.
-    pub(super) fn clear_rejected(&mut self, id: &str, code: &str, message: &str) -> bool {
+    pub(super) fn clear_rejected(&mut self, id: &str, code: ErrorCode, message: &str) -> bool {
         if !self.settle_clear_start(id) {
             return false;
         }
@@ -225,7 +226,7 @@ impl App {
             self.clear.close = None;
             self.outbox.settled(id);
             self.notices.push(
-                "connection_failed",
+                ErrorCode::ConnectionFailed,
                 "The link to the old session was lost before its `close` went out.".to_owned(),
             );
             return true;

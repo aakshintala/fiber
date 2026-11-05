@@ -23,6 +23,7 @@ use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::keyset::Context;
 use crate::link::Line;
 use crate::mouse::{self, Pointer, TargetId};
+use contract::ErrorCode;
 use contract::events::ImportedNames;
 use contract::{JobId, SessionId};
 
@@ -349,7 +350,7 @@ fn launch(app: &mut App, surface: Surface) {
         }
         Surface::Notice => {
             app.notices.push(
-                "extension_failed",
+                ErrorCode::ExtensionFailed,
                 "A notice with its whole text.".to_owned(),
             );
             app.open_more_notices();
@@ -1499,7 +1500,7 @@ fn a_click_outside_the_hooks_offer_declines_it() {
             .notices()
             .into_iter()
             .filter_map(|line| match line {
-                NoticeLine::Notice { code, text, .. } => Some((code, text)),
+                NoticeLine::Notice { code, text, .. } => Some((code.name().to_owned(), text)),
                 NoticeLine::More(_) => None,
             })
             .collect::<Vec<_>>();

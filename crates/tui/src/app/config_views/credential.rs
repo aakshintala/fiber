@@ -8,6 +8,7 @@ use crate::input::Draft;
 use crate::keys::Key;
 use crate::swapped::{Frame, Ink, List, Spot, rows_height};
 use crate::theme::Role;
+use contract::ErrorCode;
 use contract::events::EventKind;
 use contract::events::{CommandAccepted, CommandRejected, CommandResult, CredentialLabels};
 use contract::{Envelope, SessionId};
@@ -308,7 +309,7 @@ impl App {
     ) -> Vec<String> {
         if !self.outbox.is_up() {
             self.push_notice(
-                "connection_failed",
+                ErrorCode::ConnectionFailed,
                 "The hub is not connected; nothing changed.".to_owned(),
             );
             return Vec::new();
@@ -334,7 +335,7 @@ impl App {
     fn say_cache_rebuild(&mut self, changed: bool) {
         if changed && let Some(tokens) = self.usage_on_screen() {
             self.push_notice(
-                "cache_rebuild",
+                ErrorCode::CacheRebuild,
                 format!(
                     "switching rebuilds the cache: about {} tokens",
                     crate::swapped::about(tokens)
@@ -362,21 +363,21 @@ impl App {
             return;
         };
         let Some(CommandResult::CredentialSwitch { provider }) = &accepted.result else {
-            self.push_notice("io_failed", NO_SAVE.to_owned());
+            self.push_notice(ErrorCode::IoFailed, NO_SAVE.to_owned());
             return;
         };
         let key = format!("providers.\"{provider}\".credential");
         match self.write_global(&key, &save.label) {
             Some(Ok(saved)) => {
                 for warning in saved.warnings {
-                    self.push_notice("config_invalid", warning);
+                    self.push_notice(ErrorCode::ConfigInvalid, warning);
                 }
             }
             Some(Err(error)) => self.push_notice(
-                "io_failed",
+                ErrorCode::IoFailed,
                 format!("Saving {key} failed: {}", error.message),
             ),
-            None => self.push_notice("io_failed", NO_SAVE.to_owned()),
+            None => self.push_notice(ErrorCode::IoFailed, NO_SAVE.to_owned()),
         }
     }
 

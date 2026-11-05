@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use contract::ErrorCode;
 use contract::Seq;
 use contract::clock::Clock;
 use fakes::clock::FakeClock;
@@ -349,7 +350,7 @@ fn a_painted_animated_notice_asks_its_animation_wake() {
     let clock = FakeClock::new();
     let origin = clock.origin();
     let mut app = app();
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     let fake = std::rc::Rc::new(AnimatedRenderer::filling(
         "notice",
         Duration::from_millis(500),
@@ -377,7 +378,7 @@ fn a_notice_raised_during_a_drag_waits_for_the_release() {
     let origin = clock.origin();
     let mut app = app();
     app.notices.hold();
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     let fake = std::rc::Rc::new(AnimatedRenderer::filling(
         "notice",
         Duration::from_millis(500),
@@ -411,7 +412,7 @@ fn a_dismissed_notice_drops_its_animation_state_and_wake() {
     let clock = FakeClock::new();
     let origin = clock.origin();
     let mut app = app();
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     let fake = std::rc::Rc::new(AnimatedRenderer::filling(
         "notice",
         Duration::from_millis(500),
@@ -467,7 +468,7 @@ fn a_dismissed_notice_drops_its_animation_state_and_wake() {
     assert!(!app.pages().ext.cache.has_notice_state(id[0]));
     assert_eq!(app.take_wake(), None);
     // The same code and text raised again is a new item: frame 0, then 1.
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     crate::view::render(&app, area, &mut buf, None);
     assert_eq!(fake.frames.borrow().clone(), vec![0, 1, 2, 0]);
     assert_eq!(
@@ -490,7 +491,7 @@ fn a_notice_expiring_after_its_paint_arms_no_animation_wake() {
     let clock = FakeClock::new();
     let origin = clock.origin();
     let mut app = app();
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     let fake = std::rc::Rc::new(AnimatedRenderer::filling(
         "notice",
         Duration::from_millis(500),
@@ -532,7 +533,7 @@ fn an_empty_replacement_stays_hidden_without_advancing_or_scheduling() {
     let clock = FakeClock::new();
     let origin = clock.origin();
     let mut app = app();
-    app.push_notice("io_failed", "a read failed".to_owned());
+    app.push_notice(ErrorCode::IoFailed, "a read failed".to_owned());
     let fake = std::rc::Rc::new(SlotRenderer::filling(
         &["notice"],
         SlotScript::Replace(vec![]),

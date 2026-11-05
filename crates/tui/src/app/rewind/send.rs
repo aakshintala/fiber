@@ -214,17 +214,15 @@ impl App {
     pub(in crate::app) fn rewind_hub_refused(
         &mut self,
         id: &str,
-        code: &str,
+        code: ErrorCode,
         message: &str,
         waiting: &Waiting,
     ) -> bool {
         // The hub carries the code as text; an unknown one still
         // settles, read as itself.
-        let parsed = serde_json::from_value(Value::String(code.to_owned()))
-            .unwrap_or_else(|_| ErrorCode::Other(code.to_owned()));
         match waiting {
             Waiting::Fork => {
-                self.settle_fork_refusal(id, &parsed, message);
+                self.settle_fork_refusal(id, &code, message);
                 true
             }
             Waiting::RewindSend => {
@@ -233,7 +231,7 @@ impl App {
                 }
                 self.rewind_refused(&CommandRejected {
                     command_id: Some(CommandId(id.to_owned())),
-                    code: parsed,
+                    code,
                     message: message.to_owned(),
                 });
                 true
@@ -389,13 +387,12 @@ impl App {
     fn settle_fork_refusal(&mut self, id: &str, code: &ErrorCode, message: &str) {
         self.outbox.settled(id);
         if *code == ErrorCode::NotStepBoundary {
-            self.push_notice("not_step_boundary", Self::FORK_NOT_STEP_BOUNDARY.to_owned());
+            self.push_notice(
+                ErrorCode::NotStepBoundary,
+                Self::FORK_NOT_STEP_BOUNDARY.to_owned(),
+            );
         } else {
-            let notice = serde_json::to_value(code)
-                .ok()
-                .and_then(|code| code.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "other".to_owned());
-            self.push_notice(&notice, message.to_owned());
+            self.push_notice(code.clone(), message.to_owned());
         }
     }
 

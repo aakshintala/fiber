@@ -18,7 +18,7 @@ use crate::home::{
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
-use contract::SessionId;
+use contract::{ErrorCode, SessionId};
 
 mod chips;
 mod open;
@@ -714,10 +714,11 @@ impl App {
                             let code = super::hub_code(answer.payload);
                             let message =
                                 super::hub_string(answer.payload, "message").unwrap_or_default();
-                            let consumed = if self.intercept_hooks_offer(id, &code, &message) {
+                            let consumed = if self.intercept_hooks_offer(id, code.name(), &message)
+                            {
                                 true
                             } else {
-                                self.clear_rejected(id, &code, &message)
+                                self.clear_rejected(id, code.clone(), &message)
                             };
                             if start
                                 && let Some(message) =
@@ -1014,7 +1015,7 @@ impl App {
                     // switch reports without opening the gate or
                     // returning home.
                     self.notices
-                        .push(&refusal_code(&envelope.payload), refusal(&envelope.payload));
+                        .push(refusal_code(&envelope.payload), refusal(&envelope.payload));
                     return Some(Vec::new());
                 }
                 // An import's answer settles through its pending entry
@@ -1486,13 +1487,15 @@ pub(super) fn refusal(payload: &serde_json::Map<String, Value>) -> String {
 
 /// A refusal's code: `malformed` when its answer carries none the
 /// terminal can read as a command answer.
-pub(super) fn refusal_code(payload: &serde_json::Map<String, Value>) -> String {
-    payload
+pub(super) fn refusal_code(payload: &serde_json::Map<String, Value>) -> ErrorCode {
+    match payload
         .get("code")
         .and_then(Value::as_str)
         .filter(|code| !code.is_empty())
-        .unwrap_or("malformed")
-        .to_owned()
+    {
+        Some(code) => ErrorCode::from_name(code),
+        None => ErrorCode::Malformed,
+    }
 }
 
 #[cfg(test)]

@@ -7,6 +7,7 @@ use contract::events::EventKind;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
+use contract::ErrorCode;
 use contract::shapes::ProviderFailure;
 use contract::{ActionId, Envelope, JobId, SessionId};
 
@@ -603,13 +604,14 @@ impl App {
                 } else {
                     "A job takes no input here."
                 };
-                self.notices.push("invalid_arguments", message.to_owned());
+                self.notices
+                    .push(ErrorCode::InvalidArguments, message.to_owned());
                 return Some(Effect::None);
             }
         };
         if record.outcome.is_some() {
             self.notices.push(
-                "session_not_found",
+                ErrorCode::SessionNotFound,
                 "This delegate has finished.".to_owned(),
             );
             return Some(Effect::None);

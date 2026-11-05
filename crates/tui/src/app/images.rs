@@ -1,6 +1,7 @@
 //! The chain's image viewer state: fetches and the out-queue, keyed by
 //! each part's segment session (`docs/tui.md`, "Images").
 
+use contract::ErrorCode;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde_json::{Value, json};
@@ -298,8 +299,10 @@ impl App {
         );
         let name = file_name(&key.1);
         let reason = reason.strip_suffix('.').unwrap_or(reason);
-        self.notices
-            .push("io_failed", format!("Could not show {name}: {reason}."));
+        self.notices.push(
+            ErrorCode::IoFailed,
+            format!("Could not show {name}: {reason}."),
+        );
     }
 
     /// A kitty error reply for `id`: the display image that transmitted
@@ -603,8 +606,10 @@ impl App {
     /// Shows why `name` would not open, once.
     fn cant_open(&mut self, name: &str, reason: &str) {
         let reason = reason.strip_suffix('.').unwrap_or(reason);
-        self.notices
-            .push("io_failed", format!("Could not open {name}: {reason}."));
+        self.notices.push(
+            ErrorCode::IoFailed,
+            format!("Could not open {name}: {reason}."),
+        );
     }
 }
 

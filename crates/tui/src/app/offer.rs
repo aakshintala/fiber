@@ -6,6 +6,7 @@ use super::{App, Effect, Kind, mint};
 use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::offer::{FileAction, OfferKey, Row, Spot};
+use contract::ErrorCode;
 
 impl App {
     /// A key for the open offer, after the key map and the approval panel:
@@ -90,8 +91,10 @@ impl App {
             return Effect::Send(vec![line]);
         }
         if action == FileAction::Open {
-            self.notices
-                .push("invalid_arguments", "This item lists no files.".to_owned());
+            self.notices.push(
+                ErrorCode::InvalidArguments,
+                "This item lists no files.".to_owned(),
+            );
         }
         Effect::None
     }

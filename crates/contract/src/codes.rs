@@ -5,8 +5,10 @@
 use serde::{Deserialize, Serialize};
 
 /// Declares [`ErrorCode`] and, for tests, the list of every known code.
+/// Each variant declares its stable `snake_case` label beside it, so a new
+/// code cannot be added without its label.
 macro_rules! codes {
-    ($($(#[doc = $doc:literal])+ $name:ident,)+) => {
+    ($($(#[doc = $doc:literal])+ $name:ident = $label:literal,)+) => {
         /// A stable label a consumer switches on, never parsing the message.
         /// Codes are an open set: a code this build does not know reads as
         /// [`ErrorCode::Other`] and writes back unchanged.
@@ -19,6 +21,28 @@ macro_rules! codes {
             Other(String),
         }
 
+        impl ErrorCode {
+            /// Returns the variant's stable label: the declared `snake_case`
+            /// text for a known code, the kept text for [`ErrorCode::Other`].
+            pub fn name(&self) -> &str {
+                match self {
+                    $(Self::$name => $label,)+
+                    Self::Other(text) => text,
+                }
+            }
+
+            /// Reads a label back into its variant: every declared label
+            /// returns that variant, and anything else — unknown hub codes,
+            /// the empty string, mixed case — is kept as
+            /// [`ErrorCode::Other`] with the text unchanged.
+            pub fn from_name(name: &str) -> Self {
+                match name {
+                    $($label => Self::$name,)+
+                    name => Self::Other(name.to_owned()),
+                }
+            }
+        }
+
         #[cfg(test)]
         const KNOWN: &[ErrorCode] = &[$(ErrorCode::$name,)+];
     };
@@ -26,234 +50,234 @@ macro_rules! codes {
 
 codes! {
     /// An edit block's text occurs more than once.
-    AmbiguousMatch,
+    AmbiguousMatch = "ambiguous_match",
     /// The provider rejected the credential.
-    AuthenticationFailed,
+    AuthenticationFailed = "authentication_failed",
     /// The block budget ran out with no human to answer.
-    Blocked,
+    Blocked = "blocked",
     /// `web_fetch` named a link-local address or a cloud metadata host.
-    BlockedHost,
+    BlockedHost = "blocked_host",
     /// The spending budget was reached, or an extension refused a model
     /// request.
-    BudgetExceeded,
+    BudgetExceeded = "budget_exceeded",
     /// A turn is running.
-    Busy,
+    Busy = "busy",
     /// The terminal rebuilt its completion cache after a model switch.
-    CacheRebuild,
+    CacheRebuild = "cache_rebuild",
     /// A `cancel` stopped a `shell` before its command started.
-    Cancelled,
+    Cancelled = "cancelled",
     /// The session was sent `close`.
-    Closing,
+    Closing = "closing",
     /// Two extensions registered the same command name.
-    CommandConflict,
+    CommandConflict = "command_conflict",
     /// A configuration file is invalid.
-    ConfigInvalid,
+    ConfigInvalid = "config_invalid",
     /// An unknown key, or a key a repository may not set.
-    ConfigKeyIgnored,
+    ConfigKeyIgnored = "config_key_ignored",
     /// The connection to the provider failed.
-    ConnectionFailed,
+    ConnectionFailed = "connection_failed",
     /// The request does not fit the context window.
-    ContextOverflow,
+    ContextOverflow = "context_overflow",
     /// A stored credential cannot be used, or the provider's `credential()` or
     /// `sign()` failed.
-    CredentialFailed,
+    CredentialFailed = "credential_failed",
     /// No credential was found for the session's model.
-    CredentialMissing,
+    CredentialMissing = "credential_missing",
     /// A command named a delegate's session.
-    DelegateSession,
+    DelegateSession = "delegate_session",
     /// A delegate tool at depth 2.
-    DepthExceeded,
+    DepthExceeded = "depth_exceeded",
     /// A command repeats the id of one the session already accepted.
-    DuplicateCommand,
+    DuplicateCommand = "duplicate_command",
     /// An extension failed to start or missed its deadline.
-    ExtensionFailed,
+    ExtensionFailed = "extension_failed",
     /// An extension needs a newer `fiber` or a different extension API version.
-    ExtensionIncompatible,
+    ExtensionIncompatible = "extension_incompatible",
     /// The session model's provider is not installed.
-    ExtensionMissing,
+    ExtensionMissing = "extension_missing",
     /// An install names a repository or tag that does not exist.
-    ExtensionNotFound,
+    ExtensionNotFound = "extension_not_found",
     /// `fiber extension remove` names an extension nothing is installed under.
-    ExtensionNotInstalled,
+    ExtensionNotInstalled = "extension_not_installed",
     /// A required extension failed to start.
-    ExtensionRequiredFailed,
+    ExtensionRequiredFailed = "extension_required_failed",
     /// A repository's approved copy of an extension replaced the personal
     /// install of the same name in that project.
-    ExtensionShadowed,
+    ExtensionShadowed = "extension_shadowed",
     /// A repository's required extension is not approved.
-    ExtensionUnapproved,
+    ExtensionUnapproved = "extension_unapproved",
     /// The extension providing the tool died twice.
-    ExtensionUnavailable,
+    ExtensionUnavailable = "extension_unavailable",
     /// An install or update could not fetch: git or the network failed.
-    FetchFailed,
+    FetchFailed = "fetch_failed",
     /// A monitor was suppressed for 30 seconds.
-    Flooded,
+    Flooded = "flooded",
     /// A connection from inside a session is refused this command.
-    FromSession,
+    FromSession = "from_session",
     /// The terminal is still reading the session's history.
-    HistoryLoading,
+    HistoryLoading = "history_loading",
     /// An extension hook errored or ran out of time.
-    HookFailed,
+    HookFailed = "hook_failed",
     /// A repository's required hook is not approved.
-    HookUnapproved,
+    HookUnapproved = "hook_unapproved",
     /// `web_fetch` got a status other than 2xx.
-    HttpError,
+    HttpError = "http_error",
     /// The hub runs another Fiber version or commit than this terminal.
-    HubVersion,
+    HubVersion = "hub_version",
     /// Fiber cannot tell whether the call completed.
-    Indeterminate,
+    Indeterminate = "indeterminate",
     /// The instruction text passes 10% of the context window.
-    InstructionsLarge,
+    InstructionsLarge = "instructions_large",
     /// Arguments failed their schema or checks.
-    InvalidArguments,
+    InvalidArguments = "invalid_arguments",
     /// The provider rejected the request for any other reason.
-    InvalidRequest,
+    InvalidRequest = "invalid_request",
     /// A filesystem failure; the message names the path.
-    IoFailed,
+    IoFailed = "io_failed",
     /// The session stayed gone for 2 hours after a crash, so its keeper stopped the job.
-    KeeperTimeout,
+    KeeperTimeout = "keeper_timeout",
     /// A log line that cannot be encoded, or does not parse.
-    LogCorrupt,
+    LogCorrupt = "log_corrupt",
     /// A login a person must finish; the message holds the URL and any device code.
-    LoginUrl,
+    LoginUrl = "login_url",
     /// A command line Fiber could not read.
-    Malformed,
+    Malformed = "malformed",
     /// A cancelled call the server may still act on.
-    McpCancelRequested,
+    McpCancelRequested = "mcp_cancel_requested",
     /// Fiber could not get an MCP server's prompt.
-    McpPromptFailed,
+    McpPromptFailed = "mcp_prompt_failed",
     /// A required MCP server failed to start.
-    McpRequiredServerFailed,
+    McpRequiredServerFailed = "mcp_required_server_failed",
     /// A repository's required MCP server is not approved.
-    McpServerUnapproved,
+    McpServerUnapproved = "mcp_server_unapproved",
     /// The server failed to start or died.
-    McpServerUnavailable,
+    McpServerUnavailable = "mcp_server_unavailable",
     /// The server has removed the tool.
-    McpToolRemoved,
+    McpToolRemoved = "mcp_tool_removed",
     /// A `before_message` hook refused a message: a session message, or a person's or a driver's.
-    MessageRefused,
+    MessageRefused = "message_refused",
     /// A bare model id matches models of two or more installed providers.
-    ModelAmbiguous,
+    ModelAmbiguous = "model_ambiguous",
     /// A model's `extra_body` names a field Fiber builds, or its
     /// `web_search` names a type its protocol does not read, so the model is
     /// left out of the model list.
-    ModelInvalid,
+    ModelInvalid = "model_invalid",
     /// The provider does not know the model.
-    ModelNotFound,
+    ModelNotFound = "model_not_found",
     /// A model's base URL names a per-account host whose setting has no
     /// value, so the model is left out of the model list.
-    ModelUnconfigured,
+    ModelUnconfigured = "model_unconfigured",
     /// The terminal's model list is not read yet.
-    ModelsLoading,
+    ModelsLoading = "models_loading",
     /// `name_session` was called while the person's name pins the session.
-    NamePinned,
+    NamePinned = "name_pinned",
     /// `/jobs` ran in an attached session with no running jobs.
-    NoJobsRunning,
+    NoJobsRunning = "no_jobs_running",
     /// An edit block's text was not found in the file.
-    NoMatch,
+    NoMatch = "no_match",
     /// Nothing chose a model.
-    NoModel,
+    NoModel = "no_model",
     /// A process exited nonzero.
-    NonzeroExit,
+    NonzeroExit = "nonzero_exit",
     /// The path `read` or `edit` names does not exist.
-    NotFound,
+    NotFound = "not_found",
     /// A rewind's `seq` is not a step boundary.
-    NotStepBoundary,
+    NotStepBoundary = "not_step_boundary",
     /// A command arrived before `subscribe`.
-    NotSubscribed,
+    NotSubscribed = "not_subscribed",
     /// `/reviewer-setup` ended with no change to either layer of the notes.
-    NotesUnchanged,
+    NotesUnchanged = "notes_unchanged",
     /// The job's keeper died before it wrote the job's end, or there was no keeper.
-    Orphaned,
+    Orphaned = "orphaned",
     /// A job's output file passed 5 GB.
-    OutputCap,
+    OutputCap = "output_cap",
     /// A reply was cut off by the output-token limit.
-    OutputTruncated,
+    OutputTruncated = "output_truncated",
     /// A pairing code was wrong, already used or too old.
-    PairingFailed,
+    PairingFailed = "pairing_failed",
     /// A symbolic link changed between the permission decision and the write.
-    PathChanged,
+    PathChanged = "path_changed",
     /// A reply was still paused after 5 continuations in a row.
-    PausedTooLong,
+    PausedTooLong = "paused_too_long",
     /// A protected path changed while a confined call ran; startup
     /// recovery restored it.
-    ProtectedPathsRestored,
+    ProtectedPathsRestored = "protected_paths_restored",
     /// A provider server error or overload.
-    ProviderUnavailable,
+    ProviderUnavailable = "provider_unavailable",
     /// A quota, billing or subscription limit.
-    QuotaExceeded,
+    QuotaExceeded = "quota_exceeded",
     /// The provider rate-limited the request.
-    RateLimited,
+    RateLimited = "rate_limited",
     /// The provider declined on policy grounds.
-    Refused,
+    Refused = "refused",
     /// Code a repository declares was skipped: nobody approved it and nobody
     /// could be asked.
-    RepositoryCodeSkipped,
+    RepositoryCodeSkipped = "repository_code_skipped",
     /// The reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one.
-    ReviewerSelectionFailed,
+    ReviewerSelectionFailed = "reviewer_selection_failed",
     /// A delete names a session that forks or rewinds point at.
-    SessionHasDependents,
+    SessionHasDependents = "session_has_dependents",
     /// Another process holds the session.
-    SessionHeld,
+    SessionHeld = "session_held",
     /// A resume names no session.
-    SessionNotFound,
+    SessionNotFound = "session_not_found",
     /// A process killed by a signal Fiber did not send.
-    Signal,
+    Signal = "signal",
     /// A skill's header does not parse or lacks `name` or `description`.
-    SkillInvalid,
+    SkillInvalid = "skill_invalid",
     /// Two skills share a name.
-    SkillShadowed,
+    SkillShadowed = "skill_shadowed",
     /// The skills listing passes 10% of the context window.
-    SkillsLarge,
+    SkillsLarge = "skills_large",
     /// A write would replace a file the session has not seen in its current
     /// state.
-    StaleFile,
+    StaleFile = "stale_file",
     /// What a command names is no longer pending or running.
-    StaleRequest,
+    StaleRequest = "stale_request",
     /// A state value over 64 KiB.
-    StateTooLarge,
+    StateTooLarge = "state_too_large",
     /// The hub could not read the open session's log to serve this terminal.
-    StreamClosed,
+    StreamClosed = "stream_closed",
     /// The stream ended early or carried an unmatched error.
-    StreamIncomplete,
+    StreamIncomplete = "stream_incomplete",
     /// A `rewind` that asked for a summary could not get one.
-    SummaryFailed,
+    SummaryFailed = "summary_failed",
     /// A model or level choice sent while a turn runs: it applies when
     /// the turn ends, and the chips hold the old model and level until
     /// the session accepts it.
-    SwitchPending,
+    SwitchPending = "switch_pending",
     /// A deadline passed.
-    Timeout,
+    Timeout = "timeout",
     /// A `web_fetch` download larger than 10 MiB.
-    TooLarge,
+    TooLarge = "too_large",
     /// Full tool definitions take more than 10% of the context window.
-    ToolDefinitionsLarge,
+    ToolDefinitionsLarge = "tool_definitions_large",
     /// The tool itself failed, or its effects function errored.
-    ToolError,
+    ToolError = "tool_error",
     /// A remote hub connection presented no valid device token.
-    Unauthenticated,
+    Unauthenticated = "unauthenticated",
     /// A command name no extension registered.
-    UnknownCommand,
+    UnknownCommand = "unknown_command",
     /// A stop or finish reason Fiber does not map.
-    UnknownStopReason,
+    UnknownStopReason = "unknown_stop_reason",
     /// The model named a tool that does not exist.
-    UnknownTool,
+    UnknownTool = "unknown_tool",
     /// `session_message` named an id no running session has.
-    Unreachable,
+    Unreachable = "unreachable",
     /// A model replied, but not in the format Fiber asked for.
-    UnreadableReply,
+    UnreadableReply = "unreadable_reply",
     /// A file tool was given a directory, device or file it cannot handle.
-    UnsupportedFile,
+    UnsupportedFile = "unsupported_file",
     /// The invocation or its environment is wrong; exits 2.
-    Usage,
+    Usage = "usage",
     /// An install needs two majors of one dependency, or no tag meets a
     /// minimum.
-    VersionConflict,
+    VersionConflict = "version_conflict",
     /// `web_search` is not declared: several search backends are installed and
     /// none is chosen, or the chosen one is not installed.
-    WebSearchUnavailable,
+    WebSearchUnavailable = "web_search_unavailable",
     /// `/pwd` shows the attached session's recorded workspace root.
-    Workspace,
+    Workspace = "workspace",
 }
 
 #[cfg(test)]

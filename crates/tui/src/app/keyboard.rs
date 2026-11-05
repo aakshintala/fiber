@@ -1,6 +1,7 @@
 //! The person's bindings in the app: loading `keys` at startup and
 //! resolving every stroke through them (`docs/tui.md`, "Bindings").
 
+use contract::ErrorCode;
 use std::time::Instant;
 
 use std::rc::Rc;
@@ -139,7 +140,7 @@ impl App {
         let (keys, notices) = load(&setup.user);
         self.keyboard.keys = keys;
         for notice in notices {
-            self.notices.push("config_invalid", notice);
+            self.notices.push(ErrorCode::ConfigInvalid, notice);
         }
     }
 
@@ -282,7 +283,7 @@ impl App {
         // the fallthrough, and the built-in paths below still run.
         let mut noticed = false;
         for (code, text) in renderer.take_pending() {
-            self.push_notice(&code, text);
+            self.push_notice(ErrorCode::from_name(&code), text);
             noticed = true;
         }
         (None, noticed)
@@ -291,7 +292,7 @@ impl App {
     /// Drains the renderer's queued key notices onto the screen.
     fn drain_key_notices(&mut self, renderer: &Rc<dyn crate::ext::Renderer>) {
         for (code, text) in renderer.take_pending() {
-            self.push_notice(&code, text);
+            self.push_notice(ErrorCode::from_name(&code), text);
         }
     }
 

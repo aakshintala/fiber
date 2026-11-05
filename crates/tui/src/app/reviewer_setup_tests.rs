@@ -102,7 +102,7 @@ fn notices(app: &App) -> Vec<(String, String)> {
     app.notices()
         .into_iter()
         .filter_map(|line| match line {
-            NoticeLine::Notice { code, text, .. } => Some((code, text)),
+            NoticeLine::Notice { code, text, .. } => Some((code.name().to_owned(), text)),
             NoticeLine::More(_) => None,
         })
         .collect()

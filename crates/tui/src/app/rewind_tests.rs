@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::{ActionId, Envelope, SessionId, TurnId};
 use serde_json::{Value, json};
@@ -1598,7 +1599,7 @@ fn stream_closed_while_pending_keeps_the_old_session_with_its_notice() {
         Some(SESSION)
     );
     assert!(app.notices().iter().any(|line| matches!(line,
-        crate::app::NoticeLine::Notice { code, .. } if code == "stream_closed")));
+        crate::app::NoticeLine::Notice { code, .. } if *code == ErrorCode::StreamClosed)));
     assert!(app.session_view_screen(80).is_some());
     assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
     assert!(app.session_view_screen(80).is_some());
@@ -2938,8 +2939,13 @@ fn wheel_down_clamping_into_the_window_moves_the_detail_point() {
 fn rewind_hub_refused_tells_fork_from_other_waits() {
     use crate::app::Waiting;
     let mut app = attached();
-    assert!(app.rewind_hub_refused("c_fork", "busy", "busy happened", &Waiting::Fork));
-    assert!(!app.rewind_hub_refused("c_other", "busy", "busy happened", &Waiting::History));
+    assert!(app.rewind_hub_refused("c_fork", ErrorCode::Busy, "busy happened", &Waiting::Fork));
+    assert!(!app.rewind_hub_refused(
+        "c_other",
+        ErrorCode::Busy,
+        "busy happened",
+        &Waiting::History
+    ));
 }
 
 /// A long single-session history: `count` plain turns, so the rewind

@@ -10,6 +10,7 @@ use super::{
 use crate::Input;
 use crate::link::{Credits, Feed, Line, answers, read_lines};
 use crate::retry::Retry;
+use contract::ErrorCode;
 use contract::clock::Clock;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -3277,7 +3278,7 @@ fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() 
     open.lp.app.drawn(&[]);
     let notices = open.lp.app.notices();
     // `docs/tui.md`, "When an extension fails": the failure keeps one hook_failed per extension and slot.
-    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if *code == ErrorCode::HookFailed&&text.contains("session-test"))).count(),1);
     assert!(!open.lp.app.drawn(&[]), "a replay cannot report it twice");
 }
 
@@ -3366,7 +3367,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
     open.lp.app.drawn(&[]);
     let notices = open.lp.app.notices();
     // `docs/tui.md`, "When two extensions want one slot": one command_conflict per slot and set of contenders.
-    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="command_conflict"&&text.contains("tail-a, tail-b"))).count(),1);
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if *code == ErrorCode::CommandConflict&&text.contains("tail-a, tail-b"))).count(),1);
     assert!(
         !open.lp.app.drawn(&[]),
         "a replay cannot report the notice twice"

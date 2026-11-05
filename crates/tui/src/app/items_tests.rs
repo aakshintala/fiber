@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::{JobId, SessionId};
 use ratatui::buffer::Buffer;
@@ -126,7 +127,7 @@ fn delegate_gate_notice_redraw_and_reload_reach_both_screens() {
     rendered_text(&app);
     assert!(app.drawn(&[]), "selection notice requests immediate redraw");
     assert!(!app.drawn(&[]));
-    assert!(app.notices().iter().any(|line|matches!(line,crate::app::NoticeLine::Notice{code,..} if code=="extension_incompatible")));
+    assert!(app.notices().iter().any(|line|matches!(line,crate::app::NoticeLine::Notice{code,..} if *code == ErrorCode::ExtensionIncompatible)));
     app.on_line(other_line(
         DELEGATE_A,
         "extensions_loaded",
@@ -193,7 +194,7 @@ fn reload_preserves_delegate_selection_notice_before_parent_recount() {
         "reload recount's selection notice requests immediate redraw"
     );
     let notices = app.notices();
-    assert_eq!(notices.iter().filter(|line| matches!(line, crate::app::NoticeLine::Notice {code,text,..} if code == "extension_incompatible" && text.contains("session-test") && text.contains("not loaded"))).count(), 1);
+    assert_eq!(notices.iter().filter(|line| matches!(line, crate::app::NoticeLine::Notice {code,text,..} if *code == ErrorCode::ExtensionIncompatible && text.contains("session-test") && text.contains("not loaded"))).count(), 1);
     shown(&app);
     assert!(
         !app.drawn(&[]),
@@ -230,7 +231,7 @@ fn parent_page_pruning_cannot_erase_delegate_failure_before_app_drain() {
     assert!(app.drawn(&[]));
     let notices = app.notices();
     // `docs/tui.md`, "When an extension fails": the failure keeps one hook_failed per extension and slot.
-    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if code=="hook_failed"&&text.contains("session-test"))).count(),1);
+    assert_eq!(notices.iter().filter(|line|matches!(line,crate::app::NoticeLine::Notice{code,text,..} if *code == ErrorCode::HookFailed&&text.contains("session-test"))).count(),1);
     assert!(!app.drawn(&[]));
 }
 
