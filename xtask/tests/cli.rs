@@ -131,6 +131,23 @@ fn fake_nextest(dir: &TempDir, list_b_tests: bool) -> (String, String) {
     (path, json)
 }
 
+/// `xtask` run from `sub` under the fixture root: the visibility check
+/// resolves the baseline and scans from the workspace root either way.
+fn xtask_subdir(dir: &TempDir, sub: &str, args: &[&str]) -> (i32, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
+        .args(args)
+        .current_dir(dir.path().join(sub))
+        .stdin(Stdio::piped());
+    let (code, text) = common::run(
+        &format!("xtask {args:?}"),
+        command,
+        "".as_bytes(),
+        MUST_SUCCEED_WITHIN,
+    );
+    (code.unwrap(), text)
+}
+
 fn xtask_with_nextest(dir: &TempDir, args: &[&str], home: &str, stdin: &str) -> (i32, String) {
     xtask_with_nextest_listing(dir, args, home, stdin, true)
 }
@@ -1731,6 +1748,59 @@ fn the_visibility_check_fails_a_pub_crate_fn_used_only_in_its_own_module() {
     assert_eq!(
         xtask(&dir, &["visibility"], &[], ""),
         (0, "visibility: ok\n".to_owned())
+    );
+}
+
+#[test]
+fn the_visibility_baseline_skips_listed_sites_and_flags_stale_entries() {
+    let dir = workspace();
+    // The qualifier is built from parts so this file holds no declaration
+    // the repo scan could trip on; only the fixture carries one.
+    let vis = ["pub", "(crate)"].concat();
+    let decl = format!("{vis} fn helper() -> u32 {{ 1 }}\n");
+    dir.write(
+        "crates/b/src/only.rs",
+        &format!("//! only\n//! fixture\n{decl}"),
+    );
+    let flagged =
+        format!("crates/b/src/only.rs:3: helper is {vis} but no other file in b names it\n");
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (1, format!("visibility: {flagged}"))
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (1, format!("check-docs: {flagged}"))
+    );
+    // A baseline listing the site passes both arms.
+    dir.write(
+        "xtask/src/visibility_baseline.txt",
+        "crates/b/src/only.rs:helper\n",
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (0, "visibility: ok\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    // The same check from a subdirectory resolves the same baseline.
+    assert_eq!(
+        xtask_subdir(&dir, "crates/b", &["visibility"]),
+        (0, "visibility: ok\n".to_owned())
+    );
+    // Naming the site elsewhere turns its baseline line stale on both arms.
+    dir.write("crates/b/src/lib.rs", "//! b\nfn run() { helper(); }\n");
+    let stale =
+        "crates/b/src/only.rs:helper is in the visibility baseline but matches no flagged site\n";
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (1, format!("visibility: {stale}"))
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (1, format!("check-docs: {stale}"))
     );
 }
 

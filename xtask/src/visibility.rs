@@ -6,15 +6,66 @@
 //! hides a narrowing. Items defined inside an inline `mod` block are
 //! skipped — their same-file uses stay invisible to a file-granular search.
 
+use std::collections::BTreeSet;
+use std::path::Path;
+
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 use crate::rules::RustFile;
 
+// RULING-4142-6: flagged sites that live in files this branch must not
+// narrow stay listed in the baseline instead. The list is shrink-only:
+// deleting a line is the only way it changes, and a line that matches no
+// real flagged site fails the check, so a stale line is a red build, not
+// silent rot.
+/// The checked-in baseline of held `path:item` sites, relative to the
+/// repository root. Private: only this module reads it.
+const BASELINE: &str = "xtask/src/visibility_baseline.txt";
+
+/// The baseline entries in `text`: one `path:item` per line, blank lines
+/// ignored.
+pub(crate) fn parse_baseline(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The baseline entries in the `BASELINE` file at or above `dir`: the
+/// check runs from the repository root and from any subdirectory, so the
+/// lookup walks up. A missing file means empty, no skip.
+pub(crate) fn load_baseline_from(dir: &Path) -> Vec<String> {
+    let mut dir = dir.to_path_buf();
+    loop {
+        if let Ok(text) = std::fs::read_to_string(dir.join(BASELINE)) {
+            return parse_baseline(&text);
+        }
+        if !dir.pop() {
+            return Vec::new();
+        }
+    }
+}
+
+/// The baseline entries for the current working directory.
+pub(crate) fn load_baseline() -> Vec<String> {
+    match std::env::current_dir() {
+        Ok(dir) => load_baseline_from(&dir),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// A `pub(crate)` or `pub(super)` function, const or static no other file
 /// of its crate names, as `<path>:<line>: <name> is pub(crate) but no other
-/// file in <crate> names it`. Test files count on both sides; macro bodies
-/// count as use-sites.
-pub(crate) fn check(files: &[RustFile]) -> Vec<String> {
+/// file in <crate> names it`, minus every flagged site the baseline lists
+/// as `path:item`, plus one failure per baseline entry matching no flagged
+/// site: a narrowed-away or newly-used item reddens the build until its
+/// line is deleted. Test files count on both sides; macro bodies count as
+/// use-sites. The check passes only when the flagged set minus the
+/// baseline is empty and no baseline entry is stale.
+pub(crate) fn check_with_baseline(files: &[RustFile], baseline: &[String]) -> Vec<String> {
+    let baselined: BTreeSet<&str> = baseline.iter().map(String::as_str).collect();
+    let mut live: BTreeSet<String> = BTreeSet::new();
     let mut failures = Vec::new();
     for (index, file) in files.iter().enumerate() {
         for declaration in declarations(&file.source) {
@@ -24,15 +75,26 @@ pub(crate) fn check(files: &[RustFile]) -> Vec<String> {
                     && candidate.source.contains(declaration.name.as_str())
             });
             if !named_elsewhere {
-                failures.push(format!(
-                    "{}:{}: {} is {} but no other file in {} names it",
-                    file.path,
-                    declaration.line,
-                    declaration.name,
-                    declaration.visibility,
-                    file.krate
-                ));
+                let key = format!("{}:{}", file.path, declaration.name);
+                live.insert(key.clone());
+                if !baselined.contains(key.as_str()) {
+                    failures.push(format!(
+                        "{}:{}: {} is {} but no other file in {} names it",
+                        file.path,
+                        declaration.line,
+                        declaration.name,
+                        declaration.visibility,
+                        file.krate
+                    ));
+                }
             }
+        }
+    }
+    for entry in baselined {
+        if !live.contains(entry) {
+            failures.push(format!(
+                "{entry} is in the visibility baseline but matches no flagged site"
+            ));
         }
     }
     failures

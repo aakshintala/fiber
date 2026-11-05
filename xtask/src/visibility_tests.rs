@@ -13,7 +13,7 @@ fn file(rel: &str, source: &str) -> RustFile {
 }
 
 fn failures(files: Vec<RustFile>) -> Vec<String> {
-    super::check(&files)
+    super::check_with_baseline(&files, &[])
 }
 
 fn single(source: &str) -> Vec<String> {
@@ -339,5 +339,81 @@ fn other_visibility_spellings_are_skipped() {
     assert_eq!(
         single("pub(crate) fn r#type() {}\n"),
         vec!["crates/x/src/only.rs:1: type is pub(crate) but no other file in x names it"]
+    );
+}
+
+fn baseline(entries: &[&str]) -> Vec<String> {
+    entries.iter().map(|entry| (*entry).to_owned()).collect()
+}
+
+#[test]
+fn a_baselined_site_is_skipped() {
+    let files = vec![file("src/only.rs", "pub(crate) fn solo() -> u32 { 1 }\n")];
+    assert_eq!(
+        super::check_with_baseline(&files, &baseline(&["crates/x/src/only.rs:solo"])),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_flagged_site_missing_from_the_baseline_is_still_reported() {
+    let files = vec![
+        file("src/kept.rs", "pub(crate) fn kept() {}\n"),
+        file("src/held.rs", "pub(crate) fn held() {}\n"),
+    ];
+    assert_eq!(
+        super::check_with_baseline(&files, &baseline(&["crates/x/src/held.rs:held"])),
+        vec!["crates/x/src/kept.rs:1: kept is pub(crate) but no other file in x names it"]
+    );
+}
+
+#[test]
+fn a_baseline_entry_matching_no_flagged_site_fails_the_check() {
+    let files = vec![file("src/only.rs", "//! clean\nfn main() {}\n")];
+    assert_eq!(
+        super::check_with_baseline(&files, &baseline(&["crates/x/src/only.rs:gone"])),
+        vec!["crates/x/src/only.rs:gone is in the visibility baseline but matches no flagged site"]
+    );
+}
+
+#[test]
+fn a_baselined_site_named_elsewhere_is_reported_stale() {
+    let files = vec![
+        file("src/only.rs", "pub(crate) fn solo() -> u32 { 1 }\n"),
+        file("src/lib.rs", "//! b\nfn run() { solo(); }\n"),
+    ];
+    assert_eq!(
+        super::check_with_baseline(&files, &baseline(&["crates/x/src/only.rs:solo"])),
+        vec!["crates/x/src/only.rs:solo is in the visibility baseline but matches no flagged site"]
+    );
+}
+
+#[test]
+fn blank_baseline_lines_are_ignored() {
+    assert_eq!(super::parse_baseline("\n  \n\t\n"), Vec::<String>::new());
+    assert_eq!(
+        super::parse_baseline("crates/x/src/only.rs:solo\n\n  \n"),
+        vec!["crates/x/src/only.rs:solo".to_owned()]
+    );
+}
+
+#[test]
+fn a_missing_baseline_file_means_empty() {
+    let dir = fakes::TempDir::new("visibility-no-baseline");
+    assert_eq!(super::load_baseline_from(dir.path()), Vec::<String>::new());
+}
+
+#[test]
+fn a_baseline_file_above_the_working_directory_applies() {
+    let dir = fakes::TempDir::new("visibility-baseline-subdir");
+    dir.write(
+        "xtask/src/visibility_baseline.txt",
+        "crates/x/src/only.rs:solo\n",
+    );
+    let sub = dir.path().join("crates").join("x").join("src");
+    std::fs::create_dir_all(&sub).unwrap();
+    assert_eq!(
+        super::load_baseline_from(&sub),
+        vec!["crates/x/src/only.rs:solo".to_owned()]
     );
 }

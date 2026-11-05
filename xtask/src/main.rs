@@ -384,11 +384,17 @@ fn run(args: &[String]) -> Result<bool, String> {
             &rules::signal_sites(&rust_files(&workspace_members()?)?),
             "ok",
         ),
-        "visibility" => report(
-            "visibility",
-            &visibility::check(&rust_files(&workspace_members()?)?),
-            "ok",
-        ),
+        "visibility" => {
+            let (root, pkgs) = packages()?;
+            let members = members_from(&root, &pkgs);
+            let baseline = visibility::load_baseline();
+            let files = rust_files_at(&members, Path::new(&root))?;
+            report(
+                "visibility",
+                &visibility::check_with_baseline(&files, &baseline),
+                "ok",
+            )
+        }
         "session-paths" => report(
             "session-paths",
             &rules::session_paths(&rust_files(&workspace_members()?)?),
@@ -544,7 +550,12 @@ fn run(args: &[String]) -> Result<bool, String> {
                 failures.extend(docs::check_file(root, &path)?);
             }
             failures.extend(doc_citations::check(root)?);
-            failures.extend(visibility::check(&rust_files(&workspace_members()?)?));
+            let (workspace_root, pkgs) = packages()?;
+            let members = members_from(&workspace_root, &pkgs);
+            failures.extend(visibility::check_with_baseline(
+                &rust_files_at(&members, Path::new(&workspace_root))?,
+                &visibility::load_baseline(),
+            ));
             report("check-docs", &failures, "ok")
         }
         "doc-citations" => {
@@ -811,8 +822,13 @@ fn ancestor_of(fix: &str, tested: &str) -> Option<bool> {
 }
 
 fn output(program: &str, args: &[&str]) -> Result<String, String> {
+    output_in(Path::new("."), program, args)
+}
+
+fn output_in(dir: &Path, program: &str, args: &[&str]) -> Result<String, String> {
     let out = Command::new(program)
         .args(args)
+        .current_dir(dir)
         .output()
         .map_err(|e| format!("{program}: {e}"))?;
     if !out.status.success() {
@@ -842,7 +858,11 @@ fn labelled_bug(number: &str) -> Result<bool, String> {
 }
 
 fn git_lines(args: &[&str]) -> Result<Vec<String>, String> {
-    Ok(output("git", args)?
+    git_lines_in(Path::new("."), args)
+}
+
+fn git_lines_in(dir: &Path, args: &[&str]) -> Result<Vec<String>, String> {
+    Ok(output_in(dir, "git", args)?
         .lines()
         .filter(|l| !l.is_empty())
         .map(str::to_owned)
@@ -1028,6 +1048,14 @@ fn normal_edges() -> Result<BTreeSet<(String, String)>, String> {
 
 /// Every Rust file in a member, tracked or not, skipping ignored ones.
 fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
+    rust_files_at(members, Path::new("."))
+}
+
+/// Every Rust file in a member, listed and read under `dir` but reported
+/// relative to it: the visibility check scans from the workspace root so
+/// its paths match the baseline whether it runs from the root or from any
+/// subdirectory.
+fn rust_files_at(members: &Members, dir: &Path) -> Result<Vec<RustFile>, String> {
     let mut args = vec![
         "ls-files",
         "--cached",
@@ -1037,21 +1065,25 @@ fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
     ];
     args.extend(members.values().map(|m| m.dir.as_str()));
     let mut files = Vec::new();
-    for path in git_lines(&args)?.into_iter().collect::<BTreeSet<_>>() {
+    for path in git_lines_in(dir, &args)?
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+    {
         let Some(krate) = select::owner(&path, members) else {
             continue;
         };
         let Some(member) = members.get(krate) else {
             continue;
         };
-        if !path.ends_with(".rs") || !Path::new(&path).exists() {
+        let disk = dir.join(&path);
+        if !path.ends_with(".rs") || !disk.exists() {
             continue;
         }
         let rel = path
             .get(member.dir.len() + 1..)
             .unwrap_or_default()
             .to_owned();
-        let source = read(&path)?;
+        let source = std::fs::read_to_string(&disk).map_err(|e| format!("{path}: {e}"))?;
         files.push(RustFile {
             krate: krate.to_owned(),
             path,
