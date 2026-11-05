@@ -99,3 +99,4 @@ crates/tui/src/app/items/retry.rs	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-Ma
 crates/tui/src/app/delegates_tests.rs	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/items/retry_tests.rs	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/config_tests.rs	fiber-4190	plan	2026-11-05T10:30:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
