@@ -837,6 +837,145 @@ fn close_and_reopen_drops_the_old_answer() {
     );
 }
 
+/// A reopened view ignores the old history's rejection too: the old
+/// tags are forgotten with the old view, so the old answer and the old
+/// rejection fold nowhere and the new wait survives both.
+#[test]
+fn a_reopened_view_ignores_the_old_history_s_rejection() {
+    use crate::app::Waiting;
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let first = open(&mut app, &clock);
+    let id_a = first[0]["id"].clone();
+    assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+    assert!(app.session_view_screen(80).is_none());
+    let second = open(&mut app, &clock);
+    let id_b = second[0]["id"].clone();
+    assert_ne!(id_a, id_b);
+    // The old answer folds nowhere, and B's wait survives it.
+    accept(&mut app, &id_a, segment_a());
+    assert_eq!(rows(&app), [CHECK, ACTION]);
+    assert_eq!(
+        app.outbox.waiting(id_b.as_str().unwrap()),
+        Some(Waiting::RewindHistory)
+    );
+    // The old rejection shows no failure, and B still waits.
+    refuse(&mut app, &id_a, "busy");
+    assert_eq!(rows(&app), [CHECK, ACTION]);
+    assert_eq!(
+        app.outbox.waiting(id_b.as_str().unwrap()),
+        Some(Waiting::RewindHistory)
+    );
+    // B's answer still folds.
+    accept(&mut app, &id_b, segment_a());
+    assert!(rows(&app).iter().any(|row| row.contains("before: first")));
+}
+
+/// A repeat answer for one history id falls through: its tag settled
+/// with the first answer, so nothing folds again and the next page's
+/// wait survives.
+#[test]
+fn a_repeat_history_answer_falls_through_with_its_tag_gone() {
+    use crate::app::Waiting;
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let id = lines[0]["id"].clone();
+    let next = accept(&mut app, &id, segment_a());
+    let next: Value = serde_json::from_str(&next[0]).unwrap();
+    let waiting = next["id"].as_str().unwrap().to_owned();
+    let before = rows(&app);
+    accept(&mut app, &id, segment_a());
+    assert_eq!(rows(&app), before);
+    assert_eq!(app.outbox.waiting(&waiting), Some(Waiting::RewindHistory));
+}
+
+/// A send answer for an unknown id attaches nothing: the live send
+/// still waits on its tag, and the real answer still attaches.
+#[test]
+fn a_stale_send_answer_attaches_nothing_and_keeps_the_send_waiting() {
+    use crate::app::Waiting;
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    let id = out[0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::RewindSend));
+    // A stale send answer attaches nothing and leaves the wait alone.
+    let answered = app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": "c_stale", "result": {"new_session_id": NEW}}),
+    ));
+    assert!(answered.is_empty());
+    assert_eq!(
+        app.session().map(|session| session.0.as_str()),
+        Some(SESSION)
+    );
+    assert!(app.session_view_screen(80).is_some());
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::RewindSend));
+    // The live send's answer still attaches and closes the view.
+    app.on_line(session_line(
+        "command_accepted",
+        json!({"command_id": id, "result": {"new_session_id": NEW}}),
+    ));
+    assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+}
+
+/// An answer after the view closed folds nowhere: no pending entry
+/// stands, so the lingering tag is left alone.
+#[test]
+fn an_answer_after_close_folds_nowhere_and_leaves_the_tag() {
+    use crate::app::Waiting;
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    let id = lines[0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(app.on_key(crate::keys::Key::Esc, clock.now()), Effect::None);
+    assert!(app.session_view_screen(80).is_none());
+    accept(&mut app, &lines[0]["id"], segment_a());
+    assert!(app.session_view_screen(80).is_none());
+    assert_eq!(app.outbox.waiting(&id), Some(Waiting::RewindHistory));
+}
+
+/// A hub refusal for a send tag with no send on the wire owns nothing:
+/// the detail check still gates after the tag.
+#[test]
+fn a_hub_rejection_for_a_send_tag_without_a_send_changes_nothing() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    app.outbox.wait("c_send", Waiting::RewindSend);
+    assert!(!app.rewind_hub_refused(
+        "c_send",
+        ErrorCode::Busy,
+        "busy happened",
+        &Waiting::RewindSend
+    ));
+    assert_eq!(app.outbox.waiting("c_send"), Some(Waiting::RewindSend));
+}
+
+/// A retry after refusal registers exactly one send tag for its new
+/// id: the refused tag settles with the refusal.
+#[test]
+fn a_retry_after_refusal_registers_one_send_tag_for_its_new_id() {
+    use crate::app::Waiting;
+    let clock = fakes::clock::FakeClock::new();
+    let mut app = attached();
+    let lines = open(&mut app, &clock);
+    accept(&mut app, &lines[0]["id"], segment_a());
+    let out = send_rewind(&mut app, &clock);
+    let first = out[0]["id"].clone();
+    refuse(&mut app, &out[0]["id"], "summary_failed");
+    let grown = rows(&app);
+    goto(&mut app, &clock, grown.len() - 3);
+    let retry = sent(app.on_key(crate::keys::Key::Enter, clock.now()));
+    assert_eq!(retry.len(), 1);
+    assert_ne!(retry[0]["id"], first);
+    let new_id = retry[0]["id"].as_str().unwrap();
+    assert_eq!(app.outbox.waiting(new_id), Some(Waiting::RewindSend));
+    assert_eq!(app.outbox.waiting(first.as_str().unwrap()), None);
+}
+
 #[test]
 fn a_rejected_history_keeps_the_error() {
     let clock = fakes::clock::FakeClock::new();
