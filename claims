@@ -133,3 +133,5 @@ providers/databricks/thinking.lua	fiber-4184	plan	2026-11-05T11:23:16Z	Amoghs-Ma
 providers/databricks/tests/models-thinking-levels.json	fiber-4184	plan	2026-11-05T11:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/compiled_in.rs	fiber-4184	plan	2026-11-05T11:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/models_dev.rs,xtask/src/models_dev_tests.rs,providers/databricks/thinking.lua,providers/databricks/tests,xtask/src/select/compiled_in.rs,providers/databricks/thinking-overlay.json,docs/model-routing.md	fiber-4184	plan	2026-11-05T11:24:26Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+xtask/src/visibility.rs	fiber-4142	plan	2026-11-05T11:32:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
+xtask/src/visibility_tests.rs	fiber-4142	plan	2026-11-05T11:32:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
