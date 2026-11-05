@@ -100,11 +100,6 @@ crates/extensions/src/providers/naming_tests.rs	fiber-4199	grant	2026-11-05T15:3
 docs/model-routing.md	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
 docs/delegates.md	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
 crates/main/src/switch_tests.rs	fiber-4199	grant	2026-11-05T16:03:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
-crates/doors/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/log/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/contract/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/cli/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/jobs/tests	fiber-4159	plan	2026-11-05T17:42:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/visibility.rs	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
 xtask/src/visibility_tests.rs	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
 xtask/src/main.rs	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
@@ -134,26 +129,6 @@ crates/tui/src/app/images_tests.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-M
 crates/tui/src/app/rewind/send.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
 crates/tui/src/app/rewind/fold.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
 crates/tui/src/app/rewind_tests.rs	fiber-4115	plan	2026-11-05T19:31:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4204,4218,4217,4216,4213,4209,4205,4197
-crates/contract/src/envelope_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/contract/src/events_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/doors/src/client/level_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/doors/src/hub/listed_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/doors/src/session_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/doors/tests/watch.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/doors/tests/hub.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/doors/src/hub_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/src/read_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/tests/watch_all.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/src/history_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/tests/history.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/tests/reading.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/tests/writing.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/tests/common/mod.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/src/write_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/tests/support/check.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/log/src/rate_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/cli/src/sessions_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
-crates/jobs/src/delegate/run_tests.rs	fiber-4159	grant	2026-11-05T19:50:00Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4159-remaining-kind-sites	
 crates/contract/src/events.rs	fiber-4156	grant	2026-11-05T20:38:23Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/doors/src/attach.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/doors/src/client/writer.rs	fiber-4156	grant	2026-11-05T20:40:50Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
