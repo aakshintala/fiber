@@ -1423,7 +1423,8 @@ struct FakeEditor {
 impl FakeEditor {
     /// Asserts no editor process is left.
     fn assert_gone(&self) {
-        let left = fakes::matching(&self.script).unwrap_or_else(|err| panic!("ps: {err}"));
+        let left = fakes::matching(&self.script, fakes::MUST_SUCCEED_WITHIN / 2)
+            .unwrap_or_else(|err| panic!("ps: {err}"));
         assert!(left.is_empty(), "editor processes left: {left:?}");
     }
 }
