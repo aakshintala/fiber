@@ -25,6 +25,7 @@ mod busy;
 mod debug;
 mod home;
 mod idle;
+mod keeper;
 mod linux;
 mod listing;
 mod paging;
@@ -250,6 +251,7 @@ fn selected(args: &Args) -> Vec<(&'static idle::Workload, u32, u32)> {
         .chain(&session_list::WORKLOADS)
         .chain(paging)
         .chain(&sandbox::WORKLOADS)
+        .chain(&keeper::WORKLOADS)
         .map(|workload| {
             let count = if workload.timing { timing_runs } else { runs };
             (workload, count, count)

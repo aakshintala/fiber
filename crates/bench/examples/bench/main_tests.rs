@@ -166,6 +166,7 @@ fn a_pull_request_runs_timing_workloads_three_times_and_the_rest_five() {
             ("paging", (3, 3)),
             ("fsyncs", (1, 1)),
             ("10 busy turns", (5, 5)),
+            ("keeper", (5, 5)),
             ("sessions list", (1, 3)),
             ("terminal attach", (1, 5)),
             ("terminal wheel", (1, 3)),
@@ -983,7 +984,7 @@ fn skip_rows_leaves_exactly_the_named_timing_workloads_out() {
         .collect();
     assert!(!kept.contains(&"session start"), "{kept:?}");
     assert!(!kept.contains(&"sessions list"), "{kept:?}");
-    assert_eq!(kept.len(), 14, "{kept:?}");
+    assert_eq!(kept.len(), 15, "{kept:?}");
     assert_eq!(kept.len() + 2, all.len());
 }
 
