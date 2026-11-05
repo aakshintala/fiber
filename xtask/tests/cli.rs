@@ -131,23 +131,6 @@ fn fake_nextest(dir: &TempDir, list_b_tests: bool) -> (String, String) {
     (path, json)
 }
 
-/// `xtask` run from `sub` under the fixture root: the visibility check
-/// resolves the baseline and scans from the workspace root either way.
-fn xtask_subdir(dir: &TempDir, sub: &str, args: &[&str]) -> (i32, String) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
-    command
-        .args(args)
-        .current_dir(dir.path().join(sub))
-        .stdin(Stdio::piped());
-    let (code, text) = common::run(
-        &format!("xtask {args:?}"),
-        command,
-        "".as_bytes(),
-        MUST_SUCCEED_WITHIN,
-    );
-    (code.unwrap(), text)
-}
-
 fn xtask_with_nextest(dir: &TempDir, args: &[&str], home: &str, stdin: &str) -> (i32, String) {
     xtask_with_nextest_listing(dir, args, home, stdin, true)
 }
@@ -1784,11 +1767,6 @@ fn the_visibility_baseline_skips_listed_sites_and_flags_stale_entries() {
     assert_eq!(
         xtask(&dir, &["check-docs"], &[], ""),
         (0, "check-docs: ok\n".to_owned())
-    );
-    // The same check from a subdirectory resolves the same baseline.
-    assert_eq!(
-        xtask_subdir(&dir, "crates/b", &["visibility"]),
-        (0, "visibility: ok\n".to_owned())
     );
     // Naming the site elsewhere turns its baseline line stale on both arms.
     dir.write("crates/b/src/lib.rs", "//! b\nfn run() { helper(); }\n");

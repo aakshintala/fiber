@@ -7,7 +7,6 @@
 //! skipped — their same-file uses stay invisible to a file-granular search.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
@@ -32,27 +31,12 @@ pub(crate) fn parse_baseline(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The baseline entries in the `BASELINE` file at or above `dir`: the
-/// check runs from the repository root and from any subdirectory, so the
-/// lookup walks up. A missing file means empty, no skip.
-pub(crate) fn load_baseline_from(dir: &Path) -> Vec<String> {
-    let mut dir = dir.to_path_buf();
-    loop {
-        if let Ok(text) = std::fs::read_to_string(dir.join(BASELINE)) {
-            return parse_baseline(&text);
-        }
-        if !dir.pop() {
-            return Vec::new();
-        }
-    }
-}
-
-/// The baseline entries for the current working directory.
+/// The baseline entries in `BASELINE`, read relative to the working
+/// directory like every other check: a missing file means empty, no skip.
 pub(crate) fn load_baseline() -> Vec<String> {
-    match std::env::current_dir() {
-        Ok(dir) => load_baseline_from(&dir),
-        Err(_) => Vec::new(),
-    }
+    std::fs::read_to_string(BASELINE)
+        .map(|text| parse_baseline(&text))
+        .unwrap_or_default()
 }
 
 /// A `pub(crate)` or `pub(super)` function, const or static no other file

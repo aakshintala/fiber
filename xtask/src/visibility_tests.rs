@@ -596,24 +596,3 @@ fn blank_baseline_lines_are_ignored() {
         vec!["crates/x/src/only.rs:solo".to_owned()]
     );
 }
-
-#[test]
-fn a_missing_baseline_file_means_empty() {
-    let dir = fakes::TempDir::new("visibility-no-baseline");
-    assert_eq!(super::load_baseline_from(dir.path()), Vec::<String>::new());
-}
-
-#[test]
-fn a_baseline_file_above_the_working_directory_applies() {
-    let dir = fakes::TempDir::new("visibility-baseline-subdir");
-    dir.write(
-        "xtask/src/visibility_baseline.txt",
-        "crates/x/src/only.rs:solo\n",
-    );
-    let sub = dir.path().join("crates").join("x").join("src");
-    std::fs::create_dir_all(&sub).unwrap();
-    assert_eq!(
-        super::load_baseline_from(&sub),
-        vec!["crates/x/src/only.rs:solo".to_owned()]
-    );
-}
