@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use contract::SessionId;
-use contract::events::Event;
+use contract::events::{Event, EventKind};
 use serde_json::{Value, json};
 
 #[path = "../../src/fixtures.rs"]
@@ -94,10 +94,15 @@ pub(crate) fn lines(dir: &Path) -> Vec<Value> {
 }
 
 /// Each line's `kind` and `seq`.
-pub(crate) fn kinds_and_seqs(dir: &Path) -> Vec<(String, Option<u64>)> {
+pub(crate) fn kinds_and_seqs(dir: &Path) -> Vec<(EventKind, Option<u64>)> {
     lines(dir)
         .iter()
-        .map(|l| (l["kind"].as_str().unwrap().to_owned(), l["seq"].as_u64()))
+        .map(|l| {
+            (
+                EventKind::from_name(l["kind"].as_str().unwrap()),
+                l["seq"].as_u64(),
+            )
+        })
         .collect()
 }
 

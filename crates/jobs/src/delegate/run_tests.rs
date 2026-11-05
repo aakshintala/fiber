@@ -1110,8 +1110,16 @@ fn worktree_parent_releases_at_child_acknowledgement_or_failed_start_cleanup() {
 fn an_unknown_kind_with_a_valid_usage_payload_is_not_adopted_forwarded_or_folded_as_exit() {
     let mut unknown_usage = usage_envelope(1, "g_future", Some(0.1));
     unknown_usage.kind = "future_kind_é".into();
+    assert_eq!(
+        unknown_usage.kind(),
+        EventKind::Unknown("future_kind_é".into())
+    );
     let mut unknown_exit = fiber_exited_line(2, "Not an exit kind.");
     unknown_exit.kind = "future_kind_é".into();
+    assert_eq!(
+        unknown_exit.kind(),
+        EventKind::Unknown("future_kind_é".into())
+    );
     let unknown_lines = [unknown_usage, unknown_exit];
     let dir = TempDir::new("fiber-unknown-job-kind");
     let output_path = dir.path().join("events.jsonl");
