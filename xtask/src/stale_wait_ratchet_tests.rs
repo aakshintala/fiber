@@ -191,7 +191,7 @@ fn shape_renamed_helper_defect_counts() {
     // `subscribe_full`, then the test's action, then a bare `until` for
     // the action's unfiltered `turn_completed` on a replay-exposed flow,
     // counts under the new check and holds nothing under the old one.
-    let source = "fn send_sub(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_sub\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"subscribe\\\",\\\"args\\\":{{\\\"level\\\":\\\"full\\\"}}}}\"));\n}\n// The reply resumes the session, replaying the kept subscription.\nfn fire_prompt(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\nfn wait_turn(client: &Socket) {\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let source = "fn send_sub(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_sub\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"subscribe\\\",\\\"args\\\":{{\\\"level\\\":\\\"full\\\"}}}}\"));\n}\nfn fire_prompt(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\nfn wait_turn(client: &Socket) {\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     assert_eq!(count_stale(source), 1, "renamed-helper defect");
 }
 
@@ -201,7 +201,7 @@ fn shape_cross_helper_defect_counts() {
     // file order in one file. The subscribe, the action and the wait
     // live in three helpers sharing one connection; the replay marker
     // stands between the subscribe and the wait.
-    let source = "fn helper_sub(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n}\nfn helper_act(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\nfn helper_wait(client: &Socket) {\n    // The re-prompt resumes the session, replaying the kept subscription.\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let source = "fn helper_sub(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n}\nfn helper_act(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\nfn helper_wait(client: &Socket) {\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     assert_eq!(count_stale(source), 1, "cross-helper defect");
 }
 
@@ -209,7 +209,7 @@ fn shape_cross_helper_defect_counts() {
 fn shape_two_defect_waits_count_twice() {
     // #4102's acceptance: one occurrence per stale wait. Two waits in
     // defect shape count two, so collapsing to a boolean fails.
-    let source = "fn helper_sub(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n}\n// The reply resumes the session, replaying the kept subscription.\nfn helper_act(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\nfn helper_wait(client: &Socket) {\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n    until(&client, \"the resumed turn to complete again\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let source = "fn helper_sub(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n}\nfn helper_act(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\nfn helper_wait(client: &Socket) {\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n    until(&client, \"the resumed turn to complete again\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     assert_eq!(count_stale(source), 2, "two defect waits");
 }
 
@@ -217,7 +217,7 @@ fn shape_two_defect_waits_count_twice() {
 fn shape_aliased_subscribe_defect_counts() {
     // #4102's acceptance: "under any helper name", including a
     // `support::subscribe*` call renamed through `use ... as ...`.
-    let source = "use support::{subscribe as my_sub};\nfn flow(client: &Socket, session: &str) {\n    my_sub(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let source = "use support::{subscribe as my_sub};\nfn flow(client: &Socket, session: &str) {\n    my_sub(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     assert_eq!(count_stale(source), 1, "aliased subscribe defect");
 }
 
@@ -225,7 +225,7 @@ fn shape_aliased_subscribe_defect_counts() {
 fn shape_renamed_wait_defect_counts() {
     // #4102's acceptance: "under any helper name" for the wait too: a
     // bare `until` renamed through `use ... as ...` waits the same way.
-    let source = "use support::{until as wait_for};\nfn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    wait_for(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let source = "use support::{until as wait_for};\nfn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    wait_for(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     assert_eq!(count_stale(source), 1, "renamed wait defect");
 }
 
@@ -233,7 +233,7 @@ fn shape_renamed_wait_defect_counts() {
 fn shape_wrapped_wait_defect_counts() {
     // #4102's acceptance: "under any helper name", including a local
     // wrapper around the same unbounded wait, ordered after the action.
-    let source = "fn helper_sub(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n}\nfn helper_act(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\n// The reply resumes the session, replaying the kept subscription.\nfn my_wait(client: &Socket) {\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let source = "fn helper_sub(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n}\nfn helper_act(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\nfn my_wait(client: &Socket) {\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     assert_eq!(count_stale(source), 1, "wrapped wait defect");
 }
 
@@ -242,7 +242,7 @@ fn shape_wrapped_action_defect_counts() {
     // #4102's shape is "a subscribe in this file, with a following
     // unbounded `until`": the test's action counts under any helper
     // name too, when the helper sends.
-    let source = "fn helper_sub(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n}\nfn flow(client: &Socket, session: &str) {\n    // The reply resumes the session, replaying the kept subscription.\n    fire_prompt(&client, &session);\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\nfn fire_prompt(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\n";
+    let source = "fn helper_sub(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n}\nfn flow(client: &Socket, session: &str) {\n    fire_prompt(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\nfn fire_prompt(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n}\n";
     assert_eq!(count_stale(source), 1, "wrapped action defect");
 }
 
@@ -308,7 +308,7 @@ fn shape_filtered_and_bound_waits_pass() {
     // The admission and the ruling: a wait carrying a reopen-derived
     // bound, or matching by command, turn or session, or delegating its
     // match to a helper, excludes the replay by predicate.
-    let prefix = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n";
+    let prefix = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n";
     let cases: &[(&str, &str)] = &[
         (
             "    let ack = recv_answer(&client, \"c_p2\", \"the prompt acknowledgement\");\n}\n",
@@ -356,7 +356,7 @@ fn shape_filtered_and_bound_waits_pass() {
 fn shape_bound_wait_under_renamed_helper_passes() {
     // The spelling-independence negative: a bound wait under a renamed
     // helper still carries its bound, so the replay cannot satisfy it.
-    let source = "use support::{until_after as bounded};\nfn flow(client: &Socket, session: &str, sub: &Subscribed) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    bounded(&client, sub, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let source = "use support::{until_after as bounded};\nfn flow(client: &Socket, session: &str, sub: &Subscribed) {\n    support::subscribe(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    bounded(&client, sub, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     assert_eq!(count_stale(source), 0, "bound wait under renamed helper");
 }
 
@@ -365,8 +365,8 @@ fn shape_ephemeral_and_summary_pass() {
     // The contract: an ephemeral line is never in any fold, so waiting
     // for one cannot answer from the replay; a `summary` subscription
     // reads no log at all.
-    let resumed_probe = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed probe\", |line| {\n        line[\"kind\"] == \"extension_ui\"\n    });\n}\n";
-    let summary = "fn flow(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_sub\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"subscribe\\\",\\\"args\\\":{{\\\"level\\\":\\\"summary\\\"}}}}\"));\n    // The reply resumes the session.\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let resumed_probe = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed probe\", |line| {\n        line[\"kind\"] == \"extension_ui\"\n    });\n}\n";
+    let summary = "fn flow(client: &Socket, session: &str) {\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_sub\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"subscribe\\\",\\\"args\\\":{{\\\"level\\\":\\\"summary\\\"}}}}\"));\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     let cases: &[(&str, &str)] = &[
         (resumed_probe, "ephemeral-kind wait"),
         (summary, "summary subscribe"),
@@ -381,8 +381,8 @@ fn shape_consumed_replay_passes() {
     // The core rule: a consuming wait positioned after the replay drains
     // it, through the resumed marker or through an ephemeral kind that
     // only arrives live, so the later event wait reads live lines.
-    let marker_drain = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    until(&client, \"the resumed fiber_started\", |line| {\n        line[\"kind\"] == \"fiber_started\" && line[\"payload\"][\"resumed\"] == true\n    });\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
-    let ephemeral_drain = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    until(&client, \"the resumed run\", |line| {\n        line[\"kind\"] == \"session_status\"\n    });\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let marker_drain = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    until(&client, \"the resumed fiber_started\", |line| {\n        line[\"kind\"] == \"fiber_started\" && line[\"payload\"][\"resumed\"] == true\n    });\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let ephemeral_drain = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    until(&client, \"the resumed run\", |line| {\n        line[\"kind\"] == \"session_status\"\n    });\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     let cases: &[(&str, &str)] = &[
         (marker_drain, "drain through resumed marker"),
         (ephemeral_drain, "drain through ephemeral kind"),
@@ -426,8 +426,8 @@ fn shape_reset_and_other_socket_pass() {
     // later wait is on a session with no pre-subscribe history. A wait
     // on another connection reads that connection's stream, never the
     // subscribed one's replay.
-    let fresh_start_between = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session.\n    let session = start_session(&client, &workspace, \"again\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
-    let other_socket = "fn flow(client: &Socket, control: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&control, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let fresh_start_between = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    let session = start_session(&client, &workspace, \"again\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let other_socket = "fn flow(client: &Socket, control: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&control, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     let cases: &[(&str, &str)] = &[
         (fresh_start_between, "fresh start between the legs"),
         (other_socket, "wait on another connection"),
@@ -442,7 +442,7 @@ fn shape_scope_and_comments_pass() {
     // The scope never changes: the driver and other crates stay out,
     // and a defect shape inside line comments never counts. A file the
     // table does not name holds none, so a shape defect fails at zero.
-    let defect = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // The reply resumes the session, replaying the kept subscription.\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let defect = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{{}}}}\"));\n    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
     let commented: String = defect.lines().map(|line| format!("// {line}\n")).collect();
     assert_eq!(count_stale(&commented), 0, "commented defect");
     let files = [
@@ -454,5 +454,50 @@ fn shape_scope_and_comments_pass() {
     assert_eq!(
         check(&files, &maxima(&[])),
         ["crates/main/tests/flow.rs holds 1 stale-wait occurrences (maximum 0)"]
+    );
+}
+
+#[test]
+fn shape_comment_markers_establish_no_replay() {
+    // ADMIT-4102's fresh-session exclusion: replay exposure comes from
+    // executable flow, so a comment naming no reopening counts nothing,
+    // even beside a subscribe, an action and an unbounded wait.
+    let source = "fn flow(client: &Socket, session: &str) {\n    support::subscribe(&client, &session);\n    // no reopen here\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{}}}\"));\n    until(&client, \"the turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    assert_eq!(count_stale(source), 0, "comment-only replay marker");
+}
+
+#[test]
+fn shape_other_socket_bound_wait_drains_nothing() {
+    // A bounded wait on another connection reads that connection's
+    // stream, so the subscribed replay stays unread for the later wait.
+    let prefix = "fn flow(client: &Socket, control: &Socket, session: &str, sub: &Subscribed) {\n    support::subscribe(&client, &session);\n    client.send(&format!(\"{{\\\"id\\\":\\\"c_p2\\\",\\\"session_id\\\":\\\"{session}\\\",\\\"command\\\":\\\"prompt\\\",\\\"args\\\":{}}}\"));\n    let resumed_ack = recv_answer(&client, \"c_p2\", \"the resumed prompt acknowledgement\");\n";
+    let tail = "    until(&client, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n}\n";
+    let cases: &[(&str, &str)] = &[
+        (
+            "    until_after(&control, &sub, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n",
+            "other-socket until_after",
+        ),
+        (
+            "    until_after_reopen(&control, &sub, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n",
+            "other-socket until_after_reopen",
+        ),
+        ("    until_close(&control);\n", "other-socket until_close"),
+    ];
+    for (drain, what) in cases {
+        assert_eq!(count_stale(&format!("{prefix}{drain}{tail}")), 1, "{what}");
+    }
+    // The same bound wait on the subscribed connection drains the
+    // replay, including when the call spans lines.
+    let same = "    until_after(&client, &sub, \"the resumed turn to complete\", |line| {\n        line[\"kind\"] == \"turn_completed\"\n    });\n";
+    assert_eq!(
+        count_stale(&format!("{prefix}{same}{tail}")),
+        0,
+        "same-socket until_after"
+    );
+    let split = "    until(\n        &client,\n        \"the resumed fiber_started\",\n        |line| line[\"kind\"] == \"fiber_started\" && line[\"payload\"][\"resumed\"] == true,\n    );\n";
+    assert_eq!(
+        count_stale(&format!("{prefix}{split}{tail}")),
+        0,
+        "multiline same-socket drain"
     );
 }

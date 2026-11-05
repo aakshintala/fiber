@@ -30,6 +30,18 @@ const PROBE: &str = "timing-probe-twelve";
 /// (`docs/testing.md`, "Event streams").
 const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
 
+/// The fold-then-live order the replayed/live split below pins
+/// (`docs/invocation.md`, "Resuming a session"; `docs/events.md`,
+/// "`stream_reopened`"): a `full` connection folds the log by `seq`
+/// first, then streams, and `stream_reopened` comes before every line of
+/// the new fold, so the replayed prefix precedes the live turn.
+const REPLAY_ORDER_DOC: &str = "docs/invocation.md:888: `full` connection folds the log by `seq` first, then streams; docs/events.md:100-101: `stream_reopened` carries no `seq`, and comes before every line of that fold";
+
+/// The one-turn-one-completion the live half asserts (`docs/loop.md`,
+/// "The loop"): one turn runs from its input arriving to its
+/// `turn_completed`, which is written when the turn ends.
+const LIVE_TURN_DOC: &str = "docs/loop.md:3: What one turn does, from its input arriving to `turn_completed`; docs/loop.md:137: `turn_completed` is written";
+
 /// Every `op_timing` line in `text`, parsed.
 fn op_lines(text: &str) -> Vec<Value> {
     text.lines()
@@ -231,21 +243,39 @@ fn debug_times_hub_start_resume_listing_replay_and_socket() {
     // each is asserted as a set.
     support::assert_kinds_multiset(&first, &FIRST_TURN_KINDS, &[], None, COUNT_DOC);
     // The reopen-aware bound returns the replayed lines too, ending on
-    // the live event: the prefix through the replayed run-1 completion
-    // proves the resumed stream replays the kept subscription, and the
-    // live half proves the wait ran past the replay to the live turn-2
-    // end.
+    // the live event (REPLAY_ORDER_DOC): the prefix through the replayed
+    // run-1 completion proves the resumed stream replays the kept
+    // subscription, and the live half proves the wait ran past the replay
+    // to the live turn-2 end.
     let replayed_end = second
         .iter()
         .position(|line| line["kind"] == "turn_completed")
         .expect("the resumed stream replays the first turn's completion");
     let (replayed, live) = second.split_at(replayed_end + 1);
     support::assert_kinds_multiset(replayed, &SECOND_TURN_KINDS, &[], None, COUNT_DOC);
+    // The reopening precedes its fold (REPLAY_ORDER_DOC): the resumed
+    // stream carries the reopening first, then the replayed lines.
+    let reopened_at = replayed
+        .iter()
+        .position(|line| line["kind"] == "stream_reopened")
+        .expect("the resumed stream reopens before its new fold");
+    let started_at = replayed
+        .iter()
+        .position(|line| line["kind"] == "session_started")
+        .expect("the new fold opens the replayed prefix");
+    assert!(
+        reopened_at < started_at,
+        "the reopening precedes its fold ({REPLAY_ORDER_DOC}): {replayed:?}"
+    );
     let live_completed = live
         .iter()
         .filter(|line| line["kind"] == "turn_completed")
         .collect::<Vec<_>>();
-    assert_eq!(live_completed.len(), 1, "the live turn ends once: {live:?}");
+    assert_eq!(
+        live_completed.len(),
+        1,
+        "the live turn ends once ({LIVE_TURN_DOC}): {live:?}"
+    );
     let live_text = live
         .iter()
         .find(|line| line["kind"] == "text_completed")

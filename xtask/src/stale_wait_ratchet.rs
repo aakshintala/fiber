@@ -8,7 +8,8 @@
 //! an unbounded wait for that action's event carrying no reopen-derived
 //! bound, where a replayed earlier occurrence could still be unread at
 //! the wait's position. A consuming wait positioned after the replay
-//! drains it; a keeping read preserves it.
+//! drains it; a keeping read preserves it. Replay exposure comes from
+//! executable flow, never a comment.
 //!
 //! The count is conservative: an occurrence counts even inside a string
 //! literal or a block comment, and only a full-line `//` comment line
@@ -614,8 +615,15 @@ fn first_argument(line: &str, at: usize, needle_len: usize) -> String {
     if bytes.get(cursor) != Some(&b'(') {
         return String::new();
     }
-    cursor += 1;
-    let start = cursor;
+    first_argument_from(line, cursor + 1)
+}
+
+/// The first argument starting just past `(` at `start` in `text`: the
+/// scan crosses lines, so a call region's first argument reads even when
+/// the call spans lines.
+fn first_argument_from(text: &str, start: usize) -> String {
+    let bytes = text.as_bytes();
+    let mut cursor = start;
     let mut depth = 0;
     let mut instr: Option<u8> = None;
     let mut raw_hashes: Option<usize> = None;
@@ -676,7 +684,15 @@ fn first_argument(line: &str, at: usize, needle_len: usize) -> String {
         }
         cursor += 1;
     }
-    line.get(start..cursor).unwrap_or("").to_owned()
+    text.get(start..cursor).unwrap_or("").to_owned()
+}
+
+/// The first argument of a call region, which starts at its `(`.
+fn region_first_argument(region: &str) -> String {
+    if region.as_bytes().first() != Some(&b'(') {
+        return String::new();
+    }
+    first_argument_from(region, 1)
 }
 
 /// The expression without its borrows: `&client` reads `client`'s
@@ -882,10 +898,12 @@ fn wait_is_open(region: &str) -> bool {
         .any(|kind| DURABLE_KINDS.contains(&kind.as_str()))
 }
 
-/// Whether the line drains the replay for a later wait: a bound wait
-/// ending at a live line, or a consuming wait for a resume marker, an
-/// ephemeral kind, or a live-only acknowledgement match.
-fn is_drain(lines: &[&str], line_no: usize, aliases: &Aliases) -> bool {
+/// Whether the line drains the replay for a later wait on
+/// `expected_socket`: a bound wait ending at a live line, or a consuming
+/// wait for a resume marker, an ephemeral kind, or a live-only
+/// acknowledgement match, read on the same connection. A wait on another
+/// connection reads that connection's stream, never this replay.
+fn is_drain(lines: &[&str], line_no: usize, aliases: &Aliases, expected_socket: &str) -> bool {
     let Some(line) = lines.get(line_no) else {
         return false;
     };
@@ -917,10 +935,13 @@ fn is_drain(lines: &[&str], line_no: usize, aliases: &Aliases) -> bool {
     let Some((found_line, name, at)) = waited else {
         return false;
     };
+    let region = call_region(lines, found_line, at);
+    if drain_socket(line, &region, at, name.len()) != expected_socket {
+        return false;
+    }
     if ["until_after", "until_after_reopen", "until_close"].contains(&name) {
         return true;
     }
-    let region = call_region(lines, found_line, at);
     if region.contains("\"resumed\"")
         || region.contains(".resumed")
         || region.contains("stream_reopened")
@@ -942,9 +963,25 @@ fn is_drain(lines: &[&str], line_no: usize, aliases: &Aliases) -> bool {
     region.contains("command_id") || region.contains("command_accepted")
 }
 
+/// The connection a drain reads: the call's receiver on its own line,
+/// else the call's first argument, which may stand on a following line
+/// when the call spans lines.
+fn drain_socket(line: &str, region: &str, at: usize, needle_len: usize) -> String {
+    let bytes = line.as_bytes();
+    let mut cursor = at;
+    while cursor > 0 && matches!(bytes.get(cursor - 1), Some(b' ') | Some(b'\t')) {
+        cursor -= 1;
+    }
+    if cursor > 0 && bytes.get(cursor - 1) == Some(&b'.') {
+        return socket_of_call(line, at, needle_len);
+    }
+    strip_borrow(&region_first_argument(region))
+}
+
 /// One stale wait per unbounded `until` in the admitted shape: a
 /// subscribe on the same connection before it, a replay point and the
-/// test's action between them, and no drain from the replay point on.
+/// test's action between them, and no same-connection drain from the
+/// replay point on.
 fn count_shape(source: &str) -> usize {
     let lines: Vec<&str> = source.lines().collect();
     let bodies = fn_bodies(&lines);
@@ -960,17 +997,14 @@ fn count_shape(source: &str) -> usize {
     let mut waits: Vec<(usize, usize, String)> = Vec::new();
     let mut replay_points: Vec<usize> = Vec::new();
     for (line_no, line) in lines.iter().enumerate() {
-        if line.trim_start().starts_with("//") || is_use_line(line) {
-            if line.contains("resum") || line.contains("reopen") || line.contains("rewind") {
-                replay_points.push(line_no);
-            }
+        // Replay exposure comes from executable flow: a resumed, reopened
+        // or rewound session the test runs. A comment naming one, a `use`
+        // line or a function definition never replays anything.
+        if line.trim_start().starts_with("//") || is_use_line(line) || fn_name(line).is_some() {
             continue;
         }
         if line.contains("resum") || line.contains("reopen") || line.contains("rewind") {
             replay_points.push(line_no);
-        }
-        if fn_name(line).is_some() {
-            continue;
         }
         let flat: String = line.chars().filter(|c| *c != '\\').collect();
         if flat.contains("\"subscribe\"") {
@@ -1103,7 +1137,7 @@ fn count_shape(source: &str) -> usize {
             let mut drained = false;
             let mut drained_line = replay;
             while drained_line < wait_line {
-                if is_drain(&lines, drained_line, &aliases) {
+                if is_drain(&lines, drained_line, &aliases, &socket) {
                     drained = true;
                     break;
                 }
