@@ -134,3 +134,8 @@ crates/tui/src/app.rs	fiber-4176	plan	2026-11-05T19:23:16Z	Amoghs-MacBook-Pro:/U
 crates/tui/src/view/input_box.rs	fiber-4176	plan	2026-11-05T19:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/input_box_tests.rs	fiber-4176	plan	2026-11-05T19:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/keeper_version.rs	fiber-3892	grant	2026-11-05T19:28:34Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/feat/3892-keeper-version-decline	
+crates/tui/src/app/rail.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/rail_tests.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/rail.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/rail_tests.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop_rail_tests.rs	fiber-4121	plan	2026-11-05T19:28:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
