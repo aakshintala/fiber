@@ -361,7 +361,7 @@ pub(crate) struct Startup {
 
 impl Startup {
     /// What a wait for the end of startup names on expiry.
-    pub(crate) const WHAT: &'static str = "the first session_status after extensions_loaded";
+    const WHAT: &'static str = "the first session_status after extensions_loaded";
 
     /// Takes the next stdout line; true once startup has finished.
     pub(crate) fn line(&mut self, line: &Value) -> bool {
