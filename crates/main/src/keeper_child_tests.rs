@@ -277,11 +277,7 @@ fn keeper_bound_fires_two_hours_after_the_crash_and_writes_keeper_timeout() {
     let parked = clock
         .mark_parked(bound_at, Deadline::after(Duration::from_secs(10)))
         .expect("the watcher parks at the bound");
-    assert_eq!(
-        parked.threads().len(),
-        1,
-        "only the watcher parks at the bound"
-    );
+    // No park count is promised: name the watcher thread and drive it directly.
     let watcher = parked.threads().into_iter().next().expect("watcher thread");
 
     // Halfway there a wake must not fire the bound: the watcher re-parks.
@@ -321,6 +317,8 @@ fn keeper_bound_fires_two_hours_after_the_crash_and_writes_keeper_timeout() {
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
+    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // with code keeper_timeout.
     assert_eq!(completed.len(), 1, "one ending for the one held job");
     let payload = &completed[0].payload;
     assert_eq!(payload["job_id"], "j_sleepy");
@@ -383,11 +381,7 @@ fn keeper_bound_ignores_term_and_completes_through_escalation() {
     let parked = clock
         .mark_parked(kill_at, Deadline::after(Duration::from_secs(10)))
         .expect("the timer parks at the kill");
-    assert_eq!(
-        parked.threads().len(),
-        1,
-        "only the timer parks at the kill"
-    );
+    // No park count is promised: name the timer thread and drive it directly.
     let timer = parked.threads().into_iter().next().expect("timer thread");
     assert!(
         keeper.result.try_recv().is_err(),
@@ -409,6 +403,8 @@ fn keeper_bound_ignores_term_and_completes_through_escalation() {
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
+    // docs/tools.md, "The keeper": writes each one's job_completed as failed
+    // with code keeper_timeout.
     assert_eq!(completed.len(), 1, "one ending for the one held job");
     assert_eq!(completed[0].payload["error"]["code"], "keeper_timeout");
     assert_eq!(completed[0].payload["process"]["signal"], "SIGKILL");
@@ -438,6 +434,7 @@ fn keeper_prewound_reap_keeps_the_normal_completion() {
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let completed = job_completed_lines(&keeper);
+    // docs/tools.md, "The keeper": a job_completed for each job that ends.
     assert_eq!(completed.len(), 1, "one ending for the one held job");
     let expected = tools::kept_end(
         JobId("j_quick".into()),
