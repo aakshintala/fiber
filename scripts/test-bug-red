@@ -26,7 +26,7 @@ fail() {
 bug_red="$top/scripts/bug-red"
 record="$tmp/filter-args.txt"
 export BUG_RED_RECORD="$record"
-real_cargo=$(command -v cargo)
+real_cargo=$(rustup which cargo 2>/dev/null || command -v cargo || { echo "scripts/test-bug-red: no cargo found via rustup or PATH" >&2; exit 1; })
 
 mkdir -p "$tmp/bin"
 ln -s "$top/scripts/test-bug-red-cargo" "$tmp/bin/cargo"
@@ -412,7 +412,7 @@ exec "$BUG_RED_STUB_CARGO" "$@"
 WRAPPER
 chmod +x "$tmp/bin-cfg/cargo"
 export BUG_RED_STUB_CARGO="$tmp/bin/cargo"
-export BUG_RED_REAL_CARGO="$real_cargo"
+RUSTC="$(rustup which rustc 2>/dev/null || command -v rustc || { echo "scripts/test-bug-red: no rustc found via rustup or PATH" >&2; exit 1; })"; export BUG_RED_REAL_CARGO="$real_cargo" RUSTC
 export BUG_RED_TOP="$top"
 
 cat >"$tmp/list-linux.json" <<'JSON'
