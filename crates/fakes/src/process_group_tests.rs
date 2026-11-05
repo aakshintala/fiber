@@ -684,7 +684,7 @@ fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
         // Twice the fixed step budget: a production body discarding the
         // derived bound still expires inside this wait, so the failure
         // names the wrong budget instead of the rerun timing out.
-        Deadline::after(2 * MUST_SUCCEED_WITHIN),
+        Deadline::after(2 * MUST_SUCCEED_WITHIN), // ruling: #4131
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
