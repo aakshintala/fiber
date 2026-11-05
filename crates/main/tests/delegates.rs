@@ -4743,6 +4743,54 @@ fn a_delegate_spawn_without_a_model_lists_the_roles_and_references() {
 }
 
 #[test]
+fn delegate_models_omits_logged_out_provider_references() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[function_call("call_models", "delegate_models", &json!({}))]),
+        support::hello(),
+    ])
+    .unwrap();
+    install_url(&setup, "pa", &parent.url(), "openai-responses", &json!({}));
+    install_pb_without_credential(&setup, "http://127.0.0.1:1");
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "roles": {"deep": "fiber:pb/m"}}),
+    );
+
+    let deadline = Deadline::after(Duration::from_secs(90)); // ruling: #4190
+    let output = support::run_to_exit(
+        deadline,
+        "fiber ask",
+        setup.fiber(&["ask", "list the models"]),
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    support::assert_kinds_multiset(&lines, &support::read_kinds(), &[], None, COUNT_DOC);
+    let completed = completed_for(&lines, "delegate_models");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
+    let references = text.split_once("References:\n").unwrap().1;
+    let references = references.split_once("\nQuota:").unwrap().0;
+    assert!(
+        references.lines().any(|line| line == "fiber:pa/m"),
+        "{text}"
+    );
+    assert!(!references.contains("fiber:pb/m"), "{text}");
+}
+
+#[test]
 fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_neither() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);

@@ -2,6 +2,12 @@
 [profile.default]
 slow-timeout = { period = "30s", terminate-after = 4 }
 
+# The delegate listing regression has a nested fake-server completion deadline
+# of 90 s; 270 s leaves room for setup and bounded cleanup.
+[[profile.default.overrides]]
+filter = 'package(main) & test(=delegate_models_omits_logged_out_provider_references)'
+slow-timeout = { period = "30s", terminate-after = 9 }
+
 # cargo-mutants' profile (.cargo/mutants.toml): the first failure stops every
 # running test, so a test that would hang until its deadline does not turn a
 # caught mutant into a timeout.
