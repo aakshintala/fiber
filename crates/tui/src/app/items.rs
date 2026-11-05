@@ -129,8 +129,9 @@ pub(crate) struct ItemView {
     pub(crate) provider: Option<ProviderFailure>,
     /// What opening or steering last refused with.
     pub(crate) message: Option<String>,
-    /// Whether a transcript is swapped in: a running or completed fiber
-    /// delegate.
+    /// Whether the swapped transcript draws: a running fiber delegate,
+    /// or a finished one whose open was not refused (a refused finish
+    /// keeps `Open.stashed` while the fallback draws instead).
     pub(crate) has_transcript: bool,
     /// The job's output path.
     pub(crate) output_path: String,

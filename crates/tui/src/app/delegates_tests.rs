@@ -502,20 +502,6 @@ fn subscribe_id(out: &[Value]) -> String {
         .unwrap_or_else(|| panic!("a subscribe"))
 }
 
-/// One envelope of the delegate.
-fn delegate_line(kind: &str, payload: Value) -> Line {
-    Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
-        session_id: contract::SessionId(DELEGATE.to_owned()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: Some(contract::ActionId("a_1".to_owned())),
-        seq: None,
-        payload: payload.as_object().cloned().unwrap_or_default(),
-    })
-}
-
 /// Folds one assistant turn saying `text` into the open delegate's view.
 fn delegate_turn(app: &mut App, text: &str) {
     for (kind, payload) in [
@@ -528,7 +514,12 @@ fn delegate_turn(app: &mut App, text: &str) {
         ),
         ("turn_completed", json!({"outcome": "completed"})),
     ] {
-        app.on_line(delegate_line(kind, payload));
+        app.on_line(crate::app::testkit::session_line(
+            DELEGATE,
+            kind,
+            payload,
+            Some("a_1"),
+        ));
     }
 }
 
