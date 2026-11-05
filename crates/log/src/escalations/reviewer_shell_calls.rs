@@ -137,21 +137,20 @@ fn calls_in(session: &Place) -> Vec<ShellCall> {
                 }
                 action.escalated = action.escalated || request.escalation.is_some();
             }
-        } else if kind == contract::events::EventKind::PermissionResolved {
-            if let Ok(resolved) = serde_json::from_value::<ResolvedLine>(narrow.payload) {
-                let action = action_for(&mut actions, &mut order, &action_id);
-                if action.resolved.is_none() {
-                    let (Some(decision), Some(decided_by)) =
-                        (resolved.decision, resolved.decided_by)
-                    else {
-                        continue;
-                    };
-                    action.resolved = Some(Resolved {
-                        decision,
-                        decided_by,
-                        reviewed: reviewed_command(&resolved.arguments),
-                    });
-                }
+        } else if kind == contract::events::EventKind::PermissionResolved
+            && let Ok(resolved) = serde_json::from_value::<ResolvedLine>(narrow.payload)
+        {
+            let action = action_for(&mut actions, &mut order, &action_id);
+            if action.resolved.is_none() {
+                let (Some(decision), Some(decided_by)) = (resolved.decision, resolved.decided_by)
+                else {
+                    continue;
+                };
+                action.resolved = Some(Resolved {
+                    decision,
+                    decided_by,
+                    reviewed: reviewed_command(&resolved.arguments),
+                });
             }
         }
     }

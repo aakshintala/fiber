@@ -66,26 +66,25 @@ impl RateFold {
             {
                 self.started.insert(action.0.clone());
             }
-        } else if kind == EventKind::UsageRecorded {
-            if self.rate.input_tokens.is_none()
-                && line
-                    .action_id
-                    .as_ref()
-                    .is_some_and(|action| self.started.contains(&action.0))
-                && let Ok(Some(Event::UsageRecorded(recorded))) = Event::from_envelope(line)
-                && recorded.extension.is_none()
-                && recorded.origin_session_id.is_none()
-                && self.model.as_deref() == Some(recorded.model.as_str())
-                && recorded.input_media != Some(true)
-                && recorded.input_bytes > 0
-                && input_tokens(&recorded) > 0
-            {
-                self.rate = Rate {
-                    input_tokens: Some(input_tokens(&recorded)),
-                    input_bytes: recorded.input_bytes,
-                };
-                self.started.clear();
-            }
+        } else if kind == EventKind::UsageRecorded
+            && self.rate.input_tokens.is_none()
+            && line
+                .action_id
+                .as_ref()
+                .is_some_and(|action| self.started.contains(&action.0))
+            && let Ok(Some(Event::UsageRecorded(recorded))) = Event::from_envelope(line)
+            && recorded.extension.is_none()
+            && recorded.origin_session_id.is_none()
+            && self.model.as_deref() == Some(recorded.model.as_str())
+            && recorded.input_media != Some(true)
+            && recorded.input_bytes > 0
+            && input_tokens(&recorded) > 0
+        {
+            self.rate = Rate {
+                input_tokens: Some(input_tokens(&recorded)),
+                input_bytes: recorded.input_bytes,
+            };
+            self.started.clear();
         }
     }
 

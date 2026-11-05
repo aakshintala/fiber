@@ -83,16 +83,15 @@ fn escalations_in(session: &place::Place) -> Vec<AllowedEscalation> {
             {
                 pending.insert(id, prefix);
             }
-        } else if kind == contract::events::EventKind::PermissionResolved {
-            if let Ok(line) = serde_json::from_slice::<ResolvedLine>(&raw)
-                && let Some(prefix) = answered(&line.payload, &mut pending)
-            {
-                found.push(AllowedEscalation {
-                    project: session.project.clone(),
-                    identity: session.identity.clone(),
-                    prefix,
-                });
-            }
+        } else if kind == contract::events::EventKind::PermissionResolved
+            && let Ok(line) = serde_json::from_slice::<ResolvedLine>(&raw)
+            && let Some(prefix) = answered(&line.payload, &mut pending)
+        {
+            found.push(AllowedEscalation {
+                project: session.project.clone(),
+                identity: session.identity.clone(),
+                prefix,
+            });
         }
     }
 }
