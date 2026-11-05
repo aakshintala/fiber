@@ -1015,7 +1015,9 @@ impl App {
                         return Some(Vec::new());
                     }
                 }
-                if envelope.kind == "notice" && self.gated(&envelope.session_id) {
+                if envelope.kind() == contract::events::EventKind::Notice
+                    && self.gated(&envelope.session_id)
+                {
                     // An opening session's notice reaches the notices
                     // while its replay stays gated: a refused credential
                     // switch reports without opening the gate or
