@@ -19,7 +19,7 @@ use contract::events::{
     VariablesSource,
 };
 use contract::shapes::{Point, Worktree};
-use contract::{ErrorCode, JobId, Seq, clock::Clock};
+use contract::{ErrorCode, JobId, Seq, clock::Clock, shapes::Failure};
 use log::Log;
 use serde_json::{Value, json};
 
@@ -191,10 +191,10 @@ fn session_with(dir: &Path, worktree: Option<Worktree>) -> Log {
 /// one-digit `version` keeps the file length and moves no other byte, so
 /// the log is itself a mixed-version history. The single-byte diff the
 /// rewrite leaves behind is asserted, not assumed.
-fn forge_fiber_started_version(dir: &Path, occurrence: usize, version: u64) {
+fn forge_fiber_started_version(dir: &Path, occurrence: usize, from: u64, version: u64) {
     let path = dir.join("events.jsonl");
     let before = std::fs::read(&path).unwrap();
-    let current = format!("\"schema_version\":{}", contract::SCHEMA_VERSION);
+    let current = format!("\"schema_version\":{from}");
     let forged = format!("\"schema_version\":{version}");
     assert_eq!(
         current.len(),
@@ -261,7 +261,7 @@ fn keeper_schema_version_names_the_latest_in_a_mixed_history() {
     let dir = sessions.join("s_0123456789abcdef");
     let _log = session_with(&dir, None);
     let next = u64::from(contract::SCHEMA_VERSION) + 1;
-    forge_fiber_started_version(&dir, 1, next);
+    forge_fiber_started_version(&dir, 1, u64::from(contract::SCHEMA_VERSION), next);
     assert_eq!(
         super::keeper_schema_version(&dir),
         Some(next),
@@ -277,7 +277,7 @@ fn keeper_schema_version_refusal_names_the_keepers_version() {
     let dir = sessions.join(&id.0);
     drop(session_with(&dir, None));
     let next = u64::from(contract::SCHEMA_VERSION) + 1;
-    forge_fiber_started_version(&dir, 1, next);
+    forge_fiber_started_version(&dir, 1, u64::from(contract::SCHEMA_VERSION), next);
     // A keeper-held lock at an unreadable version declines instead of
     // attaching: the lock is held through the resume's failed open.
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
@@ -302,11 +302,6 @@ fn keeper_schema_version_refusal_names_the_keepers_version() {
     assert_eq!(failure.code, ErrorCode::SessionHeld);
     assert_eq!(failure.code, mismatch.code());
     assert_eq!(failure.message, mismatch.to_string());
-    assert!(
-        failure.message.contains(&next.to_string()),
-        "the refusal names the keeper's version: {}",
-        failure.message
-    );
 }
 
 #[test]
@@ -316,7 +311,12 @@ fn keeper_schema_version_ignores_a_forged_first_line() {
     let id = SessionId("s_0123456789abcdef".into());
     let dir = sessions.join(&id.0);
     let _log = session_with(&dir, None);
-    forge_fiber_started_version(&dir, 0, u64::from(contract::SCHEMA_VERSION) + 1);
+    forge_fiber_started_version(
+        &dir,
+        0,
+        u64::from(contract::SCHEMA_VERSION),
+        u64::from(contract::SCHEMA_VERSION) + 1,
+    );
     assert_eq!(
         super::keeper_schema_version(&dir),
         Some(u64::from(contract::SCHEMA_VERSION)),
@@ -378,6 +378,59 @@ fn keeper_schema_version_falls_back_without_a_parseable_version() {
     );
 }
 
+/// The hub path's `Held` decision beside the ask path's keeper decision
+/// on one log: readable, forged-latest and reverse-mixed. Both call
+/// sites share the helper, so a keeper-held lock declines identically
+/// through either.
+fn parity_failures(sessions: &Path, id: &SessionId, dir: &Path) -> (Failure, Failure) {
+    let held = || log::Error::Held {
+        session: id.0.clone(),
+        holder: "keeper 4242".to_owned(),
+    };
+    let hub = super::session_held_failure(sessions, id, held());
+    let ask = super::keeper_refusal(dir, id, held());
+    (hub, ask)
+}
+
+#[test]
+fn keeper_schema_version_parity_across_call_sites() {
+    let home = fakes::TempDir::new("main-resume-version-parity");
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let dir = sessions.join(&id.0);
+    drop(session_with(&dir, None));
+    // A keeper-held lock, as the resume's failed `Log::open` finds it.
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let _keeper = Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap();
+    // Readable: both decline with today's bare refusal.
+    let (hub, ask) = parity_failures(&sessions, &id, &dir);
+    assert_eq!(hub, ask, "the call sites share the readable decision");
+    assert_eq!(hub.code, ErrorCode::SessionHeld);
+    // Forged latest: both decline naming the keeper's version.
+    let next = u64::from(contract::SCHEMA_VERSION) + 1;
+    forge_fiber_started_version(&dir, 1, u64::from(contract::SCHEMA_VERSION), next);
+    let (hub, ask) = parity_failures(&sessions, &id, &dir);
+    assert_eq!(hub, ask, "the call sites share the forged-latest decision");
+    assert_eq!(hub.code, ErrorCode::SessionHeld);
+    assert!(
+        hub.message.contains(&format!("runs schema version {next}")),
+        "both name the keeper's version: {}",
+        hub.message
+    );
+    // Reverse-mixed: both keep the bare refusal, never naming the forged
+    // first. Restore the latest, then forge the first instead.
+    forge_fiber_started_version(&dir, 1, next, u64::from(contract::SCHEMA_VERSION));
+    forge_fiber_started_version(&dir, 0, u64::from(contract::SCHEMA_VERSION), next);
+    let (hub, ask) = parity_failures(&sessions, &id, &dir);
+    assert_eq!(hub, ask, "the call sites share the reverse-mixed decision");
+    assert_eq!(hub.code, ErrorCode::SessionHeld);
+    assert!(
+        !hub.message.contains("runs schema version"),
+        "neither names the forged first: {}",
+        hub.message
+    );
+}
+
 #[test]
 fn keeper_schema_version_treats_zero_as_unreadable() {
     let home = fakes::TempDir::new("main-resume-version-zero");
@@ -385,7 +438,7 @@ fn keeper_schema_version_treats_zero_as_unreadable() {
     let id = SessionId("s_0123456789abcdef".into());
     let dir = sessions.join(&id.0);
     let _log = session_with(&dir, None);
-    forge_fiber_started_version(&dir, 1, 0);
+    forge_fiber_started_version(&dir, 1, u64::from(contract::SCHEMA_VERSION), 0);
     assert_eq!(
         super::keeper_schema_version(&dir),
         Some(0),

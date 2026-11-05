@@ -308,6 +308,17 @@ fn resume_refused(
     !recreatable(recorded) && !in_launch_project(dir, in_project)
 }
 
+/// The failure for a resume that finds the log held: a keeper-held lock
+/// declines through the shared keeper refusal, so the hub path agrees
+/// with `ask --resume`; any other holder keeps today's refusal.
+fn session_held_failure(sessions: &Path, id: &SessionId, error: log::Error) -> Failure {
+    let dir = log::SessionDir::new(sessions, id);
+    match keeper_held(dir.path(), id) {
+        Some(keeper) => keeper_refusal(dir.path(), id, keeper),
+        None => failed(error.code(), error),
+    }
+}
+
 /// The internal session command with `--resume`: resumes the session `id`
 /// in the current directory's project to serve clients
 /// (`docs/invocation.md`, "The hub"). The hub attaches to a live session by
@@ -331,6 +342,9 @@ pub(crate) fn session_resume(
     log::crash::attach(&id);
     let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
+        Err(error @ log::Error::Held { .. }) => {
+            return ask_failed(session_held_failure(&sessions, &id, error));
+        }
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = log::SessionDir::new(&sessions, &id);
