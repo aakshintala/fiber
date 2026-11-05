@@ -285,3 +285,5 @@ crates/main/src/keeper_tests.rs	fiber-3891	plan	2026-11-05T13:48:52Z	Amoghs-MacB
 crates/jobs/src/keeper.rs	fiber-3891	plan	2026-11-05T13:48:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/resume.rs	fiber-3892	plan	2026-11-05T13:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/resume_tests.rs	fiber-3892	plan	2026-11-05T13:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/performance.md	fiber-3895	plan	2026-11-05T14:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/bench/examples/bench/main.rs	fiber-3895	plan	2026-11-05T14:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
