@@ -62,6 +62,7 @@ impl Setup {
         version: &str,
         probe: Option<mpsc::Sender<()>>,
     ) {
+        let wait = self.deadline.start_wait();
         loop {
             let clock = fakes::clock::FakeClock::new();
             let request = extensions::Request::Path(source.to_path_buf());
@@ -72,13 +73,14 @@ impl Setup {
                 &extensions::Origin::github(),
                 &*clock,
             ) {
-                Err(extensions::Error::Busy) if !self.deadline.left().is_zero() => {
+                Err(extensions::Error::Busy) if !wait.left().is_zero() => {
                     if let Some(probe) = probe.as_ref() {
-                        match probe.send(()) {
-                            Ok(()) | Err(_) => {}
-                        }
+                        let _ = probe.send(()).ok();
                     }
                     std::thread::yield_now();
+                }
+                Err(extensions::Error::Busy) => {
+                    panic!("waited until the deadline for the extensions lock");
                 }
                 plan => {
                     plan.unwrap().commit().unwrap();

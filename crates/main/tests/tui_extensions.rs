@@ -77,8 +77,9 @@ fn transient_lock_hold_does_not_fail_install() {
             .append(true)
             .open(&lock)
             .unwrap();
+        let wait = deadline.start_wait();
         while file.try_lock().is_err() {
-            if deadline.left().is_zero() {
+            if wait.left().is_zero() {
                 panic!("the holder never took the extensions lock");
             }
             std::thread::yield_now();
@@ -100,6 +101,27 @@ fn transient_lock_hold_does_not_fail_install() {
         config::extensions_dir(&setup.home()).join("alpha").is_dir(),
         "the install committed alpha once the hold lifted"
     );
+}
+
+#[test]
+#[should_panic(expected = "extensions lock")]
+fn install_path_names_lock_when_busy_past_deadline() {
+    // The shared helper's expiry names the lock: with a bound already
+    // spent, a held `extensions/.lock` fails naming it instead of
+    // unwrapping `Busy`. A zero `Deadline::after` proves the expiry
+    // without spending the test's own wait (`Socket::set_deadline`).
+    let mut setup = Setup::new();
+    setup.deadline = support::Deadline::after(std::time::Duration::ZERO);
+    let dir = fixture_dir(&setup, "alpha", &source("ALPHA-ROW"), None);
+    let lock = config::extensions_dir(&setup.home()).join(".lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&lock)
+        .unwrap();
+    file.try_lock().unwrap();
+    setup.install_path(&dir, "0.0.0", None);
 }
 
 fn turn(setup: &Setup) -> Run {
