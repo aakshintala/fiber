@@ -106,14 +106,9 @@ crates/main/tests/hub_remote_terminal.rs	fiber-4131	grant	2026-11-05T12:01:31Z	A
 crates/main/tests/support/pty.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/tests/workspace_picker.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 scripts/test-bug-red	fiber-4102	grant	2026-11-05T12:05:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
-crates/tui/src/app/session_views.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/rewind_tests.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/session_views_tests.rs	fiber-4145	plan	2026-11-05T13:34:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/resume.rs	fiber-3892	plan	2026-11-05T13:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/resume_tests.rs	fiber-3892	plan	2026-11-05T13:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/items.rs crates/tui/src/app/items/retry.rs crates/tui/src/app/delegates_tests.rs crates/tui/src/app/items/retry_tests.rs docs/tui.md crates/tui/src/view/item.rs crates/main/tests/delegate_replay.rs	fiber-4186	plan	2026-11-05T14:28:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-git grep -n "rewind_list_to" e55e507a94329fc33c264c1739c80c01835f6aee -- .	fiber-4145	plan	2026-11-05T15:08:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4145-rewind-real-height	
-git grep -n "session_view_list_metrics" e55e507a94329fc33c264c1739c80c01835f6aee -- .	fiber-4145	plan	2026-11-05T15:08:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4145-rewind-real-height	
 crates/extensions/src/providers/naming.rs	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
 crates/extensions/src/providers/naming_tests.rs	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
 docs/model-routing.md	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
