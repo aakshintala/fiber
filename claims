@@ -204,4 +204,3 @@ crates/loop/src/suspend.rs	fiber-4156	plan	2026-11-05T19:53:16Z	Amoghs-MacBook-P
 crates/tui/src/app/session_views.rs	fiber-4156	plan	2026-11-05T19:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/home.rs	fiber-4156	plan	2026-11-05T19:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/answer.rs	fiber-4156	plan	2026-11-05T19:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/approvals.rs	fiber-4156	plan	2026-11-05T19:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
