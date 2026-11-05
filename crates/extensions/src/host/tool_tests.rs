@@ -42,7 +42,7 @@ type RunnerReply = Result<Box<ToolCallCompleted>, String>;
 /// A fake runner: records each call, signals when one arrives, and answers
 /// from a script, or parks the call when told to hold until released.
 #[derive(Clone)]
-pub(super) struct FakeRunner {
+struct FakeRunner {
     inner: Arc<FakeInner>,
 }
 

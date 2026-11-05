@@ -598,7 +598,7 @@ impl Shared {
 
     /// Stops the admitted exec run of the call `id`, if any: the sender's
     /// drop reaches the exec thread without the Lua thread running.
-    pub(super) fn stop_exec(&mut self, id: u64) {
+    fn stop_exec(&mut self, id: u64) {
         if let Some(admit) = self.execs.get_mut(&id) {
             admit.stop.take();
         }
