@@ -119,7 +119,7 @@ fn delegate_job(dir: &Path) -> Option<(SessionId, JobId)> {
     let segments = log::history(dir).ok()?;
     let started = segments.first()?.range(0, 1).ok()?;
     let first = started.first()?;
-    if first.kind != "session_started" {
+    if first.kind() != contract::events::EventKind::SessionStarted {
         return None;
     }
     let parent = first.payload.get("parent")?;
@@ -148,10 +148,13 @@ fn parent_run_open(home: &Path, parent: &SessionId, job: &JobId) -> bool {
             if line.payload.get("job_id").and_then(Value::as_str) != Some(job.0.as_str()) {
                 return None;
             }
-            match line.kind.as_str() {
-                "job_started" => Some(true),
-                "job_completed" => Some(false),
-                _ => None,
+            let kind = line.kind();
+            if kind == contract::events::EventKind::JobStarted {
+                Some(true)
+            } else if kind == contract::events::EventKind::JobCompleted {
+                Some(false)
+            } else {
+                None
             }
         }) {
             return started;
