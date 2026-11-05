@@ -584,9 +584,24 @@ pruning"). A worktree's lock file coordinates a resume's recreation, an end-of-r
 delegate's parent and session messages connect to it; every other client
 reaches it through the hub. `run/hub` is the hub's own socket, which local
 clients connect to; the hub that binds it removes a stale one first. The process
-holding that session's `session.lock` owns it: it removes any socket left by a
-dead process before binding, unlinks its own at exit, and nothing else removes
-one. It sits at the top of Fiber home
+holding that session's `session.lock` owns the session socket while it holds
+the lock: no other process unlinks it. Before binding, `bind` in
+`crates/doors/src/socket.rs` connects first: a socket the connect reaches is
+live, and binding fails with `SocketHeld`. A failed connect removes the path
+only when `replaceable` in the same file agrees: a refusal or a missing path is
+replaceable at once, so a dangling symlink, or one pointing at a stale socket,
+can be removed by `bind`; otherwise only a regular file is. A symlink, or a
+path whose type cannot be read, may lead to a live session, so the path stays
+and `bind` fails with `SocketIo`. Two failure paths unlink after binding: when
+setting the socket to mode 0600 fails, `bind` attempts the unlink and returns
+the error, and the unlink itself can fail; and when the stdout-printer thread
+fails to start, `open_in` in `crates/doors/src/session.rs` unlinks the
+just-bound socket and returns the `ThreadSpawn` error. At exit,
+`Session::close` in the same file unlinks the socket while still holding
+`session.lock`, so a held lock does not imply a socket exists. Removing a
+socket path is implemented twice: `remove_socket` in
+`crates/doors/src/socket.rs` and a separate private `remove_socket` in
+`crates/hub/src/listen.rs` for the hub's own socket. It sits at the top of Fiber home
 because macOS limits a socket's path to 103 bytes (`sun_path[104]` in
 `sys/un.h`; binding at 104 fails, probed on Darwin 25.6.0), and a path under
 `projects/<key>/sessions/<id>/` exceeds that. Linux allows 107 (`unix(7)`, not
