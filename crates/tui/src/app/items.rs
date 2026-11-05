@@ -796,6 +796,16 @@ impl App {
         if !self.is_item_session(&envelope.session_id) {
             return false;
         }
+        // A line on the open session proves the open reached its hub, so
+        // a stale refusal clears with it: an early refusal hid the replay
+        // the hub answered after, and the gate reads the message. A
+        // refusal owns its message through `subscribe_refused`, so a
+        // `command_rejected` never clears here.
+        if envelope.kind() != EventKind::CommandRejected
+            && let Some(open) = self.items.open.as_mut()
+        {
+            open.message = None;
+        }
         if envelope.kind() == EventKind::ToolCallCompleted
             && let Some(open) = self.items.open.as_ref()
             && let Some(record) = self.items.jobs.get_mut(&open.job_id)

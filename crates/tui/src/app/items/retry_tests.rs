@@ -436,6 +436,32 @@ fn finished_open_refused_after_running_draws_one_dim_fallback() {
     }
 }
 
+#[test]
+fn refused_then_replayed_draws_the_transcript() {
+    let mut app = home();
+    opened(&mut app);
+    refused_finished(&mut app, "session_not_found");
+    let refused = crate::view::text(&rendered(&mut app));
+    assert!(
+        refused.contains("No transcript: no such session"),
+        "the refusal hides the replay first:\n{refused}"
+    );
+    // The hub answers after the refusal: the replay folds into the open
+    // view and clears the stale refusal with it, so the transcript draws.
+    delegate_turn(&mut app, "late replay");
+    let buf = rendered(&mut app);
+    let view = crate::view::text(&buf);
+    assert!(view.contains("late replay"), "the replay draws:\n{view}");
+    assert!(
+        !view.contains("No transcript"),
+        "no stale fallback:\n{view}"
+    );
+    assert!(
+        app.item_view().is_some_and(|item| item.has_transcript),
+        "the gate follows the replay:\n{view}"
+    );
+}
+
 /// Drives the clock: the frame time `now` reads from `clock`.
 fn tick(app: &mut App, clock: &std::sync::Arc<fakes::clock::FakeClock>) {
     app.set_now(clock.now(), contract::clock::wall_ms(clock.wall()));
