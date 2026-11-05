@@ -254,7 +254,7 @@ fn a_cfg_attributed_opener_still_opens_a_region() {
 }
 
 #[test]
-fn an_unclosed_region_skips_to_end_of_file() {
+fn an_unbalanced_file_is_skipped() {
     let source = concat!(
         "pub(crate) mod m {\n",
         "    pub(crate) fn f() {}\n",
@@ -265,7 +265,7 @@ fn an_unclosed_region_skips_to_end_of_file() {
 }
 
 #[test]
-fn a_depth_anomaly_skips_to_end_of_file() {
+fn a_stray_close_brace_skips_the_file() {
     assert_eq!(
         single("}\n    pub(crate) fn g() {}\n"),
         Vec::<String>::new()
@@ -278,5 +278,66 @@ fn a_declaration_after_a_closed_region_is_checked() {
     assert_eq!(
         single(source),
         vec!["crates/x/src/only.rs:3: after is pub(crate) but no other file in x names it"]
+    );
+}
+
+#[test]
+fn a_file_that_does_not_tokenise_is_skipped() {
+    assert_eq!(
+        single("pub(crate) fn lonely() {}\n\"unterminated\n"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_paren_delimited_macro_body_is_skipped() {
+    let source = concat!(
+        "macro_rules! m (\n",
+        "    ($x:expr) => { pub(crate) fn generated() {} }\n",
+        ")\n",
+    );
+    assert_eq!(single(source), Vec::<String>::new());
+}
+
+#[test]
+fn a_macro_two_definition_body_is_skipped() {
+    let source = concat!("macro m {\n", "    pub(crate) fn generated() {}\n", "}\n",);
+    assert_eq!(single(source), Vec::<String>::new());
+}
+
+#[test]
+fn a_bare_pub_mod_opens_a_region() {
+    let source = concat!(
+        "pub mod holder {\n",
+        "    pub(crate) fn fire() {}\n",
+        "}\n",
+        "fn run() { holder::fire(); }\n",
+    );
+    assert_eq!(single(source), Vec::<String>::new());
+}
+
+#[test]
+fn qualified_fn_forms_are_flagged() {
+    assert_eq!(
+        single("pub(crate) const fn f() -> u32 { 1 }\n"),
+        vec!["crates/x/src/only.rs:1: f is pub(crate) but no other file in x names it"]
+    );
+    assert_eq!(
+        single("pub(crate) unsafe fn f() {}\n"),
+        vec!["crates/x/src/only.rs:1: f is pub(crate) but no other file in x names it"]
+    );
+    assert_eq!(
+        single("pub(crate) extern \"C\" fn f();\n"),
+        vec!["crates/x/src/only.rs:1: f is pub(crate) but no other file in x names it"]
+    );
+}
+
+#[test]
+fn other_visibility_spellings_are_skipped() {
+    assert_eq!(single("pub fn f() {}\n"), Vec::<String>::new());
+    assert_eq!(single("pub(in crate) fn f() {}\n"), Vec::<String>::new());
+    assert_eq!(
+        single("pub(crate) fn r#type() {}\n"),
+        vec!["crates/x/src/only.rs:1: type is pub(crate) but no other file in x names it"]
     );
 }
