@@ -4,7 +4,7 @@
 use super::super::{App, Effect, Link};
 use super::Spot;
 use crate::app::testkit::{SESSION as A, hello, home_with};
-use crate::home::{Launch, Spot as HomeSpot};
+use crate::home::{Launch, Left, Spot as HomeSpot};
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::keyset::Context;
 use crate::link::Line;
@@ -219,6 +219,81 @@ fn an_exited_row_gives_up_its_number() {
     let mut app = with(&[A, B]);
     app.on_line(left(A, "exited"));
     assert_eq!(number(&app, A), None);
+    assert_eq!(number(&app, B), Some(2));
+}
+
+#[test]
+fn exited_on_screen_card_stays_with_its_number() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(number(&app, A), Some(1));
+    assert_eq!(number(&app, B), Some(2));
+    assert!(
+        app.rail_cards().is_some_and(|(cards, _)| cards
+            .iter()
+            .any(|card| card.id.0 == A && card.left == Some(Left::Exited))),
+        "the on-screen session keeps its card"
+    );
+}
+
+#[test]
+fn exited_off_screen_session_gets_no_card_while_the_on_screen_card_stays() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(B, "exited"));
+    assert!(!carded(&app, B), "an exit off screen adds no card");
+    assert_eq!(number(&app, B), None);
+    assert!(carded(&app, A));
+    app.on_line(left(A, "exited"));
+    assert!(!carded(&app, B));
+    assert!(carded(&app, A));
+    assert_eq!(number(&app, A), Some(1));
+}
+
+#[test]
+fn exited_on_screen_card_keeps_a_hidden_cards_number() {
+    let mut app = opened(&[A, B, C], A);
+    let Line::Session(mut envelope) = live(C, json!({})) else {
+        panic!("a session line");
+    };
+    envelope.schema_version = contract::SCHEMA_VERSION + 1;
+    app.on_line(Line::Session(envelope));
+    cross(&mut app, C);
+    assert!(!carded(&app, C), "the ✕ hides the CANNOT ATTACH card");
+    assert_eq!(number(&app, C), Some(3));
+    app.on_line(left(A, "exited"));
+    assert!(carded(&app, A));
+    assert_eq!(number(&app, A), Some(1));
+    assert_eq!(number(&app, C), Some(3));
+    assert_eq!(number(&app, B), Some(2));
+}
+
+#[test]
+fn exited_on_screen_card_keeps_a_replaced_number() {
+    let mut app = opened(&[A, B], A);
+    let new = "s_nnnnnnnnnnnnnnnn";
+    app.rail_state
+        .replace(SessionId(A.to_owned()), SessionId(new.to_owned()));
+    app.on_line(live(new, json!({})));
+    assert_eq!(number(&app, new), Some(1));
+    let out = sent(click(&mut app, new));
+    ack(&mut app, &out);
+    assert_eq!(on_screen(&app), Some(new));
+    app.on_line(left(new, "exited"));
+    assert!(carded(&app, new));
+    assert_eq!(number(&app, new), Some(1));
+    assert_eq!(number(&app, B), Some(2));
+}
+
+#[test]
+fn exited_on_screen_card_after_closing_takes_the_next_free_number() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(live(A, json!({"closing": true})));
+    app.on_line(live(C, json!({})));
+    assert_eq!(number(&app, C), Some(1));
+    app.on_line(left(A, "exited"));
+    assert!(carded(&app, A));
+    assert_eq!(number(&app, A), Some(3));
+    assert_eq!(number(&app, C), Some(1));
     assert_eq!(number(&app, B), Some(2));
 }
 
@@ -688,6 +763,161 @@ fn a_crashed_card_click_resumes_it() {
     let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{line}: {err}"));
     assert_eq!(raise, subscribe(&raise["id"], B, "full"));
     assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn exited_on_screen_card_stays_in_place() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert!(carded(&app, A), "the on-screen session keeps its card");
+    assert_eq!(number(&app, A), Some(1));
+    let frame = shown(&app);
+    assert!(frame.contains("○ EXITED"), "{frame}");
+}
+
+#[test]
+fn exited_on_screen_card_drops_when_switching_to_another() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert!(carded(&app, A));
+    let out = sent(click(&mut app, B));
+    ack(&mut app, &out);
+    assert_eq!(on_screen(&app), Some(B));
+    assert!(!carded(&app, A), "the other screen drops the old card");
+    assert_eq!(number(&app, A), None);
+    assert_eq!(number(&app, B), Some(2));
+}
+
+/// Finishes the open the resume started, as the crashed resume does:
+/// the first subscribe asks for commands, the raise's ack ends the
+/// gate, and a fresh status revives the card. A replayed status from
+/// before the exit changes nothing.
+fn resume_open(app: &mut App, out: &[Value]) {
+    let first = out
+        .iter()
+        .find(|line| line["command"] == "subscribe" && line["session_id"] == A)
+        .and_then(|line| line["id"].as_str())
+        .unwrap_or_else(|| panic!("a first stage for {A}: {out:?}"))
+        .to_owned();
+    let commands = commands(app.on_line(accepted(A, &first)));
+    assert_eq!(commands, vec![asks_commands(&commands[0]["id"], A)]);
+    let line = app.take_raise().unwrap_or_else(|| panic!("a raise"));
+    let raise: Value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{err}"));
+    app.on_line(accepted(A, raise["id"].as_str().unwrap_or_default()));
+    app.on_line(live(A, json!({"since": 1})));
+}
+
+#[test]
+fn exited_on_screen_card_click_resumes_it() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    let out = sent(click(&mut app, A));
+    resume_open(&mut app, &out);
+    // The session's next status makes the card live again.
+    assert!(app.rail_cards().is_some_and(|(cards, _)| {
+        cards
+            .iter()
+            .any(|card| card.id.0 == A && card.left.is_none())
+    }));
+    assert_eq!(on_screen(&app), Some(A));
+    assert_eq!(number(&app, A), Some(1));
+}
+
+#[test]
+fn enter_on_exited_card_resumes_it() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    let effect = stroke_press(&mut app, plain(Code::Enter));
+    assert!(matches!(effect, Effect::Send(_)), "{effect:?}");
+    assert_eq!(rail_focus(&app), None);
+    resume_open(&mut app, &sent(effect));
+    assert_eq!(on_screen(&app), Some(A));
+    assert!(app.rail_cards().is_some_and(|(cards, _)| {
+        cards
+            .iter()
+            .any(|card| card.id.0 == A && card.left.is_none())
+    }));
+    assert_eq!(number(&app, A), Some(1));
+}
+
+#[test]
+fn delete_on_exited_card_does_nothing() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    let card = Spot::Card(key(&app, A));
+    assert_eq!(rail_focus(&app), Some(card));
+    assert_eq!(stroke_press(&mut app, plain(Code::Delete)), Effect::None);
+    assert!(!app.quit_open());
+    assert_eq!(rail_focus(&app), Some(card));
+    assert_eq!(on_screen(&app), Some(A));
+    assert!(carded(&app, A));
+}
+
+#[test]
+fn exited_on_screen_unreadable_card_click_gives_the_notice() {
+    let mut app = opened(&[A, B], A);
+    let Line::Session(mut envelope) = live(A, json!({})) else {
+        panic!("a session line");
+    };
+    envelope.schema_version = contract::SCHEMA_VERSION + 1;
+    app.on_line(Line::Session(envelope));
+    app.on_line(left(A, "exited"));
+    assert!(carded(&app, A));
+    assert_eq!(click(&mut app, A), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Cannot attach: its status did not parse.")
+    );
+    assert!(app.notices().iter().any(|line| matches!(
+        line,
+        crate::app::NoticeLine::Notice { code, .. }
+        if *code == ErrorCode::SessionHeld
+    )));
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn enter_on_exited_unreadable_card_gives_the_notice() {
+    let mut app = opened(&[A, B], A);
+    let Line::Session(mut envelope) = live(A, json!({})) else {
+        panic!("a session line");
+    };
+    envelope.schema_version = contract::SCHEMA_VERSION + 1;
+    app.on_line(Line::Session(envelope));
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(stroke_press(&mut app, plain(Code::Enter)), Effect::None);
+    assert_eq!(
+        app.notice(),
+        Some("Cannot attach: its status did not parse.")
+    );
+    assert_eq!(on_screen(&app), Some(A));
+}
+
+#[test]
+fn exited_on_screen_card_click_with_the_link_down_sends_nothing() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    app.disconnected();
+    assert_eq!(click(&mut app, A), Effect::None);
+    assert_eq!(on_screen(&app), Some(A));
+    assert!(carded(&app, A));
+}
+
+#[test]
+fn enter_on_exited_card_with_the_link_down_sends_nothing() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    app.disconnected();
+    assert_eq!(stroke_press(&mut app, plain(Code::Enter)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(on_screen(&app), Some(A));
 }
 
 #[test]
@@ -2593,9 +2823,156 @@ fn a_hidden_rail_left_goes_home_with_default_focus() {
 }
 
 #[test]
-fn an_exited_on_screen_session_widens_home_on_its_row() {
+fn exited_on_screen_hidden_rail_left_goes_home() {
     let mut app = opened(&[A, B], A);
     app.on_line(left(A, "exited"));
+    assert_eq!(number(&app, A), Some(1));
+    assert_eq!(
+        stroke_press(&mut app, Stroke::parse("alt+r").unwrap()),
+        Effect::None
+    );
+    assert!(rail_rect(&app).is_none());
+    let homeward = stroke_press(&mut app, plain(Code::Left));
+    // An exited session owes no lowering subscribe, so the leave
+    // sends nothing and lands home all the same.
+    assert_eq!(homeward, Effect::None);
+    assert!(app.on_home());
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn exited_on_screen_exit_keeps_focus_on_another_card() {
+    let mut app = opened(&[A, B], A);
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(stroke_press(&mut app, plain(Code::Down)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+    app.on_line(left(A, "exited"));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+    assert!(carded(&app, A));
+    let frame = shown(&app);
+    assert!(frame.contains("○ EXITED"), "{frame}");
+}
+
+#[test]
+fn exited_on_screen_switch_away_clears_its_focus() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    let out = sent(click(&mut app, B));
+    ack(&mut app, &out);
+    assert_eq!(on_screen(&app), Some(B));
+    assert_eq!(rail_focus(&app), None);
+    assert!(!carded(&app, A));
+    assert_eq!(number(&app, A), None);
+}
+
+#[test]
+fn exited_on_screen_tab_walks_past_its_card_once() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    for stop in [
+        Spot::Start(key(&app, A)),
+        Spot::Done(key(&app, A)),
+        Spot::Card(key(&app, B)),
+    ] {
+        assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+        assert_eq!(rail_focus(&app), Some(stop));
+    }
+    // Every stop walked: Tab walks on from the rail.
+    assert_eq!(stroke_press(&mut app, plain(Code::Tab)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
+}
+
+#[test]
+fn exited_on_screen_left_entry_reveals_its_scrolled_off_card() {
+    let mut app = eight_scrolled_past_on_screen();
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    // No further key or hub line: the entry's settle already revealed it.
+    let area = ratatui::layout::Rect::new(0, 0, 200, 40);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let shown = crate::view::render(&app, area, &mut buf, None);
+    assert!(
+        shown
+            .iter()
+            .any(|target| target.id == TargetId::Rail(Spot::Card(key(&app, A)))),
+        "the lifted card is drawn in the same frame"
+    );
+    assert!(crate::view::text(&buf).contains("○ EXITED"));
+}
+
+#[test]
+fn exited_on_screen_alt_digit_on_its_number_does_nothing() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(number(&app, A), Some(1));
+    assert_eq!(press(&mut app, Key::AltDigit(1)), Effect::None);
+    assert_eq!(on_screen(&app), Some(A));
+    assert!(carded(&app, A));
+}
+
+/// Answers every scoped `recent` in `out` with `total` and no rows: the
+/// held hub total with the loaded rows beneath it.
+fn answer_scoped_total(app: &mut App, out: &[Value], total: usize) {
+    for line in out.iter().filter(|line| line["command"] == "recent") {
+        let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
+        app.on_line(Line::Hub(contract::HubLine {
+            kind: "command_accepted".to_owned(),
+            ts: 0,
+            schema_version: contract::SCHEMA_VERSION,
+            payload: json!({"command_id": id, "result": {"sessions": [], "total": total}})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+        }));
+    }
+}
+
+#[test]
+fn exited_on_screen_card_leaves_the_header_count_on_the_hub_total() {
+    // A new project arriving queues its scoped ask at once: answer
+    // every ask as it goes out, holding the hub total 7 for both
+    // projects before either session exits.
+    let mut app = home_with(200, 40, launch());
+    linked(&mut app);
+    for (session, fields) in [
+        (A, json!({})),
+        (C, json!({"project": "-other", "workspace": "/other"})),
+        (B, json!({})),
+    ] {
+        let out: Vec<Value> = commands(app.on_line(live(session, fields)));
+        answer_scoped_total(&mut app, &out, 7);
+    }
+    open(&mut app, A);
+    let frame = shown(&app);
+    assert!(frame.contains("7 ✓"), "{frame}");
+    // B exits off screen: the count stays on the hub total, with no card.
+    let out: Vec<Value> = commands(app.on_line(left(B, "exited")));
+    answer_scoped_total(&mut app, &out, 7);
+    let frame = shown(&app);
+    assert!(frame.contains("7 ✓"), "{frame}");
+    assert!(!frame.contains("○ EXITED"), "{frame}");
+    // The on-screen exit asks again: the count stays 7 with the card drawn.
+    let out: Vec<Value> = commands(app.on_line(left(A, "exited")));
+    answer_scoped_total(&mut app, &out, 7);
+    assert!(carded(&app, A));
+    assert_eq!(number(&app, A), Some(1));
+    let frame = shown(&app);
+    assert!(frame.contains("7 ✓"), "{frame}");
+    assert!(frame.contains("○ EXITED"), "{frame}");
+}
+
+#[test]
+fn an_exited_on_screen_session_focuses_its_card_then_widens_home_on_its_row() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert!(!app.on_home());
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert!(app.on_home());
     assert_eq!(rail_focus(&app), None);
@@ -2613,12 +2990,15 @@ fn an_exited_on_screen_session_widens_home_on_its_row() {
 }
 
 #[test]
-fn an_exited_on_screen_session_behind_more_widens_home_on_its_row() {
+fn an_exited_on_screen_session_behind_more_focuses_its_card_then_widens_home() {
     let mut app = opened(&[A, B, C, D], A);
     app.on_line(left(B, "exited"));
     app.on_line(left(C, "exited"));
     app.on_line(left(D, "exited"));
     app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert!(!app.on_home());
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert!(app.on_home());
     assert_eq!(rail_focus(&app), None);
@@ -2930,6 +3310,27 @@ fn a_reconnect_listing_the_focused_card_keeps_it() {
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
 }
 
+#[test]
+fn exited_on_screen_reconnect_keeping_the_focused_card_keeps_it() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    let id = reconnected_sessions(&mut app);
+    sessions_result(&mut app, &id, &[A, B]);
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+}
+
+#[test]
+fn exited_on_screen_quit_quits_like_the_live_path() {
+    let mut app = opened(&[A, B], A);
+    app.on_line(left(A, "exited"));
+    assert!(carded(&app, A));
+    assert_eq!(number(&app, A), Some(1));
+    type_text(&mut app, "/quit");
+    assert_eq!(press(&mut app, Key::Enter), Effect::Quit);
+}
+
 /// `A` and `B` live with `A` on screen, after one finished turn, so the
 /// conversation has a stop to navigate to.
 fn opened_in_conversation() -> App {
@@ -3054,7 +3455,7 @@ fn shift_tab_with_no_stop_clears_the_rail_leaving_no_focus() {
 }
 
 #[test]
-fn tab_with_the_on_screen_session_exited_lands_on_the_first_card() {
+fn tab_with_the_on_screen_session_exited_lands_on_its_card() {
     let mut app = opened(&[A, B], A);
     app.on_line(left(A, "exited"));
     let targets = framed(&mut app);
@@ -3065,14 +3466,15 @@ fn tab_with_the_on_screen_session_exited_lands_on_the_first_card() {
         .id;
     app.focus = Some(panel_stop);
     app.drawn(&targets);
+    // Tab enters the rail on the on-screen card, live or EXITED.
     stroke_press(&mut app, plain(Code::Tab));
-    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, B))));
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(app.focused(), None);
     assert_single_focus(&app);
 }
 
 #[test]
-fn tab_with_no_card_stop_skips_the_rail() {
+fn tab_with_only_the_on_screen_exited_card_lands_on_it() {
     let mut app = opened(&[A, B], A);
     app.on_line(left(A, "exited"));
     app.on_line(left(B, "exited"));
@@ -3084,14 +3486,11 @@ fn tab_with_no_card_stop_skips_the_rail() {
         .id;
     app.focus = Some(panel_stop);
     app.drawn(&targets);
+    // The off-screen exit leaves no card, but the on-screen EXITED card
+    // is still a stop: Tab enters the rail on it.
     stroke_press(&mut app, plain(Code::Tab));
-    assert_eq!(rail_focus(&app), None);
-    // The status row's directory and mode are stops now: Tab skips the
-    // rail and lands on the status segment.
-    assert_eq!(
-        app.focused(),
-        Some(TargetId::Panel(crate::app::panel::Spot::Status))
-    );
+    assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
+    assert_eq!(app.focused(), None);
     assert_single_focus(&app);
 }
 
