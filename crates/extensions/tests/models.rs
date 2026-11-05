@@ -30,7 +30,7 @@ fn switched_on_lists_presence_without_acquiring_or_losing_identity() {
     );
     assert!(providers.switched_on(&configuration).next().is_none());
     config::store_credential(&setup.home(), "z", "work", &Secret::new("key".into())).unwrap();
-    let configuration = config(&setup, &["providers.z.credential_label=default"]);
+    let configuration = config(&setup, &["providers.z.credential=default"]);
     assert_eq!(
         providers.switched_on(&configuration).collect::<Vec<_>>(),
         ["z"]

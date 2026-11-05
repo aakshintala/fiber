@@ -843,6 +843,8 @@ read, including cached reads, before grouping missing host settings. Logging
 out hides their models without deleting cache files. No refresh starts for a
 provider that is off. Installed provider identity remains available for
 session resolution and credential diagnostics.
+Displayed lists, catalogues and role marking use `Providers::switched_on` to
+count only switched-on providers.
 
 The age of a list is the age of its cache file, so sessions that start
 together refresh a provider once. A provider already refreshing is not

@@ -4748,6 +4748,22 @@ fn delegate_models_omits_logged_out_provider_references() {
     let _guard = arm(&setup);
     let parent = ProviderServer::start([
         support::stream(&[function_call("call_models", "delegate_models", &json!({}))]),
+        support::stream(&[function_call(
+            "call_off_reference",
+            "delegate_spawn",
+            &json!({
+                "description": "scan", "prompt": "say hello", "model": "fiber:pb/m"
+            }),
+        )]),
+        text_reply("allow"),
+        support::stream(&[function_call(
+            "call_off_role",
+            "delegate_spawn",
+            &json!({
+                "description": "scan", "prompt": "say hello", "model": "deep"
+            }),
+        )]),
+        text_reply("allow"),
         support::hello(),
     ])
     .unwrap();
@@ -4777,7 +4793,19 @@ fn delegate_models_omits_logged_out_provider_references() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    support::assert_kinds_multiset(&lines, &support::read_kinds(), &[], None, COUNT_DOC);
+    // docs/delegates.md, "Choosing a model": one listing and two refused
+    // spawns, each with its own tool completion; no delegate starts.
+    let mut expected = REFUSED_MODEL_DURABLE.to_vec();
+    expected.extend([
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_started",
+        "tool_call_completed",
+    ]);
+    support::assert_kinds_multiset(&durable_lines(&lines), &expected, &[], None, COUNT_DOC);
     let completed = completed_for(&lines, "delegate_models");
     assert_eq!(completed["payload"]["status"], "completed");
     let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
@@ -4788,6 +4816,34 @@ fn delegate_models_omits_logged_out_provider_references() {
         "{text}"
     );
     assert!(!references.contains("fiber:pb/m"), "{text}");
+    assert!(text.contains("deep: fiber:pb/m (unavailable)"), "{text}");
+    for model in ["fiber:pb/m", "deep"] {
+        let requested = lines
+            .iter()
+            .find(|line| {
+                line["kind"] == "tool_call_requested"
+                    && line["payload"]["name"] == "delegate_spawn"
+                    && line["payload"]["arguments"]["model"] == model
+            })
+            .unwrap();
+        let completed = lines
+            .iter()
+            .find(|line| {
+                line["kind"] == "tool_call_completed" && line["action_id"] == requested["action_id"]
+            })
+            .unwrap();
+        assert_eq!(completed["payload"]["status"], "failed");
+        assert_eq!(completed["payload"]["error"]["code"], "invalid_arguments");
+        let message = completed["payload"]["error"]["message"].as_str().unwrap();
+        assert!(message.contains("Unknown delegate model"), "{message}");
+    }
+    assert!(lines.iter().all(|line| line["kind"] != "delegate_started"));
+    assert_eq!(fs::read_dir(ask_sessions(&setup)).unwrap().count(), 1);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello.")
+    );
 }
 
 #[test]
@@ -6052,8 +6108,22 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
     .unwrap();
     install_url(&setup, "pa", &parent.url(), "openai-responses", &json!({}));
     install_pb_without_credential(&setup, &child.url());
+    // Presence can come from any label; the selected default still fails
+    // acquisition inside the child because its environment source is absent.
+    config::store_credential(
+        &setup.home(),
+        "pb",
+        "work",
+        &config::Secret::new("key".into()),
+    )
+    .unwrap();
     standing_allow(&setup);
-    slow_idle(&setup);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "providers": {"pb": {"credential": "default"}}}),
+    );
 
     // The probe runs the child's exact command for the same model: a
     // missing credential must fail the same way the delegate will, so its
