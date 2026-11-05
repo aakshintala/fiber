@@ -289,11 +289,10 @@ fn keeper_bound_fires_two_hours_after_the_crash_and_writes_keeper_timeout() {
         .mark_parked(bound_at, Deadline::after(Duration::from_secs(10)))
         .expect("the watcher re-parks at the bound");
     assert_eq!(parked.threads(), vec![watcher]);
-    // Nothing fired: the keeper still runs, the job still lives, the log holds no ending.
+    // Nothing fired: the watcher's confirmed re-park above proves the bound
+    // did not fire, so the exit channel must still be empty.
     assert!(
-        Deadline::after(Duration::from_secs(10))
-            .recv(&keeper.result)
-            .is_err(),
+        keeper.result.try_recv().is_err(),
         "the keeper still runs before the bound"
     );
     assert!(
@@ -372,19 +371,8 @@ fn keeper_bound_ignores_term_and_completes_through_escalation() {
         super::KEEPER_BOUND,
         &Deadline::after(Duration::from_secs(10)),
     );
-    // TERM cannot end the loop, so nothing is written yet.
-    assert!(
-        Deadline::after(Duration::from_secs(10))
-            .recv(&keeper.result)
-            .is_err(),
-        "the keeper still runs after an ignored stop"
-    );
-    assert!(support::group::alive(pgid), "the job survives its stop");
-    assert!(
-        job_completed_lines(&keeper).is_empty(),
-        "no ending is written before the reap"
-    );
-    // Past the grace the timer escalates to KILL: the reap writes the timeout.
+    // TERM cannot end the loop: the escalation timer's confirmed park proves
+    // the kill has not fired, so nothing is written yet.
     let kill_at = bound_at + support::group::GRACE;
     let parked = clock
         .mark_parked(kill_at, Deadline::after(Duration::from_secs(10)))
@@ -395,6 +383,16 @@ fn keeper_bound_ignores_term_and_completes_through_escalation() {
         "only the timer parks at the kill"
     );
     let timer = parked.threads().into_iter().next().expect("timer thread");
+    assert!(
+        keeper.result.try_recv().is_err(),
+        "the keeper still runs after an ignored stop"
+    );
+    assert!(support::group::alive(pgid), "the job survives its stop");
+    assert!(
+        job_completed_lines(&keeper).is_empty(),
+        "no ending is written before the reap"
+    );
+    // Past the grace the timer escalates to KILL: the reap writes the timeout.
     clock.advance_when_parked(
         Some(kill_at),
         Some(timer),
@@ -464,8 +462,10 @@ fn keeper_no_job_crash_spawns_no_watcher() {
         .recv_or_fail(&keeper.result, "keeper exit")
         .expect("keeper exits cleanly");
     let bound_at = clock.origin() + super::KEEPER_BOUND;
+    // The keeper's exit above proves registration closed: serve spawns the
+    // watcher before returning its result, so no park can arrive later.
     assert!(
-        !clock.await_parked(bound_at, Deadline::after(Duration::from_secs(10))),
+        !clock.parked().contains(&Some(bound_at)),
         "no watcher parks at the bound"
     );
 }
