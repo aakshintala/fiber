@@ -12,6 +12,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::Event;
+use contract::events::EventKind;
 use contract::shapes::{Failure, Worktree};
 use log::Log;
 
@@ -149,7 +150,7 @@ fn keeper_schema_version(dir: &Path) -> Option<u64> {
             Ok(envelope) => envelope,
             Err(_) => break,
         };
-        if envelope.kind == "fiber_started" {
+        if envelope.kind() == EventKind::FiberStarted {
             version = Some(u64::from(envelope.schema_version));
         }
     }
