@@ -282,3 +282,7 @@ crates/main/src/resume_tests.rs	fiber-3892	plan	2026-11-05T13:53:16Z	Amoghs-MacB
 docs/performance.md	fiber-3895	plan	2026-11-05T14:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/bench/examples/bench/main.rs	fiber-3895	plan	2026-11-05T14:11:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/items.rs crates/tui/src/app/items/retry.rs crates/tui/src/app/delegates_tests.rs crates/tui/src/app/items/retry_tests.rs docs/tui.md crates/tui/src/view/item.rs crates/main/tests/delegate_replay.rs	fiber-4186	plan	2026-11-05T14:28:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+providers/databricks/thinking-overlay.json	fiber-4202	plan	2026-11-05T14:36:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/thinking.lua	fiber-4202	plan	2026-11-05T14:36:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/models-thinking-overlay.json	fiber-4202	plan	2026-11-05T14:36:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+providers/databricks/tests/models-thinking-levels.json	fiber-4202	plan	2026-11-05T14:36:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
