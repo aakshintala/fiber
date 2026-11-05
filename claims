@@ -1,8 +1,3 @@
-.github/workflows/release.yml	fiber-4099	plan	2026-11-04T09:24:31Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-xtask/src/nightly_pair.rs	fiber-4099	plan	2026-11-04T09:24:31Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-xtask/src/nightly_pair_tests.rs	fiber-4099	plan	2026-11-04T09:24:31Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-xtask/src/nightly_fixture.rs	fiber-4099	plan	2026-11-04T09:24:31Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-xtask/src/nightly_fixture_tests.rs	fiber-4099	plan	2026-11-04T09:24:31Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/contract/src/codes.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/notices.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
@@ -76,7 +71,6 @@ crates/tui/src/view/item_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhous
 crates/tui/src/app/call_view_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/config_views/credential_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/mcp_view_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
-xtask/src/main.rs	fiber-4099	plan	2026-11-04T16:57:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/tui/src/app/home/prompt/exit.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
 crates/tui/src/app/images.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
 crates/tui/src/app/offer.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
