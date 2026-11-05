@@ -291,7 +291,7 @@ fn keeper_bound_fires_two_hours_after_the_crash_and_writes_keeper_timeout() {
     assert_eq!(parked.threads(), vec![watcher]);
     // Nothing fired: the keeper still runs, the job still lives, the log holds no ending.
     assert!(
-        Deadline::after(Duration::from_secs(2))
+        Deadline::after(Duration::from_secs(10))
             .recv(&keeper.result)
             .is_err(),
         "the keeper still runs before the bound"
@@ -374,7 +374,7 @@ fn keeper_bound_ignores_term_and_completes_through_escalation() {
     );
     // TERM cannot end the loop, so nothing is written yet.
     assert!(
-        Deadline::after(Duration::from_secs(2))
+        Deadline::after(Duration::from_secs(10))
             .recv(&keeper.result)
             .is_err(),
         "the keeper still runs after an ignored stop"
@@ -465,7 +465,7 @@ fn keeper_no_job_crash_spawns_no_watcher() {
         .expect("keeper exits cleanly");
     let bound_at = clock.origin() + super::KEEPER_BOUND;
     assert!(
-        !clock.await_parked(bound_at, Deadline::after(Duration::from_secs(2))),
+        !clock.await_parked(bound_at, Deadline::after(Duration::from_secs(10))),
         "no watcher parks at the bound"
     );
 }
