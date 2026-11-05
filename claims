@@ -66,11 +66,6 @@ crates/loop/src/usage_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBo
 crates/loop/src/util_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/warm_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/wire_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/items.rs	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/items/retry.rs	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/delegates_tests.rs	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/items/retry_tests.rs	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tui.md	fiber-4186	plan	2026-11-05T10:27:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/fakes/src/process_group.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/fakes/src/process_group_tests.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/mod.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -94,12 +89,9 @@ crates/tools/src/job_timing_tests.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs
 crates/tui/src/event_loop_tests.rs	fiber-4131	plan	2026-11-05T10:38:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/hub_timing.rs	fiber-4102	grant	2026-11-05T10:59:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/fix/4102-stale-wait-shape	
 crates/fakes/src/hold_tests.rs	fiber-4131	plan	2026-11-05T11:02:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/turn.rs	fiber-4186	plan	2026-11-05T11:14:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/view/item.rs	fiber-4186	plan	2026-11-05T11:14:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/commands.rs	fiber-4192	plan	2026-11-05T11:47:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/outbox.rs	fiber-4192	plan	2026-11-05T11:47:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/resume.rs	fiber-4192	plan	2026-11-05T11:47:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/delegate_replay.rs	fiber-4186	grant	2026-11-05T11:57:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/tests/completion.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/tests/changed_files_remote.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/tests/hub_remote_terminal.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
@@ -108,7 +100,6 @@ crates/main/tests/workspace_picker.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amog
 scripts/test-bug-red	fiber-4102	grant	2026-11-05T12:05:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/src/resume.rs	fiber-3892	plan	2026-11-05T13:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/resume_tests.rs	fiber-3892	plan	2026-11-05T13:53:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/items.rs crates/tui/src/app/items/retry.rs crates/tui/src/app/delegates_tests.rs crates/tui/src/app/items/retry_tests.rs docs/tui.md crates/tui/src/view/item.rs crates/main/tests/delegate_replay.rs	fiber-4186	plan	2026-11-05T14:28:34Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/providers/naming.rs	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
 crates/extensions/src/providers/naming_tests.rs	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
 docs/model-routing.md	fiber-4199	grant	2026-11-05T15:35:09Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4199-bare-ids-switched-on	
