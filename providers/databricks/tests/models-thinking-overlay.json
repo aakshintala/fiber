@@ -22,7 +22,7 @@
         },
         "reply": {
           "status": 200,
-          "body": "{\"model_services\":[{\"name\":\"model-services/system.ai.gpt-oss-120b\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.glm-5-2\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]}]}"
+          "body": "{\"model_services\":[{\"name\":\"model-services/system.ai.gpt-oss-120b\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.glm-5-2\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.claude-fable-5-1\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.gpt-6-astra\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]}]}"
         }
       },
       {
@@ -36,12 +36,23 @@
         },
         "reply": {
           "status": 200,
-          "body": "{\"models\":[{\"model_name\":\"gpt-oss-120b\",\"mode\":\"chat\",\"provider_type\":\"OPENAI\",\"context_window\":{\"max_input\":131072,\"max_output\":65536}},{\"model_name\":\"glm-5-2\",\"mode\":\"chat\",\"provider_type\":\"OPENAI\",\"context_window\":{\"max_input\":200000,\"max_output\":128000}}]}"
+          "body": "{\"models\":[{\"model_name\":\"gpt-oss-120b\",\"mode\":\"chat\",\"provider_type\":\"OPENAI\",\"context_window\":{\"max_input\":131072,\"max_output\":65536}},{\"model_name\":\"glm-5-2\",\"mode\":\"chat\",\"provider_type\":\"OPENAI\",\"context_window\":{\"max_input\":200000,\"max_output\":128000}},{\"model_name\":\"claude-fable-5-1\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":200000,\"max_output\":32000}},{\"model_name\":\"gpt-6-astra\",\"mode\":\"chat\",\"provider_type\":\"OPENAI\",\"context_window\":{\"max_input\":400000,\"max_output\":160000}}]}"
         }
       }
     ]
   },
   "returns": [
+    {
+      "id": "databricks-claude-fable-5-1",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "thinking_default": null
+    },
     {
       "id": "databricks-glm-5-2",
       "thinking_levels": [
@@ -50,6 +61,17 @@
         "max"
       ],
       "thinking_default": "max"
+    },
+    {
+      "id": "databricks-gpt-6-astra",
+      "thinking_levels": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "thinking_default": null
     },
     {
       "id": "databricks-gpt-oss-120b",
