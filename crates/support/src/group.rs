@@ -83,6 +83,29 @@ pub fn alive(pgid: u32) -> bool {
     )
 }
 
+/// Whether the process `pid` still runs, through `kill(pid, 0)`, with the
+/// same predicate as [`alive`]: only `ESRCH` reads dead, while `Ok` and
+/// every other errno (including `EPERM` for a process owned by someone
+/// else) read alive. Only pid 0 is refused: `kill(0, 0)` would probe the
+/// caller's own group rather than pid 0. An id past what a pid holds reads
+/// dead too: neither probe sends anything for it.
+#[must_use]
+pub fn pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let Ok(raw) = i32::try_from(pid) else {
+        return false;
+    };
+    let Some(id) = Pid::from_raw(raw) else {
+        return false;
+    };
+    !matches!(
+        rustix::process::test_kill_process(id),
+        Err(rustix::io::Errno::SRCH)
+    )
+}
+
 /// Sends `signal` to process group `pgid`, through `kill(-pgid, signal)`. A
 /// refused id, or one past what a pid holds, is [`Error::Refused`], returned
 /// before any conversion. A group already gone (`ESRCH`) is `Ok(())`; any

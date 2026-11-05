@@ -138,16 +138,24 @@ fn model_choices_come_from_the_filtered_catalogue() {
         crate::models::providers_and_config(&setup.home(), &setup.workspace()).unwrap();
     let mut filtered = providers.clone();
     filtered.retain_credentialed(&config);
-    assert!(model_offers(&filtered).unwrap().is_empty());
+    assert!(model_offers(&filtered, &config).unwrap().is_empty());
+    assert!(model_offers(&providers, &config).unwrap().is_empty());
     // A stored login switches the provider on: the rebuilt catalogue
     // offers its models, and the other provider stays out.
     store_credential(&setup.home(), "fake", "default", &Secret::new("k".into())).unwrap();
     let (providers, config, _) =
         crate::models::providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+    assert_eq!(
+        model_offers(&providers, &config).unwrap(),
+        vec![super::ModelOffer {
+            reference: "fake/m".to_owned(),
+            levels: vec!["low".to_owned(), "high".to_owned()],
+        }]
+    );
     let mut filtered = providers;
     filtered.retain_credentialed(&config);
     assert_eq!(
-        model_offers(&filtered).unwrap(),
+        model_offers(&filtered, &config).unwrap(),
         vec![super::ModelOffer {
             reference: "fake/m".to_owned(),
             levels: vec!["low".to_owned(), "high".to_owned()],
@@ -164,7 +172,9 @@ fn empty_providers_offer_nothing() {
             .unwrap()
             .is_empty()
     );
-    assert!(model_offers(&providers).unwrap().is_empty());
+    let (_, config, _) =
+        crate::models::providers_and_config(&setup.home(), &setup.workspace()).unwrap();
+    assert!(model_offers(&providers, &config).unwrap().is_empty());
 }
 
 #[test]
@@ -1827,7 +1837,7 @@ fn model_choices_trust_env_backed_presence_without_a_stored_label() {
             .expect("the parent installed one provider");
         let mut filtered = providers;
         filtered.retain_credentialed(&config);
-        let offers = model_offers(&filtered).expect("offers read");
+        let offers = model_offers(&filtered, &config).expect("offers read");
         let references: Vec<String> = offers.into_iter().map(|offer| offer.reference).collect();
         child_dump("offers-env-key", &references.join("\n"));
         return;

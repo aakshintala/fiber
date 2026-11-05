@@ -15,7 +15,7 @@
 use contract::{ErrorCode, SessionId};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::connection::{Hub, Refused};
 use crate::feed::invalid;
@@ -36,23 +36,28 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     // No resume starts a process for a session while it is deleted.
     let _gate = support::lock(&hub.resume_gate);
     let set = resolve(hub, &session, cascade, expect.as_ref())?;
-    // Held until every removal ends. A dry run probes existing locks
-    // without creating missing ones and reports busy ids without refusing;
-    // guards it takes stay held until the answer. A real delete probes
-    // every candidate before refusing, so one busy session never hides a
-    // later lock failure, and refuses before removing any part of the set.
+    // Held until every removal ends. A dry run is a reader
+    // (docs/events.md, "Writing"): it reads each candidate's
+    // lock label and reports the ids whose pid still runs, taking no lock
+    // and refusing nothing. Held is advisory; the real delete, which takes
+    // the lock, decides. A real delete probes every candidate before
+    // refusing, so one busy session never hides a later lock failure, and
+    // refuses before removing any part of the set.
     let mut locks = Vec::with_capacity(set.len());
     let mut busy: Vec<String> = Vec::new();
     for (id, dir) in &set {
-        let lock = if parsed.dry_run {
-            log::try_hold_existing(dir).map_err(|error| io_failed(id, &error))?
+        if parsed.dry_run {
+            let held = dry_run_held(dir);
+            #[cfg(test)]
+            fire_dry_run_pause();
+            if held {
+                busy.push(id.0.clone());
+            }
         } else {
-            Some(log::try_hold(dir).map_err(|error| io_failed(id, &error))?)
-        };
-        match lock {
-            None => {}
-            Some(log::Hold::Held(lock)) => locks.push(lock),
-            Some(log::Hold::Busy) => busy.push(id.0.clone()),
+            match log::try_hold(dir).map_err(|error| io_failed(id, &error))? {
+                log::Hold::Held(lock) => locks.push(lock),
+                log::Hold::Busy => busy.push(id.0.clone()),
+            }
         }
     }
     if parsed.dry_run {
@@ -70,6 +75,59 @@ pub(crate) fn delete(hub: &Hub, args: &Map<String, Value>) -> Result<Option<Valu
     }
     drop(locks);
     Ok(None)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fires once after the dry run's first candidate probe, so the
+    /// no-lock test can race a concurrent open inside the probe window.
+    static DRY_RUN_PAUSE: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Arms the one-shot hook fired after the dry run's first candidate
+/// probe. Test only: production has no seam there.
+#[cfg(test)]
+pub(crate) fn pause_dry_run(hook: impl FnOnce() + 'static) {
+    DRY_RUN_PAUSE.with(|slot| slot.set(Some(Box::new(hook))));
+}
+
+/// Fires the armed hook, if any, and disarms it. Test only.
+#[cfg(test)]
+fn fire_dry_run_pause() {
+    DRY_RUN_PAUSE.with(|slot| {
+        if let Some(hook) = slot.take() {
+            hook();
+        }
+    });
+}
+
+/// Whether the dry run reads `dir` as held: its lock label's trailing pid
+/// still runs. Only the labels a holder writes count: `<pid>` from a
+/// session and `keeper <pid>` from a keeper. A missing, empty or
+/// unparsable label, or a dead pid, reads not held. A recycled pid can
+/// read a dead holder as held, which over-reports and is safe for a
+/// report.
+fn dry_run_held(dir: &Path) -> bool {
+    let Some(label) = log::lock_label(dir) else {
+        return false;
+    };
+    let mut words = label.split_whitespace();
+    let pid_text = match words.next() {
+        None => return false,
+        Some("keeper") => match words.next() {
+            Some(pid) => pid,
+            None => return false,
+        },
+        Some(pid) => pid,
+    };
+    if words.next().is_some() {
+        return false;
+    }
+    if pid_text.bytes().any(|byte| !byte.is_ascii_digit()) {
+        return false;
+    }
+    pid_text.parse::<u32>().is_ok_and(support::group::pid_alive)
 }
 
 /// The sessions a delete would remove: `session` first, then every session

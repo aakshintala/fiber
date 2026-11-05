@@ -77,6 +77,31 @@ fn alive_sends_nothing_for_a_refused_id() {
 }
 
 #[test]
+fn pid_alive_reads_the_callers_own_pid_as_live() {
+    assert!(super::pid_alive(std::process::id()));
+}
+
+#[test]
+fn pid_alive_reads_an_unused_pid_as_dead() {
+    assert!(!super::pid_alive(i32::MAX as u32));
+}
+
+#[test]
+fn pid_alive_sends_nothing_for_an_id_past_a_pid() {
+    assert!(!super::pid_alive(PAST_PID));
+}
+
+#[test]
+fn pid_alive_refuses_zero_without_signalling() {
+    assert!(!super::pid_alive(0));
+}
+
+#[test]
+fn pid_alive_reads_pid_one_as_live() {
+    assert!(super::pid_alive(1));
+}
+
+#[test]
 fn signal_kill_ends_a_live_group() {
     let child = sleep();
     let pgid = child.id();
