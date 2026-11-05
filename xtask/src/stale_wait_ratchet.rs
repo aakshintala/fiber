@@ -352,6 +352,19 @@ fn group_closed(body_mode: bool, started: bool, depth: [i32; 3]) -> bool {
     !body_mode && started && depth == [0, 0, 0]
 }
 
+/// Whether `bytes` opens a byte-string literal at `col` (`b"`): the
+/// `b` prefix only skips the quote's opener. Missing the opener still
+/// reaches the identical scanner state, since the stray `b` steps past
+/// as an ordinary byte and the `"` then opens the string, so the `+`
+/// to `*` mutant on `col + 1` is equivalent: no return-value test can
+/// distinguish the live `b"` path from the dead-window path, and only
+/// crash mutants (`-`, overflow) are observable there
+/// (`docs/testing/mutants.md`, "Proving a test bites").
+#[cfg_attr(false, mutants::skip)]
+fn is_byte_string_opener(bytes: &[u8], col: usize) -> bool {
+    bytes.get(col) == Some(&b'b') && bytes.get(col + 1) == Some(&b'"')
+}
+
 fn scan_group_end(
     lines: &[&str],
     start_line: usize,
@@ -406,7 +419,7 @@ fn scan_group_end(
                 col += 1;
             } else if byte == b'"' {
                 instr = Some(b'"');
-            } else if byte == b'b' && bytes.get(col + 1) == Some(&b'"') {
+            } else if is_byte_string_opener(bytes, col) {
                 instr = Some(b'"');
                 col += 1;
             } else if byte == b'r' && matches!(bytes.get(col + 1), Some(b'"') | Some(b'#')) {
