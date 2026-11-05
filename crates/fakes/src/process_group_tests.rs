@@ -638,6 +638,11 @@ fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
         stalled_pgrep_child();
         return;
     }
+    // debt: this stalled-pgrep parent harness duplicates support's
+    // stalled-listing parent harness (two copies): FIFO creation, PATH
+    // setup, guarded rerun and cleanup stay duplicated; share them on the
+    // third: sharing needs a public fakes helper used only by tests,
+    // widening the surface this ticket narrows.
     let dir = crate::TempDir::new("fiber-stalled-pgrep");
     // Unique to the run: the shadow stalls only this marker, and the
     // watchdog guards only it, so no other test's process can match.

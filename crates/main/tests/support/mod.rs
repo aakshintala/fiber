@@ -251,6 +251,11 @@ fn kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_c
         stalled_listing_child();
         return;
     }
+    // debt: this stalled-listing parent harness duplicates fakes'
+    // stalled-pgrep parent harness (two copies): FIFO creation, PATH setup,
+    // guarded rerun and cleanup stay duplicated; share them on the third,
+    // once a public helper used only by tests stops widening the surface
+    // this ticket narrows.
     let dir = fakes::TempDir::new("fiber-stalled-listing");
     // Unique to the run: the shadow stalls only this marker, and the
     // watchdog guards only it, so no other test's process can match.
