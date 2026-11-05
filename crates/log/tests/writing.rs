@@ -15,7 +15,7 @@ use std::fs;
 use std::time::Duration;
 
 use common::*;
-use contract::events::{Event, TextCompleted};
+use contract::events::{Event, EventKind, TextCompleted};
 use contract::{ActionId, ErrorCode, TurnId};
 use fakes::clock::FakeClock;
 use log::{Error, Log};
@@ -53,12 +53,12 @@ fn durable_lines_carry_contiguous_seq_and_ephemeral_lines_reach_no_file() {
     log.append(&empty("step_started"), None, None).unwrap();
     assert_eq!(first.seq.map(|s| s.0), Some(0));
     assert_eq!(delta.seq, None);
-    assert_eq!(delta.kind, "assistant_message_delta");
+    assert_eq!(delta.kind(), EventKind::AssistantMessageDelta);
     assert_eq!(
         kinds_and_seqs(&tmp.session(&id("s_1"))),
         [
-            ("session_started".to_owned(), Some(0)),
-            ("step_started".to_owned(), Some(1)),
+            (EventKind::SessionStarted, Some(0)),
+            (EventKind::StepStarted, Some(1)),
         ]
     );
 }
@@ -373,8 +373,8 @@ fn a_writer_truncates_a_torn_tail_before_appending() {
     assert_eq!(
         kinds_and_seqs(&tmp.session(&id("s_1"))),
         [
-            ("session_started".to_owned(), Some(0)),
-            ("step_started".to_owned(), Some(1)),
+            (EventKind::SessionStarted, Some(0)),
+            (EventKind::StepStarted, Some(1)),
         ]
     );
 }
