@@ -139,3 +139,8 @@ crates/main/tests/changed_files_remote.rs	fiber-4131	grant	2026-11-05T12:01:31Z	
 crates/main/tests/hub_remote_terminal.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/tests/support/pty.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/tests/workspace_picker.rs	fiber-4131	grant	2026-11-05T12:01:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
+crates/bench/examples/bench/attach.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
+crates/bench/examples/bench/busy.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
+crates/bench/examples/bench/linux.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
+crates/bench/examples/bench/run.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
+crates/bench/examples/bench/wheel.rs	fiber-4142	grant	2026-11-05T12:02:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	
