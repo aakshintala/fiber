@@ -83,3 +83,15 @@ crates/support/src/group.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010
 xtask/src/stale_wait_ratchet.rs	fiber-4102	plan	2026-11-05T09:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/stale_wait_ratchet_tests.rs	fiber-4102	plan	2026-11-05T09:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/stale_wait_ratchet.rs xtask/src/stale_wait_ratchet_tests.rs	fiber-4102	plan	2026-11-05T09:33:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/src/providers.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/delegates.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/config.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/models.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/setup.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/model_list.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/parts.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/delegates.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/models_tests.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/model_lists_tests.rs	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/delegates.md	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/model-routing.md	fiber-4190	plan	2026-11-05T10:02:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
