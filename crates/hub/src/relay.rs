@@ -224,7 +224,7 @@ pub(crate) fn from_session_message(
 
 /// The `from_session` message when the refused target session's own process
 /// cannot be read: the target names the session, not the caller.
-pub(crate) fn unreadable_target_message(target: &SessionId, command: &str) -> String {
+fn unreadable_target_message(target: &SessionId, command: &str) -> String {
     format!(
         "Session `{}`'s process could not be read, so `{command}` is refused.",
         target.0

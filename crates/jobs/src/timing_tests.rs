@@ -393,7 +393,7 @@ fn assert_none(records: &mpsc::Receiver<Record>, what: &str) {
 /// its park without a clock move sees its end condition within one pause.
 /// Shared by every poll driver in `crates/jobs` tests: each driver moves
 /// time only through `try_step` below.
-pub(crate) const PAUSE: Duration = Duration::from_millis(100);
+const PAUSE: Duration = Duration::from_millis(100);
 
 /// One `try_advance_when_parked` call's outcome: the move landed, no fresh
 /// park arrived within the pause, or a park at another instant was

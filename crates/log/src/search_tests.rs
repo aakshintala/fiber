@@ -649,7 +649,7 @@ fn a_directory_whose_first_line_is_not_session_started_is_not_a_session() {
 
 /// A scanner whose identity function cancels `cancel` when it is asked
 /// about `/a/one`, so the cancel lands while that session is read.
-pub(super) fn cancelling_scanner(home: &Home, cancel: &CancelToken) -> SessionScan {
+fn cancelling_scanner(home: &Home, cancel: &CancelToken) -> SessionScan {
     let fire = cancel.clone();
     let identity: Identity = Arc::new(move |path: &Path| {
         if path == Path::new("/a/one") {
