@@ -126,3 +126,5 @@ xtask/tests/cli.rs	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/
 docs/code-quality.md	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
 docs/code-quality/lints.md	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
 docs/ci.md	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
+crates/tui/src/event_loop/attach_tests.rs	fiber-4192	grant	2026-11-05T19:22:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4192-exited-prompt-hang	
+crates/tui/src/app/commands_tests.rs	fiber-4192	grant	2026-11-05T19:22:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4192-exited-prompt-hang	
