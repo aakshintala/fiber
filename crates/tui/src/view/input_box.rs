@@ -21,6 +21,59 @@ use crate::theme::{Role, style};
 /// (`docs/tui.md`, "Steering").
 const EDITING_HINT: &str = "editing a queued message · Enter amends · ⌥X drops · Esc stops";
 
+/// The shell-mode label for a run the person sends with the next prompt
+/// (`docs/tui.md`, "The input box").
+const SHELL_SENT_LABEL: &str = "shell";
+
+/// The shell-mode label for a run shown only to the person
+/// (`docs/tui.md`, "The input box").
+const SHELL_HELD_LABEL: &str = "shell · not sent";
+
+/// The shell-mode label while the draft holds it: the sent label for a
+/// `!` draft, the held label for a `!!` one. Holds while the trimmed
+/// draft starts with `!` and carries no image — the send path's rule
+/// minus parseability, so a bare `!` already marks and the marker
+/// follows the draft keystroke by keystroke.
+fn shell_marker(app: &App) -> Option<&'static str> {
+    let draft = app.input();
+    if draft.has_image() {
+        return None;
+    }
+    let expanded = draft.expand();
+    let trimmed = expanded.trim_start();
+    if !trimmed.starts_with('!') {
+        return None;
+    }
+    Some(if trimmed.starts_with("!!") {
+        SHELL_HELD_LABEL
+    } else {
+        SHELL_SENT_LABEL
+    })
+}
+
+/// Draws the shell-mode `label` right-aligned on the box's top-edge row.
+/// The label never covers the draft: it sits on the edge row, cut to the
+/// row's width, so a narrow box truncates it. Without colour it keeps
+/// inside the box's sides, leaving the corners alone.
+fn put_shell_label(buf: &mut Buffer, area: Rect, y: u16, label: &str) {
+    let (start, end) = if surface::box_fit(area.width) {
+        (area.x.saturating_add(1), area.right().saturating_sub(1))
+    } else {
+        (area.x, area.right())
+    };
+    let avail = usize::from(end.saturating_sub(start));
+    if avail == 0 {
+        return;
+    }
+    let text = crate::text::cut(label, avail, "");
+    let wide = format::width(&text);
+    if wide == 0 {
+        return;
+    }
+    let x = end.saturating_sub(to_u16(wide));
+    buf.set_stringn(x, y, &text, wide, style(Role::Muted));
+}
+
 /// The item view's input hint while its draft is empty and no queued
 /// message is edited: steering for a delegate, job input for a job;
 /// `None` anywhere else (`docs/tui.md`, "Swapped views").
@@ -129,6 +182,15 @@ pub(super) fn draw(
                 bottom: bottom_edge,
             },
         );
+    }
+    // In shell mode the box's top-edge row carries the label,
+    // right-aligned: `shell` for a sent run, `shell · not sent` for a
+    // show-only one. The label is chrome: cut short, it sheds with the
+    // rule and the status row, while the `! ` prompt stays on the draft.
+    if chrome && top_edge {
+        if let Some(label) = shell_marker(app) {
+            put_shell_label(buf, area, box_top, label);
+        }
     }
     if app.steering_selected().is_some() {
         draw_editing_hint(area, below, &rows, (cursor_row, cursor_col), buf);
@@ -636,12 +698,23 @@ pub(super) fn rows(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
     let (row, col) = draft.cursor(width);
     let height = app.input_height();
     let top = row.saturating_add(1).saturating_sub(height);
-    let rows = draft
+    let mut rows: Vec<String> = draft
         .rows(width)
         .into_iter()
         .skip(top)
         .take(height)
         .collect();
+    // In shell mode the first draft row's 2-cell prompt reads `! `:
+    // the same width as `› `, so the wrap and cursor math below is
+    // unchanged. Scrolled past the first row, no prompt shows.
+    if top == 0 && shell_marker(app).is_some() {
+        if let Some(first) = rows.first_mut() {
+            // The draft's own prefix (`Draft::rows`).
+            if let Some(rest) = first.strip_prefix("› ") {
+                *first = format!("! {rest}");
+            }
+        }
+    }
     (rows, top, row.saturating_sub(top), col)
 }
 
