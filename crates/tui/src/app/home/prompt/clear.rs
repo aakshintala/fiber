@@ -2,7 +2,7 @@
 //! whether to clear anyway (`docs/tui.md`, "Clearing"). This module is
 //! a child of home's question module, whose closes it owns.
 
-use super::super::super::{App, Effect};
+use super::super::super::{App, Effect, Waiting};
 use super::Prompt;
 use crate::home::ClearChoice;
 use crate::keys::Key;
@@ -86,7 +86,7 @@ impl App {
     /// `close` will go with `now`. With no status to name, or a `start`
     /// already in flight, the question only closes.
     fn confirm_clear(&mut self) -> Effect {
-        if self.clear_pending_command_id().is_some() {
+        if self.outbox.waiting_any(&Waiting::ClearStart) {
             return Effect::None;
         }
         let staged = self.home.as_mut().and_then(|home| {
