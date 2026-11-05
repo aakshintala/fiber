@@ -128,3 +128,8 @@ docs/code-quality/lints.md	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-
 docs/ci.md	fiber-4142	plan	2026-11-05T17:49:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/lint/4142-visibility-wider-than-use	4204
 crates/tui/src/event_loop/attach_tests.rs	fiber-4192	grant	2026-11-05T19:22:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4192-exited-prompt-hang	
 crates/tui/src/app/commands_tests.rs	fiber-4192	grant	2026-11-05T19:22:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4192-exited-prompt-hang	
+crates/tui/src/shell.rs	fiber-4176	plan	2026-11-05T19:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/shell_tests.rs	fiber-4176	plan	2026-11-05T19:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app.rs	fiber-4176	plan	2026-11-05T19:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/input_box.rs	fiber-4176	plan	2026-11-05T19:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/input_box_tests.rs	fiber-4176	plan	2026-11-05T19:23:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
