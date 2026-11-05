@@ -74,3 +74,9 @@ crates/tui/src/mcp_view_tests.rs	fiber-4161	plan	2026-11-04T12:31:07Z	roundhouse
 crates/tui/src/app/home/prompt/exit.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
 crates/tui/src/app/images.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
 crates/tui/src/app/offer.rs	fiber-4161	grant	2026-11-04T21:56:36Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4161-notice-code-text	
+crates/hub/src/delete.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/hub/src/delete_tests.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/src/scan.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/src/lib.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/src/scan_tests.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/support/src/group.rs	fiber-4137	plan	2026-11-05T09:25:57Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
