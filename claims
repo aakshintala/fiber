@@ -41,9 +41,6 @@ xtask/src/select/reuse_tests.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-Mac
 xtask/src/select.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
 xtask/src/main.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
 crates/contract/src/envelope.rs	fiber-4162	plan	2026-11-06T09:31:17Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-providers/databricks/providers/databricks.lua	fiber-4040	plan	2026-11-06T09:51:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tools.md	fiber-4040	plan	2026-11-06T09:51:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-providers/databricks/tests/models-deferred-tools.json	fiber-4040	grant	2026-11-06T10:03:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/providers/4040-databricks-deferred	
 crates/fakes/src/http_server/server.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes/src/children_tests.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes/src/client_tests.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
