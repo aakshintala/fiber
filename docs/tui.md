@@ -970,23 +970,76 @@ install still running.
   instead ("Swapped views"). "Global" and "This project" are bold headings;
   a rule's row is "allow shell:git status · added 2d ago in review #688 · "
   and the ✕ in `error`. The last row is "Ctrl+G opens the rules file", dim.
-- **`/settings`:** the configuration keys, their effective values and the
-  layer each comes from. It edits a key through the same path as
-  `fiber config set`, and says when a change needs a reload and what that
-  costs. Ctrl+G opens the file; on a remote terminal it opens the hub's file
-  instead ("Swapped views"). The keys are a table of aligned columns:
-  a dim header row, "key", "value" and "layer", then one row per key, its
-  name, its effective value and its layer: `default`, `global`,
-  `repository`, `project` or `-c` (`docs/configuration.md`, "Layers").
-  Under the table, the reload line ("changing handoff.tokens needs a reload
-  (~84k tokens)") and "Ctrl+G opens the file", both dim.
+- **`/settings`:** every configuration key with no `*` in its path, sorted
+  into tabs by what it is for. The design is from #4280, and
+  `docs/mockups/settings.html` is a clickable mockup of it. The mockup's
+  values are made up; this section is the authority.
+  - **Top rows:** the view's name row, then "Changes save automatically",
+    dim, then the tab bar: Appearance, Notifications, Models, Permissions,
+    Sessions, Advanced. The open tab is bold on the `surface` tint, and ←→
+    moves between tabs. The view opens on Appearance.
+  - **Tabs:** each key belongs to exactly one tab, named in its `KEYS`
+    entry with its label and one-line description. A test fails when an
+    entry lacks any of the three. Advanced holds what a person rarely
+    changes (`hub.*`, `session.idle_exit_ms`, `cache.*`, `retry.*`,
+    `diagnostics.level`). Permissions holds the reviewer keys first, then
+    the sandbox keys.
+  - **Rows:** each row is the key's label, then its value, spaced one blank
+    line apart on terminals tall enough, with "› " marking the focused row.
+    A value set anywhere but global is followed by its layer, dim
+    (`project`, `repository`, `-c`); a global or default value shows no
+    layer. A key with `*` in its path is a row that opens its own screen:
+    Key bindings (`/keys`), Credentials (`/credential`), Rules (`/rules`),
+    Tools (`/tools`), Skills (`/skills`) and MCP servers (`/mcp`). Its
+    value reads "Open /keys ›".
+  - **Controls:** Enter or Space changes the focused value, by its type.
+    - A boolean shows `[x] On` or `[ ] Off`, and the key flips it.
+    - A key with a fixed set of values (`thinking`, `cache.lifetime`,
+      `diagnostics.level`, `tui.theme`) steps to the next value. For
+      `tui.theme`, each step previews the theme live.
+    - A model reference ends in " ›" and opens the model picker; its
+      choice saves to the row's key.
+    - A list (`sandbox.allow_write`, `scoped_models`, `tui.panel.cards`)
+      ends in " ›" and opens a sub-page to add, remove and reorder entries.
+    - A number or free text opens a field in place of the value. Enter
+      saves it and Esc cancels.
+
+    Every change goes through the same path as `fiber config set`, which
+    checks its type.
+  - **Saving:** a change saves at once to the layer the value already comes
+    from, or to global when no layer sets it. Tab moves the focused value
+    to the next layer the key allows (global, project, repository), and
+    Delete removes the override so the inherited value applies. On a
+    remote terminal, `tui.*` keys offer only the client's global layer.
+  - **Under the list:** the focused key's description, then its key path,
+    where it is set and when a change applies ("tui.reduced_motion · set
+    in global · Applies when the terminal starts again."), dim. After a
+    change, one more line says where it was saved ("Saved to repository
+    config.").
+  - **Search:** `/`, or typing a letter, opens a search across every tab.
+    It matches labels and key paths, hides the tab bar and adds each
+    match's tab, dim, at the right. Esc clears the search; a second Esc
+    returns.
+  - **Footer:** "←→ tab · / search · Enter change · Tab layer · Delete reset
+    · Esc close", with the keys bold. Ctrl+G still opens the file; on a
+    remote terminal it opens the hub's file instead ("Swapped views").
 
   ```
-  key                 value         layer
-  model               opus-5-5      global
-  thinking            high          project
-  handoff.tokens      400000        repository
-  budget.usd          20            project
+  Settings  /settings                                         Esc returns
+  Changes save automatically
+
+   Appearance   Notifications   Models   Permissions   Sessions   Advanced
+
+  › Reviewer model            gpt-6-luna ›
+
+    Blocks before asking you  3
+
+    Sandbox                   [x] On  repository
+
+    Rules                     Open /rules ›
+
+  The model that reviews actions the agent wants to take.
+  reviewer.model · set in global · Applies at /reload (~4k tokens).
   ```
 - **`/keys`:** the rebinding screen ("Bindings").
 - **`/skills`:** one row per skill with its name, one-line description, where

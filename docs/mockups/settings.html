@@ -1,0 +1,152 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Fiber /settings mockup</title>
+<style>
+:root{--bg:#0f1115;--fg:#d7dae0;--dim:#7a808c;--faint:#4a4f59;--acc:#8fb4ff;--sel:#1d2a44;--warn:#e5c07b;--ok:#98c379}
+*{box-sizing:border-box}
+body{margin:0;background:#05060a;display:flex;flex-direction:column;align-items:center;font:15px/1 ui-monospace,"JetBrains Mono",Menlo,monospace;color:var(--fg)}
+.note{max-width:1000px;color:#9aa;font:13px/1.5 system-ui,sans-serif;margin:16px}
+.term{width:1000px;height:640px;background:var(--bg);border:1px solid #2a2e36;border-radius:8px;margin:8px 16px 24px;display:flex;flex-direction:column;overflow:hidden}
+.top{padding:14px 24px 0;display:flex;justify-content:space-between;color:var(--dim)}
+.top b{color:var(--fg)}
+.sub{padding:8px 24px 0;color:var(--dim)}
+.tabs{display:flex;gap:6px;padding:20px 20px 0}
+.tab{padding:6px 12px;color:var(--dim)}
+.tab.on{background:#2a3550;color:#fff;font-weight:700}
+.search{margin:18px 24px 0;color:var(--dim);height:18px}
+.search .cur{background:var(--acc);color:var(--bg)}
+.list{padding:14px 0 0;flex:1}
+.row{display:grid;grid-template-columns:28px 300px 260px 1fr;padding:0 0 0 0;height:30px;align-items:center}
+.row.sel{background:var(--sel)}
+.row .ptr{color:var(--acc);padding-left:10px}
+.row.sel .lab{color:var(--acc);font-weight:700}
+.val{color:var(--fg)} .val.dimv{color:var(--dim)}
+.layer{color:var(--warn);opacity:.75;font-size:13px;margin-left:10px}
+.grp{color:var(--faint);font-size:13px}
+.detail{padding:0 24px 14px;color:var(--dim);line-height:1.7;min-height:96px}
+.detail .k{color:var(--fg)}
+.detail .saved{color:var(--ok)}
+.field{background:#000;border-bottom:1px solid var(--acc);padding:2px 6px;color:#fff}
+.foot{border-top:1px solid #2a2e36;padding:10px 24px;color:var(--dim)}
+.foot b{color:var(--fg)}
+.empty{padding:0 38px;color:var(--dim)}
+</style></head><body>
+<div class="note">Mockup for the #4280 settings design. It's interactive: click the terminal, then use ←→ to change tab, ↑↓ to move, Enter or Space to change a value, Tab to move a value to another layer, Delete to remove an override, and / or typing to search. Esc clears the search. The values and layers are made up. Not to scale: rows are spaced at 1.5 lines to show the readability spacing.</div>
+<div class="term" id="t" tabindex="0">
+  <div class="top"><span><b>Settings</b>&nbsp;&nbsp;/settings</span><span>Esc returns</span></div>
+  <div class="sub">Changes save automatically</div>
+  <div class="tabs" id="tabs"></div>
+  <div class="search" id="search"></div>
+  <div class="list" id="list"></div>
+  <div class="detail" id="detail"></div>
+  <div class="foot"><b>←→</b> tab · <b>/</b> search · <b>Enter</b> change · <b>Tab</b> layer · <b>Delete</b> reset · <b>Esc</b> close</div>
+</div>
+<script>
+const B='bool',E='enum',M='model',N='num',L='list',G='goto';
+const NOW='Applies now.',TERM='Applies when the terminal starts again.',NEW='Applies to new sessions.',REL='Applies at /reload (about 4k tokens of cache).',HUB='Applies when the hub starts again.',NEXT='Applies next turn.';
+const T=[
+["Appearance",[
+ ["Theme","tui.theme",E,"auto",["auto","dark","light","solarized"],"Colours for the whole terminal, previewed live.",NOW],
+ ["Reduce motion","tui.reduced_motion",B,false,0,"Stop spinners and animations.",TERM],
+ ["Screen reader","tui.screen_reader",E,"detected",["detected","on","off"],"Plain, linear output for screen readers.",TERM],
+ ["Hover hints","tui.hover",B,true,0,"Show what a click does when the mouse rests on it.",TERM],
+ ["Inline images","tui.inline_images",B,true,0,"Draw images in the transcript where the terminal can.",TERM],
+ ["Logo glyph","tui.logo_glyph",E,"fiber",["fiber","ascii","none"],"The mark on the home screen.",TERM],
+ ["Show the rail","tui.rail.shown",B,true,0,"The session list down the left side.",NOW],
+ ["Rail width","tui.rail.width",N,"28",0,"Columns.",TERM],
+ ["Panel width","tui.panel.width",N,"36",0,"Columns.",TERM],
+ ["Panel cards","tui.panel.cards",L,"5 shown",0,"Which cards the side panel shows, in order.",TERM],
+ ["Key bindings","keys.*",G,"/keys",0,"Rebind any action.",NOW]]],
+["Notifications",[
+ ["Bell","tui.attention.bell",B,true,0,"Ring the terminal bell when a session needs you.",TERM],
+ ["Window title","tui.attention.title",B,true,0,"Mark the window title when a session needs you.",TERM],
+ ["Desktop notification","tui.attention.notification",B,false,0,"Send a system notification when a session needs you.",TERM],
+ ["Quota notice","quota.notice_at",N,"80%",0,"Warn when a provider's quota passes this share.",REL]]],
+["Models",[
+ ["Model","model",M,"gpt-6-luna",0,"The model new sessions start on.",NEW],
+ ["Thinking","thinking",E,"high",["off","low","medium","high","xhigh"],"Reasoning effort for new sessions.",NEW],
+ ["Scoped models","scoped_models",L,"3 models",0,"The models Ctrl+L cycles through.",REL],
+ ["Web search","web_search.backend",E,"provider",["provider","fiber","off"],"Who runs web searches.",REL],
+ ["Refresh model lists","model_lists.refresh_after",N,"24h",0,"How old a provider's model list may get.",REL],
+ ["Credentials","providers.*.credential",G,"/credential",0,"Pick the credential each provider uses.",NEW]]],
+["Permissions",[
+ ["Reviewer model","reviewer.model",M,"gpt-6-luna",0,"The model that reviews actions the agent wants to take.",REL],
+ ["Reviewer context","reviewer.context",E,"recent",["recent","full"],"How much of the conversation the reviewer reads.",REL],
+ ["Blocks before asking you","reviewer.block_limits.consecutive",N,"3",0,"Blocks in a row before the action comes to you.",REL],
+ ["Blocks per session","reviewer.block_limits.session",N,"20",0,"Blocks in a session before every action comes to you.",REL],
+ ["Sandbox","sandbox.enabled",B,true,"repository","Run shell commands in the sandbox.",REL],
+ ["Writable paths","sandbox.allow_write",L,"2 paths",0,"Paths outside the repository the sandbox may write.",REL],
+ ["Unreadable paths","sandbox.deny_read",L,"4 paths",0,"Paths the sandbox may never read.",REL],
+ ["Rules","rules",G,"/rules",0,"What you have allowed or refused, and where.",NOW],
+ ["Tools","tools.*",G,"/tools",0,"Turn tools on or off.",NOW]]],
+["Sessions",[
+ ["Handoff","handoff.enabled",B,true,0,"Offer a fresh session when the context fills.",REL],
+ ["Handoff at","handoff.window_fraction",N,"0.8",0,"Share of the context window that triggers the offer.",REL],
+ ["Handoff size","handoff.tokens",N,"8000",0,"Tokens the handoff note may use.",REL],
+ ["Handoff nudge","handoff.nudge",B,true,"project","Remind the agent before the handoff.",REL],
+ ["Budget","budget.usd",N,"unset",0,"Stop a session that spends past this.",REL],
+ ["Skills","skills.disabled",G,"/skills",0,"Turn skills on or off.",NEXT],
+ ["Repository extensions","repository_extensions",E,"ask",["ask","allow","refuse"],"What to do when a repository ships extensions.",REL],
+ ["MCP servers","mcp.servers.*",G,"/mcp",0,"Connect, log in to or remove servers.",NOW]]],
+["Advanced",[
+ ["Hub port","hub.port",N,"7421",0,"Port the hub listens on.",HUB],
+ ["Default hub","hub.default",E,"local",["local","box"],"The hub this terminal connects to.","Applies at the next connection."],
+ ["Allowed origins","hub.allowed_origins",L,"none",0,"Web origins that may connect to the hub.",HUB],
+ ["Hub idle exit","hub.idle_exit_ms",N,"600000",0,"Milliseconds with no client before the hub exits.",HUB],
+ ["Session idle exit","session.idle_exit_ms",N,"unset",0,"Milliseconds idle before a session exits.",REL],
+ ["Cache lifetime","cache.lifetime",E,"1h",["5m","1h"],"How long the provider keeps the prompt cache.",REL],
+ ["Keep cache warm","cache.warm_idle",B,true,0,"Refresh the cache while a session is idle.",REL],
+ ["Warm-up cap","cache.warm_cap",N,"3",0,"Refreshes per idle stretch.",REL],
+ ["Cache diagnostics","cache.diagnostics",B,false,0,"Log cache hits and misses.",REL],
+ ["Retries","retry.attempts",N,"4",0,"Attempts for a failed provider request.",REL],
+ ["First retry delay","retry.initial_delay_ms",N,"500",0,"Milliseconds.",REL],
+ ["Longest retry delay","retry.max_delay_ms",N,"30000",0,"Milliseconds.",REL],
+ ["Diagnostics level","diagnostics.level",E,"info",["error","warn","info","debug"],"How much Fiber logs.","Applies when each process starts again."]]]];
+const LAYERS={"sandbox.enabled":["global","project","repository"],"handoff.nudge":["global","project","repository"]};
+let tab=0,sel=0,q=null,msg='',edit=null;
+const $=id=>document.getElementById(id);
+function rows(){ if(q===null) return T[tab][1].map(r=>[tab,r]);
+  const s=q.toLowerCase(); const out=[]; T.forEach((t,i)=>t[1].forEach(r=>{if(r[0].toLowerCase().includes(s)||r[1].includes(s))out.push([i,r])})); return out;}
+function show(r){const [,,ty,v]=r; if(ty===B) return v?'[x] On':'[ ] Off'; if(ty===G) return 'Open '+v+' ›'; if(ty===L) return v+' ›'; if(ty===M) return v+' ›'; return String(v);}
+function render(){
+  $('tabs').innerHTML=T.map((t,i)=>`<span class="tab ${q===null&&i===tab?'on':''}">${t[0]}</span>`).join('');
+  $('search').innerHTML=q===null?'':`/ ${q}<span class="cur">&nbsp;</span>  <span class="grp">${rows().length} matches across all tabs</span>`;
+  const rs=rows(); if(sel>=rs.length) sel=Math.max(0,rs.length-1);
+  $('list').innerHTML=rs.length?rs.map(([gi,r],i)=>{
+    const lay=r[4]&&typeof r[4]==='string'?`<span class="layer">${r[4]}</span>`:'';
+    const v=(edit&&i===sel)?`<span class="field">${edit}</span>`:`<span class="val ${r[2]===G?'dimv':''}">${show(r)}</span>${lay}`;
+    return `<div class="row ${i===sel?'sel':''}"><span class="ptr">${i===sel?'›':''}</span><span class="lab">${r[0]}</span><span>${v}</span><span class="grp">${q!==null?T[gi][0]:''}</span></div>`}).join('')
+    :`<div class="empty">No settings match “${q}”.</div>`;
+  const r=rs[sel]; if(!r){$('detail').innerHTML='';return}
+  const x=r[1]; const lay=typeof x[4]==='string'?x[4]:'global';
+  $('detail').innerHTML=`${x[5]}<br><span class="k">${x[1]}</span> · set in ${x[3]==='unset'?'nowhere (default)':lay} · ${x[6]}`+(msg?`<br><span class="saved">${msg}</span>`:'')+(edit!==null?'<br>Enter saves · Esc cancels':'');
+}
+document.addEventListener('keydown',e=>{
+  const rs=rows(), r=rs[sel]&&rs[sel][1];
+  if(edit!==null){ if(e.key==='Enter'){r[3]=edit||r[3];msg='Saved to '+(typeof r[4]==='string'?r[4]:'global')+' config.';edit=null}
+    else if(e.key==='Escape')edit=null; else if(e.key==='Backspace')edit=edit.slice(0,-1); else if(e.key.length===1)edit+=e.key; e.preventDefault(); render(); return;}
+  msg='';
+  if(q!==null&&e.key.length===1&&e.key!==' '){q+=e.key;sel=0}
+  else if(e.key==='/'&&q===null){q='';sel=0}
+  else if(e.key==='Escape'){q=null;sel=0}
+  else if(q!==null&&e.key==='Backspace'){q=q.slice(0,-1)}
+  else if(e.key==='ArrowRight'&&q===null){tab=(tab+1)%T.length;sel=0}
+  else if(e.key==='ArrowLeft'&&q===null){tab=(tab+T.length-1)%T.length;sel=0}
+  else if(e.key==='ArrowDown'){sel=Math.min(sel+1,rs.length-1)}
+  else if(e.key==='ArrowUp'){sel=Math.max(sel-1,0)}
+  else if((e.key==='Enter'||e.key===' ')&&r){
+    const where='Saved to '+(typeof r[4]==='string'?r[4]:'global')+' config.';
+    if(r[2]===B){r[3]=!r[3];msg=where+' '+r[6]}
+    else if(r[2]===E){const o=r[4]&&Array.isArray(r[4])?r[4]:LAYERS[r[1]]; const opts=Array.isArray(r[4])?r[4]:[]; r[3]=opts[(opts.indexOf(r[3])+1)%opts.length];msg=where+' '+r[6]}
+    else if(r[2]===N){edit=''}
+    else if(r[2]===M){msg='(opens the model picker; the choice saves here)'}
+    else if(r[2]===L){msg='(opens a sub-page to add, remove and reorder entries)'}
+    else if(r[2]===G){msg='(opens '+r[3]+')'}
+  }
+  else if(e.key==='Tab'&&r){ const ls=LAYERS[r[1]]||['global','project','repository']; const cur=typeof r[4]==='string'?r[4]:'global'; const nx=ls[(ls.indexOf(cur)+1)%ls.length]; r[4]=nx==='global'?0:nx; msg='Moved to '+nx+' config.'}
+  else if(e.key==='Delete'&&r){ if(typeof r[4]==='string'){msg='Removed the '+r[4]+' override; global applies.';r[4]=0} else msg='Nothing to reset: the value is already global.'}
+  else if(q===null&&e.key.length===1&&/[a-z]/i.test(e.key)){q=e.key;sel=0}
+  else return;
+  e.preventDefault(); render();
+});
+render(); $('t').focus();
+</script></body></html>
