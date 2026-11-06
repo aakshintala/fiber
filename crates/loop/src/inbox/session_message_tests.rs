@@ -762,12 +762,12 @@ impl World {
         lines[from..].to_vec()
     }
 
-    fn durable_kinds(&self) -> Vec<String> {
+    fn durable_kinds(&self) -> Vec<EventKind> {
         log::read(&self.dir)
             .unwrap()
             .into_iter()
             .filter(Envelope::is_durable)
-            .map(|line| line.kind)
+            .map(|line| line.kind())
             .collect()
     }
 
@@ -781,26 +781,29 @@ fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
 }
 
 /// A whole session's durable kinds: its opening lines, then `turns`.
-fn session_of(turns: &[Vec<&str>]) -> Vec<String> {
-    ["session_started", "preamble_built", "opening_message"]
-        .into_iter()
-        .chain(turns.iter().flatten().copied())
-        .map(str::to_owned)
-        .collect()
+fn session_of(turns: &[Vec<EventKind>]) -> Vec<EventKind> {
+    [
+        EventKind::SessionStarted,
+        EventKind::PreambleBuilt,
+        EventKind::OpeningMessage,
+    ]
+    .into_iter()
+    .chain(turns.iter().flatten().cloned())
+    .collect()
 }
 
 /// A step whose reply is text alone, then the turn's end.
-const REPLY: [&str; 5] = [
-    "assistant_message_started",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const REPLY: [EventKind; 5] = [
+    EventKind::AssistantMessageStarted,
+    EventKind::TextCompleted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 /// `turn_started`, `step_started`, then `between`, then [`REPLY`].
-fn one_step_with<'a>(between: &[&'a str]) -> Vec<&'a str> {
-    let mut all = vec!["turn_started", "step_started"];
+fn one_step_with(between: &[EventKind]) -> Vec<EventKind> {
+    let mut all = vec![EventKind::TurnStarted, EventKind::StepStarted];
     all.extend_from_slice(between);
     all.extend_from_slice(&REPLY);
     all
@@ -875,13 +878,7 @@ fn a_message_sent_just_before_the_last_idle_check_is_run() {
     assert!(sent.load(Ordering::SeqCst));
     assert!(world.admission.admit(|| true).is_none());
     let lines = world.turn_lines();
-    assert_eq!(
-        kinds(&lines),
-        one_step_with(&[])
-            .iter()
-            .map(|name| EventKind::from_name(name))
-            .collect::<Vec<_>>()
-    );
+    assert_eq!(kinds(&lines), one_step_with(&[]));
     assert_eq!(
         lines[0].payload["input"],
         json!([{
@@ -938,7 +935,7 @@ fn a_message_sent_just_after_the_last_idle_check_is_refused() {
     assert!(refused.load(Ordering::SeqCst));
     assert!(!called.load(Ordering::SeqCst));
     assert!(looped.inbox.try_recv().is_err());
-    assert_eq!(world.durable_kinds(), ["session_started"]);
+    assert_eq!(world.durable_kinds(), [EventKind::SessionStarted]);
     world.looped = Some(looped);
 }
 
@@ -1559,7 +1556,7 @@ fn a_required_offer_failure_with_a_held_message_fails_the_run() {
         world
             .durable_kinds()
             .iter()
-            .all(|kind| kind != "turn_started"),
+            .all(|kind| *kind != EventKind::TurnStarted),
         "no turn ran: {:?}",
         world.durable_kinds()
     );
@@ -1678,7 +1675,7 @@ fn a_refused_session_message_answers_message_refused_and_queues_nothing() {
         vec![(Some(FROM.to_owned()), Some(PARENT.to_owned()))],
         "the hook saw the sender and its parent"
     );
-    assert_eq!(world.durable_kinds(), ["session_started"]);
+    assert_eq!(world.durable_kinds(), [EventKind::SessionStarted]);
     world.looped = Some(looped);
 }
 
@@ -1706,7 +1703,7 @@ fn a_blocking_hook_failure_answers_hook_failed_and_queues_nothing() {
         "a failure leaves no queue entry"
     );
     assert!(answers.try_recv().is_err(), "the ack fires exactly once");
-    assert_eq!(world.durable_kinds(), ["session_started"]);
+    assert_eq!(world.durable_kinds(), [EventKind::SessionStarted]);
     world.looped = Some(looped);
 }
 
