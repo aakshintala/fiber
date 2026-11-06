@@ -80,7 +80,7 @@ stable tag. Nightly jobs reuse the stable steps verbatim so their
 measurements are reported ungated exactly as `docs/ci.md`, "Releases",
 describes, while ceiling-lowering follow-up pull requests stay on stable
 releases, which key off `CHANGELOG.md` sections and version bumps that
-nightlies never write.
+nightlies never write. There is no fallback that publishes from the last green commit.
 
 ### Rehearsing the publish path
 
