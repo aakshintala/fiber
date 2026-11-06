@@ -165,11 +165,11 @@ impl Supervisor {
     }
 
     /// Records a reaped ending; live-session job endings await confirmation.
+    /// A live call can reap before its Adopt line arrives, so the exit is
+    /// kept even with no job bound yet: the later adopt still binds, and the
+    /// crash takeover still writes the one ending.
     pub fn exited(&mut self, id: &str, exit: Exit) -> Vec<Step> {
         let Some(mut process) = self.processes.remove(id) else {
-            return Vec::new();
-        };
-        let Some(job_id) = process.job.clone() else {
             return Vec::new();
         };
         match self.phase {
@@ -179,6 +179,9 @@ impl Supervisor {
                 Vec::new()
             }
             Phase::Holding => {
+                let Some(job_id) = process.job.clone() else {
+                    return Vec::new();
+                };
                 let write = if process.expired {
                     Step::WriteKeeperTimeout { job_id, exit }
                 } else {
