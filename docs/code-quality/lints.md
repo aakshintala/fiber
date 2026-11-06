@@ -66,7 +66,9 @@ Denied everywhere:
   ignores the rest uses `if let` or `matches!`; the lints are for matches
   that must grow with the enum
 - visibility and documentation: rustc's `unreachable_pub` and `missing_docs`
-  (see "Visibility" and "Comments")
+  (see "Visibility" and "Comments"), and the `visibility` check
+  (`cargo xtask visibility`) for a function, const or static no other file
+  of its crate names
 - `unsafe_code` and `undocumented_unsafe_blocks` (see "`unsafe`")
 - an allow with no reason: `allow_attributes_without_reason`
 - a lint name the toolchain does not know: rustc's `unknown_lints` and

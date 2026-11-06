@@ -13,7 +13,7 @@ use support::lock;
 use crate::TurnCancel;
 use crate::progress::{SharedWake, Stream};
 
-pub(crate) const MAX_INNER_DEPTH: u8 = 8;
+const MAX_INNER_DEPTH: u8 = 8;
 
 /// One response shared by the requester, the loop and the closing slot.
 #[derive(Default)]

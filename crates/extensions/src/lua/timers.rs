@@ -120,7 +120,7 @@ impl Timers {
     }
 
     /// The timer ids whose Lua functions the extension's thread still frees.
-    pub(super) fn take_cleanup(&mut self) -> Vec<u64> {
+    fn take_cleanup(&mut self) -> Vec<u64> {
         std::mem::take(&mut self.cleanup)
     }
 

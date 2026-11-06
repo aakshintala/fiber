@@ -118,7 +118,7 @@ impl Steering {
     }
 
     /// The selected row's index.
-    pub(crate) fn selected_at(&self) -> Option<usize> {
+    fn selected_at(&self) -> Option<usize> {
         self.selected.as_deref().and_then(|id| self.at(id))
     }
 

@@ -16,7 +16,7 @@ pub(crate) const ROLES: usize = 41;
 /// Lifted markers start here: [`Role::lifted`] is `LIFTED_BASE` plus the
 /// role's index, so lifts run 64..=104, past every role marker and the
 /// colours the paint pass leaves alone.
-pub(crate) const LIFTED_BASE: u8 = 64;
+const LIFTED_BASE: u8 = 64;
 
 /// A colour role: what a colour is for. The order is the doc table's
 /// (`docs/tui.md`, "Themes"), and each role's index is its marker's.

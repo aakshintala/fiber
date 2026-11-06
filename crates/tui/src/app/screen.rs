@@ -19,7 +19,7 @@ use crate::window::Pages;
 /// One enum, never two fields: a frozen screen with no width stored
 /// is `Frozen { pending_width: None }`, never a contradiction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Freeze {
+enum Freeze {
     /// The scroll position moves.
     Live,
     /// The scroll keys wait; clearing applies one stored resize.

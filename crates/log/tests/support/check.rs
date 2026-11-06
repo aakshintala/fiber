@@ -12,8 +12,12 @@ pub(crate) fn check(dir: &Path) -> Result<String, String> {
     let lines = log::read(dir).map_err(|e| e.to_string())?;
     for (due, line) in (0u64..).zip(&lines) {
         let n = due + 1;
-        Event::from_envelope(line)
-            .map_err(|e| format!("line {n}: a {} payload that does not parse: {e}", line.kind))?;
+        Event::from_envelope(line).map_err(|e| {
+            format!(
+                "line {n}: a {} payload that does not parse: {e}",
+                line.kind().name()
+            )
+        })?;
         match line.seq {
             Some(seq) if seq.0 == due => {}
             Some(seq) => return Err(format!("line {n}: seq {} where {due} was due", seq.0)),

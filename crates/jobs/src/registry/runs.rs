@@ -409,7 +409,7 @@ impl Registry {
 
     /// A `Settle` taking `id`'s queue through `mark` over a weak registry:
     /// nothing was started when the registry is gone.
-    pub(crate) fn settle_through(&self, id: &str, mark: Mark) -> Settle {
+    fn settle_through(&self, id: &str, mark: Mark) -> Settle {
         let registry = Weak::clone(&self.me);
         let id = id.to_owned();
         Settle(Arc::new(move || {

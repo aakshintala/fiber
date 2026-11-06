@@ -340,7 +340,7 @@ fn stop_and_end(
     match jobs.ended(fakes::Deadline::after(STEP)) {
         Some(ended) => ended,
         None => {
-            let live = fakes::matching(marker).unwrap_or_default();
+            let live = fakes::matching(marker, fakes::MUST_SUCCEED_WITHIN / 2).unwrap_or_default();
             panic!(
                 "the stopped job to end: running={:?} started={} live={:?}",
                 jobs.running(),

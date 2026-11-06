@@ -198,7 +198,7 @@ impl Drop for Opening {
 }
 
 /// One sweep candidate: a kept subscription whose session may have resumed.
-pub(crate) struct Candidate {
+struct Candidate {
     session: String,
     mark: Mark,
     writer: Arc<Mutex<UnixStream>>,

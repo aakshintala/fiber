@@ -24,7 +24,7 @@ use crate::session::Gate;
 pub(crate) const COULD_NOT_START: &str = "The command could not start.";
 /// What a `shell` stopped before its command started says when `cancel`
 /// stopped it: the tool's own words (`tool_util.rs`, `cancelled_before`).
-pub(crate) const CANCELLED_BEFORE_START: &str = "Cancelled before it started.";
+const CANCELLED_BEFORE_START: &str = "Cancelled before it started.";
 
 /// A driver shell that passed its checks, with its cancel registered.
 pub(crate) struct Running {

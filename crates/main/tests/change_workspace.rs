@@ -402,8 +402,9 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
     // The guard's first listing must see the holder: a short wait armed
     // before the holder appears would pass with nothing to wait on,
     // instead of timing out on the live holder.
+    let wait = setup.deadline.start_wait();
     loop {
-        if fakes::matching(&held_text)
+        if fakes::matching(&held_text, wait.left() / 2)
             .unwrap_or_default()
             .contains(&group)
         {
@@ -1279,16 +1280,23 @@ fn a_rewind_names_the_ancestor_project_after_its_workspace_moves_away() {
         &dir,
         &format!("the leaf {next}'s session lock to become available"),
     );
-    // The probe drops its temporary guard; the test retains the lock here.
-    let log::Hold::Held(leaf_guard) = log::try_hold(&dir).unwrap() else {
-        panic!("the test could not take the leaf {next}'s session lock");
-    };
-    let mut leaf_held_by_test = Some(leaf_guard);
+    // The dry run reads the lock label, not the flock: hold the leaf with
+    // this process's live pid label, taking no flock.
+    fs::write(
+        dir.join("session.lock"),
+        format!("{}\n", std::process::id()),
+    )
+    .unwrap();
+    let mut leaf_held_by_test = Some(dir.clone());
     wait_for_leaf_unheld(
         &mut hubbed,
         &next,
         |_| {},
-        || drop(leaf_held_by_test.take()),
+        || {
+            if let Some(dir) = leaf_held_by_test.take() {
+                fs::write(dir.join("session.lock"), b"").unwrap();
+            }
+        },
     );
     assert!(
         leaf_held_by_test.is_none(),

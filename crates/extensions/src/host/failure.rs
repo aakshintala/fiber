@@ -204,7 +204,7 @@ pub(crate) fn wrap(lua: &Lua, raw: Function, failure: &Function) -> mlua::Result
 }
 
 /// Wraps an OAuth call whose uncaught failure has a special callback mapping.
-pub(crate) fn wrap_with_boundary(
+fn wrap_with_boundary(
     lua: &Lua,
     raw: Function,
     failure: &Function,

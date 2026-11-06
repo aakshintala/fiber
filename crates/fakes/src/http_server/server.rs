@@ -65,7 +65,7 @@ enum AcceptOutcome {
 }
 
 /// One persistent window's end.
-pub(crate) enum WindowOutcome {
+enum WindowOutcome {
     Accepted(Connection),
     /// The window's budget ran out with no connection.
     Idle,
@@ -602,7 +602,7 @@ impl HttpServer {
 
     /// One persistent window: an accepted connection, an idle end, or a
     /// stopped wait.
-    pub(crate) fn accept_window(&self) -> WindowOutcome {
+    fn accept_window(&self) -> WindowOutcome {
         match self.accept(&AcceptMode::Persistent) {
             Some(conn) => WindowOutcome::Accepted(conn),
             // An empty window ends idle; shutdown ends stopped. The

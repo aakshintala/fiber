@@ -668,7 +668,7 @@ fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
         "the refresh child never requested the model list: saw {} requests for {} (refresh child pids: {:?})",
         server.requests().len(),
         file.display(),
-        fakes::matching(&setup.refresh_pattern()),
+        fakes::matching(&setup.refresh_pattern(), setup.deadline.left() / 2),
     );
     assert!(
         std::fs::read(&file).unwrap() == old,

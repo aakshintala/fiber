@@ -37,8 +37,8 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
 /// `assert_eq!(kinds(` and the direct-support `assert_eq!(support::kinds`.
 /// Occurrences count, not matching lines, so two call sites on one line
 /// both count. Only files under `crates/` count.
-pub(crate) const KINDS_LITERAL: &str = "assert_eq!(kinds(";
-pub(crate) const SUPPORT_KINDS_LITERAL: &str = "assert_eq!(support::kinds";
+const KINDS_LITERAL: &str = "assert_eq!(kinds(";
+const SUPPORT_KINDS_LITERAL: &str = "assert_eq!(support::kinds";
 
 /// Every crate may depend on `support`, which holds no domain knowledge.
 pub(crate) const SUPPORT_QUOTE: &str = "`support` depends on nothing in the workspace, and every crate may depend on it; the rules below leave it out because it holds no domain knowledge.";

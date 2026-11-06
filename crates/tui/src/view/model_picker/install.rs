@@ -17,7 +17,7 @@ use crate::theme::Role;
 
 /// The most columns of install text a row draws: with the four columns
 /// of indent and "✗ " it stays inside the picker's 96-column content.
-pub(super) const TEXT_MAX: usize = 80;
+const TEXT_MAX: usize = 80;
 
 /// The indent of the error and outcome rows, under the name.
 const INDENT: &str = "    ";

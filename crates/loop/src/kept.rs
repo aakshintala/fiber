@@ -13,7 +13,7 @@ pub(crate) fn collect(lines: &[Envelope]) -> Result<Vec<JobCompleted>, Error> {
     let mut owned = HashSet::new();
     let mut kept = Vec::new();
     for line in lines {
-        let kind = EventKind::from_name(&line.kind);
+        let kind = line.kind();
         if kind == EventKind::JobStarted
             && line
                 .payload

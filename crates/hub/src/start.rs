@@ -358,9 +358,13 @@ fn acknowledge(stream: &UnixStream, command_id: &str) -> Ack {
         if !named {
             continue;
         }
-        match ack.get("kind").and_then(Value::as_str) {
-            Some("command_accepted") => return Ack::Accepted,
-            Some("command_rejected") => {
+        match ack
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(contract::events::EventKind::from_name)
+        {
+            Some(contract::events::EventKind::CommandAccepted) => return Ack::Accepted,
+            Some(contract::events::EventKind::CommandRejected) => {
                 let payload = ack.get("payload");
                 let code = payload
                     .and_then(|payload| payload.get("code"))

@@ -19,6 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::*;
+use contract::HubEventKind;
 use fakes::Deadline;
 
 #[allow(
@@ -84,7 +85,7 @@ fn a_hello_from_a_peer_that_already_closed_is_read() {
     let Ok((stream, hello)) = got else {
         panic!("the buffered hello is read");
     };
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     assert_eq!(stream.read_timeout().unwrap(), None);
 }
 
@@ -309,7 +310,7 @@ fn acceptance_runs_at_connect_time_before_the_hello_check() {
         .recv(&done_rx)
         .expect("the hello probe answers")
     {
-        Probe::Connected(Ok((_, hello))) => assert_eq!(hello.kind, "hub_hello"),
+        Probe::Connected(Ok((_, hello))) => assert_eq!(hello.kind(), HubEventKind::HubHello),
         Probe::Connected(Err(error)) => panic!("a hello connects: {error}"),
         Probe::Absent => panic!("a hello is not absent"),
         Probe::Failed(error) => panic!("a hello connects: {error}"),

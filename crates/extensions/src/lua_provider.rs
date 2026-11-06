@@ -106,7 +106,7 @@ impl ProcessProvider {
     /// Refreshes the handler references from the owner's current
     /// registrations: after a restart the fresh generation replaces the
     /// stale one, and a dropped registration resolves no longer.
-    pub(crate) fn rebind_runs(&self, provider_name: &str) {
+    fn rebind_runs(&self, provider_name: &str) {
         *lock(&self.runs) = self.owner.provider_runs(provider_name);
     }
 }

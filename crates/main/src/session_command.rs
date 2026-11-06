@@ -194,7 +194,7 @@ pub(crate) fn effective_answerable(base: bool, supervised: bool) -> bool {
 /// the construction above builds with, after every reload too), while the
 /// sync keeps the reload baseline the next turn-start check measures
 /// against the installed answer.
-pub(crate) fn command_update_wiring(
+fn command_update_wiring(
     current: &Arc<crate::session_extensions::Current>,
     session: &Session,
     skill_set: &r#loop::SkillSet,

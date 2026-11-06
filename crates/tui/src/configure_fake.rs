@@ -25,7 +25,7 @@ pub(crate) type NotesSave = (PathBuf, Option<NotesWrite>, Option<NotesWrite>);
 
 /// The hub's notes answer for a workspace with no test answer set: both
 /// layers empty, each file named with an `absent` version.
-pub(crate) fn empty_notes() -> ReviewerNotes {
+fn empty_notes() -> ReviewerNotes {
     let layer = |layer: Layer| NotesFile {
         file: file(layer),
         text: String::new(),
@@ -123,7 +123,7 @@ pub(crate) type SkillSwitched = (PathBuf, String, SwitchScope, bool);
 
 /// One install held at a gate: it signals on `entered` once its call is
 /// recorded and waits on `answer`.
-pub(crate) struct InstallGate {
+struct InstallGate {
     answer: std::sync::mpsc::Receiver<Result<crate::ProviderInstall, ConfigureError>>,
     entered: std::sync::mpsc::Sender<()>,
 }
@@ -156,7 +156,7 @@ pub(crate) struct Fake {
     /// Every switch asked for, in order.
     pub(crate) switched: Mutex<Vec<Switched>>,
     /// Whether `switch_tool` fails after applying the edit to its lists.
-    pub(crate) fail_after_write: Mutex<bool>,
+    fail_after_write: Mutex<bool>,
     /// What `skills_disabled` answers.
     pub(crate) skills_off: Mutex<Result<SkillsDisabled, ConfigureError>>,
     /// Every skill switch asked for, in order.
@@ -195,7 +195,7 @@ pub(crate) struct Fake {
     /// Every provider asked to log in through the browser, in order.
     pub(crate) login_names: Mutex<Vec<String>>,
     /// The `LoginShow` each browser login was given, in order.
-    pub(crate) login_shown: Mutex<Vec<Arc<dyn LoginShow>>>,
+    login_shown: Mutex<Vec<Arc<dyn LoginShow>>>,
     /// The `FakeLogin` each browser login returned, in order.
     pub(crate) logins: Mutex<Vec<Arc<FakeLogin>>>,
     /// The answer sender each browser login waits on, in order: owned by
@@ -213,7 +213,7 @@ pub(crate) struct Fake {
     /// it has reached it, and waits on it. A test ending drops its sender
     /// and releases the install, as `FakeLogin` does, so a failed test
     /// cannot retain a worker forever.
-    pub(crate) install_gates: Mutex<Vec<InstallGate>>,
+    install_gates: Mutex<Vec<InstallGate>>,
     /// Every reviewer read asked for, in order: the provider name.
     pub(crate) reviewer_reads: Mutex<Vec<String>>,
     /// The threads reviewer reads ran on, in order: discovery never runs
@@ -223,8 +223,7 @@ pub(crate) struct Fake {
     /// and waits on it. A test ending drops its sender and releases the
     /// read, as `FakeLogin` does, so a failed test cannot retain a worker
     /// forever.
-    pub(crate) reviewer_gates:
-        Mutex<Vec<std::sync::mpsc::Receiver<Result<ReviewerModels, ConfigureError>>>>,
+    reviewer_gates: Mutex<Vec<std::sync::mpsc::Receiver<Result<ReviewerModels, ConfigureError>>>>,
     /// What an ungated reviewer read answers.
     pub(crate) reviewer_answer: Mutex<Result<ReviewerModels, ConfigureError>>,
     /// Every reviewer save asked for, in order: the provider and the id.

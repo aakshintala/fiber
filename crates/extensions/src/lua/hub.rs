@@ -602,7 +602,7 @@ pub(crate) struct Shared {
     /// Each bound delegate job's finish, held from `delegate_finished`
     /// until its `job_completed` pushes the `run` item. A finish for a job
     /// no extension binds is never held.
-    pub(super) held_finishes: HashMap<contract::JobId, contract::events::DelegateFinished>,
+    held_finishes: HashMap<contract::JobId, contract::events::DelegateFinished>,
     /// Set by `abandon`: a leaked thread of this VM may still run Lua, and
     /// its `host.delegate` is refused from here on.
     pub(super) abandoned: bool,

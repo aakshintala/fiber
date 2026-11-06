@@ -37,7 +37,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   (`docs/permissions.md`, "The destructive-command guard").
   A shell call that ran inside the OS sandbox on Linux or macOS carries
   `confined` (`docs/permissions.md`, "Confinement"); the log records it
-  (`docs/events.md`, "Declared effects"). Calls remain reviewed.
+  (`docs/events.md`, "Declared effects"). A confined call takes the
+  confined fast path unless the destructive-command guard matches it
+  (`docs/permissions.md`, "Fast paths").
 - The effects function may also return the network hosts the call contacts
   (`hosts`). A list, even an empty one, says the call contacts those hosts and
   no others; an empty list says it contacts no host the model chose, as a

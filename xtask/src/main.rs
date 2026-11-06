@@ -53,7 +53,7 @@
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `crate-edges`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `visibility`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `crate-edges`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
 //! - `doc-citations --print`: prints the allow table for code citations
 //!   (`xtask/doc-citations.allow`); `check-docs` fails what the table
 //!   does not list
@@ -145,6 +145,7 @@ mod stress;
 mod test_index;
 mod threads;
 mod ticket;
+mod visibility;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -383,6 +384,16 @@ fn run(args: &[String]) -> Result<bool, String> {
             &rules::signal_sites(&rust_files(&workspace_members()?)?),
             "ok",
         ),
+        "visibility" => {
+            let members = workspace_members()?;
+            let baseline = visibility::load_baseline();
+            let files = rust_files(&members)?;
+            report(
+                "visibility",
+                &visibility::check_with_baseline(&files, &baseline),
+                "ok",
+            )
+        }
         "session-paths" => report(
             "session-paths",
             &rules::session_paths(&rust_files(&workspace_members()?)?),
@@ -538,6 +549,11 @@ fn run(args: &[String]) -> Result<bool, String> {
                 failures.extend(docs::check_file(root, &path)?);
             }
             failures.extend(doc_citations::check(root)?);
+            let members = workspace_members()?;
+            failures.extend(visibility::check_with_baseline(
+                &rust_files(&members)?,
+                &visibility::load_baseline(),
+            ));
             report("check-docs", &failures, "ok")
         }
         "doc-citations" => {
@@ -806,6 +822,7 @@ fn ancestor_of(fix: &str, tested: &str) -> Option<bool> {
 fn output(program: &str, args: &[&str]) -> Result<String, String> {
     let out = Command::new(program)
         .args(args)
+        .current_dir(Path::new("."))
         .output()
         .map_err(|e| format!("{program}: {e}"))?;
     if !out.status.success() {
@@ -1019,7 +1036,8 @@ fn normal_edges() -> Result<BTreeSet<(String, String)>, String> {
     Ok(edges)
 }
 
-/// Every Rust file in a member, tracked or not, skipping ignored ones.
+/// Every Rust file in a member, tracked or not, skipping ignored ones,
+/// listed and read relative to the working directory like every other check.
 fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
     let mut args = vec![
         "ls-files",
@@ -1037,14 +1055,15 @@ fn rust_files(members: &Members) -> Result<Vec<RustFile>, String> {
         let Some(member) = members.get(krate) else {
             continue;
         };
-        if !path.ends_with(".rs") || !Path::new(&path).exists() {
+        let disk = Path::new(&path);
+        if !path.ends_with(".rs") || !disk.exists() {
             continue;
         }
         let rel = path
             .get(member.dir.len() + 1..)
             .unwrap_or_default()
             .to_owned();
-        let source = read(&path)?;
+        let source = std::fs::read_to_string(disk).map_err(|e| format!("{path}: {e}"))?;
         files.push(RustFile {
             krate: krate.to_owned(),
             path,

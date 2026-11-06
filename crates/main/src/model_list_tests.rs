@@ -314,6 +314,42 @@ fn levels_and_default_come_from_the_model() {
 }
 
 #[test]
+fn entries_gate_an_unfiltered_mixed_provider_inventory() {
+    let setup = Setup::new("fiber-model-list-presence-entries");
+    setup.install_data("on", "on", &["m"], &json!({}));
+    install_extension(
+        &setup.home(),
+        "extensions/off",
+        json!({"name": "off", "version": "v1.0.0", "fiber": "0.1.0", "api": extensions::API}),
+        &[(
+            "off",
+            json!({"name": "off", "models": [{
+                "id": "m", "protocol": "openai-responses",
+                "base_url": "http://127.0.0.1:1/v1", "context_window": 1000
+            }]}),
+        )],
+    );
+    let (providers, notices) = extensions::Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["off", "on"]);
+    let config = Config::load(config::Sources {
+        home: setup.home(),
+        workspace: setup.workspace(),
+        project: config::ProjectKey::new("p").unwrap(),
+        overrides: vec![],
+    })
+    .unwrap();
+    let entries = super::entries(&providers, &config);
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.reference.as_str())
+            .collect::<Vec<_>>(),
+        ["on/m"]
+    );
+}
+
+#[test]
 fn configured_is_the_per_model_level_then_the_top_level() {
     let setup = Setup::new("fiber-model-list-configured");
     setup.install_data("acme-ext", "acme", &["m1"], &json!({}));

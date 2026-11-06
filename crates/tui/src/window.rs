@@ -209,7 +209,7 @@ pub(crate) struct Applied {
     pub(crate) busy: Option<bool>,
 }
 
-pub(crate) type TurnRanges = Vec<(usize, Range<usize>)>;
+type TurnRanges = Vec<(usize, Range<usize>)>;
 /// File paths of the calls in a page's own fold, keyed by their section target.
 pub(crate) type CallPaths = Vec<(Target, String)>;
 type DrawData = (Vec<Row>, Vec<RowText>, FocusItems, TurnRanges);
@@ -245,11 +245,11 @@ pub(crate) struct Shown {
 
 /// A spinning mark: a line's index in [`Shown::lines`] and its cell's
 /// column in that line.
-pub(crate) type SpinMark = (usize, u16);
+type SpinMark = (usize, u16);
 
 /// An animated mark: a line's index in [`Shown::lines`] and its item's
 /// key in the animation schedule.
-pub(crate) type AnimMark = (usize, crate::ext::anim::AnimKey);
+type AnimMark = (usize, crate::ext::anim::AnimKey);
 
 /// What a page draws: as shown, or with every section open for the
 /// search (`docs/tui.md`, "Search": every match is counted at once).
@@ -264,7 +264,7 @@ pub(crate) enum Draw {
 }
 
 /// A focus stop's row, height and stable id across paging.
-pub(crate) type FocusItems = Vec<(usize, usize, TargetId)>;
+type FocusItems = Vec<(usize, usize, TargetId)>;
 
 /// The conversation: the page index, the cards of the resident pages, each
 /// turn's totals and what the person opened.

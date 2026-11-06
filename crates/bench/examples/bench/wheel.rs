@@ -746,7 +746,7 @@ const SESSIONS: [(&str, bool); 2] = [("paging", false), ("read", true)];
 /// One wheel session, live in its own pseudo-terminal: the held terminal
 /// stays attached across the session's samples, so every burst starts
 /// from the calibrated bottom.
-pub(crate) struct WheelSession {
+struct WheelSession {
     session: Session,
     terminal: Terminal,
     id: String,

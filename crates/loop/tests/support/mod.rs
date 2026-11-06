@@ -562,7 +562,7 @@ impl CancelLatch {
 /// How long [`Gate::wait`] holds a tool at a closed gate before letting the
 /// turn proceed: the fake gate's grace. A missed release is recorded for
 /// [`Gate::check`], so the wait itself never fails the test.
-pub(crate) const GATE_GRACE: Duration = Duration::from_secs(5);
+const GATE_GRACE: Duration = Duration::from_secs(5);
 
 /// A test gate: the tool blocks until the test opens it, or a deadline
 /// passes. The deadline keeps a test failure before the release from/// hanging scoped-thread cleanup: the tool proceeds either way, the turn
@@ -1763,7 +1763,7 @@ impl Session {
 /// Waits until the session's turn thread parks with no deadline, failing
 /// the test at [`fakes::MUST_SUCCEED_WITHIN`] naming what is parked and which thread ran
 /// the turn.
-pub(crate) fn await_step_park(session: &Session) {
+fn await_step_park(session: &Session) {
     let id = session
         .turn_thread
         .expect("a turn is running on its own thread");

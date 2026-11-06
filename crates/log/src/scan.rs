@@ -140,7 +140,9 @@ impl SessionStarted {
     /// with a payload. No newline, `ts` or `seq` is needed.
     pub(crate) fn parse(first: &[u8]) -> Option<Self> {
         let line: Value = serde_json::from_slice(first).ok()?;
-        if line.get("kind")?.as_str()? != "session_started" {
+        if contract::events::EventKind::from_name(line.get("kind")?.as_str()?)
+            != contract::events::EventKind::SessionStarted
+        {
             return None;
         }
         Some(Self::of(line.get("payload")?))
@@ -254,7 +256,7 @@ pub(crate) fn first_line(dir: &Path) -> Result<SessionStarted, Error> {
         path: path.clone(),
         reason: "the log's first line is not an event".to_owned(),
     })?;
-    if line.kind != "session_started" {
+    if line.kind() != contract::events::EventKind::SessionStarted {
         return Err(Error::Pointer {
             path,
             reason: "the log's first line is not session_started".to_owned(),
@@ -299,7 +301,12 @@ pub fn started_first(dir: &Path) -> Result<SessionStarted, FirstLineError> {
         return Err(FirstLineError::Incomplete);
     }
     let line: Value = serde_json::from_slice(&first).map_err(|_| FirstLineError::Corrupt)?;
-    if line.get("kind").and_then(Value::as_str) != Some("session_started") {
+    if line
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(contract::events::EventKind::from_name)
+        != Some(contract::events::EventKind::SessionStarted)
+    {
         return Err(FirstLineError::Corrupt);
     }
     let Some(payload) = line.get("payload") else {
@@ -513,24 +520,6 @@ pub fn try_hold(dir: &Path) -> Result<Hold, Error> {
     match try_lock_file(dir)? {
         Some(file) => Ok(Hold::Held(SessionLock { _file: file })),
         None => Ok(Hold::Busy),
-    }
-}
-
-/// Takes `dir`'s lock without waiting, only when `session.lock` already
-/// exists. A missing lock file stays missing, so a dry run that probes it
-/// writes nothing: `None` means no lock file, `Some` is the existing
-/// file's state, held or busy.
-pub fn try_hold_existing(dir: &Path) -> Result<Option<Hold>, Error> {
-    let path = dir.join(LOCK);
-    let file = match OpenOptions::new().read(true).write(true).open(&path) {
-        Ok(file) => file,
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => return Err(Error::Io { path, source }),
-    };
-    match file.try_lock() {
-        Ok(()) => Ok(Some(Hold::Held(SessionLock { _file: file }))),
-        Err(TryLockError::WouldBlock) => Ok(Some(Hold::Busy)),
-        Err(TryLockError::Error(source)) => Err(Error::Io { path, source }),
     }
 }
 
