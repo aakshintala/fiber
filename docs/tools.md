@@ -331,7 +331,22 @@ path's directory, ending in `/`.
   carries a result's images, as `image` blocks right after the `toolResult`
   in the same user message: Mistral and Qwen models on Bedrock refused an
   image inside it (`docs/model-routing.md`, "Bedrock Converse wire facts").
-- A path that does not exist fails with `not_found`.
+- A path that does not exist fails with `not_found`. When the wanted name
+  differs from an entry in the same directory only by Unicode spaces, the
+  failure stays `not_found` and names the lookalike instead of opening
+  anything: every character with the Unicode White_Space property
+  (U+0020, U+00A0, U+202F, U+2003, U+2028, U+2029, tab, line feed, vertical
+  tab, form feed, carriage return, next line and the other separator and
+  control spaces) folds to U+0020 for the comparison, while a zero-width
+  space (U+200B) does not fold and never matches. Entries of any kind —
+  file, directory or symlink — report by basename only; nothing is opened,
+  stated or followed. One match stays `not_found`, names the one basename
+  and says the names differ only in Unicode spaces. Several matches stay
+  `not_found` and list at most the first 10 sorted basenames plus how many
+  more are not listed. The directory is read once, after the open failed,
+  and never on a successful read; when it cannot be read, or the wanted
+  name is not valid Unicode, the failure is the plain `not_found`,
+  byte for byte.
 - Any other file that is not UTF-8 text, and any directory or device, fails
   with `unsupported_file`, giving its size and detected type.
 - Effects: `reads`, reversible, with the resolved path.

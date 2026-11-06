@@ -320,6 +320,262 @@ fn a_missing_file_is_not_found() {
 }
 
 #[test]
+fn space_lookalike_single_names_and_opens_nothing() {
+    let dir = TempDir::new("fiber-lookalike-single");
+    let sibling = "shot\u{202f}AM.png";
+    let payload = "single-lookalike-payload-7q\n";
+    fs::write(dir.path().join(sibling), payload).unwrap();
+    let output = run(dir.path(), json!({"path": "shot AM.png"}));
+    assert_eq!(code(&output), Some(ErrorCode::NotFound));
+    let resolved = canonical(dir.path()).join("shot AM.png");
+    assert_eq!(
+        fakes::text_of(&output),
+        format!(
+            "`{}` does not exist. An entry in the same directory matches it apart from Unicode spaces, so none was opened: `{}`.\n",
+            resolved.display(),
+            sibling,
+        )
+    );
+    assert!(
+        !fakes::text_of(&output).contains(payload),
+        "{}",
+        fakes::text_of(&output)
+    );
+}
+
+#[test]
+fn space_lookalike_several_list_and_open_neither() {
+    let dir = TempDir::new("fiber-lookalike-several");
+    let first = "shot\u{202f}AM.png";
+    let second = "shot\u{a0}AM.png";
+    fs::write(dir.path().join(first), "several-payload-narrow-nbsp\n").unwrap();
+    fs::write(dir.path().join(second), "several-payload-nbsp\n").unwrap();
+    let output = run(dir.path(), json!({"path": "shot AM.png"}));
+    assert_eq!(code(&output), Some(ErrorCode::NotFound));
+    let resolved = canonical(dir.path()).join("shot AM.png");
+    // (`docs/tools.md`, "read"): several matches list at most the first 10
+    // sorted basenames. Byte order puts U+00A0 before U+202F, so the list
+    // names `second` first.
+    assert_eq!(
+        fakes::text_of(&output),
+        format!(
+            "`{}` does not exist. These names match it apart from Unicode spaces, so none was opened: `{}`, `{}`.\n",
+            resolved.display(),
+            second,
+            first,
+        )
+    );
+    assert!(
+        !fakes::text_of(&output).contains("several-payload"),
+        "{}",
+        fakes::text_of(&output)
+    );
+}
+
+#[test]
+fn space_lookalike_none_is_unchanged() {
+    let dir = TempDir::new("fiber-lookalike-none");
+    fs::write(dir.path().join("other.txt"), "unrelated\n").unwrap();
+    let output = run(dir.path(), json!({"path": "nope.txt"}));
+    assert_eq!(code(&output), Some(ErrorCode::NotFound));
+    let resolved = canonical(dir.path()).join("nope.txt");
+    assert_eq!(
+        fakes::text_of(&output),
+        format!("`{}` does not exist.\n", resolved.display())
+    );
+}
+
+#[test]
+fn space_lookalike_hit_has_no_scan() {
+    let dir = TempDir::new("fiber-lookalike-hit");
+    let body = "exact hit body\n";
+    fs::write(dir.path().join("my file.txt"), body).unwrap();
+    fs::write(dir.path().join("my\u{202f}file.txt"), "lookalike body\n").unwrap();
+    let output = run(dir.path(), json!({"path": "my file.txt"}));
+    assert!(output.error.is_none());
+    assert_eq!(fakes::text_of(&output), body);
+}
+
+#[test]
+fn space_lookalike_fold_covers_separator_spaces() {
+    for (tag, space) in [
+        ("nnbsp", "\u{202f}"),
+        ("nbsp", "\u{a0}"),
+        ("emspace", "\u{2003}"),
+        ("line-separator", "\u{2028}"),
+        ("tab", "\t"),
+        ("newline", "\n"),
+        ("nel", "\u{85}"),
+    ] {
+        let dir = TempDir::new("fiber-lookalike-fold");
+        let sibling = format!("fold{space}here.txt");
+        fs::write(dir.path().join(&sibling), "fold payload\n").unwrap();
+        let output = run(dir.path(), json!({"path": "fold here.txt"}));
+        assert_eq!(code(&output), Some(ErrorCode::NotFound), "{tag}");
+        let text = fakes::text_of(&output);
+        assert!(
+            text.contains("An entry in the same directory matches it apart from Unicode spaces"),
+            "{tag}: {text}"
+        );
+        assert!(text.contains(&format!("`{sibling}`")), "{tag}: {text}");
+        assert!(!text.contains("fold payload"), "{tag}: {text}");
+    }
+}
+
+#[test]
+fn space_lookalike_fold_keeps_zero_width_space() {
+    let dir = TempDir::new("fiber-lookalike-zwsp");
+    fs::write(dir.path().join("a\u{200b}b.txt"), "zwsp payload\n").unwrap();
+    let output = run(dir.path(), json!({"path": "a b.txt"}));
+    assert_eq!(code(&output), Some(ErrorCode::NotFound));
+    let resolved = canonical(dir.path()).join("a b.txt");
+    assert_eq!(
+        fakes::text_of(&output),
+        format!("`{}` does not exist.\n", resolved.display())
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn space_lookalike_replacement_char_matches_nothing_undecodable() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = TempDir::new("fiber-lookalike-undecodable");
+    fs::write(
+        dir.path()
+            .join(Path::new(std::ffi::OsStr::from_bytes(b"q\xffw.txt"))),
+        "undecodable payload\n",
+    )
+    .unwrap();
+    let mut saw_undecodable = false;
+    for entry in fs::read_dir(dir.path()).unwrap() {
+        if entry.unwrap().file_name().to_str().is_none() {
+            saw_undecodable = true;
+        }
+    }
+    assert!(saw_undecodable, "the sibling name really does not decode");
+    let output = run(dir.path(), json!({"path": "q\u{fffd}w.txt"}));
+    assert_eq!(code(&output), Some(ErrorCode::NotFound));
+    let resolved = canonical(dir.path()).join("q\u{fffd}w.txt");
+    assert_eq!(
+        fakes::text_of(&output),
+        format!("`{}` does not exist.\n", resolved.display())
+    );
+}
+
+#[test]
+fn space_lookalike_exact_ten_lists_without_count() {
+    // (`docs/tools.md`, "read"): several matches list at most the first 10
+    // sorted basenames plus how many more are not listed; with 10 of 10
+    // there is no count, and the backtick count pins all 10 are shown.
+    let dir = TempDir::new("fiber-lookalike-ten");
+    let spaces = [
+        "\t", "\n", "\u{b}", "\u{c}", "\r", "\u{85}", "\u{a0}", "\u{1680}", "\u{2000}", "\u{2003}",
+    ];
+    let mut basenames = Vec::new();
+    for space in spaces {
+        let sibling = format!("shot{space}AM.png");
+        fs::write(dir.path().join(&sibling), "ten payload\n").unwrap();
+        basenames.push(format!("`{sibling}`"));
+    }
+    let output = run(dir.path(), json!({"path": "shot AM.png"}));
+    assert_eq!(code(&output), Some(ErrorCode::NotFound));
+    let text = fakes::text_of(&output);
+    assert!(
+        text.contains("These names match it apart from Unicode spaces, so none was opened: "),
+        "{text}"
+    );
+    for name in &basenames {
+        assert!(text.contains(name), "{text}");
+    }
+    assert!(!text.contains("more are not listed"), "{text}");
+    assert!(!text.contains("(showing"), "{text}");
+    assert!(!text.contains("ten payload"), "{text}");
+    assert_eq!(
+        text.chars().filter(|c| *c == '`').count(),
+        2 * (1 + basenames.len())
+    );
+}
+
+#[test]
+fn space_lookalike_long_list_is_bounded() {
+    let dir = TempDir::new("fiber-lookalike-twelve");
+    // (`docs/tools.md`, "read"): several matches list at most the first 10
+    // sorted basenames plus how many more are not listed. Sorted by UTF-8
+    // bytes, the last two spaces fall outside the first 10.
+    let spaces = [
+        "\t", "\n", "\u{b}", "\u{c}", "\r", "\u{85}", "\u{a0}", "\u{1680}", "\u{2000}", "\u{2003}",
+        "\u{2028}", "\u{202f}",
+    ];
+    for space in spaces {
+        let sibling = format!("shot{space}AM.png");
+        fs::write(dir.path().join(&sibling), "twelve payload\n").unwrap();
+    }
+    let output = run(dir.path(), json!({"path": "shot AM.png"}));
+    assert_eq!(code(&output), Some(ErrorCode::NotFound));
+    let text = fakes::text_of(&output);
+    assert!(text.contains("(showing 10 of 12): "), "{text}");
+    assert!(text.contains("and 2 more are not listed."), "{text}");
+    for space in &spaces[..10] {
+        assert!(text.contains(&format!("`shot{space}AM.png`")), "{text}");
+    }
+    for space in &spaces[10..] {
+        assert!(!text.contains(&format!("shot{space}AM.png")), "{text}");
+    }
+    assert!(!text.contains("twelve payload"), "{text}");
+}
+
+/// One lookalike of any kind is named by basename and never opened
+/// (`docs/tools.md`, "read"): the shared shape behind the single-image and
+/// single-PDF cases. Both callers stay so each kind keeps its own pin.
+fn assert_single_lookalike_named_not_opened(
+    dir_tag: &str,
+    sibling: &str,
+    requested: &str,
+    marker: &str,
+) {
+    let dir = TempDir::new(dir_tag);
+    fs::write(dir.path().join(sibling), marker).unwrap();
+    let output = run(dir.path(), json!({"path": requested}));
+    assert_eq!(code(&output), Some(ErrorCode::NotFound));
+    let resolved = canonical(dir.path()).join(requested);
+    assert_eq!(
+        fakes::text_of(&output),
+        format!(
+            "`{}` does not exist. An entry in the same directory matches it apart from Unicode spaces, so none was opened: `{}`.\n",
+            resolved.display(),
+            sibling,
+        )
+    );
+    assert!(
+        !output
+            .content
+            .iter()
+            .any(|part| matches!(part, ContentPart::Image { .. } | ContentPart::Pdf(_))),
+        "a named lookalike is never opened"
+    );
+}
+
+#[test]
+fn space_lookalike_single_image_is_named_not_opened() {
+    assert_single_lookalike_named_not_opened(
+        "fiber-lookalike-image",
+        "pic\u{202f}01.png",
+        "pic 01.png",
+        "lookalike-image-marker-bytes\n",
+    );
+}
+
+#[test]
+fn space_lookalike_single_pdf_is_named_not_opened() {
+    assert_single_lookalike_named_not_opened(
+        "fiber-lookalike-pdf",
+        "doc\u{202f}1.pdf",
+        "doc 1.pdf",
+        "lookalike-pdf-marker-bytes\n",
+    );
+}
+
+#[test]
 fn a_directory_points_at_the_shell() {
     let dir = TempDir::new("fiber-read-dir");
     let sub = dir.path().join("sub");
