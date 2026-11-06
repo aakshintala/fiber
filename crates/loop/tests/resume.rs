@@ -5675,6 +5675,106 @@ fn an_orphan_on_another_harness_copies_nothing() {
     assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
 }
 
+/// A delegate log's clean exit, as the writer left it: the exit code with
+/// the final message the parent delivers.
+fn exited_with_message(text: &str) -> Event {
+    Event::FiberExited(contract::events::FiberExited {
+        exit_code: 0,
+        usage: contract::shapes::Usage {
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        final_message: Some(contract::events::FinalMessage {
+            final_action_id: ActionId("a_9".into()),
+            text: text.into(),
+        }),
+        error: None,
+        suspended_on: None,
+        questions: None,
+    })
+}
+
+/// The parent side of the settle pair: two Fiber delegates started and
+/// never ended, `s_settle`'s log ending in a clean `fiber_exited` with a
+/// final message, `s_orphan`'s log holding no exit.
+fn two_delegate_history() -> History {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_settle"), None);
+    history.write(delegate_started("j_settle", "s_settle", "fiber"), None);
+    history.write(job_started("j_orphan"), None);
+    history.write(delegate_started("j_orphan", "s_orphan", "fiber"), None);
+    let settle = stage_delegate(&history, "s_settle");
+    settle.append(&fiber_started(), None, None).unwrap();
+    settle
+        .append(&exited_with_message("migrated 3 queries"), None, None)
+        .unwrap();
+    drop(settle);
+    let orphan = stage_delegate(&history, "s_orphan");
+    orphan.append(&fiber_started(), None, None).unwrap();
+    drop(orphan);
+    history.freeze();
+    history
+}
+
+#[test]
+fn a_resumed_parent_settles_a_delegate() {
+    let mut history = two_delegate_history();
+    drop(resume_for_backfill(&mut history));
+    let lines = history.new_lines();
+    // The settled job reports the delegate's clean exit, not a death: the
+    // content pins the bug, not the mere presence of a report.
+    let completed = lines
+        .iter()
+        .find(|line| line.kind() == EventKind::JobCompleted && line.payload["job_id"] == "j_settle")
+        .unwrap();
+    assert_eq!(completed.payload["status"], "completed");
+    let finished = lines
+        .iter()
+        .find(|line| {
+            line.kind() == EventKind::DelegateFinished && line.payload["job_id"] == "j_settle"
+        })
+        .unwrap();
+    assert_eq!(finished.payload["text"], "migrated 3 queries");
+    // The settled pair first, in orphan order: the finish immediately
+    // before its completion, then the still-orphaned job.
+    assert_eq!(
+        history.new_kinds(),
+        [
+            EventKind::DelegateFinished,
+            EventKind::JobCompleted,
+            EventKind::JobCompleted
+        ]
+    );
+    assert_eq!(lines[0].payload["job_id"], "j_settle");
+    assert_eq!(lines[1].payload["job_id"], "j_settle");
+    assert_eq!(lines[2].payload["job_id"], "j_orphan");
+}
+
+#[test]
+fn a_resumed_parent_orphans_a_delegate() {
+    let mut history = two_delegate_history();
+    drop(resume_for_backfill(&mut history));
+    let lines = history.new_lines();
+    // No `fiber_exited` in the log: the orphan marking stands, with the
+    // orphaned code and message.
+    let marked = lines
+        .iter()
+        .find(|line| line.kind() == EventKind::JobCompleted && line.payload["job_id"] == "j_orphan")
+        .unwrap();
+    assert_eq!(marked.payload["status"], "failed");
+    assert_eq!(marked.payload["error"]["code"], "orphaned");
+    assert_eq!(
+        marked.payload["error"]["message"],
+        "The process that ran this job died; it may still be running."
+    );
+}
+
 /// Resumes on a thread for the writer-coordination waits: the old writer
 /// is a log handle the test holds, and the test releases it only after
 /// resume has parked on its lock. The result crosses back as text, so the
