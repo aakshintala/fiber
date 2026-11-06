@@ -1232,7 +1232,7 @@ fn tool_call_deltas_without_an_index_are_told_apart_by_id() {
 #[test]
 fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
     let data = json!({"store": false, "max_tokens": true, "reasoning_object": "yes",
-        "anthropic": true, "cache_key_field": "session_id"});
+        "anthropic": true, "gemini": true, "cache_key_field": "session_id"});
     assert_eq!(
         Compat::from_data(data.as_object().unwrap()),
         Compat {
@@ -1240,6 +1240,7 @@ fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
             max_tokens: true,
             reasoning_object: false,
             anthropic: true,
+            gemini: true,
             cache_key_field: Some("session_id".into()),
             thinking_budget: false,
             bearer: false,
@@ -1343,6 +1344,39 @@ fn a_declared_cache_key_field_carries_the_cache_key() {
     assert_eq!(sent_body(&server, 1).get("session_id"), None);
 }
 
+/// A Gemini endpoint: the flag as the model's data declares it.
+fn gemini_endpoint(server: &ProviderServer) -> Endpoint {
+    let data = json!({"gemini": true});
+    Endpoint {
+        compat: Compat::from_data(data.as_object().unwrap()),
+        ..endpoint(server)
+    }
+}
+
+#[test]
+fn gemini_body_omits_stream_options_and_prompt_cache_key() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    send(gemini_endpoint(&server), &request());
+    // An `extra_body` naming both keys still sends neither on a Gemini
+    // endpoint: the gating strips them after the merge.
+    send(
+        Endpoint {
+            extra_body: json!({"prompt_cache_key": "smuggled",
+                "stream_options": {"include_usage": true}})
+            .as_object()
+            .unwrap()
+            .clone(),
+            ..gemini_endpoint(&server)
+        },
+        &request(),
+    );
+    for n in 0..2 {
+        let body = sent_body(&server, n);
+        assert_eq!(body.get("prompt_cache_key"), None, "request {n}: {body}");
+        assert_eq!(body.get("stream_options"), None, "request {n}: {body}");
+    }
+}
+
 #[test]
 fn a_write_decodes_under_five_minutes_for_an_hour_request() {
     let bytes = stream(&[
@@ -1439,6 +1473,117 @@ fn wire_tools_is_what_the_request_sends() {
     };
     assert_eq!(by_name("a_loose"), json!(false));
     assert_eq!(by_name("z_enum"), json!(false));
+}
+
+/// A tool whose nullable unions nest in objects and arrays, in both orders.
+fn nullable_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "lookup".into(),
+        description: "Looks things up.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "city": {"type": ["string", "null"]},
+                "tags": {"type": "array", "items": {"type": ["null", "integer"]}},
+                "filter": {"type": "object", "properties": {
+                    "since": {"type": ["string", "null"]},
+                    "depth": {"type": "array", "items": {"type": "object",
+                        "properties": {"level": {"type": ["boolean", "null"]}}}}
+                }}
+            },
+            "required": ["city"],
+            "additionalProperties": false
+        }),
+        deferred: false,
+        hosted: None,
+    }
+}
+
+#[test]
+fn gemini_nullable_type_arrays_rewrite_at_every_depth() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    for endpoint in [gemini_endpoint(&server), endpoint(&server)] {
+        let request = ModelRequest {
+            tools: vec![nullable_tool()],
+            ..request()
+        };
+        send(endpoint, &request);
+    }
+    let gemini = &sent_body(&server, 0)["tools"][0]["function"]["parameters"];
+    assert_eq!(
+        gemini["properties"]["city"],
+        json!({"type": "string", "nullable": true})
+    );
+    assert_eq!(
+        gemini["properties"]["tags"]["items"],
+        json!({"type": "integer", "nullable": true})
+    );
+    assert_eq!(
+        gemini["properties"]["filter"]["properties"]["since"],
+        json!({"type": "string", "nullable": true})
+    );
+    assert_eq!(
+        gemini["properties"]["filter"]["properties"]["depth"]["items"]["properties"]["level"],
+        json!({"type": "boolean", "nullable": true})
+    );
+    // The rewrite keeps what it does not rewrite.
+    assert_eq!(gemini["required"], json!(["city"]));
+    assert_eq!(gemini["additionalProperties"], json!(false));
+    // Without the flag the schema goes over exactly as declared.
+    assert_eq!(
+        sent_body(&server, 1)["tools"][0]["function"]["parameters"],
+        nullable_tool().input_schema
+    );
+}
+
+/// Unions the rewrite must refuse, beside the one it forces: two non-null
+/// members, exactly `["null"]`, two nulls, three members and bare `"null"`
+/// stay as declared; a required `nullable: true` wins over `false`; and an
+/// object inside an `enum` value is data, not a schema, so it stays
+/// byte-identical.
+fn degenerate_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "f".into(),
+        description: "Degenerate unions.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "pair": {"type": ["string", "number"]},
+                "nothing": {"type": ["null"]},
+                "duo": {"type": ["null", "null"]},
+                "trio": {"type": ["string", "null", "integer"]},
+                "nil": {"type": "null"},
+                "forced": {"type": ["string", "null"], "nullable": false},
+                "picked": {"type": "string", "enum": [{"type": ["string", "null"]}]},
+            },
+            "required": ["pair", "nothing", "duo", "trio", "nil", "forced", "picked"],
+            "additionalProperties": false
+        }),
+        deferred: false,
+        hosted: None,
+    }
+}
+
+#[test]
+fn gemini_nullable_rewrite_leaves_degenerate_alone_and_forces_nullable_true() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    for endpoint in [gemini_endpoint(&server), endpoint(&server)] {
+        let request = ModelRequest {
+            tools: vec![degenerate_tool()],
+            ..request()
+        };
+        send(endpoint, &request);
+    }
+    let mut rewritten = degenerate_tool().input_schema;
+    rewritten["properties"]["forced"] = json!({"type": "string", "nullable": true});
+    assert_eq!(
+        sent_body(&server, 0)["tools"][0]["function"]["parameters"],
+        rewritten
+    );
+    assert_eq!(
+        sent_body(&server, 1)["tools"][0]["function"]["parameters"],
+        degenerate_tool().input_schema
+    );
 }
 
 #[test]

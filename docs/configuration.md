@@ -652,6 +652,7 @@ declares") lists:
   | `max_tokens` | boolean | `openai-completions` | the output limit goes in `max_tokens`; absent, it goes in `max_completion_tokens` |
   | `reasoning_object` | boolean | `openai-completions` | the thinking level goes in `reasoning: {effort}`, as OpenRouter takes it; absent, it goes in `reasoning_effort` |
   | `anthropic` | boolean | `openai-completions` | the model is Anthropic's, behind a gateway such as OpenRouter: requests carry Anthropic's `cache_control` markers on content parts, and Anthropic's strict-tool limits apply |
+  | `gemini` | boolean | `openai-completions` | the model is Gemini's, behind a gateway such as Databricks: requests carry no `stream_options` or `prompt_cache_key`, and nullable `type` arrays are rewritten, except inside `enum`, `const`, `default` or `examples` values |
   | `cache_key_field` | string | `openai-completions` | a body field that also carries the cache key, such as OpenRouter's `session_id` |
   | `cache_key_header` | string | `openai-responses`, `openai-completions`, `anthropic-messages`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
   | `thinking_budget` | boolean | `anthropic-messages` | the thinking level goes in `thinking: {type: "enabled", budget_tokens}` (`docs/model-routing.md`, "Thinking"); absent, it goes in `thinking: {type: "adaptive"}` and `output_config: {effort}` |
@@ -661,9 +662,10 @@ declares") lists:
   | `cache_point` | boolean | `bedrock-converse` | the model takes `cachePoint` blocks: requests carry them where Anthropic's cache markers go, each after a text block (`docs/prompt-cache.md`, "Cache markers and keys"); absent, no marker is sent |
   | `reasoning_field` | string | `bedrock-converse` | the `additionalModelRequestFields` field that carries the thinking level, `reasoning_effort` or `reasoningConfig` (`docs/model-routing.md`, "Thinking"); absent or any other value, no level is sent |
 
-  `openai-completions` always sends `stream_options.include_usage: true`,
-  because OpenAI sends no usage without it (`docs/model-routing.md`,
-  "openai-completions facts").
+  `openai-completions` sends `stream_options.include_usage: true`, because
+  OpenAI sends no usage without it (`docs/model-routing.md`,
+  "openai-completions facts"); a model with `compat.gemini` sends no
+  `stream_options`.
 - `extra_body` is added to every request for the model. It may add a field
   or replace one such as `max_tokens`, but may not name a field listed in
   `docs/model-routing.md`, "Extra request body fields"; a model that does is

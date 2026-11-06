@@ -347,6 +347,10 @@ local function entry_for(service, catalog, image_keys, thinking)
   if type(row) == "table" and row.provider_type == "ANTHROPIC" then
     claude = true
   end
+  local gemini = bare:sub(1, 7) == "gemini-"
+  if type(row) == "table" and row.provider_type == "GEMINI_ENTERPRISE" then
+    gemini = true
+  end
   if bare:sub(-6) == "-image" or image_keys[model_key(bare)] then
     return nil
   end
@@ -371,6 +375,9 @@ local function entry_for(service, catalog, image_keys, thinking)
     if DEFERRED_CLAUDE[model_key(bare)] then
       entry.deferred_tools = true
     end
+  end
+  if gemini then
+    entry.compat = { gemini = true }
   end
   local vision = type(row) == "table"
     and type(row.capabilities) == "table"
