@@ -484,13 +484,14 @@ fn pid_exits_or_is_zombie(pid: u32, deadline: Duration) -> bool {
 
 #[cfg(target_os = "linux")]
 fn pid_is_zombie(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(") ")
-                .map(|(_, fields)| fields.starts_with('Z'))
-        })
-        .unwrap_or(false)
+    match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat
+            .rsplit_once(") ")
+            .map(|(_, fields)| fields.starts_with('Z'))
+            .unwrap_or(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => panic!("reading /proc/{pid}/stat: {error}"),
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
