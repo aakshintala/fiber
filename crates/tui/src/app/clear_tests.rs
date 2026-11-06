@@ -289,7 +289,12 @@ fn a_held_line_registers_at_queue_time() {
         app.clear_send(status, contract::SessionId(SESSION.to_owned()), false),
         Effect::None
     );
-    let id = app.clear_pending_command_id().unwrap().to_owned();
+    let id = app
+        .outbox
+        .pending
+        .iter()
+        .find_map(|(id, (kind, _))| matches!(kind, crate::app::Kind::Start).then(|| id.clone()))
+        .expect("the held start waits");
     assert_eq!(
         app.outbox.waiting(&id),
         Some(crate::app::Waiting::ClearStart)
@@ -314,19 +319,35 @@ fn a_stale_clear_start_id_keeps_the_pending_clear_and_its_tag() {
         app.clear_start_accepted("c_stale", contract::SessionId(NEW.to_owned()))
             .is_none()
     );
-    assert_eq!(app.clear_pending_command_id(), Some(id));
     assert_eq!(
         app.outbox.waiting(id),
         Some(crate::app::Waiting::ClearStart)
     );
-    assert!(app.retry_clear_start("c_stale", "c_unrelated_retry".to_owned()));
+    assert!(!app.retry_clear_start("c_stale", "c_unrelated_retry".to_owned()));
     assert_eq!(app.outbox.waiting("c_unrelated_retry"), None);
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::Waiting::ClearStart)
+    );
+    assert!(!app.clear_lost("c_unknown"));
     assert_eq!(
         app.outbox.waiting(id),
         Some(crate::app::Waiting::ClearStart)
     );
     accept_start(&mut app, &json!(id), NEW);
     assert_eq!(app.session(), Some(&contract::SessionId(NEW.to_owned())));
+}
+
+/// A retry for a tag with no pending clear registers nothing: the tag
+/// is stale, so the retry leaves both tags alone.
+#[test]
+fn retry_clear_start_without_a_pending_clear_registers_no_tag() {
+    use crate::app::outbox::Waiting;
+    let mut app = homed();
+    app.outbox.wait("c_orphan", Waiting::ClearStart);
+    assert!(!app.retry_clear_start("c_orphan", "c_retry".to_owned()));
+    assert_eq!(app.outbox.waiting("c_orphan"), Some(Waiting::ClearStart));
+    assert_eq!(app.outbox.waiting("c_retry"), None);
 }
 
 const NEW: &str = "s_nnnnnnnnnnnnnnnn";
@@ -371,7 +392,10 @@ fn clear_without_session_posts_notice_and_clears_draft() {
     assert_eq!(enter(&mut app, "/clear"), Effect::None);
     assert_eq!(app.notice(), Some("No session on screen."));
     assert_eq!(app.draft(), "");
-    assert!(app.clear_pending_command_id().is_none());
+    assert!(
+        !app.outbox.waiting_any(&crate::app::Waiting::ClearStart),
+        "no start waits"
+    );
 }
 
 #[test]
@@ -379,7 +403,10 @@ fn clear_without_status_sends_nothing_and_keeps_draft() {
     let mut app = attached();
     assert_eq!(enter(&mut app, "/clear"), Effect::None);
     assert_eq!(app.draft(), "/clear");
-    assert!(app.clear_pending_command_id().is_none());
+    assert!(
+        !app.outbox.waiting_any(&crate::app::Waiting::ClearStart),
+        "no start waits"
+    );
 }
 
 /// A build or switch that names no credential overrides an earlier start
@@ -629,9 +656,12 @@ fn clear_refusal_only_settles_the_matching_start() {
         .unwrap_or_else(|| panic!("start id"));
 
     assert!(!app.clear_rejected("c_unrelated", ErrorCode::Busy, "Unrelated."));
-    assert!(app.clear_pending_command_id().is_some());
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(crate::app::Waiting::ClearStart)
+    );
     assert!(app.clear_rejected(id, ErrorCode::Busy, "Busy."));
-    assert!(app.clear_pending_command_id().is_none());
+    assert_eq!(app.outbox.waiting(id), None);
     assert_eq!(app.notice(), Some("Busy."));
 }
 
@@ -741,13 +771,16 @@ fn clear_close_answer_settles_only_its_matching_command_id() {
         "command_accepted",
         json!({"command_id": "c_unrelated", "result": {}}),
     ));
-    assert_eq!(app.clear_close_id(), Some(close_id));
+    assert_eq!(
+        app.outbox.waiting(close_id),
+        Some(crate::app::Waiting::ClearClose)
+    );
     assert!(app.outbox.pending.contains_key(close_id));
     app.on_line(hub_line(
         "command_accepted",
         json!({"command_id": close_id, "result": {}}),
     ));
-    assert_eq!(app.clear_close_id(), None);
+    assert_eq!(app.outbox.waiting(close_id), None);
     assert!(!app.outbox.pending.contains_key(close_id));
 }
 
@@ -817,7 +850,10 @@ fn clear_confirmation_without_wait_row_closes_prompt_without_sending_start() {
 
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(!app.clear_open());
-    assert!(app.clear_pending_command_id().is_none());
+    assert!(
+        !app.outbox.waiting_any(&crate::app::Waiting::ClearStart),
+        "no start waits"
+    );
 }
 
 #[test]
@@ -835,7 +871,10 @@ fn clear_confirmation_without_status_closes_prompt_without_sending_start() {
 
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(!app.clear_open());
-    assert!(app.clear_pending_command_id().is_none());
+    assert!(
+        !app.outbox.waiting_any(&crate::app::Waiting::ClearStart),
+        "no start waits"
+    );
 }
 
 /// Enter clears a wait only after the clear start answers

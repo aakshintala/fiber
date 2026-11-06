@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use contract::events::EventKind;
 use contract::events::{Event, JobCompleted, Outcome};
 use contract::inbox::Delivery;
 use contract::{ErrorCode, JobId};
@@ -33,8 +34,11 @@ pub(crate) struct StoppedJob {
 /// when this reader grows a third pass or a seventh kind.
 fn is_job_record(kind: &str) -> bool {
     matches!(
-        kind,
-        "job_started" | "delegate_started" | "delegate_finished" | "job_completed"
+        EventKind::from_name(kind),
+        EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
     )
 }
 
@@ -43,7 +47,10 @@ fn is_job_record(kind: &str) -> bool {
 /// crossing the settlement boundary below. A hook's `notice` is
 /// ephemeral and never reaches the log, so it cannot interleave here.
 fn is_hook_line(kind: &str) -> bool {
-    matches!(kind, "extension_state_set" | "extension_state_unset")
+    matches!(
+        EventKind::from_name(kind),
+        EventKind::ExtensionStateSet | EventKind::ExtensionStateUnset
+    )
 }
 
 /// Whether `completed` lists its job as stopped: `cancelled`, or `failed`
@@ -72,7 +79,7 @@ pub(crate) fn stopped_jobs(old: &Path) -> Result<Vec<StoppedJob>, Error> {
     let Some(last) = lines.last() else {
         return Ok(Vec::new());
     };
-    if last.kind != "rewound" {
+    if last.kind() != EventKind::Rewound {
         return Ok(Vec::new());
     }
     // A start is written when its job starts, long before the trailing

@@ -198,9 +198,13 @@ fn ack_of(line: &[u8], command_id: &str) -> Option<Ack> {
     if !named {
         return None;
     }
-    match ack.get("kind").and_then(Value::as_str) {
-        Some("command_accepted") => Some(Ack::Accepted),
-        Some("command_rejected") => Some(Ack::Rejected),
+    match ack
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(contract::events::EventKind::from_name)
+    {
+        Some(contract::events::EventKind::CommandAccepted) => Some(Ack::Accepted),
+        Some(contract::events::EventKind::CommandRejected) => Some(Ack::Rejected),
         _ => None,
     }
 }

@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
+use contract::events::EventKind;
 use contract::events::{
     CallStatus, Class, Control, Event, InputItem, InstructionFile, InstructionReason,
     InstructionSent, Outcome, ShellCommand, SkillLoad, ToolCallCompleted, ToolCallRequested,
@@ -48,7 +49,7 @@ pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>,
     // can fail this pass.
     for line in lines
         .iter()
-        .filter(|l| l.is_durable() && l.kind == "tool_call_completed")
+        .filter(|l| l.is_durable() && l.kind() == EventKind::ToolCallCompleted)
     {
         if let Some(Event::ToolCallCompleted(_)) =
             Event::from_envelope(line).map_err(Error::Unreadable)?
@@ -109,7 +110,7 @@ fn rebuild_with_cut(
     // what follows with its `after`.
     let mut stamped = model.to_owned();
     for line in lines.iter().filter(|l| l.is_durable()) {
-        if line.kind != "model_changed" {
+        if line.kind() != EventKind::ModelChanged {
             continue;
         }
         if let Some(Event::ModelChanged(changed)) =

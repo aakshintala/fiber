@@ -6,6 +6,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
+use contract::events::EventKind;
 use contract::extension::Drive;
 use contract::inbox::{Ack, Rejection};
 use serde_json::{Map, Value};
@@ -163,21 +164,22 @@ impl CaseRun {
             if durable {
                 events.push(serde_json::to_value(&line).unwrap_or(Value::Null));
             }
+            let kind = line.kind();
             let occurrence = seen.entry(line.kind.clone()).or_default();
             *occurrence = occurrence.saturating_add(1);
             seen_order.push(line.kind.clone());
-            if line.kind == "extensions_loaded"
+            if kind == EventKind::ExtensionsLoaded
                 && let Some(command) = command.take()
                 && !self.send_command(&driver, &cancel, &command, &mut failures)
             {
                 break;
             }
-            if !self.apply_advances(Some((&line.kind, *occurrence)), &mut advance, &mut failures) {
+            if !self.apply_advances(Some((&kind, *occurrence)), &mut advance, &mut failures) {
                 released |= self.close(&driver, &cancel, &mut failures);
                 break;
             }
-            reached_until = self.is_until(&line.kind, *occurrence);
-            if line.kind == "fiber_exited" {
+            reached_until = self.is_until(&kind, *occurrence);
+            if kind == EventKind::FiberExited {
                 if !reached_until {
                     failures.push("the session exited before its until event".to_owned());
                 }
@@ -204,7 +206,7 @@ impl CaseRun {
                 if line.is_durable() {
                     events.push(serde_json::to_value(&line).unwrap_or(Value::Null));
                 }
-                if line.kind == "fiber_exited" {
+                if line.kind() == EventKind::FiberExited {
                     break;
                 }
             }
@@ -289,7 +291,7 @@ impl CaseRun {
         let until = self
             .until
             .as_ref()
-            .map(|selector| format!("{} occurrence {}", selector.kind, selector.nth))
+            .map(|selector| format!("{} occurrence {}", selector.kind.name(), selector.nth))
             .unwrap_or_else(|| "turn_completed or turn_failed".to_owned());
         failures.push(format!(
             "{}: wait for until event {until} expired after {:?}",
@@ -300,7 +302,7 @@ impl CaseRun {
 
     fn apply_advances(
         &self,
-        current: Option<(&str, usize)>,
+        current: Option<(&EventKind, usize)>,
         next: &mut usize,
         failures: &mut Vec<String>,
     ) -> bool {
@@ -308,7 +310,7 @@ impl CaseRun {
             let ready = match (&entry.after, current) {
                 (None, _) => true,
                 (Some(selector), Some((kind, occurrence))) => {
-                    selector.kind == kind && selector.nth == occurrence
+                    &selector.kind == kind && selector.nth == occurrence
                 }
                 (Some(_), None) => false,
             };
@@ -338,10 +340,14 @@ impl CaseRun {
         true
     }
 
-    fn is_until(&self, kind: &str, occurrence: usize) -> bool {
+    fn is_until(&self, kind: &EventKind, occurrence: usize) -> bool {
         match &self.until {
-            Some(selector) => selector.kind == kind && selector.nth == occurrence,
-            None => occurrence == 1 && matches!(kind, "turn_completed" | "turn_failed"),
+            Some(selector) => &selector.kind == kind && selector.nth == occurrence,
+            None => {
+                occurrence == 1
+                    && (matches!(kind, EventKind::TurnCompleted)
+                        || matches!(kind, EventKind::Unknown(name) if name == "turn_failed"))
+            }
         }
     }
 
@@ -461,9 +467,13 @@ impl CaseRun {
 }
 
 fn has_fiber_exited(events: &[Value]) -> bool {
-    events
-        .iter()
-        .any(|event| event.get("kind").and_then(Value::as_str) == Some("fiber_exited"))
+    events.iter().any(|event| {
+        event
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(EventKind::from_name)
+            == Some(EventKind::FiberExited)
+    })
 }
 
 /// Checks durable event lines, in order, against a case's expected subsets.

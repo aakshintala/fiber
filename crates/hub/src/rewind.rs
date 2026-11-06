@@ -36,7 +36,7 @@ pub(crate) fn continued(home: &Path, session: &SessionId) -> Option<SessionId> {
 /// itself, so the hub never reads the target workspace here.
 pub(crate) fn continued_in(dir: &Path) -> Option<SessionId> {
     let line = log::last_line(dir)?;
-    if line.kind == "moved" {
+    if line.kind() == contract::events::EventKind::Moved {
         let moved: contract::events::Moved =
             serde_json::from_value(Value::Object(line.payload)).ok()?;
         if !valid_session_id(&moved.new_session_id.0) {
@@ -44,7 +44,7 @@ pub(crate) fn continued_in(dir: &Path) -> Option<SessionId> {
         }
         return Some(moved.new_session_id);
     }
-    if line.kind != "rewound" {
+    if line.kind() != contract::events::EventKind::Rewound {
         return None;
     }
     let rewound: contract::events::Rewound =

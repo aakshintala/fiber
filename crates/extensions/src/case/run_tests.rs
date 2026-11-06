@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
 use contract::events::{
-    Class, Event, ExtensionUi, ExtensionsLoaded, FiberExited, TextDelta, TurnCompleted,
+    Class, Event, EventKind, ExtensionUi, ExtensionsLoaded, FiberExited, TextDelta, TurnCompleted,
     TurnOutcome, Ui,
 };
 use contract::inbox::Rejection;
@@ -301,7 +301,7 @@ fn a_hang_advance_holds_until_its_entry_matches() {
             advance_ms: 50,
         }],
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -345,7 +345,7 @@ fn a_hang_advance_fails_naming_the_entry_when_nothing_matches() {
             advance_ms: 50,
         }],
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -370,7 +370,7 @@ fn a_matched_hang_past_the_last_advance_ends_the_event_wait() {
         vec![json!({"kind": "extension_log"})],
         Vec::new(),
         Some(Selector {
-            kind: "extension_log".to_owned(),
+            kind: EventKind::ExtensionLog,
             nth: 1,
         }),
     );
@@ -397,7 +397,7 @@ fn without_the_last_advance_the_event_wait_keeps_its_bound() {
         vec![json!({"kind": "extension_log"})],
         Vec::new(),
         Some(Selector {
-            kind: "extension_log".to_owned(),
+            kind: EventKind::ExtensionLog,
             nth: 1,
         }),
     );
@@ -430,7 +430,7 @@ fn a_failed_initial_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
             advance_ms: 50,
         }],
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -475,13 +475,13 @@ fn a_failed_mid_loop_advance_still_releases_a_stuck_hang_into_the_exit_wait() {
         vec![ClockAdvance {
             hang: Some(2),
             after: Some(Selector {
-                kind: "turn_completed".to_owned(),
+                kind: EventKind::TurnCompleted,
                 nth: 1,
             }),
             advance_ms: 50,
         }],
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -521,7 +521,7 @@ fn a_stuck_hang_past_all_advances_skips_the_event_wait() {
         Vec::new(),
         Vec::new(),
         Some(Selector {
-            kind: "extension_log".to_owned(),
+            kind: EventKind::ExtensionLog,
             nth: 1,
         }),
     );
@@ -822,7 +822,7 @@ fn an_unanswered_close_ack_fails_and_cancels_once() {
         ],
         Vec::new(),
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -862,7 +862,7 @@ fn successful_initial_advances_do_not_close_before_the_until_event() {
         ],
         Vec::new(),
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -885,7 +885,7 @@ fn the_until_event_stops_driving_and_uses_the_short_exit_deadline() {
         vec![json!({"kind": "turn_completed"})],
         Vec::new(),
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -919,13 +919,13 @@ fn exiting_before_the_next_advance_names_that_advance() {
         vec![ClockAdvance {
             hang: None,
             after: Some(Selector {
-                kind: "turn_completed".to_owned(),
+                kind: EventKind::TurnCompleted,
                 nth: 1,
             }),
             advance_ms: 200,
         }],
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -953,13 +953,13 @@ fn a_missing_advance_fails_on_the_short_advance_wait() {
         vec![ClockAdvance {
             hang: None,
             after: Some(Selector {
-                kind: "turn_completed".to_owned(),
+                kind: EventKind::TurnCompleted,
                 nth: 1,
             }),
             advance_ms: 200,
         }],
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -994,13 +994,13 @@ fn an_advance_never_reached_is_dumped_after_the_until_event_and_exit() {
         vec![ClockAdvance {
             hang: None,
             after: Some(Selector {
-                kind: "never_written".to_owned(),
+                kind: EventKind::Unknown("never_written".to_owned()),
                 nth: 1,
             }),
             advance_ms: 200,
         }],
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -1027,13 +1027,13 @@ fn an_expired_until_wait_dumps_parked_deadlines_events_and_next_advance() {
         vec![ClockAdvance {
             hang: None,
             after: Some(Selector {
-                kind: "extension_log".to_owned(),
+                kind: EventKind::ExtensionLog,
                 nth: 1,
             }),
             advance_ms: 200,
         }],
         Some(Selector {
-            kind: "extension_log".to_owned(),
+            kind: EventKind::ExtensionLog,
             nth: 1,
         }),
     );
@@ -1106,7 +1106,7 @@ fn a_parked_after_timer_waits_out_the_short_until_bound_without_advances() {
         vec![json!({"kind": "extension_log"})],
         Vec::new(),
         Some(Selector {
-            kind: "extension_log".to_owned(),
+            kind: EventKind::ExtensionLog,
             nth: 1,
         }),
     );
@@ -1227,7 +1227,7 @@ fn an_ephemeral_line_written_right_after_start_reaches_the_driver() {
             Host::default(),
             Vec::new(),
             Some(Selector {
-                kind: "assistant_message_delta".to_owned(),
+                kind: EventKind::AssistantMessageDelta,
                 nth: 1,
             }),
             true,
@@ -1305,7 +1305,7 @@ fn a_command_case_sends_its_command_once_after_extensions_loaded() {
         ],
         Vec::new(),
         Some(Selector {
-            kind: "extension_ui".to_owned(),
+            kind: EventKind::ExtensionUi,
             nth: 1,
         }),
         "export",
@@ -1352,7 +1352,7 @@ fn a_second_extensions_loaded_sends_no_further_command() {
         ],
         Vec::new(),
         Some(Selector {
-            kind: "extension_ui".to_owned(),
+            kind: EventKind::ExtensionUi,
             nth: 1,
         }),
         "export",
@@ -1388,7 +1388,7 @@ fn a_command_case_sends_before_its_extensions_loaded_until() {
         ],
         Vec::new(),
         Some(Selector {
-            kind: "extensions_loaded".to_owned(),
+            kind: EventKind::ExtensionsLoaded,
             nth: 1,
         }),
         "export",
@@ -1419,7 +1419,7 @@ fn a_rejected_command_fails_the_case_and_closes_once() {
         vec![json!({"kind": "extensions_loaded"})],
         Vec::new(),
         Some(Selector {
-            kind: "extension_ui".to_owned(),
+            kind: EventKind::ExtensionUi,
             nth: 1,
         }),
         "export",
@@ -1462,7 +1462,7 @@ fn a_rejected_command_with_until_on_its_send_line_closes_once() {
         vec![json!({"kind": "extensions_loaded"})],
         Vec::new(),
         Some(Selector {
-            kind: "extensions_loaded".to_owned(),
+            kind: EventKind::ExtensionsLoaded,
             nth: 1,
         }),
         "export",
@@ -1509,7 +1509,7 @@ fn an_unanswered_command_ack_fails_and_closes_once() {
         vec![json!({"kind": "extensions_loaded"})],
         Vec::new(),
         Some(Selector {
-            kind: "extension_ui".to_owned(),
+            kind: EventKind::ExtensionUi,
             nth: 1,
         }),
         "export",
@@ -1550,13 +1550,13 @@ fn the_command_is_sent_before_the_extensions_loaded_advance() {
         vec![ClockAdvance {
             hang: None,
             after: Some(Selector {
-                kind: "extensions_loaded".to_owned(),
+                kind: EventKind::ExtensionsLoaded,
                 nth: 1,
             }),
             advance_ms: 50,
         }],
         Some(Selector {
-            kind: "extension_ui".to_owned(),
+            kind: EventKind::ExtensionUi,
             nth: 1,
         }),
         "export",
@@ -1605,7 +1605,7 @@ fn a_prompt_case_sends_no_command() {
         ],
         Vec::new(),
         Some(Selector {
-            kind: "turn_completed".to_owned(),
+            kind: EventKind::TurnCompleted,
             nth: 1,
         }),
     );
@@ -1636,7 +1636,7 @@ fn omitted_command_text_sends_the_empty_string() {
         ],
         Vec::new(),
         Some(Selector {
-            kind: "extension_ui".to_owned(),
+            kind: EventKind::ExtensionUi,
             nth: 1,
         }),
         "export",
