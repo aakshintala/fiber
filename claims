@@ -83,8 +83,6 @@ xtask/src/rules_tests.rs	fiber-4277	plan	2026-11-06T12:19:07Z	roundhouse-7010-pl
 crates/contract/src/diag.rs	fiber-4250	plan	2026-11-06T13:42:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/diag.rs	fiber-4250	plan	2026-11-06T13:42:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/state.md	fiber-4250	plan	2026-11-06T13:42:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/agents/triage-labels.md	docs/4271-needs-plan-label	grant	2026-11-06T17:36:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/docs/4271-needs-plan-label	
-docs/workflow.md	docs/4271-needs-plan-label	grant	2026-11-06T17:37:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/docs/4271-needs-plan-label	
 crates/main/tests/terminal.rs	tests/4318-terminal-resume-list	grant	2026-11-06T18:41:29Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4318-terminal-resume-list	
 crates/contract/src/events.rs	fiber-4250	plan	2026-11-06T20:02:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/delegate/outcome.rs	fiber-4250	plan	2026-11-06T20:02:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
