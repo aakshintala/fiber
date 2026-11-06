@@ -82,7 +82,7 @@ pub(in crate::app) enum Open {
 pub(in crate::app) struct SessionViews {
     open: Option<Open>,
     usage: UsageFold,
-    rate: log::RateFold,
+    rate: diag::RateFold,
     context: ContextFold,
     request: Option<(String, String)>,
     diff: Option<(String, Diff)>,

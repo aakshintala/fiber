@@ -6,10 +6,11 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-alloc-stats = []
+alloc-stats = ["diag/alloc-stats"]
 
 [dependencies]
 contract = { path = "../contract" }
+diag = { path = "../diag" }
 grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
@@ -18,10 +19,6 @@ serde.workspace = true
 serde_json.workspace = true
 support = { path = "../support" }
 thiserror.workspace = true
-
-# The process's resources for a `resources` line (docs/dependencies.md).
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
 
 [dev-dependencies]
 fakes = { path = "../fakes" }

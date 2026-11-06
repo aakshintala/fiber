@@ -5,7 +5,7 @@ use contract::events::EventKind;
 use std::collections::BTreeMap;
 
 use contract::Envelope;
-use log::Rate;
+use diag::Rate;
 
 use crate::swapped::{Frame, Ink, List, Spot, about, compact};
 use crate::theme::Role;

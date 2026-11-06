@@ -618,6 +618,7 @@ fn at_info_timed_reads_no_clock_and_writes_nothing() {
     assert!(!home.path().join("logs").exists());
 }
 
+// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
     let home = Home::new("ld-timed-drop");
@@ -986,6 +987,7 @@ fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
     }
 }
 
+// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn op_timing_data_holds_only_op_ms_and_tool() {
     let home = Home::new("ld-timed-data");
@@ -1012,6 +1014,7 @@ fn op_timing_data_holds_only_op_ms_and_tool() {
     }
 }
 
+// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn every_process_shape_writes_the_closed_data_keys() {
     for (process, kind) in [
