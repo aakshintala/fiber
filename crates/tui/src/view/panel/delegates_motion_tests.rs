@@ -14,6 +14,7 @@ use crate::home::Launch;
 use crate::link::Line;
 use crate::motion::SPINNER;
 use crate::view::{render, text};
+use contract::events::EventKind;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const CARDS: [&str; 5] = ["session", "changed_files", "delegates", "jobs", "quota"];
@@ -40,7 +41,7 @@ fn attached(width: u16, height: u16) -> App {
 /// One envelope of the attached session.
 fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -115,7 +116,7 @@ fn subscribe(app: &mut App, job: &str, state: serde_json::Value) {
         payload[key] = value;
     }
     app.on_line(Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

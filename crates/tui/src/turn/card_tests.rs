@@ -2,6 +2,7 @@
 //! broken at a handoff's band, with half-block edges
 //! (`docs/tui.md`, "Look", "Turns", "Handoff").
 
+use contract::events::EventKind;
 use contract::{ActionId, Envelope, SessionId};
 use jiff::tz::TimeZone;
 use serde_json::{Value, json};
@@ -25,7 +26,7 @@ const WIDTH: u16 = 60;
 /// One envelope at `ts` milliseconds.
 fn envelope(kind: &str, action: Option<&str>, ts: u64, payload: Value) -> Envelope {
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use contract::clock::Clock;
+use contract::{HubEventKind, events::EventKind};
 use fakes::clock::FakeClock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -25,7 +26,7 @@ const HEIGHT: u16 = 12;
 /// One session envelope.
 fn session_line(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -145,7 +146,7 @@ fn home_app(started: u64) -> (App, Arc<FakeClock>) {
     app.set_zone(crate::local_time::new_york());
     app.set_size(80, 24);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -180,7 +181,7 @@ fn status(state: &str) -> Line {
 /// One session envelope at wall time `ts` milliseconds.
 fn session_line_at(kind: &str, payload: serde_json::Value, action: Option<&str>, ts: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

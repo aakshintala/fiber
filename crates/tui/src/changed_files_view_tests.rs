@@ -12,6 +12,7 @@ use contract::clock::Clock;
 use contract::events::CommandResult;
 use contract::shapes::Process;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -65,13 +66,13 @@ fn app_with_files() -> App {
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.set_size(80, 24);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     }));
     app.on_line(Line::Session(Envelope {
-        kind: "tool_call_completed".to_owned(),
+        kind: EventKind::ToolCallCompleted.name().to_owned(),
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: SCHEMA_VERSION,
@@ -111,7 +112,7 @@ fn app_with_diff() -> App {
     let request: serde_json::Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     app.on_line(Line::Session(Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: SCHEMA_VERSION,

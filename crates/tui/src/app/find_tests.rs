@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -25,7 +26,7 @@ pub(super) fn now() -> Instant {
 /// A line of the session.
 fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -39,7 +40,7 @@ fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
 /// The hub's `hub_hello`.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -74,7 +75,7 @@ fn started(app: &mut App, line: Line) -> Vec<String> {
     // docs/tui.md, "Slash commands": one `commands` request per `turn_started` (docs/testing.md, "Event streams").
     assert_eq!(asked.len(), 1, "{asked:?}");
     let answer = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -196,7 +197,7 @@ pub(super) fn numbered(
 ) -> Line {
     *seq += 1;
     let envelope = contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -254,7 +255,7 @@ fn hub_answer(id: &str, log: &[contract::Envelope], from: u64, to: u64) -> Line 
         .cloned()
         .collect();
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -990,7 +991,7 @@ fn a_rejected_answer_marks_the_search_incomplete_with_a_notice() {
     let (mut app, _, fetch) = dropped_fetch();
     let (id, _, _) = command(&fetch);
     let rejected = Line::Session(contract::Envelope {
-        kind: "command_rejected".to_owned(),
+        kind: EventKind::CommandRejected.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1016,7 +1017,7 @@ fn an_unreadable_answer_marks_it_incomplete() {
     let (mut app, _, fetch) = dropped_fetch();
     let (id, _, _) = command(&fetch);
     let unreadable = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1597,7 +1598,7 @@ fn the_count_shows_scanning_and_incomplete() {
     // Its answer rejected: incomplete, while the next page still scans.
     let (id, _, _) = command(&outgoing[0]);
     let rejected = Line::Session(contract::Envelope {
-        kind: "command_rejected".to_owned(),
+        kind: EventKind::CommandRejected.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -2889,7 +2890,7 @@ fn a_moved_revision_on_a_dropped_page_counts_the_rescan_once() {
     search_all(&mut app, &_log, "durable");
     let revision = app.pages().index().revision(0);
     let correction = contract::Envelope {
-        kind: "usage_recorded".to_owned(),
+        kind: EventKind::UsageRecorded.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -2940,7 +2941,7 @@ fn segment(
 ) -> contract::Envelope {
     *seq += 1;
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 1_000 + *seq,
         schema_version: contract::SCHEMA_VERSION,

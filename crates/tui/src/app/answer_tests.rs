@@ -4,13 +4,14 @@ use super::Answer;
 use crate::app::outbox::{Outbox, Waiting};
 use crate::link::Line;
 use contract::{Envelope, HubLine, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 fn line(session: bool, kind: &str, payload: Value) -> Line {
     let payload = payload.as_object().unwrap().clone();
     if session {
         Line::Session(Envelope {
-            kind: kind.to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: SessionId("s_answer".to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -21,7 +22,7 @@ fn line(session: bool, kind: &str, payload: Value) -> Line {
         })
     } else {
         Line::Hub(HubLine {
-            kind: kind.to_owned(),
+            kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload,

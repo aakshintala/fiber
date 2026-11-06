@@ -5,6 +5,7 @@ use super::{
     HomeScreen, Left, Level, ListLine, Row, Sessions, State, Subs, delete_line, dependents,
     from_status, glyph, line, line_with, opening, quit_count, recent_rows,
 };
+use contract::events::EventKind;
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
 
@@ -62,7 +63,7 @@ fn payload(state: Value) -> Value {
 /// A `session_status` envelope for `session` in `state`.
 fn envelope(session: &str, state: Value) -> Envelope {
     Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

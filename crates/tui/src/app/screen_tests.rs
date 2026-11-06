@@ -1,6 +1,7 @@
 //! Tests for the conversation's geometry: the size, the scroll position and
 //! the window of resident pages, against `Screen` alone.
 
+use contract::events::EventKind;
 use contract::{ActionId, Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
@@ -11,7 +12,7 @@ use crate::app::Target;
 fn envelope(seq: &mut u64, kind: &str, action: Option<&str>, payload: Value) -> Envelope {
     *seq += 1;
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 1_000 + *seq,
         schema_version: contract::SCHEMA_VERSION,

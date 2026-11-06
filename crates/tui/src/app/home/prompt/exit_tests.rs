@@ -9,6 +9,7 @@ use crate::link::Line;
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::events::ImportedNames;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -74,7 +75,7 @@ fn live(session: &str, state: Value, clients: u32, jobs: u32, delegates: u32) ->
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -88,7 +89,7 @@ fn live(session: &str, state: Value, clients: u32, jobs: u32, delegates: u32) ->
 /// A hub `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session, "how": how})
@@ -882,7 +883,7 @@ fn slash(app: &mut App, text: &str) -> Effect {
 /// A hub `command_accepted` for `id` with `result`.
 pub(super) fn accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1002,7 +1003,7 @@ fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
 /// A hub `command_rejected` for command `id`.
 pub(super) fn rejected(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "code": code, "message": message})
@@ -1476,7 +1477,7 @@ fn quit_close_session_answer_settles_its_tag() {
         .unwrap_or_else(|| panic!("close session"));
     assert_eq!(app.outbox.waiting(id), Some(Waiting::Close));
     let answer = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

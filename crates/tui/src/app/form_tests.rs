@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use contract::clock::Clock;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 use crate::app::{App, Effect};
@@ -19,7 +20,7 @@ const S_B: &str = "s_bbbbbbbbbbbbbbbb";
 fn attached() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -37,7 +38,7 @@ fn envelope(kind: &str, payload: Value) -> contract::Envelope {
 /// One envelope from `session` without an action.
 fn from(session: &str, kind: &str, payload: Value) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -61,7 +62,7 @@ fn feed(app: &mut App, line: contract::Envelope) {
     let asked: Value = serde_json::from_str(first).unwrap_or_default();
     assert_eq!(asked["command"], "commands");
     let answer = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: session,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

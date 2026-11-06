@@ -10,6 +10,7 @@ use crate::link::Line;
 use crate::local_time::{new_york, turn_started_at};
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -41,7 +42,7 @@ fn launch() -> Launch {
 /// A `permission_requested` review, which opens the approval panel.
 fn review() -> Line {
     Line::Session(contract::Envelope {
-        kind: "permission_requested".to_owned(),
+        kind: EventKind::PermissionRequested.name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -349,7 +350,7 @@ fn an_unnamed_home_row_with_a_display_name_still_labels_by_sender_id() {
 /// the driver's.
 fn turn_with_sender_message(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: EventKind::TurnStarted.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -387,7 +388,7 @@ fn an_approval_panel_draws_over_home() {
 /// A hub `command_accepted` for `id` with `result`.
 fn accepted(id: &str, result: serde_json::Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -405,7 +406,7 @@ fn accepted(id: &str, result: serde_json::Value) -> Line {
 /// A hub `command_rejected` for `id` with `message`.
 fn refused(id: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -430,7 +431,7 @@ fn refused(id: &str, message: &str) -> Line {
 /// A `session_status` for `session`, idle and named.
 fn status(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -470,7 +471,7 @@ fn closing(session: &str) -> Line {
 /// A `turn_started` for `session` with one message.
 fn turn_started(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: EventKind::TurnStarted.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -498,7 +499,7 @@ fn turn_started_answered(app: &mut App, session: &str) {
         .as_str()
         .unwrap_or_else(|| panic!("commands id"));
     let answer = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -755,7 +756,7 @@ fn an_attention_line_changes_nothing() {
     let mut app = home_with(80, 24, launch());
     app.on_line(hello());
     let attention = Line::Hub(contract::HubLine {
-        kind: "attention".to_owned(),
+        kind: HubEventKind::Attention.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": "s_aaaaaaaaaaaaaaaa"})
@@ -771,7 +772,7 @@ fn an_attention_line_changes_nothing() {
 /// A hub `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session, "how": how})
@@ -823,7 +824,7 @@ fn a_left_with_an_unknown_how_changes_nothing() {
     app.on_line(hello());
     app.on_line(status("s_aaaaaaaaaaaaaaaa"));
     let left = Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({
@@ -976,7 +977,7 @@ fn live(session: &str, name: &str, workspace: &str, project: &str, state: Value)
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -990,7 +991,7 @@ fn live(session: &str, name: &str, workspace: &str, project: &str, state: Value)
 /// A session `command_accepted` for `id` from `session`.
 fn session_accepted(session: &str, id: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1007,7 +1008,7 @@ fn session_accepted(session: &str, id: &str) -> Line {
 /// `message`.
 fn session_refused(session: &str, id: &str, code: &str, message: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_rejected".to_owned(),
+        kind: EventKind::CommandRejected.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1027,7 +1028,7 @@ fn session_refused(session: &str, id: &str, code: &str, message: &str) -> Line {
 /// A hub `command_rejected` for `id`, with `code` and `message`.
 fn hub_refused(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -5160,7 +5161,7 @@ fn the_back_hint_bolds_the_key_and_dims_the_rest() {
 /// A steering queue with one row for `session`.
 fn steering_queue(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "steering_queue".to_owned(),
+        kind: EventKind::SteeringQueue.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -6026,7 +6027,7 @@ fn press(app: &mut App, key: Key) -> Value {
 /// A hub `command_accepted` carrying the offer's import `result`.
 fn hub_accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "result": result})
@@ -6039,7 +6040,7 @@ fn hub_accepted(id: &str, result: Value) -> Line {
 /// A hub `command_rejected` for the offer's import.
 fn hub_rejected(id: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({
@@ -6381,7 +6382,7 @@ fn an_accept_arriving_while_its_session_reopens_falls_through_the_gate() {
     // The import's accept arrives while gated: it still opens the
     // report, with no notices, closing the pending entry.
     let accepted = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -7068,7 +7069,7 @@ fn a_gated_opening_session_still_hands_an_import_answer_to_its_handler() {
     // while gated: the ask consumes it, opening no report here, and
     // the gate still holds for the subscribe's own answer.
     let answer = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: session.clone(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

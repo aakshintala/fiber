@@ -8,6 +8,7 @@ use super::{Form, Spot};
 use crate::approvals::{Panel, PanelKey, Queue, Title};
 use crate::keys::{Edit, Key};
 use crate::theme::{Role, style};
+use contract::events::EventKind;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -1479,7 +1480,7 @@ fn the_panel_places_the_caret_on_the_words_line() {
 /// One session envelope without an action.
 fn envelope(kind: &str, payload: Value) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

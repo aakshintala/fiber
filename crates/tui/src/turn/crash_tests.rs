@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::app::{App, Target};
 use crate::link::Line;
+use contract::events::EventKind;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -34,7 +35,7 @@ fn feed_with_seq(
     payload: Value,
 ) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

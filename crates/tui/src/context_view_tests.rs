@@ -5,6 +5,7 @@ use super::{Category, ContextFold, Handoff, LARGEST_SHOWN, Sized, bar, categorie
 use crate::swapped::{Ink, List, render};
 use crate::theme::Role;
 use contract::Envelope;
+use contract::events::EventKind;
 use contract::{ActionId, SCHEMA_VERSION, SessionId};
 use log::{Rate, RateFold};
 use ratatui::buffer::Buffer;
@@ -13,7 +14,7 @@ use serde_json::{Value, json};
 
 fn envelope(kind: &str, action: Option<&str>, payload: Value) -> Envelope {
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: SessionId("s_1".to_owned()),
         ts: 0,
         schema_version: SCHEMA_VERSION,

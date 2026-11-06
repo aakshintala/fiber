@@ -8,6 +8,7 @@ use crate::configure::ConfigureError;
 use crate::home::Launch;
 use contract::ErrorCode;
 use contract::events::Notice;
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
@@ -626,7 +627,7 @@ fn the_picker_is_a_picker_context() {
 /// A `hub_hello` this terminal reads.
 fn hello() -> crate::link::Line {
     crate::link::Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -636,7 +637,7 @@ fn hello() -> crate::link::Line {
 /// A live `session_status` for `session`, streaming.
 fn streaming(session: &str) -> crate::link::Line {
     crate::link::Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -739,7 +740,7 @@ const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 /// One envelope of `session`.
 fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> crate::link::Line {
     crate::link::Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1196,7 +1197,7 @@ fn sent(effect: Effect) -> serde_json::Value {
 /// A `command_accepted` for `id` on `session`.
 fn accepted(session: &str, id: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1210,7 +1211,7 @@ fn accepted(session: &str, id: &str) -> Line {
 /// A `command_rejected` for `id` on `session`, with `code` and `message`.
 fn refused(session: &str, id: &str, code: &str, message: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_rejected".to_owned(),
+        kind: EventKind::CommandRejected.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1230,7 +1231,7 @@ fn refused(session: &str, id: &str, code: &str, message: &str) -> Line {
 /// A hub `command_rejected` for `id` with `message`.
 fn hub_refused(id: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -2256,7 +2257,7 @@ fn the_start_model_clears_once_start_is_accepted() {
         .expect("a start line");
     // The hub accepts the `start`: the choice rode it, and clears.
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -3523,7 +3524,7 @@ fn remote_home_named(model: Option<&str>, thinking: Option<&str>) -> App {
 
 fn hub_hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -3594,9 +3595,9 @@ fn scripted_remote_named(
             };
             let answer = Line::Hub(contract::HubLine {
                 kind: if accepted {
-                    "command_accepted".to_owned()
+                    HubEventKind::CommandAccepted.name().to_owned()
                 } else {
-                    "command_rejected".to_owned()
+                    HubEventKind::CommandRejected.name().to_owned()
                 },
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -4686,7 +4687,7 @@ fn count_code(app: &App, code: ErrorCode) -> usize {
 /// path alone clears.
 fn turn_started() -> Line {
     Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: EventKind::TurnStarted.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4707,7 +4708,7 @@ fn turn_started() -> Line {
 /// turn ends, so the turn-end fold clears the applied shares.
 fn turn_completed() -> Line {
     Line::Session(contract::Envelope {
-        kind: "turn_completed".to_owned(),
+        kind: EventKind::TurnCompleted.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

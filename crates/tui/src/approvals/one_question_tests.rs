@@ -1,6 +1,7 @@
 //! Tests for one-question interactions on the request panel: keys,
 //! digits, their lines with styled runs, and the shared queue.
 
+use contract::events::EventKind;
 use contract::shapes::Choice;
 use ratatui::style::{Modifier, Style};
 use serde_json::{Value, json};
@@ -982,7 +983,7 @@ const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 
 fn envelope(kind: &str, payload: Value) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

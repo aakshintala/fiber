@@ -5,6 +5,7 @@ use super::Steering;
 use crate::input::Draft;
 use contract::clock::Clock;
 use contract::events::SteeringQueue;
+use contract::{HubEventKind, events::EventKind};
 
 /// A draft holding `text`, the cursor at its end.
 fn typed(text: &str) -> Draft {
@@ -314,7 +315,7 @@ fn a_click_does_not_select_a_row_with_an_image() {
 fn attached() -> crate::app::App {
     let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -328,7 +329,7 @@ fn attached() -> crate::app::App {
 fn feed(app: &mut crate::app::App, queue: &SteeringQueue) {
     let payload = serde_json::to_value(queue).unwrap_or(serde_json::json!({"messages": []}));
     let line = crate::link::Line::Session(contract::Envelope {
-        kind: "steering_queue".to_owned(),
+        kind: EventKind::SteeringQueue.name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -4,6 +4,7 @@ use super::{cards, rows};
 use crate::app::App;
 use crate::home::Launch;
 use crate::link::Line;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
@@ -68,7 +69,7 @@ fn timed_line(kind: &str, ts: u64, payload: serde_json::Value) -> Line {
 /// One envelope of `session` at `ts`.
 fn timed_line_for(session: &str, kind: &str, ts: u64, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,
@@ -332,7 +333,7 @@ fn preamble_line_for(session: &str, window: u64, trigger: Option<u64>) -> Line {
 /// attached one.
 fn other_waiting(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -360,7 +361,7 @@ fn other_waiting(session: &str) -> Line {
 /// attached one.
 fn other_idle(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

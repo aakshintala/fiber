@@ -16,6 +16,7 @@ use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use crate::swapped::Spot as ViewSpot;
+use contract::HubEventKind;
 use contract::SessionId;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -927,7 +928,7 @@ fn files_attached(width: u16, height: u16) -> App {
     app.attach(SessionId(SESSION.to_owned()));
     app.set_size(width, height);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -997,7 +998,7 @@ fn rejected_diff(session: &str, id: &str, message: &str) -> Line {
 
 fn hub_rejected(id: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "message": message})
@@ -2528,7 +2529,7 @@ fn files_attached_in(root: &std::path::Path, width: u16, height: u16) -> App {
     app.attach(SessionId(SESSION.to_owned()));
     app.set_size(width, height);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -2822,7 +2823,7 @@ fn files_remote() -> App {
     app.attach(SessionId(SESSION.to_owned()));
     app.set_size(120, 35);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -2866,7 +2867,7 @@ fn files_remote_scripted() -> (App, RemoteScript) {
     app.attach(SessionId(SESSION.to_owned()));
     app.set_size(120, 35);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

@@ -9,6 +9,7 @@ use super::super::tests::{
 };
 use crate::app::{App, Effect};
 use crate::keys::Key;
+use contract::{HubEventKind, events::EventKind};
 
 #[test]
 fn a_match_on_the_top_row_at_the_start_is_current() {
@@ -75,7 +76,7 @@ fn a_query_change_or_close_clears_due_the_store_and_the_fetch() {
 /// An envelope of `kind` from `session` whose payload names command `id`.
 fn command_reply(kind: &str, session: &str, id: &str) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -479,7 +480,7 @@ fn reconnect_clears_connection_texts_but_not_the_search_text() {
     app.set_size(40, 10);
     assert!(
         app.on_line(crate::app::Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: HubEventKind::HubHello.name().to_owned(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),

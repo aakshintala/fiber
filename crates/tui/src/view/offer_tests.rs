@@ -3,6 +3,7 @@
 
 use contract::clock::Clock;
 use contract::events::OfferDecision;
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -20,7 +21,7 @@ const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 /// A session line of `kind` from [`S_A`].
 fn session_line(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -36,7 +37,7 @@ fn session_line(kind: &str, payload: Value) -> Line {
 fn offered(items: Value, width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

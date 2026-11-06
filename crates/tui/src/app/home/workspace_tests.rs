@@ -7,6 +7,7 @@ use crate::home::{Launch, Spot};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use contract::clock::Clock;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -34,7 +35,7 @@ fn launch() -> Launch {
 /// A hub `command_accepted` for `id` with `result`.
 fn accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -49,7 +50,7 @@ fn accepted(id: &str, result: Value) -> Line {
 /// A hub `command_rejected` for `id` with `message`.
 fn refused(id: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -68,7 +69,7 @@ fn refused(id: &str, message: &str) -> Line {
 /// A live `session_status` for `session`, named `name`, in `workspace`.
 fn live(session: &str, name: &str, workspace: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

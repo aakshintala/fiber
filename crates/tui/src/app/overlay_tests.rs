@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use contract::ErrorCode;
 use contract::{ActionId, JobId, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -31,7 +32,7 @@ fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(80, 24);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -68,7 +69,7 @@ fn home_at(open_at: crate::OpenAt) -> App {
 /// One durable session line numbered `seq`.
 fn line(kind: &str, seq: u64, action: Option<&str>, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: id(SESSION),
         ts: seq,
         schema_version: contract::SCHEMA_VERSION,
@@ -136,7 +137,7 @@ fn call_turn(seq: &mut u64, message: &str, call: &str) -> Vec<Line> {
 /// A session `command_accepted` for `id`, without a result.
 fn session_accepted(session: &str, command: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -152,7 +153,7 @@ fn session_accepted(session: &str, command: &str) -> Line {
 /// The raise's acceptance for `id`: the pass ends at `last`.
 fn raise_accepted(session: &str, command: &str, last: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -176,7 +177,7 @@ fn hub(kind: &str, session: &str, last: Option<u64>) -> Line {
         payload.insert("last_seq".to_owned(), json!(last));
     }
     Line::Hub(contract::HubLine {
-        kind: kind.to_owned(),
+        kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload,
@@ -186,7 +187,7 @@ fn hub(kind: &str, session: &str, last: Option<u64>) -> Line {
 /// A hub `command_rejected` for `id` with `message`.
 fn hub_refused(id: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1556,7 +1557,7 @@ fn replayed_shell_lines_fold_into_the_second_pages() {
         .pending
         .insert(shell_id.to_owned(), (Kind::Shell, draft));
     app.on_line(Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: id(SESSION),
         ts: 11,
         schema_version: contract::SCHEMA_VERSION,
@@ -1679,7 +1680,7 @@ fn no_thumb_while_the_screen_is_frozen() {
 /// A turn whose prompt carried an image at `path`.
 fn started_with_image(app: &mut App, path: &str) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: EventKind::TurnStarted.name().to_owned(),
         session_id: id(SESSION),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1766,7 +1767,7 @@ fn a_refusal_recorded_at_one_id_holds_after_the_swap() {
 /// Folds a prompt carrying an image at `path` into `pages`.
 fn fold_image(pages: &mut crate::window::Pages, path: &str) {
     pages.apply(&contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: EventKind::TurnStarted.name().to_owned(),
         session_id: id(SESSION),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1904,8 +1905,8 @@ fn reads_stop_when_the_held_lines_fill_the_screen() {
         .turn_lines()
         .unwrap_or_else(|| panic!("a turn start in the window"));
     assert_eq!(
-        from.first().map(|line| line.kind.as_str()),
-        Some("turn_started"),
+        from.first().map(|line| line.kind()),
+        Some(EventKind::TurnStarted),
         "the cut lines never count"
     );
     let app = app();
@@ -1985,8 +1986,8 @@ fn a_long_turn_reads_until_the_screen_is_full_with_no_cap() {
         .unwrap_or_else(|| panic!("the turn start"));
     assert_eq!(from.len(), 700);
     assert_eq!(
-        from.first().map(|line| line.kind.as_str()),
-        Some("turn_started")
+        from.first().map(|line| line.kind()),
+        Some(EventKind::TurnStarted)
     );
 }
 
@@ -2225,8 +2226,8 @@ fn reads_stop_at_the_turn_start_that_fills_the_screen() {
             .turn_lines()
             .unwrap_or_else(|| panic!("the newest turn start"));
         assert_eq!(
-            from.first().map(|line| line.kind.as_str()),
-            Some("turn_started"),
+            from.first().map(|line| line.kind()),
+            Some(EventKind::TurnStarted),
             "the cut lines never count"
         );
         let probe = app();
@@ -2529,8 +2530,8 @@ fn a_turn_longer_than_one_answer_reads_until_its_start() {
         .unwrap_or_else(|| panic!("the turn start"));
     assert_eq!(from.len(), 700);
     assert_eq!(
-        from.first().map(|line| line.kind.as_str()),
-        Some("turn_started")
+        from.first().map(|line| line.kind()),
+        Some(EventKind::TurnStarted)
     );
 }
 
@@ -3364,7 +3365,7 @@ fn segment_lines_in(
         started = json!({"forked_from": forked});
     }
     lines.push(contract::Envelope {
-        kind: "session_started".to_owned(),
+        kind: EventKind::SessionStarted.name().to_owned(),
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -3610,7 +3611,7 @@ fn chain_segment(
         started = json!({"forked_from": {"session_id": parent_session, "seq": point}});
     }
     lines.push(contract::Envelope {
-        kind: "session_started".to_owned(),
+        kind: EventKind::SessionStarted.name().to_owned(),
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

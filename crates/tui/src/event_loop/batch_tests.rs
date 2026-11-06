@@ -8,11 +8,12 @@ use std::sync::mpsc::{self, Receiver};
 use super::{HOLD, HUB_BATCH, batch, batchable, joins};
 use crate::Input;
 use crate::link::{Credits, Line};
+use contract::events::EventKind;
 
 /// One hub line named `hub-{seq}`.
 fn hub(seq: u64) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: format!("hub-{seq}"),
+        kind: EventKind::Unknown(format!("hub-{seq}")).name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -38,8 +39,8 @@ fn described(inputs: &[Input]) -> Vec<String> {
     inputs
         .iter()
         .map(|input| match input {
-            Input::Hub(Line::Session(line)) => line.kind.clone(),
-            Input::Hub(Line::Hub(line)) => line.kind.clone(),
+            Input::Hub(Line::Session(line)) => line.kind().name().to_owned(),
+            Input::Hub(Line::Hub(line)) => line.kind().name().to_owned(),
             Input::Bytes(_) => "bytes".to_owned(),
             Input::Tick => "tick".to_owned(),
             Input::Converted { .. } => "other".to_owned(),

@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use contract::events::EventKind;
 use contract::events::{CallStatus, FileChange};
 use ratatui::style::Modifier;
 use serde_json::json;
@@ -2203,7 +2204,7 @@ fn answered_ask_call(id: usize) -> Call {
             super::super::answers::fold(
                 &mut turns,
                 &contract::Envelope {
-                    kind: kind.to_owned(),
+                    kind: EventKind::from_name(kind).name().to_owned(),
                     session_id: contract::SessionId("s".to_owned()),
                     ts: 0,
                     schema_version: contract::SCHEMA_VERSION,

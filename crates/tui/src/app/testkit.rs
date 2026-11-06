@@ -12,6 +12,7 @@ use std::thread;
 use std::time::Instant;
 
 use contract::clock::Clock;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::json;
 
 use super::{App, Effect};
@@ -28,7 +29,7 @@ pub(crate) const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// A `hub_hello` this terminal reads.
 pub(crate) fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -80,7 +81,7 @@ pub(crate) fn sender_status(name: &str, named: bool) -> Line {
         payload["named"] = json!(true);
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(SENDER.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -94,7 +95,7 @@ pub(crate) fn sender_status(name: &str, named: bool) -> Line {
 /// A live `session_status` for `session`, streaming.
 pub(crate) fn live(session: contract::SessionId) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: session,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -210,7 +211,7 @@ fn envelope(
     action: Option<&str>,
 ) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -252,7 +253,7 @@ pub(crate) fn long_turns(app: &mut App, seq: &mut u64, count: u64) {
         let message = format!("a_m{at}");
         let mut push = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
             app.on_line(Line::Session(contract::Envelope {
-                kind: kind.to_owned(),
+                kind: EventKind::from_name(kind).name().to_owned(),
                 session_id: contract::SessionId(SESSION.to_owned()),
                 ts: *seq,
                 schema_version: contract::SCHEMA_VERSION,

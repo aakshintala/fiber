@@ -18,6 +18,7 @@ use crate::motion::SPINNER;
 use crate::theme::Role;
 use crate::view::text;
 use contract::SessionId;
+use contract::events::EventKind;
 use ratatui::style::Modifier;
 
 const A: &str = "s_aaaaaaaaaaaaaaaa";
@@ -60,7 +61,7 @@ fn status(session: &str, state: Value, since: u64) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

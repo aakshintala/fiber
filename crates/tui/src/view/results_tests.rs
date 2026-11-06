@@ -9,6 +9,7 @@ use crate::app::Snippet;
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::results_support::{attached, now, reply};
+use contract::events::EventKind;
 
 #[test]
 fn small_results_areas_draw_only_complete_entries() {
@@ -125,7 +126,7 @@ fn two_turns_show_each_matchs_own_turn_label() {
         ),
     ] {
         app.on_line(crate::link::Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: contract::SessionId(crate::results_support::SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

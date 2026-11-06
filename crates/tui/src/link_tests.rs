@@ -2,6 +2,7 @@
 
 use super::{Credits, Feed, Line, QUEUE, answers, parse_line, read_lines, write_line};
 use crate::Input;
+use contract::{HubEventKind, events::EventKind};
 use fakes::Deadline;
 use std::io::Read;
 use std::os::unix::net::UnixStream;
@@ -29,7 +30,9 @@ fn lends_allow_exactly_one_extra_queue_and_restore_the_cap() {
     await_waiter(&credits, "restored cap");
     for _ in 0..=QUEUE {
         credits.received(&Input::Hub(Line::Hub(contract::HubLine {
-            kind: "ignored".into(),
+            kind: HubEventKind::Unknown("ignored".to_owned())
+                .name()
+                .to_owned(),
             ts: 0,
             schema_version: 1,
             payload: serde_json::Map::new(),
@@ -64,7 +67,7 @@ fn routed_feed_installs_the_stream_and_bypasses_line_credits() {
     feed.send(Input::Connected(
         client,
         contract::HubLine {
-            kind: "hub_hello".into(),
+            kind: HubEventKind::HubHello.name().to_owned(),
             ts: 0,
             schema_version: 1,
             payload: serde_json::Map::new(),
@@ -239,7 +242,7 @@ fn an_unknown_kind_is_not_a_command_answer() {
 #[test]
 fn answers_matches_only_its_command() {
     let line = |kind: &str, id: &str| contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId("s_x".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -261,7 +264,7 @@ fn answers_matches_only_its_command() {
 fn history_answer_reads_lines_and_rejections() {
     use super::history_answer;
     let line = |kind: &str, payload: serde_json::Value| contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId("s_x".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -315,8 +318,8 @@ fn valid(seq: u64) -> String {
 /// The identity of a received hub line.
 fn identity(input: &Input) -> String {
     match input {
-        Input::Hub(Line::Session(line)) => line.kind.clone(),
-        Input::Hub(Line::Hub(line)) => line.kind.clone(),
+        Input::Hub(Line::Session(line)) => line.kind().name().to_owned(),
+        Input::Hub(Line::Hub(line)) => line.kind().name().to_owned(),
         Input::Converted { .. } => panic!("a hub line, not another input"),
         Input::Bytes(_)
         | Input::Connected(..)
@@ -586,7 +589,7 @@ fn takes_past_the_cap_wait_for_a_receive() {
 /// One parsed hub line: released when received.
 fn hub_line(seq: u64) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: format!("line-{seq}"),
+        kind: EventKind::Unknown(format!("line-{seq}")).name().to_owned(),
         session_id: contract::SessionId("s_x".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

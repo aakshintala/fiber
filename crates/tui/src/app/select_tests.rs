@@ -14,11 +14,12 @@ use crate::home::Launch;
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{self, TargetId};
+use contract::events::EventKind;
 
 /// A line of the session, numbered `seq` when it has one.
 fn line(kind: &str, payload: Value, action: Option<&str>, seq: Option<u64>) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: seq.unwrap_or(0).saturating_mul(1_000),
         schema_version: contract::SCHEMA_VERSION,
@@ -472,7 +473,7 @@ fn launch() -> Launch {
 /// A feed `session_status` for `session`, idle.
 fn status(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

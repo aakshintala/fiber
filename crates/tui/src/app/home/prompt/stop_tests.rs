@@ -12,6 +12,7 @@ use crate::link::Line;
 use crate::mouse::{Pointer, TargetId};
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -56,7 +57,7 @@ fn live_named(
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -75,7 +76,7 @@ fn live(session: &str, state: Value) -> Line {
 /// A hub `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"session_id": session, "how": how})

@@ -9,6 +9,7 @@ use crate::local_time::{new_york, turn_started_at};
 use crate::theme::Role;
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -45,7 +46,7 @@ fn session_line(
     action: Option<&str>,
 ) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -778,7 +779,7 @@ fn wide(app: &mut App) -> (String, Buffer) {
 fn asked() -> App {
     let mut app = empty();
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1119,7 +1120,7 @@ fn the_cursor_stays_on_a_screen_one_column_wide() {
 /// One session envelope at `ts` milliseconds.
 fn at(kind: &str, action: Option<&str>, ts: u64, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,
@@ -1362,7 +1363,7 @@ fn clicking_a_placeholder_opens_the_image_in_the_viewer() {
     // the caption does (`docs/tui.md`, "Images").
     let mut app = empty();
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1453,7 +1454,7 @@ fn prompt_bubble_with_inline_image() {
     // bubble, then its caption (`docs/tui.md`, "Images").
     let mut app = empty();
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1739,7 +1740,7 @@ fn slash_panel_with_the_sessions_commands() {
 fn asked_nothing() -> App {
     let mut app = empty();
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1975,7 +1976,7 @@ fn running(width: u16, height: u16) -> App {
     app.set_size(width, height);
     attach(&mut app, S_A);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -5328,7 +5329,7 @@ fn offered(items: serde_json::Value, width: u16, height: u16) -> App {
     use crate::link::Line;
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

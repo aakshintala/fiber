@@ -5,6 +5,7 @@ use super::Input;
 use super::tests::{feed, new_loop};
 use crate::home::Launch;
 use crate::link::Line;
+use contract::events::EventKind;
 use ratatui::backend::TestBackend;
 use std::path::PathBuf;
 
@@ -102,7 +103,7 @@ fn the_wheel_over_the_panel_scrolls_it_in_the_loop() {
     lp.app.attach(contract::SessionId(SESSION.to_owned()));
     let lines: Vec<String> = (0..60).map(|n| format!("line {n:02}")).collect();
     lp.app.on_line(Line::Session(contract::Envelope {
-        kind: "extension_ui".to_owned(),
+        kind: EventKind::ExtensionUi.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

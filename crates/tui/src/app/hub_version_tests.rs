@@ -2,6 +2,7 @@
 //! notice, and the reason an unreadable row gives.
 
 use contract::ErrorCode;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 use super::super::notices::NoticeLine;
@@ -74,7 +75,7 @@ fn app() -> App {
 
 fn hello(schema: u32, payload: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: schema,
         payload: payload.as_object().cloned().unwrap_or_default(),
@@ -304,7 +305,7 @@ fn the_reason_names_the_hubs_build_after_a_differing_hello() {
 
 fn status(id: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(id.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

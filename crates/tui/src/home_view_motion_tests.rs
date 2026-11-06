@@ -13,6 +13,7 @@ use crate::home::Launch;
 use crate::link::Line;
 use crate::motion::SPINNER;
 use crate::view::{render, text};
+use contract::events::EventKind;
 
 const WALL: u64 = 1_700_000_000_000;
 
@@ -43,7 +44,7 @@ fn home(width: u16, height: u16) -> App {
 /// A `session_status` for `session` in `state`.
 fn status(session: &str, state: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

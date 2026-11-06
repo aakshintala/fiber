@@ -14,6 +14,7 @@ use crate::configure::{Shown, WriteScope};
 use crate::configure_fake::{Fake, row};
 use crate::home::Launch;
 use crate::keys::Key;
+use contract::HubEventKind;
 
 /// A seam over two rows.
 fn fake() -> Arc<Fake> {
@@ -53,7 +54,7 @@ fn home(seam: Arc<Fake>) -> App {
 fn connected(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
