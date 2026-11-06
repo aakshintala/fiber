@@ -1014,15 +1014,27 @@ When a person types a model:
 2. If nothing matches and the string ends in `:` and a thinking level (`off`,
    `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), Fiber strips the
    suffix, matches the rest and applies that thinking level.
-3. A bare model id works if exactly one installed provider has it. Two matches
-   are the error `model_ambiguous`, which lists every match. Prefix the
-   provider, as `provider/model`. A provider that is installed but lacks the
-   named model is `no_model`. A bare id that no installed provider has is
-   `no_model` too, and its message says to run `fiber models`. Only a
+3. Through the session's bare-id resolution, a bare model id counts
+   only switched-on providers: it works if exactly one switched-on
+   provider has it. Two or more switched-on matches are the error
+   `model_ambiguous`, which lists only the switched-on matches.
+   Prefix the provider, as `provider/model`. A provider that is installed
+   but lacks the named model is `no_model`. A bare id that no installed
+   provider has is `no_model` too, and its message says to run
+   `fiber models`. When no switched-on provider has the id but a logged-out
+   installed one does, the error is `credential_missing`: it names the
+   provider as not logged in, with the login command. Only a
    `provider/model` whose provider is not installed is `extension_missing`.
-   These rules match a model left out with `model_unconfigured` too, so naming
-   one is `model_unconfigured`, not `no_model`, and a bare id it shares with
-   another provider's model is `model_ambiguous`.
+   These rules match a model left out with `model_unconfigured` too, so
+   naming one is `model_unconfigured`, not `no_model`, and a bare id it
+   shares with another provider's model is `model_ambiguous` only with at
+   least two switched-on holders, configured or not.
+
+   A session's resolver inventory is installed-wide: it names every
+   installed provider. Only bare-id candidate selection and displayed lists
+   filter on credential presence ("Credentials"). A switch reads the pinned
+   startup configuration, but presence is live: storing or removing a
+   credential flips the next bare-id resolution with no configuration change.
 
 The exact match comes first because OpenRouter model ids contain colons.
 

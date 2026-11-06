@@ -647,8 +647,23 @@ pub(crate) fn prepare(
     let now = switching.reloadable();
     let resolved = switching
         .registry
-        .resolve_named(&switching.naming, &args.model)
-        .map_err(|error| invalid(error.to_string()))?;
+        .resolve_named(&switching.naming, &switching.startup_config, &args.model)
+        .map_err(|error| {
+            // A bare id only logged-out providers hold rejects with the
+            // credential's own code (`docs/invocation.md`, `model`; and
+            // `docs/model-routing.md`, "When a credential is missing or
+            // fails"); every other resolution error stays
+            // `invalid_arguments`. Compared by code, not variant: no other
+            // `resolve_named` failure carries `credential_missing`.
+            if error.code() == ErrorCode::CredentialMissing {
+                Rejection {
+                    code: error.code(),
+                    message: error.to_string(),
+                }
+            } else {
+                invalid(error.to_string())
+            }
+        })?;
     crate::scripted::label(resolved.provider, label).map_err(rejection)?;
     let reference = resolved.reference();
     let context_window = crate::settings::context_window(resolved.model, &reference)
