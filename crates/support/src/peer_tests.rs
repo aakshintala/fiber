@@ -30,6 +30,58 @@ struct Script {
     unreadable_argv: Vec<Pid>,
     unreadable_current: bool,
     argv_reads: std::cell::RefCell<Vec<Pid>>,
+    /// A staged mid-walk exit, fired once by the read it targets.
+    flip: std::cell::RefCell<Option<MidWalkFlip>>,
+    /// Pids whose parent was read, in call order.
+    parent_reads: std::cell::RefCell<Vec<Pid>>,
+    /// The child's parent as the walk sees it after the flip fired: a
+    /// pid re-homes the child, while `None` removes its parent row so a
+    /// re-read fails too.
+    reparented: std::cell::RefCell<HashMap<Pid, Option<Pid>>>,
+    /// Exited pids, whose rows the flip dropped: every later read of one
+    /// fails.
+    exited: std::cell::RefCell<Vec<Pid>>,
+}
+
+/// A one-shot exit staged on a scripted tree: the first effective-uid or
+/// parent read of `old_parent` after the parent read returned it for
+/// `child` re-homes `child` to `new_parent`, then fails that read. A
+/// `new_parent` equal to `old_parent` leaves the tree alone, and `None`
+/// removes the child's parent row. The exited parent's own rows vanish
+/// with it, so a later read of it fails.
+struct MidWalkFlip {
+    child: Pid,
+    old_parent: Pid,
+    new_parent: Option<Pid>,
+    fail_parent: bool,
+}
+
+impl Script {
+    /// Fire the staged exit when this read is the one it targets: the
+    /// read that follows the parent read which returned the old parent
+    /// for the flip's child. Re-homes the child, drops the exited
+    /// parent's rows, and reports that this read fails. One shot.
+    fn fire_flip(&self, pid: Pid, is_parent_read: bool) -> bool {
+        let fire = self.flip.borrow().as_ref().is_some_and(|flip| {
+            is_parent_read == flip.fail_parent
+                && pid == flip.old_parent
+                && self.parent_reads.borrow().contains(&flip.child)
+                && self.parents.get(&flip.child) == Some(&flip.old_parent)
+        });
+        if !fire {
+            return false;
+        }
+        let flip = self
+            .flip
+            .borrow_mut()
+            .take()
+            .expect("a staged flip fires once");
+        self.reparented
+            .borrow_mut()
+            .insert(flip.child, flip.new_parent);
+        self.exited.borrow_mut().push(flip.old_parent);
+        true
+    }
 }
 
 impl ProcessRead for Script {
@@ -44,6 +96,12 @@ impl ProcessRead for Script {
     }
 
     fn euid(&self, pid: Pid) -> Result<EffectiveUid, ReadError> {
+        if self.fire_flip(pid, false) {
+            return Err(ReadError::Unreadable { pid, what: "euid" });
+        }
+        if self.exited.borrow().contains(&pid) {
+            return Err(ReadError::Unreadable { pid, what: "euid" });
+        }
         if self.unreadable_euid.contains(&pid) {
             return Err(ReadError::Unreadable { pid, what: "euid" });
         }
@@ -54,6 +112,25 @@ impl ProcessRead for Script {
     }
 
     fn parent(&self, pid: Pid) -> Result<Pid, ReadError> {
+        if self.fire_flip(pid, true) {
+            return Err(ReadError::Unreadable {
+                pid,
+                what: "parent",
+            });
+        }
+        self.parent_reads.borrow_mut().push(pid);
+        if self.exited.borrow().contains(&pid) {
+            return Err(ReadError::Unreadable {
+                pid,
+                what: "parent",
+            });
+        }
+        if let Some(view) = self.reparented.borrow().get(&pid).copied() {
+            return view.ok_or(ReadError::Unreadable {
+                pid,
+                what: "parent",
+            });
+        }
         if self.unreadable_parent.contains(&pid) {
             return Err(ReadError::Unreadable {
                 pid,
@@ -163,6 +240,67 @@ fn ancestors_name_an_unreadable_parent() {
         euids: [(Pid(50), EffectiveUid(1000))].into_iter().collect(),
         ..Script::default()
     };
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap_err(),
+        IncompleteWalk { pid: Pid(50) }
+    );
+}
+
+/// A 100 -> 50 -> 70 -> 1 tree with a staged exit of PID 50: the first
+/// owner or parent read of PID 50 after the parent read returns it for
+/// PID 100 re-homes PID 100 to `new_parent`, then fails. PID 60's row
+/// points at PID 70, so a re-homed walk can continue through it.
+fn exiting_parent_tree(new_parent: Option<Pid>, fail_parent: bool) -> Script {
+    Script {
+        parents: [
+            (Pid(100), Pid(50)),
+            (Pid(50), Pid(70)),
+            (Pid(60), Pid(70)),
+            (Pid(70), Pid(1)),
+            (Pid(1), Pid(0)),
+        ]
+        .into_iter()
+        .collect(),
+        euids: [
+            (Pid(50), EffectiveUid(1000)),
+            (Pid(60), EffectiveUid(1000)),
+            (Pid(70), EffectiveUid(1000)),
+            (Pid(1), EffectiveUid(0)),
+        ]
+        .into_iter()
+        .collect(),
+        flip: std::cell::RefCell::new(Some(MidWalkFlip {
+            child: Pid(100),
+            old_parent: Pid(50),
+            new_parent,
+            fail_parent,
+        })),
+        ..Script::default()
+    }
+}
+
+#[test]
+fn ancestors_reparented_mid_walk_continues_from_the_new_parent() {
+    let read = exiting_parent_tree(Some(Pid(60)), false);
+    let found = super::ancestors(Pid(100), &read).expect("the walk continues from the new parent");
+    assert!(found.contains(&ProcessInfo {
+        pid: Pid(60),
+        euid: EffectiveUid(1000),
+    }));
+    assert!(found.contains(&ProcessInfo {
+        pid: Pid(70),
+        euid: EffectiveUid(1000),
+    }));
+    assert!(found.contains(&ProcessInfo {
+        pid: Pid(1),
+        euid: EffectiveUid(0),
+    }));
+    assert!(!found.iter().any(|ancestor| ancestor.pid == Pid(50)));
+}
+
+#[test]
+fn ancestors_refuse_when_the_re_read_parent_is_unchanged() {
+    let read = exiting_parent_tree(Some(Pid(50)), false);
     assert_eq!(
         super::ancestors(Pid(100), &read).unwrap_err(),
         IncompleteWalk { pid: Pid(50) }
