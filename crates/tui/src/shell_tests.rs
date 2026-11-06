@@ -1,7 +1,8 @@
 //! Tests for `!` commands.
 
-use super::{answered, item, parse};
-use contract::events::CommandResult;
+use super::{answered, error_row, item, parse, ran, row};
+use contract::ErrorCode;
+use contract::events::{CommandResult, ShellCommand};
 use contract::shapes::Process;
 
 /// A process that exited with `code`.
@@ -57,12 +58,87 @@ fn only_a_show_only_answer_with_its_output_is_an_item() {
             "process": {"exit_code": 0, "timed_out": false}}))
         .ok()
     };
-    assert_eq!(answered("!!ls", result()), Some("! ls\nout".to_owned()));
+    assert_eq!(
+        answered("!!ls", result()),
+        Some("! ls\nonly you see this\nout\nexit 0".to_owned())
+    );
     assert_eq!(answered("!ls", result()), None);
     assert_eq!(answered("ls", result()), None);
     assert_eq!(answered("!!ls", None), None);
     let other = serde_json::from_value(serde_json::json!({"tools": []})).ok();
     assert_eq!(answered("!!ls", other), None);
+}
+
+#[test]
+fn a_row_names_the_command_the_note_the_output_and_the_exit() {
+    assert_eq!(
+        row("echo hi", "sent with your next prompt", "hi\n", &exited(0)),
+        "! echo hi\nsent with your next prompt\nhi\nexit 0"
+    );
+    assert_eq!(
+        row("echo hi", "only you see this", "hi\n", &exited(0)),
+        "! echo hi\nonly you see this\nhi\nexit 0"
+    );
+}
+
+#[test]
+fn a_row_keeps_a_nonzero_exit_or_a_signal() {
+    assert_eq!(
+        row("false", "sent with your next prompt", "", &exited(1)),
+        "! false\nsent with your next prompt\nexit 1"
+    );
+    let killed = Process {
+        exit_code: None,
+        signal: Some("SIGKILL".to_owned()),
+        timed_out: true,
+    };
+    assert_eq!(
+        row("sleep 9", "only you see this", "", &killed),
+        "! sleep 9\nonly you see this\nsignal SIGKILL"
+    );
+}
+
+#[test]
+fn a_row_with_no_exit_or_signal_names_no_ending() {
+    let unknown = Process {
+        exit_code: None,
+        signal: None,
+        timed_out: false,
+    };
+    assert_eq!(
+        row("ls", "only you see this", "a\n", &unknown),
+        "! ls\nonly you see this\na"
+    );
+}
+
+#[test]
+fn a_row_with_empty_output_is_the_command_the_note_and_the_exit() {
+    assert_eq!(
+        row("true", "sent with your next prompt", "", &exited(0)),
+        "! true\nsent with your next prompt\nexit 0"
+    );
+}
+
+#[test]
+fn an_error_row_shows_what_arrived_verbatim() {
+    assert_eq!(
+        error_row("ls", &ErrorCode::from_name("busy"), "no"),
+        "! ls\nbusy: no"
+    );
+}
+
+#[test]
+fn a_shell_command_line_is_a_sent_row() {
+    let line = ShellCommand {
+        command: "echo hi".to_owned(),
+        output: "hi\n".to_owned(),
+        artifact: None,
+        process: exited(0),
+    };
+    assert_eq!(
+        ran(&line),
+        "! echo hi\nsent with your next prompt\nhi\nexit 0"
+    );
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! `!` commands: a draft that runs a shell command, and how its output
 //! shows (`docs/tui.md`, "The input box"; `docs/invocation.md`, `shell`).
 
+use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::{CommandResult, ShellCommand};
 use contract::shapes::Process;
@@ -37,7 +38,7 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
     match result? {
         CommandResult::Shell {
             output, process, ..
-        } => Some(item(command, &output, &process)),
+        } => Some(row(command, "only you see this", &output, &process)),
         CommandResult::Rewind { .. }
         | CommandResult::Tools { .. }
         | CommandResult::McpServers { .. }
@@ -61,9 +62,37 @@ pub(crate) fn answered(text: &str, result: Option<CommandResult>) -> Option<Stri
     }
 }
 
-/// The item a `shell_command` line shows.
+/// The item a `shell_command` line shows. Only a `!` run with `send`
+/// true writes a `shell_command` line, so the row always carries the
+/// sent note.
 pub(crate) fn ran(line: &ShellCommand) -> String {
-    item(&line.command, &line.output, &line.process)
+    row(
+        &line.command,
+        "sent with your next prompt",
+        &line.output,
+        &line.process,
+    )
+}
+
+/// The single transcript row for a shell run: `! <command>`, the kind
+/// note, the output verbatim, then how it ended. Unlike `item()`, the
+/// row always names a successful exit.
+pub(crate) fn row(command: &str, note: &str, output: &str, process: &Process) -> String {
+    let body = item(command, output, process);
+    let head = format!("! {command}");
+    let rest = body.strip_prefix(head.as_str()).unwrap_or_default();
+    let mut text = format!("{head}\n{note}{rest}");
+    if process.signal.is_none() && process.exit_code == Some(0) {
+        text.push_str("\nexit 0");
+    }
+    text
+}
+
+/// The transcript row for a command that could not start: `! <command>`
+/// then `<code>: <message>` exactly as it arrived.
+pub(crate) fn error_row(command: &str, code: &ErrorCode, message: &str) -> String {
+    let code = code.name();
+    format!("! {command}\n{code}: {message}")
 }
 
 /// The conversation item for a command and how it ended: `! <command>`,

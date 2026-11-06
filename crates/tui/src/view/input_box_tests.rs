@@ -2106,6 +2106,176 @@ fn the_input_status_input_drops_a_zero_window() {
     assert_eq!(seen.last(), Some(&None));
 }
 
+/// The shell-mode marker's rows in a whole screen: the box's top-edge
+/// row and the first draft row, found from the rule between the draft
+/// and the chrome.
+fn marker_rows(shown: &str) -> (String, String) {
+    let rule = rule_row(shown);
+    let edge = shown
+        .lines()
+        .nth(rule - 2)
+        .expect("a top-edge row")
+        .to_owned();
+    let draft = shown
+        .lines()
+        .nth(rule - 1)
+        .expect("a first draft row")
+        .to_owned();
+    (edge, draft)
+}
+
+#[test]
+fn a_bang_draft_shows_the_shell_marker() {
+    let app = typed(80, 12, "!ls");
+    let (edge, draft) = marker_rows(&screen(&app, 80, 12));
+    assert!(edge.ends_with("shell"), "top-edge label, got {edge:?}");
+    assert!(
+        draft.starts_with("▌ ! !ls"),
+        "shell prompt before the draft, got {draft:?}"
+    );
+}
+
+#[test]
+fn a_bare_bang_shows_the_shell_marker() {
+    let app = typed(80, 12, "!");
+    let (edge, draft) = marker_rows(&screen(&app, 80, 12));
+    assert!(edge.ends_with("shell"), "top-edge label, got {edge:?}");
+    assert!(
+        draft.starts_with("▌ ! !"),
+        "shell prompt on a bare bang, got {draft:?}"
+    );
+}
+
+#[test]
+fn backspacing_the_bang_clears_the_marker_step_by_step() {
+    let mut app = typed(80, 12, "!ls");
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::Backspace, now);
+    let (edge, draft) = marker_rows(&screen(&app, 80, 12));
+    assert!(
+        edge.ends_with("shell"),
+        "still marked at '!l', got {edge:?}"
+    );
+    assert!(
+        draft.starts_with("▌ ! !l"),
+        "shell prompt at '!l', got {draft:?}"
+    );
+    app.on_key(Key::Backspace, now);
+    let (edge, draft) = marker_rows(&screen(&app, 80, 12));
+    assert!(edge.ends_with("shell"), "still marked at '!', got {edge:?}");
+    assert!(
+        draft.starts_with("▌ ! !"),
+        "shell prompt at '!', got {draft:?}"
+    );
+    app.on_key(Key::Backspace, now);
+    let (edge, draft) = marker_rows(&screen(&app, 80, 12));
+    assert!(!edge.contains("shell"), "no label past '!', got {edge:?}");
+    assert!(
+        draft.starts_with("▌ › "),
+        "plain prompt past '!', got {draft:?}"
+    );
+}
+
+#[test]
+fn a_double_bang_draft_shows_the_not_sent_label() {
+    let app = typed(80, 12, "!!echo hi");
+    let (edge, draft) = marker_rows(&screen(&app, 80, 12));
+    assert!(
+        edge.ends_with("shell · not sent"),
+        "not-sent label, got {edge:?}"
+    );
+    assert!(
+        draft.starts_with("▌ ! !!echo hi"),
+        "shell prompt before the draft, got {draft:?}"
+    );
+}
+
+#[test]
+fn an_image_draft_shows_no_shell_marker() {
+    let mut app = typed(80, 12, "!ls");
+    let now = fakes::clock::FakeClock::new().now();
+    app.on_key(Key::CtrlV, now);
+    app.on_image_inner(0, Ok("AAA".to_owned()));
+    let (edge, draft) = marker_rows(&screen(&app, 80, 12));
+    assert!(
+        !edge.contains("shell"),
+        "no label with an image, got {edge:?}"
+    );
+    assert!(
+        draft.starts_with("▌ › "),
+        "plain prompt with an image, got {draft:?}"
+    );
+}
+
+#[test]
+fn no_color_shell_marker_reads_as_text() {
+    let app = typed(80, 12, "!ls");
+    let area = Rect::new(0, 0, 80, 12);
+    let (buf, _, top) = no_color_drawn(&app, area);
+    let edge: String = (0..80).map(|x| buf[(x, top)].symbol()).collect();
+    assert!(
+        edge.contains("shell"),
+        "label reads without colour, got {edge:?}"
+    );
+    assert!(edge.ends_with("┐"), "label keeps the corner, got {edge:?}");
+    let draft: String = (0..80).map(|x| buf[(x, top + 1)].symbol()).collect();
+    assert!(
+        draft.starts_with("│! !ls"),
+        "glyph reads without colour, got {draft:?}"
+    );
+}
+
+#[test]
+fn a_narrow_box_keeps_the_shell_label_clear_of_the_draft() {
+    let app = typed(40, 10, "!!echo hi");
+    let (edge, draft) = marker_rows(&screen(&app, 40, 10));
+    assert!(
+        edge.ends_with("shell · not sent"),
+        "not-sent label at 40 columns, got {edge:?}"
+    );
+    assert!(
+        draft.starts_with("▌ ! !!echo hi"),
+        "draft clear of the label, got {draft:?}"
+    );
+}
+
+#[test]
+fn a_cut_short_box_sheds_the_shell_label_but_keeps_the_prompt() {
+    // Three rows hold the draft with both edges but no chrome: the
+    // label sheds with it, while the `! ` prompt stays on the draft.
+    let app = typed(20, 3, "!ls");
+    let area = Rect::new(0, 0, 20, 3);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    draw(&app, area, &mut bottom, &mut buf, &mut Vec::new());
+    let shown = crate::view::text(&buf);
+    assert!(
+        !shown.contains("shell"),
+        "label sheds with chrome, got {shown:?}"
+    );
+    assert!(
+        shown.contains("! !ls"),
+        "prompt stays on the draft, got {shown:?}"
+    );
+}
+
+#[test]
+fn a_shell_label_too_wide_for_its_row_is_cut() {
+    let area = Rect::new(0, 0, 10, 3);
+    let mut buf = Buffer::empty(area);
+    super::put_shell_label(&mut buf, area, 0, "shell · not sent");
+    let row: String = (0..10).map(|x| buf[(x, 0)].symbol()).collect();
+    assert_eq!(row, "shell · no");
+}
+
+#[test]
+fn the_cursor_column_is_unchanged_in_shell_mode() {
+    // The `! ` swap keeps the prompt's two cells, so the caret sits
+    // where the plain prompt puts it: past `!ls` as past `!` plus `ls`.
+    let app = typed(60, 12, "!ls");
+    assert_eq!(super::cursor_row(&app, 60, 11), (4, 7));
+}
+
 /// A decorating renderer on the input_status slot is handed the built-in
 /// row, so the row's figures reach the screen (`docs/tui.md`, "Extension
 /// seams").
