@@ -220,3 +220,4 @@ providers/databricks/providers/databricks.lua	fiber-4258	plan	2026-11-06T03:52:0
 providers/databricks/tests	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4269,4267,4266,4259,4232,4218,4213,4209
 docs/configuration.md	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4269,4267,4266,4259,4232,4218,4213,4209
 docs/model-routing.md	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4269,4267,4266,4259,4232,4218,4213,4209
+crates/tui/src/remote/router_tests.rs	fiber-4158	plan	2026-11-06T04:00:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4266,4269,4267,4259,4218,4213
