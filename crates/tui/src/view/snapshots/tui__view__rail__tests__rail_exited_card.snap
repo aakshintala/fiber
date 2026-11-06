@@ -1,0 +1,11 @@
+---
+source: crates/tui/src/view/rail_tests.rs
+assertion_line: 548
+expression: text(&buf)
+---
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌ 1 ○ EXITED                       16s
+▌ screen
+▌ ⎇ main
+▌ $0.00
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

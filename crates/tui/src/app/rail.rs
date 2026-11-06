@@ -192,18 +192,35 @@ impl App {
     /// The cards and the launch project, or None without home. The cards
     /// are every card except a CANNOT ATTACH card the person hid and that
     /// has not crashed, and never a session whose card moved to a new
-    /// session.
+    /// session, plus the on-screen session's card when it exits: it stays
+    /// in its project group, in feed order, until the screen shows
+    /// another session (`docs/tui.md`, "The rail").
     pub(crate) fn rail_cards(&self) -> Option<(Vec<&Row>, Option<&str>)> {
         let home = self.home.as_ref()?;
         let hidden = &self.rail_state.hidden;
+        // Row keys are unique and never reused, so the drawn set is the
+        // filtered cards plus the attached exited feed row, in the feed
+        // order `all` already carries.
+        let cards: BTreeSet<u64> = home
+            .sessions
+            .cards()
+            .into_iter()
+            .filter(|row| {
+                !(crate::view::rail::cannot_attach(row) && hidden.contains(&row.id))
+                    && !self.rail_state.is_cardless(&row.id)
+            })
+            .map(|row| row.key)
+            .collect();
+        let attached = self
+            .session()
+            .and_then(|id| home.sessions.feed_row(id))
+            .filter(|row| row.left == Some(Left::Exited))
+            .map(|row| row.key);
         Some((
             home.sessions
-                .cards()
+                .all()
                 .into_iter()
-                .filter(|row| {
-                    !(crate::view::rail::cannot_attach(row) && hidden.contains(&row.id))
-                        && !self.rail_state.is_cardless(&row.id)
-                })
+                .filter(|row| cards.contains(&row.key) || Some(row.key) == attached)
                 .collect(),
             home.launch_project(),
         ))
@@ -263,8 +280,18 @@ impl App {
         // Numbers cover every card, hidden ones included, so a hidden
         // card keeps its number for its whole life and a new card takes
         // the smallest free one (`docs/tui.md`, "The rail"). Only the
-        // drawn cards show.
-        self.rail_state.sync(&home.sessions.cards());
+        // drawn cards show. The on-screen session's exited card keeps its
+        // live number the same way, while an exit off screen still gives
+        // its number up.
+        let attached = self.session().cloned();
+        let mut numbered = home.sessions.cards();
+        if let Some(id) = &attached
+            && let Some(row) = home.sessions.feed_row(id)
+            && row.left == Some(Left::Exited)
+        {
+            numbered.push(row);
+        }
+        self.rail_state.sync(&numbered);
         let Some(key) = self.rail_state.reveal else {
             return;
         };
@@ -690,10 +717,24 @@ impl App {
         )
     }
 
-    /// A click on a rail item.
+    /// A click on a rail item. A click on an exited card resumes it
+    /// through the same `open_entry` opening its exited row from home
+    /// uses, so an unreadable one answers with home's notice and sends
+    /// nothing; every other card switches.
     pub(super) fn rail_click(&mut self, spot: Spot) -> Effect {
         match spot {
-            Spot::Card(key) => self.switch_to(key),
+            Spot::Card(key) => {
+                let exited = self
+                    .home
+                    .as_ref()
+                    .and_then(|home| home.sessions.by_key(key))
+                    .is_some_and(|row| row.left == Some(Left::Exited));
+                if exited {
+                    self.open_entry(key)
+                } else {
+                    self.switch_to(key)
+                }
+            }
             Spot::Dismiss(key) => self.dismiss_card(key),
             Spot::Start(key) => self.start_in(key),
             Spot::Done(key) => self.exits_in(key),

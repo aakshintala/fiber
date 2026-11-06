@@ -107,6 +107,41 @@ fn alt_one_switches_in_the_loop() {
     assert_eq!(lp.app.session().map(|id| id.0.as_str()), Some(B));
 }
 
+/// A hub `session_left` for `session`, ended `how`.
+fn left(session: &str, how: &str) -> Line {
+    Line::Hub(contract::HubLine {
+        kind: "session_left".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::json!({"session_id": session, "how": how})
+            .as_object()
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
+#[test]
+fn exited_card_keeps_wall_time_elapsed_in_the_loop() {
+    let mut lp = wide();
+    let clock = fakes::clock::FakeClock::new();
+    lp.clock = clock.clone();
+    let since = contract::clock::wall_ms(clock.wall()) - 16_000;
+    lp.app.on_line(live(A, since));
+    lp.app.on_line(live(B, since));
+    // The session on screen exits: its card stays in place with its
+    // number and its elapsed from the loop's wall time.
+    lp.app.on_line(left(A, "exited"));
+    feed(&mut lp, vec![Input::Resize]);
+    let frame = shown(&lp);
+    assert!(frame.contains("1 ○ EXITED"), "{frame}");
+    assert!(frame.contains("16s"), "{frame}");
+    // The card persists across the next frame too.
+    feed(&mut lp, vec![Input::Resize]);
+    let frame = shown(&lp);
+    assert!(frame.contains("1 ○ EXITED"), "{frame}");
+    assert!(frame.contains("16s"), "{frame}");
+}
+
 #[test]
 fn the_wheel_over_the_rail_scrolls_it_in_the_loop() {
     let mut lp = wide();
