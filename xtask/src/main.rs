@@ -110,7 +110,8 @@
 //! - `stale-wait-ratchet`: reads the inline per-file maxima from stdin as one
 //!   `<path> <maximum>` per line, and fails when a file under
 //!   `crates/main/tests/` outside `support/` holds more stale-wait
-//!   occurrences (`recv_reply` uses, `fn subscribe(`, `fn subscribe_full(`)
+//!   occurrences (subscribe-then-action-then-unbounded-wait on a replayable
+//!   session, plus `recv_reply`, `fn subscribe(`, `fn subscribe_full(`)
 //!   than its maximum (0 when absent)
 //! - `site --out <dir>`: builds the user docs site (docs/ci.md, "The user docs site")
 //! - `logo-mask --font <path> [--out <path>]`: regenerates the logo's alpha
