@@ -9,12 +9,14 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
+    clippy::indexing_slicing,
     reason = "test helpers; a failure is the test's"
 )]
 
 mod extension_harness;
 mod support;
 
+use extension_harness::{send, until_session, until_session_close};
 use std::fs;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
@@ -1537,7 +1539,6 @@ fn a_confined_worktree_delegate_commits_branches_and_recovers_a_reflog() {
 #[cfg(target_os = "linux")]
 #[test]
 fn delegates_inherit_a_run_override_and_refreshed_denials() {
-    use extension_harness::{send, until_session, until_session_close};
     use serde_json::json;
     use std::sync::{
         Arc,
@@ -1933,4 +1934,788 @@ fn a_detached_call_runs_unconfined_with_the_sandbox_on_and_takes_no_protected_pa
             "a detached call records no baseline or lock: {recorded:?}"
         );
     }
+}
+
+/// The `/sandbox` toggle's binary contract: an interactive session driven
+/// over its socket. The toggle flips the session's handle, so the next
+/// shell call confines only after `on`, reviews after `off`, and an
+/// unavailable `on` sets the setting with one notice and reviews.
+struct Live {
+    running: extension_harness::Running,
+    client: extension_harness::Socket,
+    /// Every subscribed socket line taken so far.
+    taken: Vec<serde_json::Value>,
+}
+
+/// Writes the toggle tests' `config` and standing `allow` rules for
+/// `shell` and `delegate_spawn`.
+fn prepare(setup: &Setup, config: &serde_json::Value) {
+    support::write_json(&setup.home().join("config.json"), config);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            serde_json::json!({"decision": "allow", "tool": "shell", "prefix": "cat "}),
+            serde_json::json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+        ),
+    )
+    .unwrap();
+}
+
+impl Live {
+    /// Starts an interactive session with `config` and standing shell
+    /// `allow` rules, subscribes full, and returns it ready for commands.
+    fn start(setup: &Setup, id: &str, config: &serde_json::Value) -> Self {
+        prepare(setup, config);
+        let mut running = setup.start_session(id, &[]);
+        let client = running.connect(&setup.socket(id));
+        send(
+            &client,
+            r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#,
+        );
+        let taken = until_session(&client, "subscription", |line| {
+            line["kind"] == "command_accepted"
+        });
+        Self {
+            running,
+            client,
+            taken,
+        }
+    }
+
+    /// Takes socket lines until `cmd`'s accept, keeping every line.
+    fn accept(&mut self, cmd: &str, what: &str) {
+        let lines = until_session(&self.client, what, |line| {
+            line["kind"] == "command_accepted" && line["payload"]["command_id"] == cmd
+        });
+        self.taken.extend(lines);
+    }
+
+    /// Sends `sandbox` with `enabled` and expects the accept.
+    fn toggle(&mut self, cmd: &str, enabled: bool) {
+        send(
+            &self.client,
+            &serde_json::json!({"id": cmd, "command": "sandbox", "args": {"enabled": enabled}})
+                .to_string(),
+        );
+        self.accept(cmd, "the sandbox acknowledgement");
+    }
+
+    /// Prompts without waiting: the turn runs while the test drives other
+    /// commands, for toggling mid-turn.
+    fn prompt(&mut self, cmd: &str, text: &str) {
+        send(
+            &self.client,
+            &serde_json::json!({"id": cmd, "command": "prompt", "args": {"content": [{"type": "text", "text": text}]}})
+                .to_string(),
+        );
+        self.accept(cmd, "the prompt acknowledgement");
+    }
+
+    /// Waits out the running turn, keeping every line.
+    fn wait_turn(&mut self, what: &str) {
+        let lines = until_session(&self.client, what, |line| line["kind"] == "turn_completed");
+        self.taken.extend(lines);
+    }
+
+    /// Prompts and runs one turn to completion, keeping every line.
+    fn turn(&mut self, cmd: &str, text: &str) {
+        self.prompt(cmd, text);
+        self.wait_turn("the turn");
+    }
+
+    /// Waits for a socket line matching `done`, keeping every line.
+    fn wait_for(&mut self, what: &str, mut done: impl FnMut(&serde_json::Value) -> bool) {
+        let lines = until_session(&self.client, what, &mut done);
+        self.taken.extend(lines);
+    }
+
+    /// The subscribed `notice` lines whose message contains `needle`.
+    fn notices(&self, needle: &str) -> Vec<&serde_json::Value> {
+        self.taken
+            .iter()
+            .filter(|line| {
+                line["kind"] == "notice"
+                    && line["payload"]["message"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .contains(needle)
+            })
+            .collect()
+    }
+
+    /// Closes the session and expects a clean exit.
+    fn finish(self) {
+        send(&self.client, r#"{"id":"close","command":"close"}"#);
+        until_session_close(&self.client);
+        let (status, _, stderr) = self.running.wait();
+        assert_eq!(status.code(), Some(0), "{stderr}");
+    }
+}
+
+/// The session log's JSON lines for `id`.
+fn session_log(setup: &Setup, id: &str) -> Vec<serde_json::Value> {
+    let text = fs::read_to_string(support::session_dir(setup, id).join("events.jsonl")).unwrap();
+    support::complete_lines(&text)
+}
+
+/// The `tool_call_started` line for the log's one `shell` call.
+fn shell_started(lines: &[serde_json::Value]) -> &serde_json::Value {
+    let requested = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested" && line["payload"]["name"] == "shell")
+        .expect("a shell request");
+    let action = requested["action_id"].as_str().unwrap();
+    lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
+        .expect("a shell start")
+}
+
+/// The call ran reviewed, not confined: it starts without `confined` and
+/// completes with the command's output. A standing `allow` rule approves
+/// the call on the rule fast path, which writes no `permission_resolved`
+/// of its own (`docs/permissions.md`, "What the log records").
+fn reviewed(lines: &[serde_json::Value], started: &serde_json::Value, expected: &str) {
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "the call starts outside the sandbox"
+    );
+    let action = started["action_id"].as_str().unwrap();
+    let completed = lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == action)
+        .expect("a completion for the call");
+    assert_eq!(completed["payload"]["status"], "completed", "{completed}");
+    let text = completed["payload"]["content"]
+        .as_array()
+        .map(|content| {
+            content
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default();
+    assert!(text.contains(expected), "the reviewed call ran: {text:?}");
+}
+
+/// Toggling on confines the next shell call: the accept carries the
+/// lifetime notice, and the call starts with `confined: true`.
+#[cfg(target_os = "linux")]
+#[test]
+fn toggle_on_confines_the_next_shell_call() {
+    use serde_json::json;
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let probe = setup.workspace().join("probe.txt");
+    fs::write(&probe, "hi\n").unwrap();
+    let command = format!("cat {}", probe.display());
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "call_shell",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut live = Live::start(&setup, &id, &json!({"model": "fake/m"}));
+    live.toggle("sb_on", true);
+    assert_eq!(
+        live.notices("Sandbox on for this session until /reload.")
+            .len(),
+        1,
+        "the on notice is the reply"
+    );
+    live.turn("p1", "read the probe");
+    let log = session_log(&setup, &id);
+    assert_eq!(
+        shell_started(&log)["payload"]["confined"],
+        true,
+        "the call starts confined"
+    );
+    live.finish();
+}
+
+/// Toggling off reviews the next shell call: the off notice is the reply,
+/// the start omits `confined`, and the review resolves it.
+#[test]
+fn toggle_off_reviews_the_next_shell_call() {
+    use serde_json::json;
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let probe = setup.workspace().join("probe.txt");
+    fs::write(&probe, "hi\n").unwrap();
+    let command = format!("cat {}", probe.display());
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "call_shell",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut live = Live::start(&setup, &id, &json!({"model": "fake/m"}));
+    live.toggle("sb_on", true);
+    live.toggle("sb_off", false);
+    assert_eq!(
+        live.notices("Sandbox on for this session until /reload.")
+            .len(),
+        1
+    );
+    assert_eq!(
+        live.notices("Sandbox off for this session.").len(),
+        1,
+        "the off notice is the reply"
+    );
+    live.turn("p1", "read the probe");
+    let log = session_log(&setup, &id);
+    let started = shell_started(&log);
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "the call starts outside the sandbox"
+    );
+    reviewed(&log, started, "hi\n");
+    live.finish();
+}
+
+/// Toggling on while unavailable sets the setting on with one notice and
+/// reviews the next call: a repeated enable says the line once total.
+#[test]
+fn toggle_on_while_unavailable_reviews_and_says_so_once() {
+    use serde_json::json;
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let secret = setup.workspace().join("secret");
+    fs::write(&secret, "shh\n").unwrap();
+    let probe = setup.workspace().join("probe.txt");
+    fs::write(&probe, "hi\n").unwrap();
+    let command = format!("cat {}", probe.display());
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "call_shell",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut live = Live::start(
+        &setup,
+        &id,
+        &json!({"model": "fake/m", "sandbox": {"enabled": false, "deny_read": [secret.display().to_string()]}}),
+    );
+    live.toggle("sb_on", true);
+    live.toggle("sb_again", true);
+    let unavailable = live.notices("sandbox unavailable: ");
+    assert_eq!(unavailable.len(), 1, "the line lands once total");
+    assert!(
+        unavailable[0]["payload"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("sandbox unavailable: sandbox read-deny path "),
+        "the reply names the deny: {}",
+        unavailable[0]["payload"]
+    );
+    live.turn("p1", "read the probe");
+    let log = session_log(&setup, &id);
+    let started = shell_started(&log);
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "no call is confined"
+    );
+    reviewed(&log, started, "hi\n");
+    live.finish();
+}
+
+/// A startup-unavailable session that is then enabled says the line once
+/// total: the toggle's accept carries no second notice.
+#[test]
+fn startup_unavailable_session_then_enabled_says_so_once() {
+    use serde_json::json;
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let secret = setup.workspace().join("secret");
+    fs::write(&secret, "shh\n").unwrap();
+    let probe = setup.workspace().join("probe.txt");
+    fs::write(&probe, "hi\n").unwrap();
+    let command = format!("cat {}", probe.display());
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "call_shell",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let deny = secret.display().to_string();
+    let config = json!({"model": "fake/m", "sandbox": {"enabled": true, "deny_read": [deny]}});
+    prepare(&setup, &config);
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+    running.wait_for("notice");
+    let startup_unavailable: Vec<serde_json::Value> = running
+        .first
+        .iter()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .filter(|line: &serde_json::Value| {
+            line["kind"] == "notice"
+                && line["payload"]["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with("sandbox unavailable: ")
+        })
+        .collect();
+    assert_eq!(
+        startup_unavailable.len(),
+        1,
+        "startup says the line once: {startup_unavailable:?}"
+    );
+    let client = running.connect(&setup.socket(&id));
+    send(
+        &client,
+        r#"{"id":"sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let taken = until_session(&client, "subscription", |line| {
+        line["kind"] == "command_accepted"
+    });
+    let mut live = Live {
+        running,
+        client,
+        taken,
+    };
+    live.toggle("sb_on", true);
+    live.turn("p1", "read the probe");
+    assert!(
+        live.notices("sandbox unavailable: ").is_empty(),
+        "the toggle adds no second line"
+    );
+    let log = session_log(&setup, &id);
+    let started = shell_started(&log);
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "no call is confined"
+    );
+    reviewed(&log, started, "hi\n");
+    live.finish();
+}
+
+/// An enable followed by a reload says the on line once total, and the
+/// reload restores the configured off state for the next call.
+#[cfg(target_os = "linux")]
+#[test]
+fn enable_then_reload_says_the_on_line_once_and_restores_config() {
+    use serde_json::json;
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let probe = setup.workspace().join("probe.txt");
+    fs::write(&probe, "hi\n").unwrap();
+    let command = format!("cat {}", probe.display());
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "call_shell",
+            "shell",
+            &json!({"command": command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut live = Live::start(&setup, &id, &json!({"model": "fake/m"}));
+    live.toggle("sb_on", true);
+    send(&live.client, r#"{"id":"rl","command":"reload"}"#);
+    let reloaded = until_session(&live.client, "settings refresh", |line| {
+        line["kind"] == "reloaded"
+    });
+    assert!(
+        reloaded.last().unwrap()["payload"].get("failed").is_none(),
+        "the reload applies"
+    );
+    assert_eq!(
+        live.notices("Sandbox on for this session until /reload.")
+            .len(),
+        1,
+        "the on line lands once total"
+    );
+    live.turn("p1", "read the probe");
+    let log = session_log(&setup, &id);
+    let started = shell_started(&log);
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "the reload restores the configured off state"
+    );
+    reviewed(&log, started, "hi\n");
+    live.finish();
+}
+
+/// The toggle is per session with untouched config: only the toggled
+/// session confines, the other's next call reviews with no `confined`,
+/// and the config bytes are identical.
+#[cfg(target_os = "linux")]
+#[test]
+fn toggle_is_per_session_with_untouched_config() {
+    use serde_json::json;
+    use support::{function_call, hello, stream};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let probe = setup.workspace().join("probe.txt");
+    fs::write(&probe, "hi\n").unwrap();
+    let command = format!("cat {}", probe.display());
+    let call = || {
+        stream(&[function_call(
+            "call_shell",
+            "shell",
+            &json!({"command": command}),
+        )])
+    };
+    let server = fakes::ProviderServer::start([call(), hello(), call(), hello()]).unwrap();
+    setup.provider(&server);
+    let config = json!({"model": "fake/m"});
+    prepare(&setup, &config);
+    let before = fs::read(setup.home().join("config.json")).unwrap();
+    let id_a = doors::mint("s_");
+    let id_b = doors::mint("s_");
+    let mut session_a = Live::start(&setup, &id_a, &config);
+    let mut session_b = Live::start(&setup, &id_b, &config);
+    session_a.toggle("sb_on", true);
+    session_a.turn("pa", "read the probe");
+    session_b.turn("pb", "read the probe");
+    let log_a = session_log(&setup, &id_a);
+    assert_eq!(
+        shell_started(&log_a)["payload"]["confined"],
+        true,
+        "only the toggled session confines"
+    );
+    let log_b = session_log(&setup, &id_b);
+    let started_b = shell_started(&log_b);
+    assert!(
+        started_b["payload"].get("confined").is_none(),
+        "the untouched session reviews with no confined"
+    );
+    reviewed(&log_b, started_b, "hi\n");
+    assert!(
+        session_b.notices("Sandbox on").is_empty(),
+        "the line lands only on the toggled session"
+    );
+    assert_eq!(
+        fs::read(setup.home().join("config.json")).unwrap(),
+        before,
+        "toggling writes no config"
+    );
+    session_a.finish();
+    session_b.finish();
+}
+
+/// A detached call with the toggle-flipped sandbox on runs outside it:
+/// reviewed, unconfined, and with no protected-path transaction.
+#[cfg(target_os = "linux")]
+#[test]
+fn toggle_on_detach_runs_unconfined_reviewed_without_protected_transaction() {
+    use serde_json::json;
+    use support::{function_call, hello, stream, text_reply};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let workspace = setup.workspace();
+    let marker = workspace.join("detached-toggle-ran");
+    let script = workspace.join("detach-toggle.sh");
+    let ready = fakes::children::Ready::new(&workspace);
+    fs::write(
+        &script,
+        format!(
+            "touch {}\necho $$ > {}\nexec sleep 60\n",
+            marker.display(),
+            ready.path().display()
+        ),
+    )
+    .unwrap();
+    let command = format!("sh {}", script.display());
+    let server = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "detached_toggle",
+            "shell",
+            &json!({"command": command, "detach": true}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut live = Live::start(
+        &setup,
+        &id,
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"}}),
+    );
+    live.toggle("sb_on", true);
+    live.turn("p1", "start the detached command");
+    let log = session_log(&setup, &id);
+    let action = log
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested" && line["payload"]["name"] == "shell")
+        .expect("a shell request")["action_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let started = log
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started" && line["action_id"] == action)
+        .expect("a start for the detached call");
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "the detached call runs outside the sandbox"
+    );
+    let completed = log
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed" && line["action_id"] == action)
+        .expect("a completion for the detached call");
+    assert_eq!(
+        completed["payload"]["status"], "completed",
+        "the reviewed detach ran: {completed}"
+    );
+    // Model, reviewer verdict, model: the standing allow never covers a
+    // detached call, so the reviewer is consulted.
+    assert_eq!(
+        server.requests().len(),
+        3,
+        "the detached call reaches the reviewer"
+    );
+    assert!(
+        completed["payload"]["details"]
+            .get("protected_paths")
+            .is_none(),
+        "an unconfined call takes no protected-path transaction"
+    );
+    let pgid = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
+    assert!(marker.exists(), "the detached script ran");
+    assert!(
+        fakes::group_alive(pgid),
+        "the detached child outlives the run"
+    );
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    assert!(
+        fakes::group_empties(pgid, fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the reaper thread reaps the killed child"
+    );
+    // No baseline or lock file under the project's `protected-paths/`
+    // (`crates/tools/src/shell/sandbox/protected/baseline.rs`,
+    // `state_paths`): nothing transacted, so nothing was recorded.
+    let mut recorded: Vec<std::path::PathBuf> = Vec::new();
+    let projects = setup.home().join("projects");
+    if projects.exists() {
+        let mut stack = vec![projects];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if let Some(name) = path.file_name().and_then(|name| name.to_str())
+                    && ["baseline.json", "baseline.lock", "active.lock"].contains(&name)
+                {
+                    recorded.push(path);
+                }
+            }
+        }
+    }
+    assert!(
+        recorded.is_empty(),
+        "a detached call records no baseline or lock: {recorded:?}"
+    );
+    live.finish();
+}
+
+/// A delegate started after the toggle inherits it on: the child's shell
+/// call starts confined.
+#[cfg(target_os = "linux")]
+#[test]
+fn delegate_started_after_toggle_inherits_on() {
+    use serde_json::json;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use support::{function_call, hello, stream, text_reply};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let probe = setup.workspace().join("probe.txt");
+    fs::write(&probe, "hi\n").unwrap();
+    let child_command = format!("cat {}", probe.display());
+    let requested = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&requested);
+    // The turn's model request comes first and carries no
+    // `delegate_spawn`: it launches the delegate. Every later request,
+    // reviewer verdict or follow-up turn, reads as an allow.
+    let parent = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
+        let _body = String::from_utf8_lossy(&request.body);
+        if !seen.swap(true, Ordering::SeqCst) {
+            stream(&[function_call(
+                "spawn",
+                "delegate_spawn",
+                &json!({"description": "read", "prompt": "read the probe", "model": "fiber:child/m"}),
+            )])
+        } else {
+            text_reply("allow")
+        }
+    })
+    .unwrap();
+    let child = fakes::ProviderServer::start([
+        stream(&[function_call(
+            "child_shell",
+            "shell",
+            &json!({"command": child_command}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&parent);
+    sandbox_child_provider(&setup, &child);
+    let id = doors::mint("s_");
+    let mut live = Live::start(
+        &setup,
+        &id,
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"}}),
+    );
+    live.toggle("sb_on", true);
+    live.turn("p1", "read the probe through a delegate");
+    live.wait_for("the delegate's finish", |line| {
+        line["kind"] == "delegate_finished"
+    });
+    let finished: Vec<_> = live
+        .taken
+        .iter()
+        .filter(|line| line["kind"] == "delegate_finished")
+        .collect();
+    assert_eq!(finished.len(), 1, "the delegate ran");
+    let job = live
+        .taken
+        .iter()
+        .find(|line| line["kind"] == "job_started")
+        .expect("a delegate job receipt");
+    let log = fs::read_to_string(job["payload"]["output_path"].as_str().unwrap()).unwrap();
+    let calls = sandbox_lines(&log);
+    let started = calls
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started")
+        .expect("a child shell start");
+    assert_eq!(
+        started["payload"]["confined"], true,
+        "the child inherits the toggled-on sandbox"
+    );
+    live.finish();
+}
+
+/// A delegate running across the toggle keeps its prior snapshot: toggled
+/// on mid-run, its shell call still starts unconfined.
+#[cfg(target_os = "linux")]
+#[test]
+fn running_delegate_keeps_prior() {
+    use serde_json::json;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use support::{function_call, stream, text_reply};
+
+    let setup = Setup::new_with_sandbox_root();
+    let _guard = support::SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy());
+    let probe = setup.workspace().join("probe.txt");
+    fs::write(&probe, "hi\n").unwrap();
+    let child_command = format!("cat {}", probe.display());
+    let requested = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&requested);
+    // The turn's model request comes first and carries no
+    // `delegate_spawn`: it launches the delegate. Every later request,
+    // reviewer verdict or follow-up turn, reads as an allow.
+    let parent = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
+        let _body = String::from_utf8_lossy(&request.body);
+        if !seen.swap(true, Ordering::SeqCst) {
+            stream(&[function_call(
+                "spawn",
+                "delegate_spawn",
+                &json!({"description": "read", "prompt": "read the probe", "model": "fiber:child/m"}),
+            )])
+        } else {
+            text_reply("allow")
+        }
+    })
+    .unwrap();
+    let shelled = Arc::new(AtomicBool::new(true));
+    let shell_launch = Arc::clone(&shelled);
+    let child = fakes::ProviderServer::start_responding(move |request: &fakes::Request| {
+        let _body = String::from_utf8_lossy(&request.body);
+        if shell_launch.swap(false, Ordering::SeqCst) {
+            stream(&[function_call(
+                "child_shell",
+                "shell",
+                &json!({"command": child_command}),
+            )])
+        } else {
+            text_reply("allow")
+        }
+    })
+    .unwrap();
+    child.hold();
+    setup.provider(&parent);
+    sandbox_child_provider(&setup, &child);
+    let id = doors::mint("s_");
+    let mut live = Live::start(
+        &setup,
+        &id,
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"}}),
+    );
+    live.prompt("p1", "read the probe through a delegate");
+    live.wait_for("the delegate's start", |line| {
+        line["kind"] == "delegate_started"
+    });
+    live.toggle("sb_on", true);
+    child.release();
+    live.wait_turn("the delegate's turn");
+    live.wait_for("the delegate's finish", |line| {
+        line["kind"] == "delegate_finished"
+    });
+    let finished: Vec<_> = live
+        .taken
+        .iter()
+        .filter(|line| line["kind"] == "delegate_finished")
+        .collect();
+    assert_eq!(finished.len(), 1, "the delegate ran");
+    let job = live
+        .taken
+        .iter()
+        .find(|line| line["kind"] == "job_started")
+        .expect("a delegate job receipt");
+    let log = fs::read_to_string(job["payload"]["output_path"].as_str().unwrap()).unwrap();
+    let calls = sandbox_lines(&log);
+    let started = calls
+        .iter()
+        .find(|line| line["kind"] == "tool_call_started")
+        .expect("a child shell start");
+    assert!(
+        started["payload"].get("confined").is_none(),
+        "the running delegate keeps its prior snapshot"
+    );
+    live.finish();
 }
