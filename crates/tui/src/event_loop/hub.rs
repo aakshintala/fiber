@@ -282,7 +282,14 @@ impl Connection {
             let Some(last) = answer.last().and_then(|line| line.seq) else {
                 break;
             };
-            from = last.0.saturating_add(1);
+            // The cursor always moves past the requested window's start:
+            // an answer ending at or below it would otherwise re-request
+            // the same window forever, replaying without progress while
+            // keys pile up in `answer`. At `u64::MAX` both adds saturate,
+            // so a window ending at MAX answered with last MAX would
+            // re-request `(MAX, MAX)`; no log reaches MAX and an empty
+            // answer still breaks, so the walk ends.
+            from = last.0.saturating_add(1).max(from.saturating_add(1));
             lines.extend(answer);
         }
         Ok(lines)
