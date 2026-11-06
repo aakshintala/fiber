@@ -344,7 +344,14 @@ fn config_error_file(error: &extensions::Error) -> Option<std::path::PathBuf> {
                 None
             }
         }
-        _ => None,
+        config::ConfigError::FiberHome(_)
+        | config::ConfigError::Override { .. }
+        | config::ConfigError::ProjectKey { .. }
+        | config::ConfigError::CredentialMissing { .. }
+        | config::ConfigError::CredentialFailed { .. }
+        | config::ConfigError::SecretName { .. }
+        | config::ConfigError::BadThemeName
+        | config::ConfigError::ThemeRead(_) => None,
     }
 }
 
