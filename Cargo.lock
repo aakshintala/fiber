@@ -1635,6 +1635,7 @@ name = "log"
 version = "0.0.0"
 dependencies = [
  "contract",
+ "diag",
  "fakes",
  "grep-matcher",
  "grep-regex",
