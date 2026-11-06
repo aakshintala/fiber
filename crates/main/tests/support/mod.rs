@@ -3850,11 +3850,11 @@ fn effect_after_accept_ignores_other_ids_and_passes_on_its_own() {
     let lines = held_wait_passes_after_release(
         "the c_1 answer",
         fakes::MUST_SUCCEED_WITHIN,
-        move |_deadline| {
+        move |deadline| {
             wait_for_effect_after_accept(
                 "the c_1 answer",
                 "c_1",
-                |what, got| client.next(what, got),
+                |what, got| client.next_through(&deadline, what, got),
                 |line| line["payload"].get("result").is_some(),
             )
         },
