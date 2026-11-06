@@ -137,6 +137,7 @@ pub(crate) struct Calls {
 }
 
 /// Test-only workspace crates; additions need a surveyor ruling.
+#[cfg(test)]
 pub(crate) const TEST_ONLY_CRATES: &[&str] = &["support", "fakes", "xtask", "fakes-contract"];
 
 /// The quoted rules that grant each first-party crate's normal dependencies.
