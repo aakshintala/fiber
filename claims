@@ -112,7 +112,6 @@ crates/loop/tests/review_jig.rs	fiber-4236	grant	2026-11-06T10:08:25Z	roundhouse
 crates/loop/tests/reviewer_eval.rs	fiber-4236	grant	2026-11-06T10:08:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4236-ask-user-answers-shown	
 crates/loop/tests/support/review.rs	fiber-4236	grant	2026-11-06T10:08:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4236-ask-user-answers-shown	
 crates/loop/tests/fixtures/review_person_input	fiber-4236	grant	2026-11-06T10:08:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4236-ask-user-answers-shown	
-crates/main/tests/main_journeys.rs	fiber-4293	plan	2026-11-06T10:12:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/fakes/src/http_server/server.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes/src/children_tests.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes/src/client_tests.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
