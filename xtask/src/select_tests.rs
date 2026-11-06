@@ -1,12 +1,16 @@
 use super::*;
 
 pub(super) fn members() -> Members {
-    let member = |dir: &str, deps: &[&str]| Member {
-        dir: dir.to_owned(),
-        version: "0.0.0".to_owned(),
-        deps: deps.iter().map(|d| (*d).to_owned()).collect(),
-        library: true,
-        unrun_tests: Vec::new(),
+    let member = |dir: &str, deps: &[&str]| {
+        let deps: Vec<String> = deps.iter().map(|d| (*d).to_owned()).collect();
+        Member {
+            dir: dir.to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: deps.clone(),
+            normal_deps: deps,
+            library: true,
+            unrun_tests: Vec::new(),
+        }
     };
     BTreeMap::from([
         ("contract".to_owned(), member("crates/contract", &[])),
@@ -282,6 +286,7 @@ fn dependents_follow_a_chain_of_any_length() {
         dir: format!("crates/{dep}-user"),
         version: "0.0.0".to_owned(),
         deps: vec![dep.to_owned()],
+        normal_deps: vec![dep.to_owned()],
         library: true,
         unrun_tests: Vec::new(),
     };
@@ -326,6 +331,138 @@ fn a_file_under_crates_extensions_is_not_a_package_file() {
         &["config", "main"],
     );
     assert_eq!(selection, Selection::Crates(strings(&["extensions"])));
+}
+
+/// `members_with_tools()` where `loop` also depends on `jobs` through a
+/// development edge only, and `tui` normally depends on `loop`: a test-only
+/// `jobs` change reaches `loop` but never `tui`.
+fn members_with_dev_jobs() -> Members {
+    let mut members = members_with_tools();
+    members.insert(
+        "jobs".to_owned(),
+        Member {
+            dir: "crates/jobs".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            normal_deps: Vec::new(),
+            library: true,
+            unrun_tests: Vec::new(),
+        },
+    );
+    if let Some(loop_member) = members.get_mut("loop") {
+        loop_member.deps.push("jobs".to_owned());
+    }
+    if let Some(tui) = members.get_mut("tui") {
+        tui.deps = vec!["loop".to_owned()];
+        tui.normal_deps = vec!["loop".to_owned()];
+    }
+    members
+}
+
+/// Three fixture crates where `b` depends on `a` through a development edge
+/// only and `c` normally depends on `b`: a source change to `a` reaches `b`
+/// but never `c`.
+fn members_with_dev_chain() -> Members {
+    let member = |dir: &str, deps: &[&str], normal: &[&str]| Member {
+        dir: dir.to_owned(),
+        version: "0.0.0".to_owned(),
+        deps: deps.iter().map(|d| (*d).to_owned()).collect(),
+        normal_deps: normal.iter().map(|d| (*d).to_owned()).collect(),
+        library: true,
+        unrun_tests: Vec::new(),
+    };
+    BTreeMap::from([
+        ("a".to_owned(), member("crates/a", &[], &[])),
+        ("b".to_owned(), member("crates/b", &["a"], &[])),
+        ("c".to_owned(), member("crates/c", &["b"], &["b"])),
+    ])
+}
+
+#[test]
+fn a_test_only_change_selects_its_own_crate_without_dependents() {
+    let selection = classify(
+        &strings(&[
+            "crates/log/src/x_tests.rs",
+            "crates/tui/src/app/snapshots/x.snap",
+        ]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log", "tui"])));
+    // A crate holding a test-only file beside a source file still expands.
+    let selection = classify(
+        &strings(&["crates/log/src/x_tests.rs", "crates/log/src/lib.rs"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log", "loop"])));
+    // A near-miss of the `snapshots/` segment is a source change.
+    for path in [
+        "crates/contract/src/snapshot/y.snap",
+        "crates/contract/src/snapshots_old/y.snap",
+    ] {
+        let selection = classify(&strings(&[path]), &members_with_tools());
+        assert_eq!(
+            selection,
+            Selection::Crates(strings(&["config", "contract", "log", "loop"])),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn a_test_only_fixture_change_runs_its_listed_crate_alone() {
+    let selection = classify(
+        &strings(&["crates/picture/tests/fixtures/cmyk.jpg"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["main"])));
+}
+
+#[test]
+fn a_test_only_change_follows_one_dev_hop_and_stops() {
+    let selection = classify(
+        &strings(&["crates/jobs/src/x_tests.rs"]),
+        &members_with_dev_jobs(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["jobs", "loop"])));
+}
+
+#[test]
+fn a_test_only_log_plus_a_config_source_change_skips_loop() {
+    let selection = classify(
+        &strings(&["crates/log/src/x_tests.rs", "crates/config/src/lib.rs"]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["config", "log"])));
+}
+
+#[test]
+fn a_source_change_follows_a_dev_edge_one_hop_only() {
+    let selection = classify(
+        &strings(&["crates/a/src/lib.rs"]),
+        &members_with_dev_chain(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["a", "b"])));
+}
+
+#[test]
+fn a_prototype_file_forces_the_old_path() {
+    let selection = classify(
+        &strings(&[
+            "crates/log/tests/x_tests.rs",
+            "research/tui-prototype/src/main.rs",
+        ]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log", "loop"])));
+}
+
+#[test]
+fn a_test_only_plus_docs_change_narrows() {
+    let selection = classify(
+        &strings(&["crates/log/tests/x_tests.rs", "crates/log/README.md"]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log"])));
 }
 
 #[test]
@@ -603,6 +740,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/tools".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -613,6 +751,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/tui".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -623,6 +762,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/provider".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -633,6 +773,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "xtask".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -643,6 +784,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/picture".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -653,6 +795,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/hub".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -669,6 +812,7 @@ pub(super) fn package_members() -> Members {
             dir: "crates/cli".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },

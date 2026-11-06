@@ -962,11 +962,22 @@ fn members_from(root: &str, packages: &[Value]) -> Members {
     packages
         .iter()
         .map(|package| {
-            let deps = array(package, "dependencies")
-                .iter()
-                .filter_map(|d| by_dir.get(&relative(Path::new(d.get("path")?.as_str()?), root)))
-                .map(|name| (*name).to_owned())
-                .collect();
+            let mut deps = Vec::new();
+            let mut normal_deps = Vec::new();
+            for dependency in array(package, "dependencies") {
+                let Some(path) = dependency.get("path").and_then(Value::as_str) else {
+                    continue;
+                };
+                let Some(name) = by_dir.get(&relative(Path::new(path), root)) else {
+                    continue;
+                };
+                deps.push((*name).to_owned());
+                // The normal-edge subset mirrors `normal_edges`: a missing
+                // or null `kind` is a normal edge, anything else is not.
+                if !dependency.get("kind").is_some_and(|kind| !kind.is_null()) {
+                    normal_deps.push((*name).to_owned());
+                }
+            }
             let library = array(package, "targets")
                 .iter()
                 .any(|t| array(t, "kind").iter().any(|k| k.as_str() == Some("lib")));
@@ -980,6 +991,7 @@ fn members_from(root: &str, packages: &[Value]) -> Members {
                 dir: dir_of(package),
                 version: text(package, "version").to_owned(),
                 deps,
+                normal_deps,
                 library,
                 unrun_tests,
             };

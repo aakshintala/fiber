@@ -10,6 +10,7 @@ fn member(unrun_tests: &[&str]) -> Members {
             dir: "crates/log".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: unrun_tests.iter().map(|path| (*path).to_owned()).collect(),
         },
