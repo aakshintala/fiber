@@ -211,9 +211,6 @@ crates/tui/src/app/items/retry_tests.rs	fiber-4158	plan	2026-11-06T00:18:47Z	Amo
 crates/loop/src/reviewer/shown.rs	fiber-4236	plan	2026-11-06T00:35:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 docs/permissions.md	fiber-4236	plan	2026-11-06T00:35:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/loop/examples/review.rs	fiber-4236	plan	2026-11-06T00:35:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
-docs/tools.md	fiber-3971	plan	2026-11-06T00:38:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
-providers/anthropic/providers/anthropic.json	fiber-3971	plan	2026-11-06T00:38:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
-providers/openai/providers/openai.json	fiber-3971	plan	2026-11-06T00:38:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/tests/keeper_version.rs	fiber-4220	plan	2026-11-06T00:52:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/main/tests/main_journeys.rs	fiber-4226	plan	2026-11-06T01:49:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/terminal.rs	fiber-4226	plan	2026-11-06T01:49:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
