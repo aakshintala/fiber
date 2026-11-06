@@ -304,7 +304,7 @@ fn source_newest_mtime(dir: &std::path::Path) -> std::io::Result<std::time::Syst
 /// keeps the old catalogue and names the extension, as the install's
 /// damaged-directory notices do.
 fn unreadable_provider_extension(home: &std::path::Path) -> Option<String> {
-    let entries = std::fs::read_dir(home.join("extensions")).ok()?;
+    let entries = std::fs::read_dir(config::extensions_dir(home)).ok()?;
     let mut culprits = Vec::new();
     for entry in entries.flatten() {
         let dir = entry.path();
