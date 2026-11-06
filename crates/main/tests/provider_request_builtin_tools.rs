@@ -90,12 +90,7 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match self.deadline.recv(&finished) {
             Ok(output) => output.unwrap(),
-            Err(_) => support::expired(
-                self.deadline,
-                group,
-                &finished,
-                &format!("`fiber ask` to exit"),
-            ),
+            Err(_) => support::expired(self.deadline, group, &finished, "`fiber ask` to exit"),
         };
         assert!(
             !fakes::group_alive(group),
@@ -175,7 +170,7 @@ fn null_unions(value: &Value, path: &mut String, found: &mut Vec<String>) {
                 null_unions(item, &mut item_path, found);
             }
         }
-        _ => {}
+        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {}
     }
 }
 
