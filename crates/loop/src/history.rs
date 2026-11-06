@@ -100,6 +100,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     };
     let mut pass = Pass {
         own_segment: false,
+        continues: false,
         index: 0,
         workspace: None,
         previous_workspace: None,
@@ -166,6 +167,16 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     // persisted store: the fold's running store rides the seed carry, so
     // the resumed loop stages no request twice and answers what is pending.
     resumed.seed.pending_asks = pass.asks.clone();
+    // A continuing chain never adopted a parent opening, so an empty seed
+    // names no log yet: it defaults to the own log, pinned, so the nudge
+    // and the note request name the session's own log from the first
+    // opening on. A plain resume keeps whatever its latest opening left.
+    if pass.continues {
+        if resumed.seed.session_log.is_empty() {
+            resumed.seed.session_log = segments[own].dir.join("events.jsonl").display().to_string();
+        }
+        resumed.seed.session_log_pinned = true;
+    }
     // Every request the own segment left open belongs to an earlier process.
     resumed.exit.carry();
     resumed.orphans = pass.orphans.finish();
@@ -180,6 +191,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
 /// mid-pass. Every field is owned.
 struct Pass {
     own_segment: bool,
+    continues: bool,
     index: usize,
     workspace: Option<String>,
     previous_workspace: Option<String>,
@@ -345,6 +357,12 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             resumed.offers = crate::offer::Folded::default();
         }
         pass.previous_workspace = Some(started.workspace.clone());
+        // A fork or rewind continues its parent's log: its seed defaults
+        // to the own log below, pinned, so the nudge and the note request
+        // name the session's own log.
+        if pass.own_segment && (started.forked_from.is_some() || started.rewind.is_some()) {
+            pass.continues = true;
+        }
         if pass.own_segment && pass.workspace.is_none() {
             pass.workspace = Some(started.workspace.clone());
             resumed.worktree = started.worktree.clone();
@@ -413,9 +431,14 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             resumed.session_blocks += 1;
         }
     } else if let Event::OpeningMessage(message) = &event {
-        pass.running
-            .session_log
-            .clone_from(&message.environment.session_log);
+        // Only the own log's openings seed the running path: a parent
+        // segment's openings belong to the parent's session log, and the
+        // fold end pins a continuing chain to the own log instead.
+        if pass.own_segment {
+            pass.running
+                .session_log
+                .clone_from(&message.environment.session_log);
+        }
     } else if let Event::TurnStarted(_) = &event {
         if let (Some(turn), Some(seq)) = (&line.turn_id, line.seq) {
             let state = Carry {
@@ -513,6 +536,7 @@ pub(crate) fn read_window(
         } else {
             for mut line in segment.lines(from)? {
                 rewrite_images(&mut line, &segment.dir);
+                absolutize_artifact(&mut line, &segment.dir);
                 lines.push(line);
             }
         }
@@ -572,6 +596,31 @@ fn rewrite_parts(parts: &mut [Value], dir: &Path) {
                 make_absolute(page, dir);
             }
         }
+    }
+}
+
+/// Makes a parent segment's tool result `artifact` absolute against that
+/// segment's directory when it is relative: the artifact names a file in
+/// the artifacts directory of the session that wrote it, and the handoff
+/// note resolves it under the session log's directory (`docs/handoff.md`,
+/// "Overflow"). Own lines and absolute paths pass through untouched. In
+/// memory only; nothing is written or copied.
+fn absolutize_artifact(line: &mut Envelope, dir: &Path) {
+    if line.kind() != EventKind::ToolCallCompleted {
+        return;
+    }
+    let artifact = line
+        .payload
+        .get("artifact")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(artifact) = artifact
+        && Path::new(&artifact).is_relative()
+    {
+        line.payload.insert(
+            "artifact".to_owned(),
+            Value::String(dir.join(artifact).display().to_string()),
+        );
     }
 }
 

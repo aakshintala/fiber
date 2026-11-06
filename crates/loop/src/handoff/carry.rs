@@ -35,6 +35,10 @@ pub(crate) struct Carry {
     pub(crate) extension_jobs: HashSet<String>,
     /// The session log's path, from the latest opening message.
     pub(crate) session_log: String,
+    /// Whether the session log's path is an authoritative continuation
+    /// override: a fork or rewind pinned the seed to its own log, so no
+    /// later opening moves it back to the parent's.
+    pub(crate) session_log_pinned: bool,
     /// Whether this context was nudged.
     pub(crate) nudged: bool,
     /// The text parts the actions of a handoff window completed, by action:

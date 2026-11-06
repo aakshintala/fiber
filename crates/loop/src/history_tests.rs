@@ -715,6 +715,105 @@ fn the_window_reader_makes_a_parent_image_absolute_and_keeps_the_owns() {
 }
 
 #[test]
+fn the_window_reader_makes_a_parent_artifact_absolute_and_keeps_the_owns() {
+    // A tool result's `artifact` is relative to the session that wrote
+    // it: the reader makes a parent segment's absolute against that
+    // segment's directory, so the handoff note resolves the originating
+    // file (`docs/handoff.md`, "Overflow"). The own segment's lines pass
+    // through untouched, relative or absolute or absent.
+    let result = |artifact: Option<&str>| {
+        Event::ToolCallCompleted(ToolCallCompleted {
+            status: CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: None,
+            content: Vec::new(),
+            details: None,
+            artifact: artifact.map(str::to_owned),
+            kept: None,
+            changes: None,
+            control: None,
+            changed_by: None,
+            protected_paths: None,
+            provider_item: None,
+            hosts_surfaced: Vec::new(),
+            loaded: None,
+        })
+    };
+    let (_home, sessions) = sessions("artifact-provenance");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(
+                A,
+                1,
+                Some("t_1"),
+                Some("a_1"),
+                &result(Some("artifacts/a_1.txt")),
+            ),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 1)))),
+            envelope(
+                B,
+                1,
+                Some("t_2"),
+                Some("a_2"),
+                &result(Some("artifacts/b_1.txt")),
+            ),
+            envelope(
+                B,
+                2,
+                Some("t_2"),
+                Some("a_3"),
+                &result(Some("/already/absolute.txt")),
+            ),
+            envelope(B, 3, Some("t_2"), Some("a_4"), &result(None)),
+        ],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    let log = Log::open(
+        &sessions,
+        SessionId(B.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = read_window(&log, folded.window, folded.end).unwrap();
+    let mut artifacts = Vec::new();
+    for line in &lines {
+        if line.kind() == EventKind::ToolCallCompleted {
+            artifacts.push(
+                line.payload
+                    .get("artifact")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
+    assert_eq!(
+        artifacts,
+        [
+            json!(
+                sessions
+                    .join(A)
+                    .join("artifacts/a_1.txt")
+                    .display()
+                    .to_string()
+            ),
+            json!("artifacts/b_1.txt"),
+            json!("/already/absolute.txt"),
+            serde_json::Value::Null,
+        ]
+    );
+}
+
+#[test]
 fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
     // A completed handoff in the middle segment puts the window there:
     // the reader holds nothing before it, whatever segment it is on.
@@ -3033,6 +3132,7 @@ fn person_input_turn_snapshot_keeps_staged_request() {
     let mut folded = resumed(&sessions.join(A)).unwrap();
     let mut pass = Pass {
         own_segment: true,
+        continues: false,
         index: 0,
         workspace: None,
         previous_workspace: None,
