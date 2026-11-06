@@ -3847,25 +3847,19 @@ fn effect_after_accept_ignores_other_ids_and_passes_on_its_own() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&accepted)
         .expect("the parked command was accepted");
-    let (entered_tx, entered) = mpsc::channel::<()>();
-    let (done_tx, done) = mpsc::channel::<Vec<Value>>();
-    thread::spawn(move || {
-        entered_tx.send(()).unwrap_or(());
-        let lines = wait_for_effect_after_accept(
-            "the c_1 answer",
-            "c_1",
-            |what, got| client.next(what, got),
-            |line| line["payload"].get("result").is_some(),
-        );
-        done_tx.send(lines).unwrap_or(());
-    });
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&entered)
-        .expect("the waiter entered its wait");
-    release.send(()).unwrap_or(());
-    let lines = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&done)
-        .expect("the wait answers once released");
+    let lines = held_wait_passes_after_release(
+        "the c_1 answer",
+        fakes::MUST_SUCCEED_WITHIN,
+        move |_deadline| {
+            wait_for_effect_after_accept(
+                "the c_1 answer",
+                "c_1",
+                |what, got| client.next(what, got),
+                |line| line["payload"].get("result").is_some(),
+            )
+        },
+        move || release.send(()).unwrap_or(()),
+    );
     assert!(
         lines
             .iter()
