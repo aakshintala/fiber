@@ -148,3 +148,4 @@ crates/doors/src/client/level_tests.rs	contract/4162-kind-private	grant	2026-11-
 crates/loop/src/process.rs	contract/4162-kind-private	grant	2026-11-06T20:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4162-kind-private	
 crates/loop/src/process_tests.rs	contract/4162-kind-private	grant	2026-11-06T20:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4162-kind-private	
 crates/tui/src/approvals.rs	contract/4162-kind-private	grant	2026-11-06T20:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4162-kind-private	
+crates/main/tests/delegates.rs	fiber-4250	plan	2026-11-06T21:11:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4325,4317
