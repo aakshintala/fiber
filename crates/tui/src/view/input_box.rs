@@ -718,12 +718,13 @@ pub(super) fn rows(app: &App, width: u16) -> (Vec<String>, usize, usize, u16) {
     // In shell mode the first draft row's 2-cell prompt reads `! `:
     // the same width as `› `, so the wrap and cursor math below is
     // unchanged. Scrolled past the first row, no prompt shows.
-    if top == 0 && shell_marker(app).is_some() {
-        if let Some(first) = rows.first_mut() {
-            // The draft's own prefix (`Draft::rows`).
-            if let Some(rest) = first.strip_prefix("› ") {
-                *first = format!("! {rest}");
-            }
+    if top == 0
+        && shell_marker(app).is_some()
+        && let Some(first) = rows.first_mut()
+    {
+        // The draft's own prefix (`Draft::rows`).
+        if let Some(rest) = first.strip_prefix("› ") {
+            *first = format!("! {rest}");
         }
     }
     (rows, top, row.saturating_sub(top), col)
