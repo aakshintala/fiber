@@ -3661,9 +3661,9 @@ fn held_wait_outer_bound_is_three_inner_budgets() {
     assert_eq!(OUTER_BUDGET_FACTOR, 3);
 }
 
-/// Runs a held-then-released wait once, for the four
-/// `*_fails_fast_while_held_and_passes_after_release` tests: the waiter
-/// signals `entered`, the test runs `release`, and the released wait's
+/// Runs a held-then-released wait once, for the five tests on the
+/// entered/release skeleton: the waiter signals `entered`, the test runs
+/// `release`, and the released wait's
 /// report arrives first, under `inner * OUTER_BUDGET_FACTOR`, so a stall
 /// fails naming `what`, the waiter's own step, with whether the waiter is
 /// still running. The inner deadline is made before the waiter spawns, so
