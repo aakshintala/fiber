@@ -465,6 +465,98 @@ fn a_test_only_plus_docs_change_narrows() {
     assert_eq!(selection, Selection::Crates(strings(&["log"])));
 }
 
+/// The `## Selection` section of `docs/ci.md`, which the test below pins
+/// against `classify_with` clause by clause: not whole-file bytes, so
+/// unrelated `docs/ci.md` edits never red it.
+fn selection_section() -> String {
+    let doc = include_str!("../../docs/ci.md").to_owned();
+    let heading = "## Selection\n";
+    let start = doc
+        .find(heading)
+        .expect("docs/ci.md has a Selection section");
+    let rest = &doc[start + heading.len()..];
+    let end = rest
+        .find("\n## ")
+        .map(|i| start + heading.len() + i)
+        .unwrap_or(doc.len());
+    // One space per whitespace run, so a promise matches however the doc
+    // wraps its lines.
+    doc[start..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[test]
+fn a_selection_sentence_matches_classify_with() {
+    let section = selection_section();
+    for phrase in [
+        "is not a candidate",
+        "every candidate file in that crate is a test file",
+        "under a `snapshots/` directory",
+        "one hop with no further fan-out",
+        "development-edges propagate one hop and normal edges transitively",
+        "keep their rules above and below",
+    ] {
+        assert!(
+            section.contains(phrase),
+            "the Selection section says: {phrase}"
+        );
+    }
+    // The per-crate partition: the test-only log file narrows while the
+    // source-changed config file expands.
+    let selection = classify(
+        &strings(&["crates/log/src/x_tests.rs", "crates/config/src/lib.rs"]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["config", "log"])));
+    // The three candidate exclusions: docs, listed and package files.
+    let selection = classify(
+        &strings(&["crates/log/tests/x_tests.rs", "crates/log/README.md"]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log"])));
+    let selection = classify(
+        &strings(&["crates/picture/tests/fixtures/cmyk.jpg"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["main"])));
+    let selection = classify_with(
+        &strings(&[
+            "providers/opencode/extension.json",
+            "crates/log/src/x_tests.rs",
+        ]),
+        &members(),
+        COMPILED_IN,
+        &["config"],
+    );
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["config", "log", "main"]))
+    );
+    // The snapshots rule: a tui snapshot is a test-only file of tui.
+    let selection = classify(
+        &strings(&["crates/tui/src/app/snapshots/x.snap"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["tui"])));
+    // The one dev hop: a source change to `a` reaches `b`, never `c`.
+    let selection = classify(
+        &strings(&["crates/a/src/lib.rs"]),
+        &members_with_dev_chain(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["a", "b"])));
+    // The prototype exclusion: the whole diff takes the old path.
+    let selection = classify(
+        &strings(&[
+            "crates/log/tests/x_tests.rs",
+            "research/tui-prototype/src/main.rs",
+        ]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log", "loop"])));
+}
+
 #[test]
 fn a_package_file_plus_a_manifest_runs_everything() {
     let everything: Vec<String> = members().keys().cloned().collect();
