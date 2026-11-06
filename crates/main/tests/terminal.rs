@@ -1528,7 +1528,11 @@ fn journey_quit_resume_answer_again() {
     let mut run = terminal(&setup, 120, 32, &["resume"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
-    run.wait_screen("the session list", |grid| grid.contents.contains("first"));
+    run.wait_screen_reporting(
+        "the session list",
+        |grid| grid.contents.contains("first"),
+        || resume_list_state(&setup),
+    );
     // The drawn list is the terminal's own view, so Enter follows the
     // grid; the attached session's title proves the open before the
     // next prompt goes out.
@@ -2629,6 +2633,29 @@ fn session_model_changed(setup: &support::Setup) -> String {
         }
     }
     format!("session model_changed: {switches:?}")
+}
+
+/// The resume run's list state for a stall report, so a no-row expiry
+/// says whether the row was never written or the feed never reached
+/// it: the session dir entries prove the row's source on disk, and the
+/// hub socket proves the hub bound its socket (it binds before its
+/// feed starts). The hub log says how far the hub got. Reads under
+/// construction are absent, never failures: a missing dir or log reads
+/// as empty.
+fn resume_list_state(setup: &support::Setup) -> String {
+    let mut entries: Vec<String> = fs::read_dir(sessions(setup))
+        .map(|dirs| {
+            dirs.filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    format!(
+        "hub socket present: {}; sessions: {entries:?}; hub log:\n{}",
+        setup.hub_socket().exists(),
+        setup.hub_log(),
+    )
 }
 
 /// The Session card keeps the old chips through the send: some row still
