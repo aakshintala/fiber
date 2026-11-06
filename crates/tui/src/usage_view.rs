@@ -68,7 +68,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
         rows.push(row("No model calls yet.", Ink::Muted));
         budget_row(&mut rows, budget, 0.0);
     } else {
-        let session = log::usage(calls.iter().copied());
+        let session = diag::usage(calls.iter().copied());
         rows.push(row("By turn", Ink::Heading));
         let known_turns: BTreeSet<TurnId> = fold.turns.iter().cloned().collect();
         let mut turns: BTreeMap<TurnId, Vec<&UsageRecorded>> = BTreeMap::new();
@@ -84,11 +84,11 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
                 continue;
             };
             let title = format!("turn {}", number.saturating_add(1));
-            let usage = log::usage(group.iter().copied());
+            let usage = diag::usage(group.iter().copied());
             append_entry(&mut rows, &title, &usage);
         }
         if !outside.is_empty() {
-            let usage = log::usage(outside.iter().copied());
+            let usage = diag::usage(outside.iter().copied());
             append_entry(&mut rows, "outside a turn", &usage);
         }
 
@@ -98,7 +98,7 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
             models.entry(&line.model).or_default().push(line);
         }
         for (model, group) in models {
-            let usage = log::usage(group.iter().copied());
+            let usage = diag::usage(group.iter().copied());
             append_entry(&mut rows, model, &usage);
         }
 
@@ -112,18 +112,18 @@ pub(crate) fn frame(fold: &UsageFold, budget: Option<f64>, list: List) -> Frame 
             }
         }
         if !this_session.is_empty() {
-            let usage = log::usage(this_session.iter().copied());
+            let usage = diag::usage(this_session.iter().copied());
             append_entry(&mut rows, "this session", &usage);
         }
         for (session, label) in &fold.delegates {
             if let Some(group) = delegates.remove(session) {
-                let usage = log::usage(group.iter().copied());
+                let usage = diag::usage(group.iter().copied());
                 append_entry(&mut rows, label, &usage);
             }
         }
         for (session, group) in delegates {
             let label = format!("session {}", session.0);
-            let usage = log::usage(group.iter().copied());
+            let usage = diag::usage(group.iter().copied());
             append_entry(&mut rows, &label, &usage);
         }
         budget_row(&mut rows, budget, session.cost.unwrap_or(0.0));

@@ -75,8 +75,8 @@ pub fn run(
     connect: Connect,
     on_attach: OnAttach,
     clock: Arc<dyn Clock>,
-    diag: Arc<log::diag::Diag>,
-    startup: Option<log::diag::Timer>,
+    diag: Arc<diag::diag::Diag>,
+    startup: Option<diag::diag::Timer>,
 ) -> Result<i32, Error> {
     run_with(
         tty,
@@ -110,8 +110,8 @@ pub(crate) fn run_with(
         std::thread::Builder,
         Box<dyn FnOnce() + Send + 'static>,
     ) -> std::io::Result<std::thread::JoinHandle<()>>,
-    diag: Arc<log::diag::Diag>,
-    startup: Option<log::diag::Timer>,
+    diag: Arc<diag::diag::Diag>,
+    startup: Option<diag::diag::Timer>,
 ) -> Result<i32, Error> {
     // The startup guard drops first: its line covers guard construction
     // through this entry, before any first-render or attach span opens.
@@ -491,10 +491,10 @@ struct Loop<B: Backend> {
     timing: crate::timing::Timing,
     /// The first draw with attached-session history, carried from
     /// `run_with`; discarded if the loop ends before that draw.
-    attached_frame: Option<log::diag::Timer>,
+    attached_frame: Option<diag::diag::Timer>,
     /// The opening summary subscribe's guard, while the open holds that
     /// stage: dropped once the open leaves it, writing one line.
-    summary_span: Option<log::diag::Timer>,
+    summary_span: Option<diag::diag::Timer>,
     /// Where workers post their results.
     files_out: Sender<Input>,
     /// The `@` panel's search worker, while the panel is open.
