@@ -1352,7 +1352,7 @@ fn gemini_endpoint(server: &ProviderServer) -> Endpoint {
     let data = json!({"gemini": true});
     Endpoint {
         compat: Compat::from_data(data.as_object().unwrap()),
-        ..endpoint(&server)
+        ..endpoint(server)
     }
 }
 

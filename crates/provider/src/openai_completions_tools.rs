@@ -86,7 +86,7 @@ fn rewrite_nullable_types(schema: &mut Value) {
                 rewrite_nullable_types(item);
             }
         }
-        _ => {}
+        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {}
     }
 }
 
