@@ -299,38 +299,68 @@ fn source_newest_mtime(dir: &std::path::Path) -> std::io::Result<std::time::Syst
     Ok(newest)
 }
 
-/// The installed extension whose provider data cannot be read, if one
-/// of Fiber home's installed extensions is the culprit: the reload
-/// keeps the old catalogue and names the extension, as the install's
-/// damaged-directory notices do.
-fn unreadable_provider_extension(home: &std::path::Path) -> Option<String> {
-    let entries = std::fs::read_dir(config::extensions_dir(home)).ok()?;
-    let mut culprits = Vec::new();
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        if config::read_providers(&dir).is_err() {
-            culprits.push(
-                installed_extension_name(&dir)
-                    .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned()),
-            );
-        }
-    }
-    culprits.sort();
-    culprits.into_iter().next()
+/// The installed extension whose provider data cannot be read, from
+/// the load failure itself: the `ConfigError`'s file lives under that
+/// extension's directory, whose manifest names it, as the install's
+/// damaged-directory notices do. A failure outside any extension (a
+/// cache or config file) names none. Either way the reload keeps the
+/// old catalogue.
+fn unreadable_provider_extension(error: &extensions::Error) -> Option<String> {
+    let dir = extension_dir_for(&config_error_file(error)?)?;
+    config::read_manifest(&dir)
+        .ok()
+        .map(|manifest| manifest.name)
+        .or_else(|| {
+            dir.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
 }
 
-/// The name the installed extension at `dir` declares, if its manifest
-/// still reads.
-fn installed_extension_name(dir: &std::path::Path) -> Option<String> {
-    let manifest = std::fs::read_to_string(dir.join("extension.json")).ok()?;
-    serde_json::from_str::<serde_json::Value>(&manifest)
-        .ok()?
-        .get("name")?
-        .as_str()
-        .map(str::to_owned)
+/// The file a provider-load failure names, when it names a file: the
+/// `ConfigError`'s file, or its `source_name` when that is a path. A
+/// command-line, cache-name or config key names no file.
+fn config_error_file(error: &extensions::Error) -> Option<std::path::PathBuf> {
+    let extensions::Error::Config(error) = error else {
+        return None;
+    };
+    match error {
+        config::ConfigError::Json { file, .. }
+        | config::ConfigError::Shape { file, .. }
+        | config::ConfigError::Io { file, .. }
+        | config::ConfigError::Unsynced { file, .. }
+        | config::ConfigError::NotPlain { file, .. }
+        | config::ConfigError::Refused { file, .. } => Some(file.clone()),
+        config::ConfigError::WrongType { source_name, .. }
+        | config::ConfigError::DuplicateExtension { source_name, .. } => {
+            // A manifest or provider shape error carries its file as
+            // the source; the manifest's compatibility case appends
+            // " (<name>)", which the ancestor search below still
+            // climbs past. A relative source (`-c`, a cache name) is
+            // never a file the load read.
+            let path = std::path::PathBuf::from(source_name);
+            if path.is_absolute() && extension_dir_for(&path).is_some() {
+                Some(path)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The extension directory holding `file`: the file's directory when
+/// it holds the manifest, else the nearest ancestor that does. A
+/// cache, config or credential file sits under none.
+fn extension_dir_for(file: &std::path::Path) -> Option<std::path::PathBuf> {
+    let start: std::path::PathBuf = if file.is_dir() {
+        file.to_path_buf()
+    } else {
+        file.parent()?.to_path_buf()
+    };
+    start
+        .ancestors()
+        .find(|dir| dir.join("extension.json").is_file())
+        .map(|dir| dir.to_path_buf())
 }
 
 /// The late preparation skips the sync: no grouping, records,
@@ -499,7 +529,7 @@ impl State {
                     vec![contract::events::Notice {
                         code: contract::ErrorCode::ExtensionFailed,
                         message: error.to_string(),
-                        extension: unreadable_provider_extension(&self.sources.home),
+                        extension: unreadable_provider_extension(&error),
                     }],
                 );
             }

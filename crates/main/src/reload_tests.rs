@@ -706,6 +706,130 @@ fn provider_reload_failure_keeps_the_old_catalogue() {
     );
 }
 
+/// Installs the fake extension's manifest (and an empty provider file)
+/// without touching its data: the mapping tests below build their
+/// errors, so only the manifest must read.
+fn unreadable_rig() -> Rig {
+    let rig = Rig::new("fiber-reload-unreadable");
+    crate::test_support::install_extension(
+        &rig.home,
+        "extensions/fake",
+        json!({"name":"fake","version":"v0.0.0","fiber":"0.0.0","api":1}),
+        &[(
+            "fake",
+            json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"}, "models": []}),
+        )],
+    );
+    rig
+}
+
+#[test]
+fn unreadable_provider_reports_the_manifest_name_for_a_provider_file_error() {
+    let rig = unreadable_rig();
+    let file = rig.home.join("extensions/fake/providers/fake.json");
+    let error = extensions::Error::Config(config::ConfigError::Json {
+        file,
+        line: 1,
+        column: 2,
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&error),
+        Some("fake".to_owned())
+    );
+}
+
+#[test]
+fn unreadable_provider_reports_the_manifest_name_for_a_manifest_or_dir_error() {
+    let rig = unreadable_rig();
+    let manifest = extensions::Error::Config(config::ConfigError::Shape {
+        file: rig.home.join("extensions/fake/extension.json"),
+        line: 1,
+        column: 2,
+        expected: "an extension's manifest",
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&manifest),
+        Some("fake".to_owned())
+    );
+    // A directory error starts the ancestor search at itself.
+    let dir = extensions::Error::Config(config::ConfigError::Io {
+        file: rig.home.join("extensions/fake/providers"),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&dir),
+        Some("fake".to_owned())
+    );
+}
+
+#[test]
+fn unreadable_provider_reads_the_source_name_when_it_is_a_path() {
+    let rig = unreadable_rig();
+    let file = rig.home.join("extensions/fake/providers/fake.json");
+    let shaped = extensions::Error::Config(config::ConfigError::WrongType {
+        source_name: file.display().to_string(),
+        key: "name".to_owned(),
+        expected: "the file's own name, without `.json`".to_owned(),
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&shaped),
+        Some("fake".to_owned())
+    );
+    // The manifest's compatibility case appends " (<name>)": the
+    // ancestor search still climbs past it to the manifest.
+    let compat = extensions::Error::Config(config::ConfigError::WrongType {
+        source_name: format!(
+            "{} (fake)",
+            rig.home.join("extensions/fake/extension.json").display()
+        ),
+        key: "tui.session_versions".to_owned(),
+        expected: "an object with a string min and an optional string before".to_owned(),
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&compat),
+        Some("fake".to_owned())
+    );
+    // A relative source (`-c`) is never a file the load read.
+    let relative = extensions::Error::Config(config::ConfigError::WrongType {
+        source_name: "-c".to_owned(),
+        key: "providers".to_owned(),
+        expected: "names that are each one file name in providers/".to_owned(),
+    });
+    assert_eq!(super::unreadable_provider_extension(&relative), None);
+}
+
+#[test]
+fn unreadable_provider_names_the_directory_when_the_manifest_does_not_read() {
+    let rig = unreadable_rig();
+    std::fs::write(rig.home.join("extensions/fake/extension.json"), "{").unwrap();
+    let file = rig.home.join("extensions/fake/providers/fake.json");
+    let error = extensions::Error::Config(config::ConfigError::Json {
+        file,
+        line: 1,
+        column: 2,
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&error),
+        Some("fake".to_owned())
+    );
+}
+
+#[test]
+fn unreadable_provider_names_none_outside_any_extension() {
+    let rig = unreadable_rig();
+    // A cache file sits under no extension directory.
+    let cache = extensions::Error::Config(config::ConfigError::Io {
+        file: rig.home.join("cache/models/fake.json"),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
+    });
+    assert_eq!(super::unreadable_provider_extension(&cache), None);
+    // A non-config failure names no file at all.
+    assert_eq!(
+        super::unreadable_provider_extension(&extensions::Error::Busy),
+        None
+    );
+}
+
 #[test]
 fn provider_reload_refreshes_an_old_cached_list() {
     let mut fixture = Fixture::new();
