@@ -1874,6 +1874,16 @@ its tools are deferred, change only when the preamble is built.
 - Probed 2026-11-03 on `https://api.openai.com/v1`: `openai/gpt-5.4` pass, spend unknown; `openai/gpt-5.4-mini` pass, spend unknown; `openai/gpt-5.4-nano` fail (load: HTTP 400: Tool 'tool_search' is not supported with gpt-5.4-nano.), spend unknown; `openai/gpt-5.4-pro` fail (cache: cache read 0 of 4354 input tokens), spend unknown; `openai/gpt-5.5` pass, spend unknown; `openai/gpt-5.5-pro` fail (cache: cache read 0 of 4598 input tokens), spend unknown; `openai/gpt-5.6-luna` pass, spend unknown; `openai/gpt-5.6-sol` pass, spend unknown; `openai/gpt-5.6-terra` pass, spend unknown; `openai/gpt-6-astra` inconclusive (the model did not call the loaded tool), spend unknown; `openai/gpt-6-luna` pass, spend unknown; `openai/gpt-6-sol` pass, spend unknown; `openai/gpt-6.1-sol` inconclusive (the model did not call the loaded tool)., spend unknown
 - Probed 2026-11-03 on `https://api.openai.com/v1` (repeat): `openai/gpt-6-astra` inconclusive (the model did not call the loaded tool), spend unknown; `openai/gpt-6.1-sol` inconclusive (the model did not call the loaded tool), spend unknown.
 - Total spend for the 2026-11-03 probe runs: unknown.
+- Probed 2026-11-04 on the Databricks AI gateway (`/ai-gateway/anthropic/v1`): `databricks/databricks-claude-opus-5-5` pass, spend 19470 input and 153 output tokens. The run printed:
+  ```
+  probe: anthropic-messages databricks-claude-opus-5-5
+  load: pass (searched, loaded probe_calendar_create, then called it)
+  cache: pass (cache read 6329 of 6524 input tokens)
+  probe: pass
+  spend: 19470 input, 153 output tokens
+  ```
+- The other Databricks Claude rows are set from their `providers/anthropic` counterparts rather than probed: a row carries `deferred_tools` when its model's Anthropic row does, and stays unset when that row is unset or inconclusive (`databricks-claude-opus-5`); `databricks-claude-opus-5-5` is set either way, because the 2026-11-04 run probed it directly.
+- Gateway pass-through was proved on `databricks-claude-opus-5-5` alone and is assumed uniform across the Databricks Claude rows, which are set from their `providers/anthropic` counterparts rather than probed.
 - Anthropic and OpenAI Responses (gpt-5.4 and later) both defer natively.
   `openai-completions` and `google-generative-ai` do not.
 - On a model without deferral, every tool is declared in full and
