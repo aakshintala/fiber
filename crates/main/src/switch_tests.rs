@@ -1391,15 +1391,16 @@ fn a_bare_id_shared_with_a_logged_out_provider_resolves() {
     assert_eq!(made.model.reference, "other/m");
 }
 
-/// A bare id only a logged-out provider names rejects naming its holder
-/// as not logged in, with the login command: `filed`'s key file is
-/// absent, so bare `fm` is its missing credential.
+/// A bare id only a logged-out provider names rejects with the
+/// credential's own code, naming its holder as not logged in, with the
+/// login command: `filed`'s key file is absent, so bare `fm` is its
+/// missing credential.
 #[test]
-fn a_bare_id_only_a_logged_out_provider_names_is_invalid_arguments() {
+fn a_bare_id_only_a_logged_out_provider_names_is_credential_missing() {
     let fixture = fixture("fiber-switch-logged-out-bare");
     let switching = switching(&fixture, &[]);
     let rejection = rejected(&switching, &args("fm"), None);
-    assert_eq!(rejection.code, ErrorCode::InvalidArguments);
+    assert_eq!(rejection.code, ErrorCode::CredentialMissing);
     assert_eq!(
         rejection.message,
         "No credential for `filed`: `filed` has `fm` but is not logged in. \

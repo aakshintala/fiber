@@ -97,8 +97,8 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   provider is marked ` (unavailable)`. Naming that role or the provider's
   model in a delegate call fails before any process starts.
 - The switched-on rule is the session's (`docs/model-routing.md`, "Naming
-  a model"): only switched-on providers count, whether the model comes
-  from a role or a full reference.
+  a model"): only switched-on providers count when a bare id resolves; a
+  full `provider/model` reference resolves installed-wide.
 - A role is a name for a model reference, for example `deep` for
   `claude:opus:high`. A role may also name a credential label, so one
   project's delegates can run on different subscriptions of one provider

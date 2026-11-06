@@ -345,8 +345,8 @@ fn a_bare_id_only_a_logged_out_holder_names_is_credential_missing() {
 
 #[test]
 fn a_bare_id_with_no_switched_on_holder_names_every_logged_out_holder() {
-    // Neither holder is switched on: one error names both, sorted, each
-    // with its login command.
+    // Neither holder is switched on: one error names both, sorted, with
+    // the single login command the missing-credential display appends.
     let providers = registry(&[("pb", vec![model("m")]), ("pa", vec![model("m")])]);
     let (_root, config) = credentialed(&[]);
     let error = providers.resolve_named(&[], &config, "m").unwrap_err();
@@ -356,8 +356,8 @@ fn a_bare_id_with_no_switched_on_holder_names_every_logged_out_holder() {
     ));
     assert_eq!(
         error.to_string(),
-        "No credential for `pa`: `pa`, `pb` have `m` but are not logged in; \
-         run `fiber login pa`, `fiber login pb`. Run `fiber login pa`."
+        "No credential for `pa`: `pa`, `pb` have `m` but are not logged in. \
+         Run `fiber login pa`."
     );
 }
 

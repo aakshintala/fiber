@@ -75,57 +75,50 @@ impl Providers {
         {
             return prepared;
         }
-        let matches = named(naming, rest);
-        match self.resolve(typed) {
+        // One candidate list for both outcomes: the naming-list matches,
+        // plus the resolved reference when the registry resolves (a
+        // logged-out holder counts for nothing below, but names the
+        // missing credential), plus the registry's ambiguity matches when
+        // resolution reports one. The empty-holder fallback keeps the
+        // original resolution result, which is the failed one: a resolved
+        // holder is always counted or logged out, so it never falls
+        // through.
+        let mut candidates = named(naming, rest);
+        let resolved = self.resolve(typed);
+        match &resolved {
             Ok(model) => {
-                let mut counted = switched_only(&matches, &on);
                 let reference = model.reference();
-                if on.contains(owner(&reference)) && !counted.contains(&reference) {
-                    counted.push(reference.clone());
-                }
-                match counted.as_slice() {
-                    // The one installed holder is logged out: name it
-                    // instead of resolving.
-                    [] => Err(missing_credential(
-                        rest,
-                        &logged_out_holders(&matches, Some(&reference), self, &on),
-                    )),
-                    [single] => self.resolve(single).map(|mut made| {
-                        made.thinking = thinking;
-                        made
-                    }),
-                    [..] => Err(ambiguous(rest, &mut counted)),
+                if !candidates.contains(&reference) {
+                    candidates.push(reference);
                 }
             }
-            Err(error) => {
-                let mut matches = matches;
-                if let crate::Error::Ambiguous {
-                    matches: theirs, ..
-                } = &error
-                {
-                    for reference in theirs {
-                        if !matches.contains(reference) {
-                            matches.push(reference.clone());
-                        }
+            Err(crate::Error::Ambiguous {
+                matches: theirs, ..
+            }) => {
+                for reference in theirs {
+                    if !candidates.contains(reference) {
+                        candidates.push(reference.clone());
                     }
-                }
-                let mut counted = switched_only(&matches, &on);
-                match counted.as_slice() {
-                    [] => {
-                        let holders = logged_out_holders(&matches, None, self, &on);
-                        if holders.is_empty() {
-                            Err(error)
-                        } else {
-                            Err(missing_credential(rest, &holders))
-                        }
-                    }
-                    [single] => self.resolve(single).map(|mut made| {
-                        made.thinking = thinking;
-                        made
-                    }),
-                    [..] => Err(ambiguous(rest, &mut counted)),
                 }
             }
+            Err(_) => {}
+        }
+        let mut counted = switched_only(&candidates, &on);
+        match counted.as_slice() {
+            // The installed holders are all logged out: name them
+            // instead of resolving.
+            [] => {
+                let holders = logged_out_holders(&candidates, None, self, &on);
+                if holders.is_empty() {
+                    return resolved;
+                }
+                Err(missing_credential(rest, &holders))
+            }
+            [single] => self.resolve(single).map(|mut made| {
+                made.thinking = thinking;
+                made
+            }),
+            [..] => Err(ambiguous(rest, &mut counted)),
         }
     }
 
@@ -171,12 +164,10 @@ fn logged_out_holders(
     registry: &Providers,
     on: &BTreeSet<String>,
 ) -> Vec<String> {
-    let mut candidates: Vec<&str> = matches.iter().map(String::as_str).collect();
-    if let Some(reference) = extra {
-        candidates.push(reference);
-    }
-    let mut holders: Vec<String> = candidates
-        .into_iter()
+    let mut holders: Vec<String> = matches
+        .iter()
+        .map(String::as_str)
+        .chain(extra)
         .filter(|reference| {
             registry.get(owner(reference)).is_some() && !on.contains(owner(reference))
         })
@@ -200,6 +191,9 @@ fn missing_credential(id: &str, holders: &[String]) -> crate::Error {
     owners.sort();
     owners.dedup();
     let provider = owners[0].to_owned();
+    // One login instruction lives in `ConfigError::CredentialMissing`'s
+    // display (`Run fiber login {provider}`), so `why` names every holder
+    // without adding a second one.
     let why = if owners.len() == 1 {
         format!("`{}` has `{id}` but is not logged in", owners[0])
     } else {
@@ -208,12 +202,7 @@ fn missing_credential(id: &str, holders: &[String]) -> crate::Error {
             .map(|name| format!("`{name}`"))
             .collect::<Vec<_>>()
             .join(", ");
-        let logins = owners
-            .iter()
-            .map(|name| format!("`fiber login {name}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("{names} have `{id}` but are not logged in; run {logins}")
+        format!("{names} have `{id}` but are not logged in")
     };
     crate::Error::Config(config::ConfigError::CredentialMissing { provider, why })
 }
