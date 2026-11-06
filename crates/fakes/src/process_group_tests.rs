@@ -760,7 +760,7 @@ fn stalled_pgrep_child() {
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
         crate::wait_until(
             "the stalled listing to name its stall",
-            Deadline::after(Duration::from_secs(2)),
+            Deadline::after(MUST_SUCCEED_WITHIN),
             move || match matching(&listed, bound) {
                 Ok(pids) => pids.contains(&pid),
                 Err(error) => panic!("reading the stalled pgrep listing: {error}"),
