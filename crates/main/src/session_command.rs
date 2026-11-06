@@ -937,7 +937,10 @@ pub(crate) fn assemble_session(
             // drops the ones it would repeat and keeps the new ones.
             let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
             let providers = reload.mcp_providers(&server_failures);
-            let ((reloader, late), sandbox_apply) = reload.preparers_with_sandbox(written);
+            let sandbox = reload.sandbox.clone();
+            let workspace = reload.sources.workspace.clone();
+            let ((reloader, late), latch) = reload.preparers_with_latch(written);
+            let sandbox_apply = crate::settings::sandbox_toggle(&sandbox, &workspace, latch);
             session.mcp_servers(providers.refresh);
             session.mcp_login(providers.login);
             session.personal_source_check(crate::prompt_files::personal_source_check(
@@ -1449,7 +1452,10 @@ pub(crate) fn assemble_session(
             // drops the ones it would repeat and keeps the new ones.
             let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
             let providers = reload.mcp_providers(&server_failures);
-            let ((reloader, late), sandbox_apply) = reload.preparers_with_sandbox(written);
+            let sandbox = reload.sandbox.clone();
+            let workspace = reload.sources.workspace.clone();
+            let ((reloader, late), latch) = reload.preparers_with_latch(written);
+            let sandbox_apply = crate::settings::sandbox_toggle(&sandbox, &workspace, latch);
             session.mcp_servers(providers.refresh);
             session.mcp_login(providers.login);
             session.personal_source_check(crate::prompt_files::personal_source_check(
