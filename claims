@@ -163,3 +163,5 @@ xtask/src/select/compiled_in.rs	fiber-4275	plan	2026-11-06T13:52:33Z	Amoghs-MacB
 xtask/src/select_tests.rs	fiber-4275	plan	2026-11-06T13:52:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/main_tests.rs	fiber-4275	plan	2026-11-06T13:52:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/compiled_in_tests.rs	fiber-4275	plan	2026-11-06T13:52:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/stress_tests.rs	fiber-4275	plan	2026-11-06T14:45:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/test_index_tests.rs	fiber-4275	plan	2026-11-06T14:45:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
