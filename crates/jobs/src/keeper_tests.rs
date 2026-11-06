@@ -230,6 +230,32 @@ fn bound_twice_stops_again_but_writes_once() {
 }
 
 #[test]
+fn exit_before_adopt_still_writes_the_normal_completion() {
+    // A fast call can reap before the session's Adopt line reaches the
+    // control thread. The exit must survive until the adopt binds the job,
+    // so the crash takeover still writes the one normal ending.
+    let mut sup = Supervisor::new();
+    sup.started("quick".into());
+    assert!(sup.exited("quick", end()).is_empty());
+    assert!(sup.adopt("quick", JobId("j_quick".into())));
+    // docs/tools.md, "The keeper": a job_completed for each job that ends,
+    // and the keeper exits once its last job ends.
+    assert_eq!(
+        sup.lifeline_eof(),
+        vec![
+            Step::HoldLog,
+            Step::WriteJobCompleted {
+                id: "quick".into(),
+                job_id: JobId("j_quick".into()),
+                exit: end(),
+                unless_logged: true,
+            },
+            Step::Exit,
+        ]
+    );
+}
+
+#[test]
 fn bound_outside_holding_marks_nothing() {
     // Live: the session is still there, so the bound cannot fire.
     let mut live = mixed();
