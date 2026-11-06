@@ -9,15 +9,14 @@
 //! panic hook: one crash report under `crashes/` in Fiber home before the
 //! process aborts.
 
-#[cfg(any(test, feature = "alloc-stats"))]
-pub mod alloc_stats;
-#[cfg(test)]
-mod alloc_stats_tests;
+// The `diag` module re-exported below shadows the `diag` crate in later
+// `use` paths, so the re-exports name the crate through this alias.
+extern crate diag as diag_crate;
+
 mod artifact;
 pub mod crash;
 mod delete;
 mod dependents;
-pub mod diag;
 mod escalations;
 mod export;
 #[cfg(test)]
@@ -26,13 +25,11 @@ mod history;
 mod media;
 mod name;
 mod offsets;
-mod rate;
 mod read;
 mod resolve;
 mod scan;
 mod search;
 mod state_fold;
-mod usage;
 mod weak_emit;
 mod write;
 
@@ -49,13 +46,17 @@ use contract::{ErrorCode, SessionId};
 pub use artifact::{OutputRead, Refusal, Unreadable, check_artifact_path, open_artifact};
 pub use delete::{delete_session, is_plain_dir};
 pub use dependents::{Children, dependents};
+#[cfg(feature = "alloc-stats")]
+pub use diag_crate::alloc_stats;
+pub use diag_crate::diag;
+pub use diag_crate::usage;
+pub use diag_crate::{Rate, RateFold};
 pub use escalations::{AllowedEscalation, ShellCall, allowed_escalations, reviewer_shell_calls};
 pub use export::export;
 pub use history::{Segment, history, history_to, last_line, last_seq};
 pub use media::read_media;
 pub use name::session_name;
 pub use name::session_parent;
-pub use rate::{Rate, RateFold};
 pub use read::{
     Injector, Lines, Scan, Watcher, complete_len_of, find_logged_session, find_session, kind_of,
     last_kind, lines, lines_from, read, tail_lines,
@@ -68,7 +69,6 @@ pub use scan::{
 };
 pub use search::{Identity, SessionScan};
 pub use state_fold::{Fold, Ruled, StateSeed, fold, fold_boundary, fold_from, seed};
-pub use usage::usage;
 pub use weak_emit::WeakEmit;
 pub use write::lock_label;
 pub use write::{Log, Subscription, cut_joined, cut_notice};

@@ -4,13 +4,15 @@ use std::thread;
 use std::time::Duration;
 
 use super::*;
-use contract::ErrorCode;
 use contract::events::{
-    Clients, Empty, Event, EventKind, ExtensionsLoaded, FiberStarted, LoadedExtension, Notice,
-    SessionState, SessionStatus, TextDelta,
+    CacheLifetime, Clients, Empty, Event, EventKind, ExtensionsLoaded, FiberStarted,
+    LoadedExtension, Notice, PreambleBuilt, PreambleReason, SentTool, SessionState, SessionStatus,
+    TextDelta, UsageRecorded,
 };
 use contract::shapes::{Tokens, Usage};
+use contract::{ErrorCode, GenerationId};
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
+use serde_json::Value;
 const DEADLINE: Duration = Duration::from_secs(10);
 
 fn check_holder(work: impl FnOnce() + Send + 'static) {
@@ -1609,4 +1611,90 @@ fn a_failed_moved_sync_keeps_its_line_without_truncation() {
     .unwrap();
     assert_eq!(crate::read(&dir).unwrap().len(), 1);
     after_sync(|| None);
+}
+
+fn sent(definition: Value) -> SentTool {
+    SentTool {
+        name: "read".into(),
+        registered_by: "builtin".into(),
+        deferred: false,
+        definition: serde_json::from_value(definition).unwrap(),
+    }
+}
+
+fn built(reason: PreambleReason, system_prompt: &str) -> PreambleBuilt {
+    PreambleBuilt {
+        reason,
+        model: "m".into(),
+        context_window: 7,
+        trigger_at: None,
+        budget: None,
+        thinking: None,
+        tool_choice: "pick".into(),
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        credential: None,
+        system_prompt: system_prompt.into(),
+        tools: vec![sent(json!({"type": "object"}))],
+        replaced: Vec::new(),
+    }
+}
+
+fn recorded(generation: &str) -> UsageRecorded {
+    UsageRecorded {
+        generation_id: GenerationId(generation.into()),
+        model: "m".into(),
+        tokens: Tokens {
+            input: 10,
+            cache_read: 0,
+            cache_write: [("5m".to_owned(), 90)].into_iter().collect(),
+            output: 3,
+        },
+        web_searches: None,
+        cost: None,
+        subscription: None,
+        extension: None,
+        origin_session_id: None,
+        reviewer: None,
+        warming: None,
+        input_bytes: 105,
+        input_media: None,
+    }
+}
+
+#[test]
+fn open_replays_the_rate_and_appends_leave_it() {
+    let sessions = fakes::TempDir::new("log-unit-rate");
+    let id = SessionId("s_1".into());
+    let log = Log::create(sessions.path(), id.clone(), fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(log.replayed_rate().rate().tokens(12), None);
+    log.append(
+        &Event::PreambleBuilt(built(PreambleReason::Start, "hi")),
+        None,
+        None,
+    )
+    .unwrap();
+    log.append(
+        &Event::AssistantMessageStarted(Empty {}),
+        None,
+        Some(ActionId("a_1".into())),
+    )
+    .unwrap();
+    log.append(
+        &Event::UsageRecorded(recorded("g_1")),
+        None,
+        Some(ActionId("a_1".into())),
+    )
+    .unwrap();
+    assert_eq!(log.replayed_rate().rate().tokens(12), None);
+    drop(log);
+    let opened = Log::open(sessions.path(), id, fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(opened.replayed_rate().rate().tokens(12), Some(11));
+    opened
+        .append(
+            &Event::PreambleBuilt(built(PreambleReason::Reload, "hi")),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(opened.replayed_rate().rate().tokens(12), Some(11));
 }

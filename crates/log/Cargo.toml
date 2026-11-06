@@ -6,10 +6,11 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-alloc-stats = []
+alloc-stats = ["diag/alloc-stats"]
 
 [dependencies]
 contract = { path = "../contract" }
+diag = { path = "../diag" }
 grep-matcher.workspace = true
 grep-regex.workspace = true
 grep-searcher.workspace = true
