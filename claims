@@ -88,8 +88,6 @@ crates/main/tests/shell_look.rs	fiber-4176	grant	2026-11-05T22:03:02Z	roundhouse
 crates/main/src/keeper_child_tests.rs	fiber-3891	plan	2026-11-05T22:22:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3891-keeper-timeout	4213
 crates/jobs/src/keeper_tests.rs	fiber-3891	plan	2026-11-05T22:22:48Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3891-keeper-timeout	4213
 crates/main/src/keeper_child.rs	fiber-3891	plan	2026-11-05T22:22:48Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3891-keeper-timeout	4213
-docs/performance.md	fiber-3895	plan	2026-11-06T00:09:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	4209
-xtask/src/bench/judge.rs	fiber-3895	plan	2026-11-06T00:09:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	4209
 crates/tui/src/app/answer_tests.rs	fiber-4158	plan	2026-11-06T00:09:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/tui/src/app/attention_tests.rs	fiber-4158	plan	2026-11-06T00:09:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/tui/src/app/call_view_tests.rs	fiber-4158	plan	2026-11-06T00:09:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
