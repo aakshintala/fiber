@@ -31,7 +31,7 @@ use r#loop::{
 use serde_json::{Value, json};
 use support::{
     DEADLINE, MODEL, Session, StartHooks, TestTool, calls_reply, delivery, kinds, paris,
-    start_added,
+    start_added, with_tokens,
 };
 
 const FORK: &str = "s_fork";
@@ -866,4 +866,77 @@ fn a_fork_after_a_reload_sends_the_reloaded_tools_and_runs_one() {
             .unwrap();
         assert_eq!(completion.payload["status"], "completed");
     }
+}
+
+/// The text every rendered input carries, joined: model-visible words
+/// without the request scaffolding around them.
+fn texts(conversation: &[Input]) -> String {
+    let mut out = String::new();
+    for input in conversation {
+        match input {
+            Input::User { text, .. }
+            | Input::Assistant { text, .. }
+            | Input::Reasoning { text, .. }
+            | Input::ToolResult { text, .. } => {
+                out.push_str(text);
+                out.push('\n');
+            }
+            Input::ToolCall { .. } | Input::ToolSearchResult { .. } => {}
+        }
+    }
+    out
+}
+
+/// A fork past the nudge threshold names its own log in the nudge and in
+/// the handoff note request, not its parent's (`docs/handoff.md`,
+/// "Looking back").
+#[test]
+fn a_forked_nudge_and_note_name_the_forks_own_log() {
+    let session = parent();
+    let (b, tx, provider, dir) = fork(
+        &session,
+        point(&session.dir, 1),
+        vec![tool("test_tool")],
+        vec![
+            with_tokens(calls_reply("", &[("test_tool", paris())]), 266_666, 0),
+            with_tokens(calls_reply("", &[("test_tool", paris())]), 399_999, 0),
+            Scripted::text("The note."),
+            Scripted::text("fork-done"),
+        ],
+    );
+    let expected = dir.join("events.jsonl").display().to_string();
+    let _b = turn(b, &tx, &task());
+    let requests = provider.requests();
+    // All four scripted replies run in the one fork turn.
+    assert_eq!(requests.len(), 4);
+    // The fork's first request carries the pre-point parent turn ("one" was
+    // answered before the point) and not the past-point reply ("two-done"
+    // answers the request after the point).
+    let first = texts(&requests[0].conversation);
+    assert!(first.contains("one-done"), "{first:?}");
+    assert!(!first.contains("two-done"), "{first:?}");
+    // The nudge names the fork's own log: 266_666 measured tokens plus the
+    // one-token tool result trips the two-thirds check at 266_667.
+    let nudge = user(requests[1].conversation.last().unwrap());
+    assert!(
+        nudge.starts_with("Fiber: your context holds 266667 tokens. At 400000 tokens"),
+        "{nudge:?}"
+    );
+    assert!(nudge.contains(&expected), "{nudge:?}");
+    assert!(
+        nudge.ends_with(&format!("{FORK}/events.jsonl.")),
+        "{nudge:?}"
+    );
+    assert!(!nudge.contains("s_test"), "{nudge:?}");
+    // The automatic handoff at 400_000 tokens asks for the note against
+    // the fork's own log too.
+    let asked = user(requests[2].conversation.last().unwrap());
+    assert!(
+        asked.starts_with("Fiber is about to restart your context."),
+        "{asked:?}"
+    );
+    assert!(
+        asked.contains(&format!("The session log is at {expected}.")),
+        "{asked:?}"
+    );
 }
