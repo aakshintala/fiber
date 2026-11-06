@@ -148,3 +148,4 @@ xtask/src/select/plan.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro
 xtask/src/select/plan_tests.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/select/reuse.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/tests/cli.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/extension_test_tests.rs	fiber-4201	plan	2026-11-06T06:59:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4287,4285,4283,4259,4218,4213
