@@ -222,3 +222,6 @@ crates/loop/src/history.rs	fiber-4236	plan	2026-11-06T01:56:13Z	Amoghs-MacBook-P
 crates/loop/src/handoff/carry.rs	fiber-4236	plan	2026-11-06T01:56:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/util.rs	fiber-4236	plan	2026-11-06T01:56:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/conversation.rs	fiber-4236	plan	2026-11-06T01:56:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/job_timing_tests.rs	fiber-4229	plan	2026-11-06T01:57:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/jobs.rs	fiber-4229	plan	2026-11-06T01:57:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/jobs_tests.rs	fiber-4229	plan	2026-11-06T01:57:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
