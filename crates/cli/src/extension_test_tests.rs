@@ -543,7 +543,7 @@ fn ps_failure_in_the_zombie_probe_names_the_ps_read() {
     let output = fakes::rerun_prepared(
         &test,
         &[(CHILD, "1"), ("PATH", path.as_str())],
-        Deadline::after(TEST_WAIT),
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         |_| {},
     );
     assert!(
