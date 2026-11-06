@@ -7,7 +7,7 @@ use serde_json::Value;
 /// Asserts two byte strings hold the same bytes, reporting only the lengths
 /// and the first differing offset. Exact equality: nothing is truncated or
 /// hashed away.
-pub(crate) fn assert_bytes_eq(expected: &[u8], actual: &[u8], what: &str) {
+fn assert_bytes_eq(expected: &[u8], actual: &[u8], what: &str) {
     let offset = expected.iter().zip(actual.iter()).position(|(a, b)| a != b);
     let same = expected.len() == actual.len() && offset.is_none();
     assert!(

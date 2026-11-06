@@ -12,6 +12,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::Event;
+use contract::events::EventKind;
 use contract::shapes::{Failure, Worktree};
 use log::Log;
 
@@ -133,6 +134,49 @@ fn keeper_held(dir: &Path, id: &SessionId) -> Option<log::Error> {
         })
 }
 
+/// The keeper's schema version: the latest complete `fiber_started`
+/// envelope's `schema_version` in the session log, read through
+/// `log::lines` without taking the lock. The keeper is spawned from the
+/// session's own binary, and every session holder appends a
+/// `fiber_started`, so the latest complete one is the keeper's version
+/// (`docs/tools.md`, "The keeper"). A torn tail ends the read through
+/// the iterator's `None`, so an earlier complete line still stands; a
+/// complete line this build cannot parse, or an I/O error, carries no
+/// keeper version to name, so the read returns `None`, which keeps the
+/// bare `Held` refusal. The clear covers any unreadable line: without a
+/// parse there is no `kind` to restrict it to `fiber_started`, and the
+/// fail-safe direction is the bare refusal.
+fn keeper_schema_version(dir: &Path) -> Option<u64> {
+    let mut version = None;
+    for line in log::lines(dir).ok()? {
+        let envelope = match line {
+            Ok(envelope) => envelope,
+            Err(_) => return None,
+        };
+        if envelope.kind() == EventKind::FiberStarted {
+            version = Some(u64::from(envelope.schema_version));
+        }
+    }
+    version
+}
+
+/// The refusal for a keeper-held lock: when the keeper runs a schema
+/// version this build cannot read, the refusal names the keeper's
+/// version (`docs/tools.md`, "The keeper"); anything else keeps the
+/// bare `Held` refusal.
+fn keeper_refusal(dir: &Path, id: &SessionId, keeper: log::Error) -> Failure {
+    match keeper_schema_version(dir) {
+        Some(version) if version != u64::from(contract::SCHEMA_VERSION) => {
+            let mismatch = doors::SessionError::VersionMismatch {
+                id: id.clone(),
+                version,
+            };
+            failed(mismatch.code(), mismatch)
+        }
+        _ => failed(keeper.code(), keeper),
+    }
+}
+
 fn open_or_attach(
     sessions: &Path,
     id: SessionId,
@@ -150,7 +194,7 @@ fn open_or_attach(
         Ok(log) => Ok(log),
         Err(error @ log::Error::Held { .. }) => {
             if let Some(keeper) = keeper_held(dir.path(), &id) {
-                Err(ask_failed(failed(keeper.code(), keeper)))
+                Err(ask_failed(keeper_refusal(dir.path(), &id, keeper)))
             } else {
                 Err(attach(error))
             }
@@ -268,6 +312,17 @@ fn resume_refused(
     !recreatable(recorded) && !in_launch_project(dir, in_project)
 }
 
+/// The failure for a resume that finds the log held: a keeper-held lock
+/// declines through the shared keeper refusal, so the hub path agrees
+/// with `ask --resume`; any other holder keeps today's refusal.
+fn session_held_failure(sessions: &Path, id: &SessionId, error: log::Error) -> Failure {
+    let dir = log::SessionDir::new(sessions, id);
+    match keeper_held(dir.path(), id) {
+        Some(keeper) => keeper_refusal(dir.path(), id, keeper),
+        None => failed(error.code(), error),
+    }
+}
+
 /// The internal session command with `--resume`: resumes the session `id`
 /// in the current directory's project to serve clients
 /// (`docs/invocation.md`, "The hub"). The hub attaches to a live session by
@@ -291,6 +346,9 @@ pub(crate) fn session_resume(
     log::crash::attach(&id);
     let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
+        Err(error @ log::Error::Held { .. }) => {
+            return ask_failed(session_held_failure(&sessions, &id, error));
+        }
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = log::SessionDir::new(&sessions, &id);

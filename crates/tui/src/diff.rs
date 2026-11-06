@@ -334,7 +334,7 @@ pub(crate) fn gutter_prefix(number: Option<u64>, gutter: usize) -> Option<String
 /// The gutter prefix text: its number right-aligned in `width` and
 /// one space, or blanks of that width where it has no number. The
 /// caller draws it dim.
-pub(crate) fn gutter_text(number: Option<u64>, width: usize) -> String {
+fn gutter_text(number: Option<u64>, width: usize) -> String {
     match number {
         Some(number) => format!("{number:>width$} "),
         None => " ".repeat(width + 1),

@@ -176,7 +176,7 @@ fn read_log_bytes(home: &Home, id: &str) -> Result<u64, String> {
 
 /// How long one open-mode jig run may take: the release-built jig
 /// replays a 10 MiB log and draws its frames.
-pub(crate) const OPEN_JIG: Duration = Duration::from_secs(120);
+const OPEN_JIG: Duration = Duration::from_secs(120);
 
 /// What one open-mode jig run printed: parsing each line, folding it,
 /// and the frames drawn.
@@ -347,11 +347,11 @@ pub(crate) const SPAN_METRIC: &str = "attach_span_ms";
 
 /// The parent operation the five live attach spans partition: the
 /// first draw holding attached-session history.
-pub(crate) const ATTACHED_FRAME_OP: &str = "tui.attached_frame";
+const ATTACHED_FRAME_OP: &str = "tui.attached_frame";
 
 /// The five live attach spans in boundary order: setup, wait, tail,
 /// prepare and draw.
-pub(crate) const ATTACH_SPAN_OPS: [&str; 5] = [
+const ATTACH_SPAN_OPS: [&str; 5] = [
     "tui.attach_setup",
     "tui.attach_wait",
     "tui.attach_tail",
@@ -753,7 +753,7 @@ pub(crate) const FIXTURE_COUNT: u32 = 2;
 /// One attach fixture, ready to time: its home with the grown log, its
 /// hub, and its live, idle session. The warm attach ran during
 /// preparation, so no timed sample shares setup with the session.
-pub(crate) struct AttachFixture {
+struct AttachFixture {
     home: Home,
     hub: Proc,
     session: Session,

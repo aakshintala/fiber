@@ -236,7 +236,7 @@ fn a_stalled_install_step_installs_nothing() {
     );
     // The run kills what it stopped: leftovers fail the test, by pid and
     // never the test's own group.
-    let leftovers = fakes::matching(&watching).unwrap();
+    let leftovers = fakes::matching(&watching, fakes::MUST_SUCCEED_WITHIN / 2).unwrap();
     for pid in &leftovers {
         drop(fakes::kill_pid(*pid, "KILL"));
     }

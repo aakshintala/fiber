@@ -76,7 +76,7 @@ impl Observe<'_> {
 /// The download's `host` and `path`: the authority without userinfo,
 /// the path up to any query or fragment, percent-decoded. Empty
 /// pieces stay `None`.
-pub(crate) fn sanitized_url(url: &str) -> (Option<String>, Option<String>) {
+fn sanitized_url(url: &str) -> (Option<String>, Option<String>) {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     let rest = rest.split(['?', '#']).next().unwrap_or(rest);
     let (authority, path) = rest.find('/').map_or((rest, "/"), |at| rest.split_at(at));
@@ -259,7 +259,7 @@ fn binary_name(name: &str) -> Option<&str> {
 
 /// Downloads `url` with the production limits and the proxy the environment
 /// names. A manifest-declared binary's path is omitted from every line.
-pub(crate) fn download_manifest_observed(
+fn download_manifest_observed(
     name: &str,
     url: &str,
     observe: &Observe<'_>,

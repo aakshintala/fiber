@@ -116,7 +116,7 @@ pub(crate) struct RequestBudget {
     start: Instant,
     duration: Duration,
     guard_start: Instant,
-    pub(crate) guard_for: Duration,
+    guard_for: Duration,
 }
 
 impl RequestBudget {
@@ -166,7 +166,7 @@ pub(crate) struct WaitAck {
 
 /// One held waiter's announcement: its phase and its own sequence.
 #[cfg(test)]
-pub(crate) type HeldNote = (&'static str, u64);
+type HeldNote = (&'static str, u64);
 
 /// The test-only check-to-park pause: while armed, a waiter holds after
 /// its check, subscription and acknowledgment but before its park. The

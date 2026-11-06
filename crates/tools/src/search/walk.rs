@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// Directories a walk never discovers, however the ignore files read
 /// (`docs/tools.md`, "Search", "What it skips").
-pub(crate) const VCS: [&str; 6] = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
+const VCS: [&str; 6] = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
 
 /// How a named path is visited.
 #[derive(Debug)]

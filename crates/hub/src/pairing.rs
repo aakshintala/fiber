@@ -26,7 +26,7 @@ use crate::devices;
 use crate::feed::close_connections;
 
 type Fill = Box<dyn FnMut(&mut [u8]) -> Result<(), ()> + Send>;
-pub(crate) const CODE_LIFETIME: Duration = Duration::from_secs(600);
+const CODE_LIFETIME: Duration = Duration::from_secs(600);
 const CODE_LEN: usize = 10;
 const CODE_ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 const NAME_MAX: usize = 64;

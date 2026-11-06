@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use contract::HubEventKind;
 use contract::clock::{Clock, Wake};
 use doors::hub::{self, Hub};
 use fakes::Deadline;
@@ -252,7 +253,7 @@ fn a_hub_exiting_past_one_poll_is_started_again_once_its_socket_is_gone() {
             Arc::clone(&clock),
         )
         .unwrap_or_else(|error| panic!("{}: the fresh hub answers: {error}", entry.name()));
-        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hub.1.kind(), HubEventKind::HubHello, "{}", entry.name());
         assert_eq!(calls.load(Ordering::SeqCst), 1, "{}", entry.name());
         assert!(
             Deadline::after(DEADLINE).recv(&released_rx).is_ok(),
@@ -488,7 +489,7 @@ fn an_existing_hub_is_used_and_the_starter_rests() {
             FakeClock::new(),
         )
         .unwrap();
-        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hub.1.kind(), HubEventKind::HubHello, "{}", entry.name());
         assert_eq!(calls.load(Ordering::SeqCst), 0, "{}", entry.name());
     }
 }
@@ -515,7 +516,7 @@ fn without_a_hub_the_starter_runs_once() {
             FakeClock::new(),
         )
         .unwrap();
-        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hub.1.kind(), HubEventKind::HubHello, "{}", entry.name());
         assert_eq!(calls.load(Ordering::SeqCst), 1, "{}", entry.name());
     }
 }
@@ -599,7 +600,7 @@ fn eof_before_hello_retries_the_whole_connect_once() {
             served_tx.send(()).unwrap();
         });
         let hub = run(entry, home, || Ok(()), FakeClock::new()).unwrap();
-        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hub.1.kind(), HubEventKind::HubHello, "{}", entry.name());
         // The connect returns once the hello is read, which can be before
         // the server finishes its second connection.
         assert!(
@@ -625,7 +626,7 @@ fn a_hub_that_exited_before_the_retry_is_started_again() {
             FakeClock::new(),
         )
         .unwrap();
-        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hub.1.kind(), HubEventKind::HubHello, "{}", entry.name());
         assert_eq!(calls.load(Ordering::SeqCst), 2, "{}", entry.name());
         assert!(
             Deadline::after(DEADLINE).recv(&exited_rx).is_ok(),
@@ -693,7 +694,7 @@ fn a_cr_terminated_hello_is_read() {
             stream.flush().unwrap();
         });
         let hub = run(entry, home, never_start(), FakeClock::new()).unwrap();
-        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hub.1.kind(), HubEventKind::HubHello, "{}", entry.name());
     }
 }
 
@@ -764,7 +765,7 @@ fn a_hello_in_two_parts_inside_the_deadline_connects() {
             stream.write_all(b"\n").unwrap();
         });
         let hub = run(entry, home, never_start(), FakeClock::new()).unwrap();
-        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hub.1.kind(), HubEventKind::HubHello, "{}", entry.name());
     }
 }
 
@@ -776,7 +777,7 @@ fn a_hello_then_close_still_connects() {
         let listener = UnixListener::bind(home.join("run").join("hub")).unwrap();
         thread::spawn(move || serve_once(listener, &hello_line()));
         let hub = run(entry, home, never_start(), FakeClock::new()).unwrap();
-        assert_eq!(hub.1.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hub.1.kind(), HubEventKind::HubHello, "{}", entry.name());
     }
 }
 
@@ -794,7 +795,7 @@ fn the_connected_stream_has_no_read_timeout() {
             release_rx.recv().unwrap_or(());
         });
         let (stream, hello) = run(entry, home, never_start(), FakeClock::new()).unwrap();
-        assert_eq!(hello.kind, "hub_hello", "{}", entry.name());
+        assert_eq!(hello.kind(), HubEventKind::HubHello, "{}", entry.name());
         assert_eq!(stream.read_timeout().unwrap(), None, "{}", entry.name());
         release_tx.send(()).unwrap_or(());
     }
@@ -896,7 +897,7 @@ fn a_full_backlog_retries_the_connect_without_starting_until_release() {
         .recv(&done_rx)
         .unwrap_or_else(|_| panic!("the released backlog answers before {DEADLINE:?}"))
         .expect("the released backlog connects");
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     assert_eq!(stream.read_timeout().unwrap(), None);
     drop(held);
 }
@@ -1022,7 +1023,7 @@ fn a_probe_with_a_hello_connects() {
     // parked advance.
     match hub::probe_until(&home, &*clock, deadline) {
         hub::Probe::Connected(Ok((stream, hello))) => {
-            assert_eq!(hello.kind, "hub_hello");
+            assert_eq!(hello.kind(), HubEventKind::HubHello);
             assert_eq!(stream.read_timeout().unwrap(), None);
             let flags = rustix::fs::fcntl_getfl(&stream).unwrap();
             assert!(
@@ -1299,6 +1300,6 @@ fn a_hub_that_binds_while_the_connect_polls_is_connected() {
     let hub = Deadline::after(DEADLINE)
         .recv_or_fail(&held.done, "the connect's answer")
         .expect("a hub that binds inside the deadline connects");
-    assert_eq!(hub.1.kind, "hub_hello");
+    assert_eq!(hub.1.kind(), HubEventKind::HubHello);
     assert_eq!(held.clock.now(), origin + POLL);
 }

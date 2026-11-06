@@ -92,7 +92,7 @@ pub(crate) fn applies(key: &str) -> Applies {
 /// the reload's cache rebuild in tokens when known (`docs/tui.md`,
 /// "Swapped views"). `usage` is the last call's prompt size on the
 /// session on screen.
-pub(crate) fn reload_text(key: &str, usage: Option<u64>) -> String {
+fn reload_text(key: &str, usage: Option<u64>) -> String {
     match usage {
         Some(tokens) => format!(
             "changing {key} needs a reload ({})",

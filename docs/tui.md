@@ -612,7 +612,10 @@ a click on it returns too. The mouse wheel over a view moves its visible rows 3 
   view read-only: its status row shows the outcome (`completed`, `failed`
   or `cancelled`) where the stop target would be, the transcript is the
   replay of its log, and Enter keeps the finished notice instead of
-  steering.
+  steering. A delegate on another harness, with no fiber log to replay,
+  shows one dim line under the path line instead: "No transcript for
+  <harness> delegates". A finished delegate whose log is missing or
+  unreadable shows "No transcript: <reason>", dim.
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box sends `job_input` to type into it as raw keys, as `jobs write`
   does for the model, so the person can finish an interactive step the model

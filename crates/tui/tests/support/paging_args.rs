@@ -27,7 +27,7 @@ pub(crate) enum Mode {
 /// How many lines each frame folds: a number, or `end` for the single
 /// final frame. The bench prints the single frame's count as its number,
 /// so both spell it.
-pub(crate) fn parse_frame_every(text: &str) -> Result<usize, String> {
+fn parse_frame_every(text: &str) -> Result<usize, String> {
     if text == "end" {
         return Ok(usize::MAX);
     }

@@ -431,7 +431,7 @@ const THINKING_VOCABULARY: [&str; 7] = ["off", "minimal", "low", "medium", "high
 
 /// The hand-maintained Databricks thinking overlay, from the repository
 /// root: compiled in, never read at run time.
-pub(crate) const DATABRICKS_THINKING_OVERLAY: &str = "providers/databricks/thinking-overlay.json";
+const DATABRICKS_THINKING_OVERLAY: &str = "providers/databricks/thinking-overlay.json";
 
 /// One validated overlay row: the file key with its levels and default.
 pub(crate) struct OverlayRow {

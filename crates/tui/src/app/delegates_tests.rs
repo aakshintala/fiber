@@ -4,10 +4,14 @@
 //! subscribes each running Fiber delegate once, and a delegate's own
 //! status is stored, never a home row.
 
-use super::super::{App, Effect};
+use super::super::{App, Effect, SessionView};
+use crate::app::panel::Spot as PanelSpot;
 use crate::home::{Launch, Spot as HomeSpot};
-use crate::keys::{Mouse, MouseKind};
+use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
+use crate::mouse::TargetId;
+use contract::JobId;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -496,6 +500,175 @@ fn subscribe_id(out: &[Value]) -> String {
         .next()
         .and_then(|line| line["id"].as_str().map(str::to_owned))
         .unwrap_or_else(|| panic!("a subscribe"))
+}
+
+/// Folds one assistant turn saying `text` into the open delegate's view.
+fn delegate_turn(app: &mut App, text: &str) {
+    for (kind, payload) in [
+        ("turn_started", json!({"input": []})),
+        ("assistant_message_started", json!({})),
+        ("text_completed", json!({"text": text})),
+        (
+            "assistant_message_completed",
+            json!({"outcome": "completed"}),
+        ),
+        ("turn_completed", json!({"outcome": "completed"})),
+    ] {
+        app.on_line(crate::app::testkit::session_line(
+            DELEGATE,
+            kind,
+            payload,
+            Some("a_1"),
+        ));
+    }
+}
+
+/// Renders `app` whole at 80 by 24: the full view's text, so the status
+/// card and the transcript draw together.
+fn rendered(app: &mut App) -> String {
+    app.set_size(80, 24);
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let _ = crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
+}
+
+/// Job `j_1`'s serial.
+fn job_serial(app: &App) -> u64 {
+    app.serial_of_job(&JobId("j_1".to_owned()))
+        .unwrap_or_else(|| panic!("a serial"))
+}
+
+/// A finished fiber delegate with two turns folded, for the entries to
+/// open: the fold path the two-turn box (#4186) relies on, narrowed to
+/// the in-process fold — not the acceptance proof, which replays a real
+/// log through the hub.
+fn finished_two_turn_delegate(app: &mut App) {
+    start_delegate(app, "j_1", DELEGATE);
+    complete(app, "j_1");
+}
+
+#[test]
+fn finished_fiber_delegate_folds_two_turns_through_both_entries() {
+    // Entry A: the `/delegates` list, Enter on the finished row.
+    let mut app = home();
+    opened(&mut app);
+    finished_two_turn_delegate(&mut app);
+    assert_eq!(
+        app.open_session_view(SessionView::AllDelegates),
+        Effect::None
+    );
+    match app.session_view_key(&Key::Enter) {
+        Some(Effect::Send(_)) => {}
+        Some(_) | None => panic!("opening sends"),
+    }
+    assert!(app.item_open());
+    delegate_turn(&mut app, "one done");
+    delegate_turn(&mut app, "two done");
+    let view = rendered(&mut app);
+    assert!(
+        view.contains("one done") && view.contains("two done"),
+        "both turns fold through /delegates:\n{view}"
+    );
+
+    // Entry B: the Delegates card's finished row.
+    let mut app = home();
+    opened(&mut app);
+    finished_two_turn_delegate(&mut app);
+    match app.on_click(TargetId::Panel(PanelSpot::Delegate(job_serial(&app)))) {
+        Effect::Send(_) => {}
+        Effect::None
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("opening sends"),
+    }
+    assert!(app.item_open());
+    delegate_turn(&mut app, "one done");
+    delegate_turn(&mut app, "two done");
+    let view = rendered(&mut app);
+    assert!(
+        view.contains("one done") && view.contains("two done"),
+        "both turns fold through the card row:\n{view}"
+    );
+}
+
+#[test]
+fn finished_other_harness_draws_its_fallback() {
+    let mut app = home();
+    opened(&mut app);
+    start_other(&mut app, "j_1", DELEGATE, "claude");
+    // The card row opens the running view, which holds its output.
+    let serial = job_serial(&app);
+    assert_eq!(
+        app.on_click(TargetId::Panel(PanelSpot::Delegate(serial))),
+        Effect::None
+    );
+    assert!(app.item_open());
+    // The job's stdout rows are its output, not its transcript: the
+    // fallback still draws beside them.
+    app.on_line(session_line(
+        "job_delta",
+        json!({"job_id": "j_1", "text": "row one\n"}),
+    ));
+    app.on_line(session_line(
+        "job_delta",
+        json!({"job_id": "j_1", "text": "row two\n"}),
+    ));
+    complete(&mut app, "j_1");
+    let view = rendered(&mut app);
+    assert!(
+        view.contains("No transcript for claude delegates"),
+        "the harness fallback:\n{view}"
+    );
+    assert!(view.contains("row one"), "stdout stays:\n{view}");
+    assert!(view.contains("row two"), "stdout stays:\n{view}");
+    assert!(view.contains("completed"), "the outcome stays:\n{view}");
+    assert!(view.contains("claude"), "the card stays:\n{view}");
+}
+
+#[test]
+fn a_job_view_draws_no_fallback() {
+    let mut app = home();
+    opened(&mut app);
+    start_job(&mut app, "j_1", "task j_1");
+    app.on_line(session_line(
+        "job_delta",
+        json!({"job_id": "j_1", "text": "row one\n"}),
+    ));
+    match app.on_click(TargetId::Panel(PanelSpot::Job(job_serial(&app)))) {
+        Effect::None => {}
+        Effect::Send(_)
+        | Effect::Quit
+        | Effect::ListFiles
+        | Effect::FindPause { .. }
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Exit(_)
+        | Effect::Copy(_)
+        | Effect::OpenLink(_)
+        | Effect::OpenFile(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. } => panic!("a job opens with nothing to send"),
+    }
+    assert!(app.item_open());
+    let view = rendered(&mut app);
+    assert!(
+        view.contains("Output since this terminal attached"),
+        "the job body draws:\n{view}"
+    );
+    assert!(view.contains("row one"), "its output draws:\n{view}");
+    assert!(
+        !view.contains("No transcript"),
+        "a job is not a delegate:\n{view}"
+    );
 }
 
 /// The `subscribe` lines among `out`.

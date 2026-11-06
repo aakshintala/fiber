@@ -29,6 +29,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use contract::HubEventKind;
 use contract::clock::Clock;
 use contract::{HubLine, SCHEMA_VERSION};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
@@ -804,7 +805,7 @@ fn check_line(buf: &mut Vec<u8>) -> Result<HubLine, Poll> {
             "the hub did not speak `hub_hello` first",
         ))
     })?;
-    if hello.kind != "hub_hello" {
+    if hello.kind() != HubEventKind::HubHello {
         return Err(Poll::Failed(io::Error::new(
             io::ErrorKind::InvalidData,
             "the hub did not speak `hub_hello` first",

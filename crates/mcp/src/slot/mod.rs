@@ -152,7 +152,7 @@ pub(crate) enum Served {
 ///
 /// One in-flight start's hold on its slot: clearing the flag and waking
 /// the waiters on drop, so an unwind releases the lease too.
-pub(super) struct LeaseGuard<'a> {
+struct LeaseGuard<'a> {
     lease: &'a Mutex<bool>,
     wake: &'a Condvar,
 }

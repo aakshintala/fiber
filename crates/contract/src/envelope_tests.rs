@@ -118,10 +118,12 @@ fn the_ephemeral_example_carries_no_seq() {
 
 #[test]
 fn unknown_fields_are_ignored() {
+    use crate::events::EventKind;
+
     let line =
         r#"{"kind":"x","session_id":"s","ts":1,"schema_version":1,"future":true,"payload":{}}"#;
     let envelope = parse(line);
-    assert_eq!(envelope.kind, "x");
+    assert_eq!(envelope.kind(), EventKind::Unknown("x".into()));
     assert_eq!(
         serde_json::to_string(&envelope).unwrap(),
         r#"{"kind":"x","session_id":"s","ts":1,"schema_version":1,"payload":{}}"#
@@ -155,9 +157,11 @@ fn hub_hello_serializes_kind_ts_schema_version_payload_in_order() {
 
 #[test]
 fn a_hub_line_carries_no_session_id() {
+    use crate::HubEventKind;
+
     let line = r#"{"kind":"hub_hello","ts":1759150000000,"schema_version":1,"payload":{"fiber_version":"0.0.0"}}"#;
     let parsed: HubLine = serde_json::from_str(line).unwrap();
-    assert_eq!(parsed.kind, "hub_hello");
+    assert_eq!(parsed.kind(), HubEventKind::HubHello);
     assert_eq!(serde_json::to_string(&parsed).unwrap(), line);
 }
 

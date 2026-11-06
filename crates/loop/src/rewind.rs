@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use contract::events::EventKind;
 use contract::events::{Event, Parent, Rewind, SessionNamed, SessionStarted, ToolCallRequested};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{Effect, Point, Worktree};
@@ -237,7 +238,7 @@ pub fn rewound_from(
     let Some(last) = last else {
         return Err(not_rewound());
     };
-    if last.kind == "moved" {
+    if last.kind() == EventKind::Moved {
         let moved: contract::events::Moved =
             serde_json::from_value(serde_json::Value::Object(last.payload))
                 .map_err(|_| not_rewound())?;
@@ -255,7 +256,7 @@ pub fn rewound_from(
             None,
         ));
     }
-    if last.kind != "rewound" {
+    if last.kind() != EventKind::Rewound {
         return Err(not_rewound());
     }
     let rewound: contract::events::Rewound =
@@ -282,7 +283,7 @@ pub fn rewound_from(
 pub fn latest_name(dir: &Path) -> Option<SessionNamed> {
     log::last_line_where(dir, |line| {
         let event: Value = serde_json::from_slice(line).ok()?;
-        if event.get("kind")?.as_str()? != "session_named" {
+        if EventKind::from_name(event.get("kind")?.as_str()?) != EventKind::SessionNamed {
             return None;
         }
         serde_json::from_value(event.get("payload")?.clone()).ok()
@@ -349,7 +350,7 @@ fn changes(dir: &Path, point: Seq) -> Result<(Vec<String>, Vec<String>), Error> 
     let lines = log::read(dir)?;
     let mut requested: HashMap<ActionId, ToolCallRequested> = HashMap::new();
     for line in &lines {
-        if line.kind != "tool_call_requested" {
+        if line.kind() != EventKind::ToolCallRequested {
             continue;
         }
         if let Some(Event::ToolCallRequested(call)) =
@@ -362,7 +363,7 @@ fn changes(dir: &Path, point: Seq) -> Result<(Vec<String>, Vec<String>), Error> 
     let mut paths: Vec<String> = Vec::new();
     let mut calls: Vec<String> = Vec::new();
     for line in &lines {
-        if line.kind != "tool_call_started" {
+        if line.kind() != EventKind::ToolCallStarted {
             continue;
         }
         if !line.seq.as_ref().is_some_and(|seq| seq.0 > point.0) {

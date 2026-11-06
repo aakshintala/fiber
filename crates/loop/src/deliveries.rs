@@ -141,10 +141,7 @@ impl Starts {
 /// The delivery's `changed_by`: the chain's attribution, but only when the
 /// delivery changed and the attribution is non-empty. A withheld result
 /// carries none, and an empty vector is never written as `[]`.
-pub(crate) fn changed_by_of(
-    answer_changed_by: Vec<String>,
-    outcome_changed: bool,
-) -> Option<Vec<String>> {
+fn changed_by_of(answer_changed_by: Vec<String>, outcome_changed: bool) -> Option<Vec<String>> {
     (outcome_changed && !answer_changed_by.is_empty()).then_some(answer_changed_by)
 }
 
@@ -335,7 +332,7 @@ impl Loop {
     /// with the display text kept separate; an artifact-only change
     /// leaves the text unchanged. The cut belongs to `calls::job_event`
     /// after it.
-    pub(crate) fn deliver_finish(
+    fn deliver_finish(
         &mut self,
         mut finished: DelegateFinished,
         status: Outcome,
@@ -471,7 +468,7 @@ fn call_status(status: Outcome) -> CallStatus {
 /// what the model is sent, with the hook's full text kept in an artifact.
 /// A replacement equal to the delivery as built is kept as built, so an
 /// already-cut notice keeps its marker where the cut would move it.
-pub(crate) fn bound_notice(log: &log::Log, id: &JobId, replacement: &str, built: &str) -> String {
+fn bound_notice(log: &log::Log, id: &JobId, replacement: &str, built: &str) -> String {
     if replacement == built {
         return replacement.to_owned();
     }
@@ -493,7 +490,7 @@ const DELIVERY_LIMIT: usize = 3_000;
 /// marker, as the monitor's own batching cuts them. A replacement equal
 /// to the delivery as built is kept as built, so an already-cut batch
 /// keeps its marker where the cut would move it.
-pub(crate) fn bound_lines(replacement: &str, built: &str) -> String {
+fn bound_lines(replacement: &str, built: &str) -> String {
     if replacement == built {
         return replacement.to_owned();
     }

@@ -14,7 +14,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use contract::clock::Clock;
-use contract::events::{CommandAccepted, Empty, Event, ExtensionsLoaded, LoadedExtension, Notice};
+use contract::events::{
+    CommandAccepted, Empty, Event, EventKind, ExtensionsLoaded, LoadedExtension, Notice,
+};
 use contract::{CommandId, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
@@ -266,7 +268,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
     let ack_at = lines
         .iter()
         .position(|line| {
-            line.kind == "command_accepted"
+            line.kind() == EventKind::CommandAccepted
                 && line.payload.get("command_id").and_then(|id| id.as_str()) == Some("c_a_down")
         })
         .expect("the acknowledgement is written");
@@ -280,14 +282,14 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
     // After it, only the prelude's snapshot and the status: the queued
     // `extensions_loaded` below the cutoff is not written again from the
     // new queue, and the notice is not written.
-    let after: Vec<&str> = lines[ack_at + 1..]
-        .iter()
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(after, ["extensions_loaded", "session_status"]);
+    let after: Vec<EventKind> = lines[ack_at + 1..].iter().map(|line| line.kind()).collect();
+    assert_eq!(
+        after,
+        [EventKind::ExtensionsLoaded, EventKind::SessionStatus]
+    );
     let durable_extensions: Vec<&contract::Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "extensions_loaded" && line.seq.is_some())
+        .filter(|line| line.kind() == EventKind::ExtensionsLoaded && line.seq.is_some())
         .collect();
     assert_eq!(
         durable_extensions.len(),
@@ -297,7 +299,7 @@ fn a_lowering_drains_a_lagged_writer_through_the_cutoff() {
     );
     let full_copy = lines[..ack_at]
         .iter()
-        .position(|line| line.kind == "extensions_loaded")
+        .position(|line| line.kind() == EventKind::ExtensionsLoaded)
         .expect("the full-level copy arrives before the acknowledgement");
     assert_eq!(lines[full_copy].seq.map(|seq| seq.0), Some(cutoff - 2));
     assert!(
@@ -417,16 +419,16 @@ fn a_deferred_response_is_written_after_the_drain_before_the_snapshots() {
     let mut buf = Vec::new();
     apply(&mut writing, &rx, &mut buf, None).unwrap();
     let lines = envelopes(&String::from_utf8(buf).unwrap());
-    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
     assert_eq!(
         kinds,
         [
-            "step_started",
-            "step_started",
-            "extensions_loaded",
-            "command_accepted",
-            "notice",
-            "extensions_loaded",
+            EventKind::StepStarted,
+            EventKind::StepStarted,
+            EventKind::ExtensionsLoaded,
+            EventKind::CommandAccepted,
+            EventKind::Notice,
+            EventKind::ExtensionsLoaded,
         ],
         "the drain, then the deferred response, then the snapshots"
     );
@@ -508,7 +510,7 @@ fn a_lowering_waits_for_the_deferred_response_after_its_drain() {
     assert!(
         envelopes(&text)
             .iter()
-            .all(|line| line.kind != "command_accepted"),
+            .all(|line| line.kind() != EventKind::CommandAccepted),
         "no acceptance precedes the loop's answer"
     );
     resp_tx
@@ -519,28 +521,28 @@ fn a_lowering_waits_for_the_deferred_response_after_its_drain() {
         |text| {
             envelopes(text)
                 .iter()
-                .map(|line| line.kind.as_str())
+                .map(|line| line.kind())
                 .collect::<Vec<_>>()
                 == [
-                    "step_started",
-                    "step_started",
-                    "extensions_loaded",
-                    "command_accepted",
-                    "extensions_loaded",
+                    EventKind::StepStarted,
+                    EventKind::StepStarted,
+                    EventKind::ExtensionsLoaded,
+                    EventKind::CommandAccepted,
+                    EventKind::ExtensionsLoaded,
                 ]
         },
         "the drain, then the deferred acceptance, then the snapshot",
     );
     let lines = envelopes(&text);
-    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
     assert_eq!(
         kinds,
         [
-            "step_started",
-            "step_started",
-            "extensions_loaded",
-            "command_accepted",
-            "extensions_loaded",
+            EventKind::StepStarted,
+            EventKind::StepStarted,
+            EventKind::ExtensionsLoaded,
+            EventKind::CommandAccepted,
+            EventKind::ExtensionsLoaded,
         ]
     );
     assert_eq!(
@@ -618,15 +620,15 @@ fn a_raising_writes_nothing_before_its_deferred_response() {
         |text| {
             envelopes(text)
                 .iter()
-                .map(|line| line.kind.as_str())
+                .map(|line| line.kind())
                 .collect::<Vec<_>>()
-                == ["command_accepted", "step_started"]
+                == [EventKind::CommandAccepted, EventKind::StepStarted]
         },
         "the deferred acceptance arrives after the loop's answer, before the seeds",
     );
     let lines = envelopes(&text);
-    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
-    assert_eq!(kinds, ["command_accepted", "step_started"]);
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    assert_eq!(kinds, [EventKind::CommandAccepted, EventKind::StepStarted]);
     assert_eq!(
         lines[0]
             .payload
@@ -675,7 +677,7 @@ fn a_cancelled_response_ends_the_switch_as_an_error() {
     );
     let lines = envelopes(&String::from_utf8(buf).unwrap());
     assert_eq!(lines.len(), 1, "the drain is written; nothing after it");
-    assert_eq!(lines[0].kind, "step_started");
+    assert_eq!(lines[0].kind(), EventKind::StepStarted);
 }
 
 /// A writer whose bytes the test reads back.
@@ -769,7 +771,7 @@ fn a_kept_answer_pushed_after_the_log_ends_is_written_before_stop() {
         1,
         "the kept answer pushed after the end is written before stop; got {lines:?}"
     );
-    assert_eq!(lines[0].kind, "command_rejected");
+    assert_eq!(lines[0].kind(), EventKind::CommandRejected);
     gate.conns.finish(conn);
     support::close_within(opened.session, opened.log);
 }
@@ -850,7 +852,7 @@ fn control_boundary_lines_carry_literal_names_and_tokens() {
     ];
     for (kind, literal, token) in cases {
         let line = control_line(&session, kind, token);
-        assert_eq!(line.kind, literal);
+        assert_eq!(line.kind(), EventKind::Unknown(literal.to_owned()));
         assert_eq!(line.session_id, session);
         assert_eq!(line.ts, 0);
         assert_eq!(line.schema_version, contract::SCHEMA_VERSION);
@@ -954,7 +956,9 @@ fn control_boundary_full_level_writer_forwards_ordinary_envelopes() {
         "the ordinary doors.stopx near miss reaches the client"
     );
     assert!(
-        lines.iter().all(|line| line.kind != "doors.stop"),
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::Unknown("doors.stop".into())),
         "the internal stop line does not reach the client"
     );
 }

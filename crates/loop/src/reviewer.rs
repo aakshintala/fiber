@@ -796,7 +796,7 @@ impl Loop {
     /// send order, then judges exactly as the serial path's second ask
     /// does. A grant installed while an earlier call applied moots the
     /// stored reply instead of preventing its send.
-    pub(crate) fn apply_stored_stage2(
+    fn apply_stored_stage2(
         &mut self,
         under: &UnderReview<'_>,
         endpoint: &ReviewEndpoint,

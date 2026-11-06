@@ -196,7 +196,7 @@ impl ObservationFinish {
     /// Holds the encoder's redacted prefix digests, once, on the observed
     /// run path: absent on a send failure, so those lines stay out of a
     /// miss count.
-    pub(crate) fn set_hashes(&mut self, hashes: PrefixHashes) {
+    fn set_hashes(&mut self, hashes: PrefixHashes) {
         self.hashes = Some(hashes);
     }
 
@@ -204,7 +204,7 @@ impl ObservationFinish {
     /// cache write keyed by lifetime. Called once, after a successful
     /// decode, so a line carrying usage always carries a 2xx status;
     /// absent on a send or decode failure.
-    pub(crate) fn set_usage(&mut self, tokens: &Tokens) {
+    fn set_usage(&mut self, tokens: &Tokens) {
         self.cache_read = Some(tokens.cache_read);
         self.cache_write = Some(tokens.cache_write.clone());
     }
@@ -240,7 +240,7 @@ impl ObservationFinish {
 /// Whole milliseconds from `start` to `end`: truncated, saturating to
 /// `u64::MAX`. A clock that runs backwards contributes zero: no panic
 /// and no fabricated duration.
-pub(crate) fn ms_since(start: Instant, end: Instant) -> u64 {
+fn ms_since(start: Instant, end: Instant) -> u64 {
     duration_ms(end.checked_duration_since(start).unwrap_or(Duration::ZERO))
 }
 

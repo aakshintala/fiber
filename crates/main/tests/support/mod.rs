@@ -30,6 +30,7 @@ use serde_json::{Value, json};
 
 pub(crate) mod hold;
 pub(crate) mod journey;
+pub(crate) mod lived_home;
 pub(crate) mod package;
 pub(crate) mod pty;
 pub(crate) mod repo_provider;
@@ -193,10 +194,15 @@ pub(crate) fn bounded<T: Send + 'static>(
 #[track_caller]
 pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
     let text = text.to_owned();
+    let outer = deadline.cleanup_phase();
+    // The listing step is half the enclosing cleanup wait's remaining, read
+    // at entry, so a stalled listing expires inside the wait and the failure
+    // names the `pgrep` step instead of the outer wait.
+    let step = outer.left() / 2;
     fakes::within(
         &format!("killing every process matching {text}"),
-        deadline.cleanup_phase(),
-        move || fakes::kill_matching(&text),
+        outer,
+        move || fakes::kill_matching(&text, step),
     )
 }
 
@@ -207,12 +213,160 @@ pub(crate) fn kill_matching(deadline: Deadline, text: &str) -> io::Result<()> {
 /// process exits.
 pub(crate) fn kill_matching_detached(text: &str) {
     let text = text.to_owned();
-    let spawned = thread::Builder::new().spawn(move || match fakes::kill_matching(&text) {
-        Ok(()) | Err(_) => {}
+    let spawned = thread::Builder::new().spawn(move || {
+        match fakes::kill_matching(&text, fakes::MUST_SUCCEED_WITHIN / 2) {
+            Ok(()) | Err(_) => {}
+        }
     });
     match spawned {
         Ok(_) | Err(_) => {}
     }
+}
+
+/// Present in a re-executed child, absent in the parent: the child drives
+/// the support wrapper into a stalled listing under a derived cleanup
+/// budget.
+const STALLED_LISTING_CHILD: &str = "FIBER_TEST_STALLED_LISTING_CHILD";
+
+/// The stalled listing's marker, set by the parent for the child alone.
+const STALLED_LISTING_MARKER: &str = "FIBER_TEST_STALLED_LISTING_MARKER";
+
+/// The outer bound in milliseconds, set by the parent for the child alone.
+const STALLED_LISTING_BOUND_MS: &str = "FIBER_TEST_STALLED_LISTING_BOUND_MS";
+
+/// The support `kill_matching` wrapper funds its listing step from its
+/// enclosing cleanup wait: the child reads a 400 ms outer bound from its
+/// environment, derives a 400 ms within on an injected clock, and drives
+/// the wrapper into a stalled `pgrep` shadow, asserting the returned error
+/// (never a panic) names the `pgrep` step with the exact derived 200 ms
+/// budget. The parent re-executes this test under a 30 s wall deadline
+/// with a `PATH`-shadowed `pgrep` that blocks on a FIFO only for the
+/// run's unique marker and execs the real `pgrep` otherwise (per-test
+/// processes, so no other test's listing can block on this FIFO), guards
+/// the stall by pid, and asserts the child's success before releasing the
+/// FIFO; the expiry already killed and reaped the shadow through
+/// production.
+#[test]
+fn kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_cleanup_budget() {
+    if std::env::var_os(STALLED_LISTING_CHILD).is_some() {
+        stalled_listing_child();
+        return;
+    }
+    // debt: this stalled-listing parent harness duplicates fakes'
+    // stalled-pgrep parent harness (two copies): FIFO creation, PATH setup,
+    // guarded rerun and cleanup stay duplicated; share them on the third,
+    // once a public helper used only by tests stops widening the surface
+    // this ticket narrows.
+    let dir = fakes::TempDir::new("fiber-stalled-listing");
+    // Unique to the run: the shadow stalls only this marker, and the
+    // watchdog guards only it, so no other test's process can match.
+    let marker = format!("stall-kill-{}", std::process::id());
+    let fifo = dir.path().join("fifo");
+    fakes::fifo(&fifo);
+    // Resolved before shadowing: the shadow falls through to it for every
+    // listing that is not this run's stall.
+    let real = Command::new("sh")
+        .args(["-c", "command -v pgrep"])
+        .output()
+        .expect("a shell resolves pgrep")
+        .stdout;
+    let real = String::from_utf8_lossy(&real).trim().to_owned();
+    assert!(!real.is_empty(), "a real pgrep resolves before shadowing");
+    // The production call passes the pattern form, so the shadow matches
+    // the pattern literally: the raw marker never appears contiguously.
+    // The marker is alphanumeric plus hyphens, so `fakes` wraps only the
+    // first character in brackets.
+    // debt: this stall shadow duplicates fakes' stalled-pgrep shadow (two
+    // copies), and `[s]...` hand-rolls `pattern`, which stays `pub(crate)`
+    // and unreachable here: share both on the third, once a public helper
+    // used only by tests stops widening the surface this ticket narrows.
+    let listing = format!("[{}]{}", &marker[..1], &marker[1..]);
+    let body = format!(
+        "for arg in \"$@\"; do\n  case \"$arg\" in\n    *'{}'*)\n      read line < '{}'\n      exit 0\n      ;;\n  esac\ndone\nexec '{}' \"$@\"\n",
+        listing,
+        fifo.display(),
+        real,
+    );
+    fakes::script(dir.path(), "pgrep", &body);
+    // Held open read+write across the rerun, so the shadow's open succeeds
+    // and its read parks: the stall holds reliably past child startup, and
+    // the 200 ms wall expiry fires at least 29,800 ms before the 30 s exit
+    // cap can release it, with a 120 ms floor over the slowest healthy
+    // `pgrep` spawn. Dropping it releases a shadow the expiry left behind,
+    // which then exits at once.
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .expect("the test holds the stall FIFO open");
+    // The guard kills this stall alone by its argv if the child hangs and
+    // the expiry below never runs: never this test's own group.
+    let stall_guard = Watchdog::matching(&marker);
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").expect("the parent reads PATH")
+    );
+    let output = fakes::rerun_within(
+        "support::kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_cleanup_budget",
+        &[
+            (STALLED_LISTING_CHILD, "1"),
+            ("PATH", path.as_str()),
+            (STALLED_LISTING_MARKER, marker.as_str()),
+            (STALLED_LISTING_BOUND_MS, "400"),
+        ],
+        // A 30 s wall bound, the same as Task 1's proof: the re-executed
+        // child's expected ≈2-4 s wall (boot plus setup plus the 200 ms
+        // stall) fits inside the exit wait with margin — the 200 ms bound
+        // fires at least 29,800 ms before the exit cap can release the
+        // stall — with group cleanup inside a second 30 s.
+        Deadline::after(Duration::from_secs(30)),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "the stalled-listing child proves the derived budget:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran exactly the stalled-listing test: {stdout}"
+    );
+    drop(held);
+    stall_guard.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+/// The re-executed child: a 400 ms env-fed outer cleanup wait on an
+/// injected clock halves to the exact nonzero 200 ms listing step the
+/// wrapper must fund.
+#[track_caller]
+fn stalled_listing_child() {
+    let marker = std::env::var(STALLED_LISTING_MARKER).expect("the parent sets the stall marker");
+    let outer_ms: u64 = std::env::var(STALLED_LISTING_BOUND_MS)
+        .expect("the parent sets the outer bound")
+        .parse()
+        .expect("the outer bound is milliseconds");
+    let clock: &'static Arc<fakes::clock::FakeClock> =
+        Box::leak(Box::new(fakes::clock::FakeClock::new()));
+    // 400 ms of cleanup from the environment on a clock that never
+    // advances: the wrapper's outer wait is this cleanup phase, and its
+    // listing step is half of it. The outer `within` receives on the wall
+    // clock through this deadline, with margin for loaded-host scheduling.
+    let wait = Deadline::on(&**clock).within(Duration::from_millis(outer_ms));
+    let error = match kill_matching(wait, &marker) {
+        Ok(()) => panic!("the stalled listing outlives the derived cleanup budget"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.kind(),
+        ErrorKind::TimedOut,
+        "the expiry is a timeout, not a pgrep failure"
+    );
+    assert_eq!(
+        error.to_string(),
+        "pgrep did not exit within 200ms",
+        "the expiry names the pgrep step with the derived budget"
+    );
 }
 
 /// The timeout branch of a wait for a started process's exit: kills
@@ -2247,15 +2401,19 @@ impl Drop for SessionGuard {
     /// is dead when the drop returns; a drop never blocks past that or panics.
     fn drop(&mut self) {
         let text = self.workspace.clone();
+        // The drop owns no caller budget to halve; its deadline is the
+        // cleanup phase it receives on, halved for the listing step.
+        let wait = self.deadline.cleanup_phase();
+        let step = wait.left() / 2;
         let (done, finished) = mpsc::channel();
         let spawned = thread::Builder::new().spawn(move || {
-            let killed = fakes::kill_matching(&text);
+            let killed = fakes::kill_matching(&text, step);
             match done.send(killed) {
                 Ok(()) | Err(_) => {}
             }
         });
         if spawned.is_ok() {
-            match self.deadline.cleanup_phase().recv(&finished) {
+            match wait.recv(&finished) {
                 Ok(_) | Err(_) => {}
             }
         }
@@ -3822,16 +3980,23 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     // The parked child is listed before the release goes out, so a vacuous
     // pass cannot hide a holder that never parked.
     let listed = pattern.clone();
+    let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN).start_wait();
     fakes::wait_until(
         "the parked refresh child to list",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || fakes::matching(&listed).unwrap_or_default().contains(&pid),
+        move || {
+            fakes::matching(&listed, wait.left() / 2)
+                .unwrap_or_default()
+                .contains(&pid)
+        },
     );
     // The old wait checks the match at once: the parked child is still
     // listed, so the bare assertion fails.
     let old = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         assert!(
-            fakes::matching(&pattern).unwrap_or_default().is_empty(),
+            fakes::matching(&pattern, fakes::MUST_SUCCEED_WITHIN / 2)
+                .unwrap_or_default()
+                .is_empty(),
             "the refresh child already exited"
         );
     }));
@@ -4031,11 +4196,12 @@ fn holder_dies_with_the_test_process_that_parked_it() {
     // The listing names the acked pid, tying the listed process to the
     // acknowledged reader and closing the spawn-vs-list race.
     let listed = pattern.clone();
+    let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN).start_wait();
     fakes::wait_until(
         "the parked holder to list",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
         move || {
-            fakes::matching(&listed)
+            fakes::matching(&listed, wait.left() / 2)
                 .unwrap_or_default()
                 .contains(&holder)
         },

@@ -1,6 +1,7 @@
 use super::*;
 use crate::open_log;
 use contract::SessionId;
+use contract::events::EventKind;
 use std::io::SeekFrom;
 use std::sync::mpsc;
 use std::thread;
@@ -480,7 +481,10 @@ fn ended_watcher() -> (fakes::TempDir, Watcher) {
 fn recv_after_end_returns_a_kept_line_pushed_after_the_end() {
     let (_sessions, mut watcher) = ended_watcher();
     watcher.injector().push_kept(kept_line("late"));
-    assert_eq!(watcher.recv_after_end().kind, "late");
+    assert_eq!(
+        watcher.recv_after_end().kind(),
+        EventKind::Unknown("late".into())
+    );
 }
 
 #[test]
@@ -491,7 +495,7 @@ fn recv_after_end_waits_while_nothing_is_queued() {
     let (tx, rx) = mpsc::channel();
     thread::spawn(
         move || {
-            if let Ok(()) = tx.send(watcher.recv_after_end().kind) {}
+            if let Ok(()) = tx.send(watcher.recv_after_end().kind()) {}
         },
     );
     parked_after_end::wait();
@@ -504,6 +508,6 @@ fn recv_after_end_waits_while_nothing_is_queued() {
         Deadline::after(Duration::from_secs(10))
             .recv(&rx)
             .expect("the pushed line wakes the wait"),
-        "late"
+        EventKind::Unknown("late".into())
     );
 }

@@ -442,7 +442,7 @@ pub fn providers_in(home: &Path) -> Result<Providers, CliError> {
 }
 
 /// The installed providers in `home`, and the notices loading them gave.
-pub(crate) fn providers_with_notices(home: &Path) -> Result<(Providers, Vec<Notice>), CliError> {
+fn providers_with_notices(home: &Path) -> Result<(Providers, Vec<Notice>), CliError> {
     Ok(Providers::load(home)?)
 }
 

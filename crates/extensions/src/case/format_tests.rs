@@ -295,7 +295,7 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
         parsed.clock[0]
             .after
             .as_ref()
-            .map(|after| (after.kind.as_str(), after.nth)),
+            .map(|after| (after.kind.name(), after.nth)),
         Some(("turn_completed", 2))
     );
     assert_eq!(parsed.host.http.len(), 2);
@@ -329,7 +329,7 @@ fn every_session_field_and_each_host_reply_shape_is_read() {
         parsed
             .until
             .as_ref()
-            .map(|until| (until.kind.as_str(), until.nth)),
+            .map(|until| (until.kind.name(), until.nth)),
         Some(("notice", 1))
     );
     assert_eq!(parsed.expect.len(), 1);
@@ -939,7 +939,7 @@ fn a_command_case_requires_until() {
         panic!("command case parsed as a call case");
     };
     assert_eq!(
-        parsed.until.as_ref().map(|until| until.kind.as_str()),
+        parsed.until.as_ref().map(|until| until.kind.name()),
         Some("extension_ui")
     );
 
@@ -952,7 +952,7 @@ fn a_command_case_requires_until() {
         parsed
             .until
             .as_ref()
-            .map(|until| (until.kind.as_str(), until.nth)),
+            .map(|until| (until.kind.name(), until.nth)),
         Some(("notice", 2))
     );
 }

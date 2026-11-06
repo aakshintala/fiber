@@ -918,7 +918,7 @@ fn is_read_only(effects: &Effects) -> bool {
 
 /// Maps the spawn outcome like [`from_spawn`], carrying the call's
 /// end-of-call protected-path report into the foreground result.
-pub(crate) fn from_spawn_reported(
+fn from_spawn_reported(
     result: Result<Finished, std::io::Error>,
     limit: Option<Limit>,
     command: &str,

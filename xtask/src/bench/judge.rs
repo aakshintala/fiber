@@ -1203,7 +1203,7 @@ pub(super) struct Line {
 
 /// The head's results, the stored results when they parsed, and the commit
 /// the stored results are from.
-pub(super) type Measured<'a> = (Option<&'a Results>, Option<&'a Results>, &'a str);
+type Measured<'a> = (Option<&'a Results>, Option<&'a Results>, &'a str);
 
 /// Starts each failure that is a measurement over its budget, as opposed to
 /// a result that is missing or malformed.

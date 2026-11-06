@@ -2258,7 +2258,7 @@ fn fake_git() -> PathBuf {
 /// fail the test without leaking. By pid, never by group: a stalled `git`
 /// shares this test's process group.
 fn no_stall_left(unique: &str) {
-    let leftovers = fakes::matching(unique).unwrap();
+    let leftovers = fakes::matching(unique, fakes::MUST_SUCCEED_WITHIN / 2).unwrap();
     for pid in &leftovers {
         drop(fakes::kill_pid(*pid, "KILL"));
     }
