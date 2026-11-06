@@ -1,6 +1,4 @@
 crates/loop/tests	fiber-4157	plan	2026-11-05T10:04:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/main_journeys.rs	fiber-4100	plan	2026-11-05T10:05:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/Cargo.toml	fiber-4100	plan	2026-11-05T10:05:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/asking_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/before_message_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/before_tool_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
