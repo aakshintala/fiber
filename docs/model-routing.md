@@ -632,7 +632,8 @@ For each model:
   dialect it speaks
 - the thinking levels it supports ("Thinking")
 - whether deferred tools work for it, declared only after a probe
-  (`docs/tools.md`, "Which tools the model sees")
+  (`docs/tools.md`, "Which tools the model sees"), except the Databricks
+  Claude rows set from their `providers/anthropic` counterparts there
 - `web_search`: the vendor's own hosted-search tool type, exactly as it is
   sent, such as `web_search_20250305` or `google_search`; absent when the
   model's provider hosts no search for it ("Hosted web search")
