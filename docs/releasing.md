@@ -80,7 +80,9 @@ stable tag. Nightly jobs reuse the stable steps verbatim so their
 measurements are reported ungated exactly as `docs/ci.md`, "Releases",
 describes, while ceiling-lowering follow-up pull requests stay on stable
 releases, which key off `CHANGELOG.md` sections and version bumps that
-nightlies never write.
+nightlies never write. There is no fallback that publishes from the last green commit.
+
+A red nightly pauses merges until a rerun passes (`docs/workflow.md`, "Merging"). A red nightly is any failed nightly-path run: the scheduled `0 5 * * *` run or a manual dispatch under the same check, except `rehearse=true` dispatches, which run only the `rehearsal` job. Preflight counts: the decide step fails the run when the tag listing fails, before `nightly-needed` is ever `publish`. Stable pushes never trigger the pause. The pause ends at the first passing nightly run that re-executes the failed scope: a same-commit rerun of the failed jobs from the Actions tab, or the next scheduled nightly on a main containing the fix. A green that skipped the failed scope does not end the pause: after a post-publish failure the next run recomputes preflight, finds the already-published tag, decides `skip`, and every later nightly job skips, so the run goes green without re-executing anything. The dedicated fix lane (aakshintala/switchyard#1261) takes the failure.
 
 ### Rehearsing the publish path
 

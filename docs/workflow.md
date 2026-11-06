@@ -312,6 +312,8 @@ green, the full run passed on the exact head, and every review finding is
 resolved, the orchestrator squash-merges the pull request, deletes its
 branch and checks the ticket closed.
 
+A red nightly pauses merges, except for fix pull requests, until a nightly rerun passes (`docs/releasing.md`, "Nightly pre-releases"). A fix pull request is one that fixes the nightly failure; the orchestrator holds merges human-side through the pause — no script enforces it — and reads a fix pull request against the failure before merging it through the pause. Lanes keep planning and building during the pause. A red post-merge backstop does not pause merges (`docs/ci.md`, "The backstop on `main`"): the backstop never blocks a merge.
+
 ### Break-glass merge
 
 When the `CI` check itself is broken and that blocks other pull requests, the
