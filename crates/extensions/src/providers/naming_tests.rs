@@ -533,3 +533,39 @@ fn delegate_model_refuses_an_unknown_model() {
     let providers = registry(&[("openai", vec![model("x")])]);
     assert_eq!(providers.delegate_model("fiber:nope/x"), None);
 }
+
+#[test]
+fn a_holder_flips_between_counted_and_logged_out_without_a_config_change() {
+    // Presence is live: under one unchanged configuration, storing `pa`'s
+    // credential flips bare `m` from naming its logged-out holder to
+    // resolving it, and deleting the credential flips it back.
+    let providers = registry(&[("pa", vec![model("m")])]);
+    let root = fakes::TempDir::new("fiber-naming-presence-flip");
+    let home = root.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let config = Config::load(Sources {
+        home: home.clone(),
+        workspace: home.clone(),
+        project: ProjectKey::new("p").unwrap(),
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let error = providers.resolve_named(&[], &config, "m").unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Config(config::ConfigError::CredentialMissing { .. })
+    ));
+    config::store_credential(&home, "pa", "default", &Secret::new("key".into())).unwrap();
+    let made = providers.resolve_named(&[], &config, "m").unwrap();
+    assert_eq!(made.reference(), "pa/m");
+    assert!(config::delete_credential(&home, "pa", "default").unwrap());
+    let error = providers.resolve_named(&[], &config, "m").unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Config(config::ConfigError::CredentialMissing { .. })
+    ));
+    assert_eq!(
+        error.to_string(),
+        "No credential for `pa`: `pa` has `m` but is not logged in. Run `fiber login pa`."
+    );
+}

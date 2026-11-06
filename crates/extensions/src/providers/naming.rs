@@ -63,8 +63,11 @@ impl Providers {
                 }
             });
         }
-        // Presence is fixed at startup, matching the session's route and
-        // credential pinning: every bare-id candidate list below filters
+        // The configuration is the pinned startup configuration, but
+        // credential presence is live (`has_credential` never memoizes, so
+        // each call rereads credential files and the environment): a login
+        // or logout flips the next read with no configuration change.
+        // Within this one call every bare-id candidate list below filters
         // on this one set, so neither contributor leaks.
         let on: BTreeSet<String> = self.switched_on(config).map(str::to_owned).collect();
         if typed != rest
