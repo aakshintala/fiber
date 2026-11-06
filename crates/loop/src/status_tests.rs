@@ -2435,3 +2435,60 @@ fn finished_turns_forget_their_tool_names() {
         assert_eq!(w.fold.tools.len(), 0, "after turn {}", turn + 1);
     }
 }
+
+/// An unknown kind that is none of the four control lines leaves the
+/// observer not live: with the `LIVE` guard forced true it would go live
+/// and read the jobs, the branch and the count.
+#[test]
+fn an_unknown_line_that_is_no_control_line_leaves_the_observer_not_live() {
+    use contract::events::EventKind;
+
+    let running = Arc::new(Mutex::new(vec![job("j1")]));
+    let branch = Arc::new(Mutex::new(Some(Git {
+        branch: Some("main".into()),
+    })));
+    let count = Arc::new(Mutex::new(7u32));
+    let reads = Arc::new(Mutex::new(0u32));
+    let (r, b) = (Arc::clone(&running), Arc::clone(&branch));
+    let (c, n) = (Arc::clone(&count), Arc::clone(&reads));
+    let fold = Fold::new(
+        "-w".to_owned(),
+        "/w".to_owned(),
+        "fake/m".to_owned(),
+        None,
+        Box::new(move || r.lock().unwrap().clone()),
+        Box::new(move || b.lock().unwrap().clone()),
+        Box::new(move || {
+            *n.lock().unwrap() += 1;
+            *c.lock().unwrap()
+        }),
+    );
+    let (_tx, rx) = std::sync::mpsc::channel::<std::sync::mpsc::Sender<()>>();
+    let mut observer = super::Observer {
+        fold,
+        log: std::sync::Weak::new(),
+        live: false,
+        last: None,
+        requests: rx,
+    };
+    let line = envelope("future_kind", 1001, None, None, Some(1001), &json!({}));
+    assert!(matches!(line.kind(), EventKind::Unknown(_)));
+    assert!(matches!(observer.line(&line), super::Flow::Go));
+    assert!(!observer.live, "an unknown line is not the live line");
+    assert!(!observer.fold.live, "go_live did not run");
+    assert_eq!(
+        *reads.lock().unwrap(),
+        0,
+        "go_live did not read the clients"
+    );
+    assert_eq!(observer.fold.status().jobs, 0);
+    // The live line does go live, so the harness above can tell the two
+    // apart. The log is gone, so the first emit after going live reports
+    // `Gone`; the live flag and the reads still prove `go_live` ran.
+    let live = envelope("status_live", 1002, None, None, None, &json!({}));
+    assert!(matches!(observer.line(&live), super::Flow::Gone));
+    assert!(observer.live);
+    assert!(observer.fold.live);
+    assert_eq!(*reads.lock().unwrap(), 1);
+    assert_eq!(observer.fold.status().jobs, 1);
+}
