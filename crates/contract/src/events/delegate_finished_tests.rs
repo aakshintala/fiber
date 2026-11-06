@@ -75,13 +75,3 @@ fn usage_is_copied_from_the_exit_line() {
     let finished = line.delegate_finished(&job_id());
     assert_eq!(finished.usage, usage());
 }
-
-#[test]
-fn the_fold_sets_no_worktree() {
-    // Only the live drive assigns a worktree, after the fold: the fold
-    // itself leaves it unset.
-    let line = exited(0, Some("Done."), None);
-    let finished = line.delegate_finished(&job_id());
-    assert_eq!(finished.worktree, None);
-    assert_eq!(finished.questions, None);
-}

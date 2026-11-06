@@ -768,6 +768,137 @@ fn a_settled_pair_behind_a_suspended_batch_holds_notice_and_final_text() {
     );
 }
 
+#[test]
+fn an_owned_settled_pair_behind_a_suspended_batch_still_logs_its_finish() {
+    // An extension-owned settled pair behind a suspended turn: the log still
+    // gets `delegate_finished` immediately before its `job_completed`
+    // (`docs/delegates.md`, "Events"), while neither text joins `held` —
+    // the extension owns the end, as a live extension finish does. The pair
+    // is constructed directly, so this pins the write, not the settle.
+    let home = fakes::TempDir::new("fiber-settle-held-owned");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        log::Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap(),
+    );
+    let (_inbox, rx) = mpsc::channel();
+    let mut looped = crate::Loop::start(
+        crate::Session {
+            log: Arc::clone(&log),
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: crate::Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                clock,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(fakes::NoRules),
+            },
+        },
+        None,
+    )
+    .unwrap();
+    looped.suspended = Some(crate::resume::Suspended {
+        turn: contract::TurnId("t_1".into()),
+        pending: crate::suspend::Pending::Approval(contract::events::PermissionRequested {
+            request_id: contract::RequestId("r_1".into()),
+            always_reviewed: false,
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+                confined: false,
+            },
+            step: contract::events::AskStep::StandingAsk {
+                standing_rule: contract::events::StandingRule {
+                    scope: contract::events::RuleScope::Project,
+                    prefix: "atlas".into(),
+                },
+            },
+        }),
+        action: ActionId("a_1".into()),
+        batch: Vec::new(),
+        started: None,
+        permission: None,
+    });
+    looped
+        .handoff
+        .carry
+        .extension_jobs
+        .insert("j_owned_settle".into());
+    let finished = DelegateFinished {
+        job_id: JobId("j_owned_settle".into()),
+        text: "migrated 3 queries".into(),
+        artifact: None,
+        questions: None,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        worktree: None,
+        changed_by: None,
+    };
+    let completed = JobCompleted {
+        job_id: JobId("j_owned_settle".into()),
+        status: Outcome::Completed,
+        error: None,
+        process: Some(contract::shapes::Process {
+            exit_code: Some(0),
+            signal: None,
+            timed_out: false,
+        }),
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    };
+    looped
+        .mark_orphans(vec![crate::jobs::OrphanEnd::Settled(
+            finished.clone(),
+            Box::new(completed.clone()),
+        )])
+        .unwrap();
+    // The pair writes `delegate_finished` immediately before its
+    // `job_completed`, even though the extension owns the end.
+    let lines: Vec<contract::Envelope> = log::read(&home.path().join("s_test"))
+        .unwrap()
+        .into_iter()
+        .filter(contract::Envelope::is_durable)
+        .collect();
+    let lines = &lines[lines.len() - 2..];
+    assert_eq!(
+        lines[0].kind(),
+        contract::events::EventKind::DelegateFinished
+    );
+    assert_eq!(lines[1].kind(), contract::events::EventKind::JobCompleted);
+    assert_eq!(lines[0].payload["text"], "migrated 3 queries");
+    assert_eq!(lines[1].payload["status"], "completed");
+    // The extension owns the end, so nothing joins `held`.
+    assert!(looped.held.is_empty());
+}
+
 /// A failed end a hook rewrote: `notice` holds what the model was sent
 /// and `output_tail` is absent, carrying the raw tail it replaced.
 fn noticed(id: &str, notice: &str) -> Event {

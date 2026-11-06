@@ -520,15 +520,15 @@ impl Loop {
                 OrphanEnd::Settled(finished, completed) => (Some(finished), *completed),
             };
             if self.suspended.is_some() {
-                if let Some(finished) = &finished
-                    && !self.handoff.carry.owned(&finished.job_id.0)
-                {
+                if let Some(finished) = &finished {
                     let event = Event::DelegateFinished(finished.clone());
                     self.log.append(&event, None, None)?;
-                    self.held.push(Input::User {
-                        text: delegate_text(finished),
-                        images: Vec::new(),
-                    });
+                    if !self.handoff.carry.owned(&finished.job_id.0) {
+                        self.held.push(Input::User {
+                            text: delegate_text(finished),
+                            images: Vec::new(),
+                        });
+                    }
                 }
                 let event = Event::JobCompleted(completed.clone());
                 self.log.append(&event, None, None)?;
