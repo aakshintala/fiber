@@ -863,34 +863,73 @@ fn head_failures_reject_a_line_that_is_not_an_id() {
 }
 
 #[test]
-fn base_results_parse_each_outcome_by_exact_id() {
+fn base_outcomes_match_by_exact_binary_and_name() {
+    // The same test name under another binary is another test: only the
+    // exact `binary-id name` line decides, and an id the base list does
+    // not name gets no line (the pull request added it).
+    let head = strings(&["b fold::tests::first", "c fold::tests::first"]);
     assert_eq!(
-        parse_base_results(
-            "pass\tmain::suite case\nfail\tmain::suite old\nunrunnable\tmain::suite skipped\n"
+        classify_base(
+            &head,
+            "a fold::tests::first\nb fold::tests::first\n",
+            "",
+            "b fold::tests::first\n",
         ),
-        Ok(BTreeMap::from([
-            ("main::suite case".to_owned(), BaseOutcome::Passed),
-            ("main::suite old".to_owned(), BaseOutcome::Failed),
-            ("main::suite skipped".to_owned(), BaseOutcome::Unrunnable),
-        ]))
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Passed)]),
     );
 }
 
 #[test]
-fn base_results_reject_a_line_that_is_not_an_outcome() {
-    for text in [
-        // Unknown outcome.
-        "flaky\tmain::suite case\n",
-        // No tab between the outcome and the id.
-        "pass main::suite case\n",
-        // Not an exact nextest id.
-        "pass\tlonely\n",
-        "pass\tthree part id\n",
-        // A repeated id would double-count one test.
-        "pass\tmain::suite case\nfail\tmain::suite case\n",
-    ] {
-        assert!(parse_base_results(text).is_err(), "{text:?}");
-    }
+fn a_base_failure_beats_an_execution() {
+    let head = strings(&["b fold::tests::first"]);
+    assert_eq!(
+        classify_base(
+            &head,
+            "b fold::tests::first\n",
+            "b fold::tests::first\n",
+            "b fold::tests::first\n",
+        ),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Failed)]),
+    );
+}
+
+#[test]
+fn a_base_pass_on_retry_counts_as_a_pass() {
+    // Executed without failing: the base passed, if only on retry, so a
+    // retry never masks a head break.
+    let head = strings(&["b fold::tests::first"]);
+    assert_eq!(
+        classify_base(
+            &head,
+            "b fold::tests::first\n",
+            "",
+            "b fold::tests::first\n",
+        ),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Passed)]),
+    );
+}
+
+#[test]
+fn a_listed_but_unexecuted_id_is_unrunnable() {
+    let head = strings(&["b fold::tests::first"]);
+    assert_eq!(
+        classify_base(&head, "b fold::tests::first\n", "", "",),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Unrunnable)]),
+    );
+}
+
+#[test]
+fn base_lists_skip_empty_lines() {
+    let head = strings(&["b fold::tests::first"]);
+    assert_eq!(
+        classify_base(
+            &head,
+            "\nb fold::tests::first\n\n",
+            "\n",
+            "\nb fold::tests::first\n",
+        ),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Passed)]),
+    );
 }
 
 fn break_jobs() -> BTreeMap<String, bool> {

@@ -17,8 +17,9 @@
 //!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped. With the
-//!   `HEAD_FAILURES` and `BASE_RESULTS` files set, a failed `test_linux` leg
-//!   fails only on the tests the head newly broke against the base commit
+//!   `HEAD_FAILURES` file plus the `BASE_LIST`, `BASE_FAILED` and
+//!   `BASE_EXECUTED` files set, a failed `test_linux` leg fails only on the
+//!   tests the head newly broke against the base commit
 //!   (`docs/ci.md`, "On every pull request that changes code").
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
@@ -267,16 +268,24 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .collect();
             // The head-vs-base break data the Linux leg uploads on a pull
             // request whose head run failed (`docs/ci.md`, "On every pull
-            // request that changes code"). Absent everywhere else, when the
-            // verdict falls back to the job results alone; a failed leg with
-            // head failures but no usable base fails closed.
+            // request that changes code"): the head's failed ids plus the
+            // base test list, failures and executions, classified in tested
+            // code. Absent everywhere else, when the verdict falls back to
+            // the job results alone; a failed leg with head failures but no
+            // usable base fails closed.
             let head_failures = match data_file("HEAD_FAILURES")? {
                 None => Vec::new(),
                 Some(text) => select::parse_head_failures(&text)?,
             };
-            let base = match data_file("BASE_RESULTS")? {
-                None => select::BaseResults::Untestable,
-                Some(text) => select::BaseResults::Listed(select::parse_base_results(&text)?),
+            let base = match (
+                data_file("BASE_LIST")?,
+                data_file("BASE_FAILED")?,
+                data_file("BASE_EXECUTED")?,
+            ) {
+                (Some(list), Some(failed), Some(executed)) => select::BaseResults::Listed(
+                    select::classify_base(&head_failures, &list, &failed, &executed),
+                ),
+                _ => select::BaseResults::Untestable,
             };
             if !head_failures.is_empty() {
                 let breaks = select::new_breaks(&head_failures, &base);

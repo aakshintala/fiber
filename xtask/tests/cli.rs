@@ -2610,18 +2610,21 @@ fn verdict_excuses_a_test_linux_failure_with_no_new_breaks() {
         "head-failures.txt",
         "main::suite old\nmain::suite skipped\n",
     );
-    dir.write(
-        "base-results.txt",
-        "fail\tmain::suite old\nunrunnable\tmain::suite skipped\n",
-    );
+    dir.write("base-ids.txt", "main::suite old\nmain::suite skipped\n");
+    dir.write("base-failed.txt", "main::suite old\n");
+    dir.write("base-executed.txt", "main::suite old\n");
     let head = dir.path().join("head-failures.txt");
-    let base = dir.path().join("base-results.txt");
+    let list = dir.path().join("base-ids.txt");
+    let failed = dir.path().join("base-failed.txt");
+    let executed = dir.path().join("base-executed.txt");
     let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
     let env = [
         ("NEEDS", needs),
         ("JOBS", r#"{"test_linux":true}"#),
         ("HEAD_FAILURES", head.to_str().unwrap()),
-        ("BASE_RESULTS", base.to_str().unwrap()),
+        ("BASE_LIST", list.to_str().unwrap()),
+        ("BASE_FAILED", failed.to_str().unwrap()),
+        ("BASE_EXECUTED", executed.to_str().unwrap()),
     ];
     let (code, out) = xtask(&dir, &["verdict"], &env, "");
     assert_eq!(code, 0, "{out}");
@@ -2643,15 +2646,21 @@ fn verdict_excuses_a_test_linux_failure_with_no_new_breaks() {
 fn verdict_fails_a_newly_broken_test_linux_failure() {
     let dir = TempDir::new("xtask-verdict-newly-broken");
     dir.write("head-failures.txt", "main::suite new\n");
-    dir.write("base-results.txt", "pass\tmain::suite new\n");
+    dir.write("base-ids.txt", "main::suite new\n");
+    dir.write("base-failed.txt", "");
+    dir.write("base-executed.txt", "main::suite new\n");
     let head = dir.path().join("head-failures.txt");
-    let base = dir.path().join("base-results.txt");
+    let list = dir.path().join("base-ids.txt");
+    let failed = dir.path().join("base-failed.txt");
+    let executed = dir.path().join("base-executed.txt");
     let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
     let env = [
         ("NEEDS", needs),
         ("JOBS", r#"{"test_linux":true}"#),
         ("HEAD_FAILURES", head.to_str().unwrap()),
-        ("BASE_RESULTS", base.to_str().unwrap()),
+        ("BASE_LIST", list.to_str().unwrap()),
+        ("BASE_FAILED", failed.to_str().unwrap()),
+        ("BASE_EXECUTED", executed.to_str().unwrap()),
     ];
     let (code, out) = xtask(&dir, &["verdict"], &env, "");
     assert_eq!(code, 1, "{out}");
@@ -2680,15 +2689,21 @@ fn verdict_fails_closed_without_break_data() {
 fn verdict_keeps_a_touched_retry_failure_with_no_new_breaks() {
     let dir = TempDir::new("xtask-verdict-touched-retry");
     dir.write("head-failures.txt", "main::suite old\n");
-    dir.write("base-results.txt", "fail\tmain::suite old\n");
+    dir.write("base-ids.txt", "main::suite old\n");
+    dir.write("base-failed.txt", "main::suite old\n");
+    dir.write("base-executed.txt", "main::suite old\n");
     let head = dir.path().join("head-failures.txt");
-    let base = dir.path().join("base-results.txt");
+    let list = dir.path().join("base-ids.txt");
+    let failed = dir.path().join("base-failed.txt");
+    let executed = dir.path().join("base-executed.txt");
     let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
     let env = [
         ("NEEDS", needs),
         ("JOBS", r#"{"test_linux":true}"#),
         ("HEAD_FAILURES", head.to_str().unwrap()),
-        ("BASE_RESULTS", base.to_str().unwrap()),
+        ("BASE_LIST", list.to_str().unwrap()),
+        ("BASE_FAILED", failed.to_str().unwrap()),
+        ("BASE_EXECUTED", executed.to_str().unwrap()),
         ("TOUCHED_FAILED", "true"),
     ];
     let (code, out) = xtask(&dir, &["verdict"], &env, "");

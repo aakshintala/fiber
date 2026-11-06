@@ -529,15 +529,15 @@ jobs:
       # A pull request fails only on the tests it newly broke (docs/ci.md,
       # "On every pull request that changes code"): rerun exactly the head's
       # failed tests at the base commit in a scratch worktree, and record
-      # each one's base outcome for the verdict step. The scratch checkout
-      # never touches this job's checkout, target dir or caches.
+      # the base test list, failures and executions for the verdict step,
+      # which classifies each head failure in tested code. The scratch
+      # checkout never touches this job's checkout, target dir or caches.
       - name: Rerun the head failures at the base commit
         if: always() && github.event_name == 'pull_request'
         env:
           BASE_DIR: ${{ runner.temp }}/base
           OUT_DIR: ${{ runner.temp }}/new-breaks
         run: |
-          : >"$OUT_DIR/base-results.txt"
           if [ ! -s "$OUT_DIR/head-failures.txt" ]; then
             echo "no head failures: no base rerun"
             exit 0
@@ -591,23 +591,10 @@ jobs:
                       continue
                   handle.write(f'{classname} {name}\n')
           PYEOF
-          while IFS= read -r id; do
-            [ -n "$id" ] || continue
-            if ! grep -qFx -- "$id" "$OUT_DIR/base-ids.txt"; then
-              # Absent from the base list: the pull request added the test;
-              # no line, and the verdict reads the absence as PR-added.
-              continue
-            elif grep -qFx -- "$id" "$OUT_DIR/base-failed.txt"; then
-              printf 'fail\t%s\n' "$id"
-            elif grep -qFx -- "$id" "$OUT_DIR/base-executed.txt"; then
-              printf 'pass\t%s\n' "$id"
-            else
-              printf 'unrunnable\t%s\n' "$id"
-            fi
-          done <"$OUT_DIR/head-failures.txt" >"$OUT_DIR/base-results.txt"
-      # Both files travel to the verdict step: the head's failed ids and
-      # each one's base outcome. A missing file fails closed here, never in
-      # the verdict.
+      # The four files travel to the verdict step: the head's failed ids
+      # plus the base test list, failures and executions, which the verdict
+      # classifies in tested code. A missing file fails closed here, never
+      # in the verdict.
       - name: Upload the head-vs-base break data
         if: always() && github.event_name == 'pull_request'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -615,7 +602,9 @@ jobs:
           name: new-breaks
           path: |
             ${{ runner.temp }}/new-breaks/head-failures.txt
-            ${{ runner.temp }}/new-breaks/base-results.txt
+            ${{ runner.temp }}/new-breaks/base-ids.txt
+            ${{ runner.temp }}/new-breaks/base-failed.txt
+            ${{ runner.temp }}/new-breaks/base-executed.txt
           if-no-files-found: error
           retention-days: 7
 
@@ -1976,9 +1965,10 @@ jobs:
       - *cache-restore
       # The head-vs-base break data the Linux leg uploads on a pull request
       # whose head run failed (docs/ci.md, "On every pull request that
-      # changes code"): on a push, and on a pull request that skips the
-      # Linux leg, the artifact does not exist, and the verdict falls back
-      # to the job results alone.
+      # changes code"): the head's failed ids plus the base test list,
+      # failures and executions. On a push, and on a pull request that
+      # skips the Linux leg, the artifact does not exist, and the verdict
+      # falls back to the job results alone.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: github.event_name == 'pull_request' && fromJSON(needs.select.outputs.jobs).test_linux
         with:
@@ -1989,6 +1979,8 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           JOBS: ${{ needs.select.outputs.jobs }}
           HEAD_FAILURES: ${{ runner.temp }}/new-breaks/head-failures.txt
-          BASE_RESULTS: ${{ runner.temp }}/new-breaks/base-results.txt
+          BASE_LIST: ${{ runner.temp }}/new-breaks/base-ids.txt
+          BASE_FAILED: ${{ runner.temp }}/new-breaks/base-failed.txt
+          BASE_EXECUTED: ${{ runner.temp }}/new-breaks/base-executed.txt
           TOUCHED_FAILED: ${{ needs.test_linux.outputs.touched_failed }}
         run: cargo xtask verdict

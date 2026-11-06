@@ -341,31 +341,43 @@ pub(crate) fn parse_head_failures(text: &str) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
-/// The base side's per-test outcomes, one `<outcome>\t<id>` line each: the
-/// outcome is `pass`, `fail` or `unrunnable`, and the id is an exact nextest
-/// id as a `parse_head_failures` line holds it. A line that is not one is an
-/// error naming it, and so is a repeated id.
-pub(crate) fn parse_base_results(text: &str) -> Result<BTreeMap<String, BaseOutcome>, String> {
+/// The base side's per-test outcomes from the rerun's three id-per-line
+/// lists: the base test list, the base failures and the base executions.
+/// Each list holds exact nextest ids as `parse_head_failures` lines hold
+/// them, empty lines skipped. An id the base list does not name gets no
+/// line: the pull request added the test, and the verdict reads the absence
+/// as PR-added (`new_breaks`). A listed id the rerun failed is `Failed`; a
+/// listed id it executed without failing is `Passed`, so a base pass on
+/// retry still counts as a pass and a retry never masks a head break; a
+/// listed id it never executed is `Unrunnable` (`docs/ci.md`, "On every
+/// pull request that changes code").
+pub(crate) fn classify_base(
+    head_failures: &[String],
+    base_list: &str,
+    base_failed: &str,
+    base_executed: &str,
+) -> BTreeMap<String, BaseOutcome> {
+    fn ids(text: &str) -> std::collections::HashSet<&str> {
+        text.lines().filter(|line| !line.is_empty()).collect()
+    }
+    let listed = ids(base_list);
+    let failed = ids(base_failed);
+    let executed = ids(base_executed);
     let mut outcomes = BTreeMap::new();
-    for (index, line) in text.lines().enumerate() {
-        if line.is_empty() {
+    for id in head_failures {
+        if !listed.contains(id.as_str()) {
             continue;
         }
-        let error = || format!("base results line {}: {line}", index + 1);
-        let Some((outcome, id)) = line.split_once('\t') else {
-            return Err(error());
+        let outcome = if failed.contains(id.as_str()) {
+            BaseOutcome::Failed
+        } else if executed.contains(id.as_str()) {
+            BaseOutcome::Passed
+        } else {
+            BaseOutcome::Unrunnable
         };
-        let outcome = match outcome {
-            "pass" => BaseOutcome::Passed,
-            "fail" => BaseOutcome::Failed,
-            "unrunnable" => BaseOutcome::Unrunnable,
-            _ => return Err(error()),
-        };
-        if id.split_whitespace().count() != 2 || outcomes.insert(id.to_owned(), outcome).is_some() {
-            return Err(error());
-        }
+        outcomes.insert(id.clone(), outcome);
     }
-    Ok(outcomes)
+    outcomes
 }
 
 /// Failures, one line each; empty when `CI` passes. `results` maps each job
