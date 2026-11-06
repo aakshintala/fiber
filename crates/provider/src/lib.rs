@@ -165,6 +165,10 @@ pub struct Compat {
     /// (`research/openai-completions-probe`), and Anthropic's strict-tool
     /// limits apply.
     pub anthropic: bool,
+    /// `openai-completions`: the model is Gemini behind a gateway such as
+    /// Databricks. Requests carry no `stream_options` or `prompt_cache_key`,
+    /// and nullable `type` arrays are rewritten.
+    pub gemini: bool,
     /// `openai-completions`: the body field that also carries the cache key,
     /// such as OpenRouter's `session_id` (`docs/prompt-cache.md`, "Cache
     /// markers and keys").
@@ -223,6 +227,7 @@ impl Compat {
             max_tokens: flag("max_tokens").unwrap_or(false),
             reasoning_object: flag("reasoning_object").unwrap_or(false),
             anthropic: flag("anthropic").unwrap_or(false),
+            gemini: flag("gemini").unwrap_or(false),
             cache_key_field: data
                 .get("cache_key_field")
                 .and_then(Value::as_str)

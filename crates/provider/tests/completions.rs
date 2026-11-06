@@ -1232,7 +1232,7 @@ fn tool_call_deltas_without_an_index_are_told_apart_by_id() {
 #[test]
 fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
     let data = json!({"store": false, "max_tokens": true, "reasoning_object": "yes",
-        "anthropic": true, "cache_key_field": "session_id"});
+        "anthropic": true, "gemini": true, "cache_key_field": "session_id"});
     assert_eq!(
         Compat::from_data(data.as_object().unwrap()),
         Compat {
@@ -1240,6 +1240,7 @@ fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
             max_tokens: true,
             reasoning_object: false,
             anthropic: true,
+            gemini: true,
             cache_key_field: Some("session_id".into()),
             thinking_budget: false,
             bearer: false,
