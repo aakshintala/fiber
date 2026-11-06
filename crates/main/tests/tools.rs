@@ -721,6 +721,75 @@ fn a_credential_path_is_denied_for_a_read_and_a_shell_cat_under_every_spelling()
 }
 
 #[test]
+fn deny_listed_lookalike_sibling_is_denied() {
+    // The credential directory holds a file whose name differs from the
+    // requested one only by a Unicode space. The call declares a path under
+    // `credentials/`, so the built-in deny refuses it before it runs; the
+    // not-found scan never starts, and no protected bytes escape.
+    let setup = Setup::new_with_started_deadline();
+    let secret = setup.home().join("credentials").join("my secret.txt");
+    fs::create_dir_all(secret.parent().unwrap()).unwrap();
+    fs::write(&secret, format!("{MARKER}\n")).unwrap();
+    let sibling = fs::canonicalize(secret.parent().unwrap())
+        .unwrap()
+        .join("my\u{202f}secret.txt");
+    let request = sibling.to_str().unwrap().to_owned();
+    assert!(!request.contains(MARKER), "{request}");
+    let events = vec![function_call("read_0", "read", &json!({"path": request}))];
+    let script = serde_json::to_string(&events).unwrap();
+    assert!(
+        !script.contains(MARKER),
+        "the scripted arguments contain the credential file's text"
+    );
+    let server = ProviderServer::start([stream(&events), hello()]).unwrap();
+    setup.provider_with_defaults(&server);
+
+    let run = setup.run(&["ask", "show the secret"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), denied_kinds(1));
+    let requested: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_requested")
+        .collect();
+    let resolved: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "permission_resolved")
+        .collect();
+    let completed: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(completed.len(), 1);
+    assert_eq!(&resolved[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(&completed[0]["action_id"], &requested[0]["action_id"]);
+    assert_eq!(resolved[0]["payload"]["decided_by"], "credential_deny");
+    assert_eq!(
+        resolved[0]["payload"]["reason"],
+        "The call touches Fiber's credential directory."
+    );
+    assert_eq!(completed[0]["payload"]["status"], "denied");
+    assert_eq!(completed[0]["payload"]["reason"], "credentials");
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started"),
+        "the denied call never started"
+    );
+    assert_no_marker("stdout", run.stdout.as_bytes());
+    assert_no_marker("stderr", run.stderr.as_bytes());
+    for (index, request) in server.requests().iter().enumerate() {
+        assert_no_marker(&format!("request {index}"), &request.body);
+    }
+    assert_session_has_no_marker(&run.session_dir(&setup));
+}
+
+#[test]
 fn a_configured_read_only_command_is_denied_for_a_credential_path() {
     // `jq` is listed in the person's `shell.read_only` with no flags: the
     // call declares its operands, the credential deny refuses it before it
