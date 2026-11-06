@@ -69,9 +69,6 @@ crates/main/src/keeper_child.rs	fiber-3891	plan	2026-11-05T22:22:48Z	roundhouse-
 crates/loop/src/reviewer/shown.rs	fiber-4236	plan	2026-11-06T00:35:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 docs/permissions.md	fiber-4236	plan	2026-11-06T00:35:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
 crates/loop/examples/review.rs	fiber-4236	plan	2026-11-06T00:35:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber/.claude/worktrees/flywheel-reads-2	
-crates/main/tests/main_journeys.rs	fiber-4226	plan	2026-11-06T01:49:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/terminal.rs	fiber-4226	plan	2026-11-06T01:49:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/support/pty.rs	fiber-4226	plan	2026-11-06T01:49:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/history.rs	fiber-4236	plan	2026-11-06T01:56:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/handoff/carry.rs	fiber-4236	plan	2026-11-06T01:56:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/util.rs	fiber-4236	plan	2026-11-06T01:56:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
