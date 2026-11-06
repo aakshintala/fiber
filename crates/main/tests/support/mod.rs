@@ -3978,10 +3978,9 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     fakes::wait_until(
         "the parked refresh child to list",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || {
-            fakes::matching(&listed, wait.left() / 2)
-                .unwrap_or_default()
-                .contains(&pid)
+        move || match fakes::matching(&listed, wait.left() / 2) {
+            Ok(pids) => pids.contains(&pid),
+            Err(error) => panic!("listing the parked refresh child: {error}"),
         },
     );
     // The old wait checks the match at once: the parked child is still
@@ -4194,10 +4193,9 @@ fn holder_dies_with_the_test_process_that_parked_it() {
     fakes::wait_until(
         "the parked holder to list",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || {
-            fakes::matching(&listed, wait.left() / 2)
-                .unwrap_or_default()
-                .contains(&holder)
+        move || match fakes::matching(&listed, wait.left() / 2) {
+            Ok(pids) => pids.contains(&holder),
+            Err(error) => panic!("listing the parked holder: {error}"),
         },
     );
     // The holder lives in another group, so this SIGKILL reaches only the

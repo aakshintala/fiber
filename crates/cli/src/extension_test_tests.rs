@@ -484,28 +484,92 @@ fn pid_exits_or_is_zombie(pid: u32, deadline: Duration) -> bool {
 
 #[cfg(target_os = "linux")]
 fn pid_is_zombie(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(") ")
-                .map(|(_, fields)| fields.starts_with('Z'))
-        })
-        .unwrap_or(false)
+    match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat
+            .rsplit_once(") ")
+            .map(|(_, fields)| fields.starts_with('Z'))
+            .unwrap_or(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => panic!("reading /proc/{pid}/stat: {error}"),
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
 fn pid_is_zombie(pid: u32) -> bool {
-    Command::new("ps")
+    match Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .any(|state| state.starts_with('Z'))
-        })
-        .unwrap_or(false)
+    {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .any(|state| state.starts_with('Z')),
+        Ok(output) => panic!("ps to read the state of {pid} failed: {}", output.status),
+        Err(error) => panic!("ps to read the state of {pid}: {error}"),
+    }
+}
+
+/// A `ps` that exits non-success is a listing failure, never a kept
+/// wait: the parent shadows `ps` with a stub that exits 1 for the
+/// re-executed child alone, and the child drives the probe against a
+/// live pid and asserts the failure names the `ps` read. The full
+/// `module_path!` pins the rerun: a shortened path matches no test and
+/// the parent would pass without the child ever running.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn ps_failure_in_the_zombie_probe_names_the_ps_read() {
+    const CHILD: &str = "FIBER_EXTENSION_TEST_PS_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        ps_failure_names_the_ps_read();
+        return;
+    }
+    let dir = fakes::TempDir::new("fiber-extension-test-ps-stub");
+    fakes::script(dir.path(), "ps", "exit 1\n");
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let name = module_path!().split_once("::").unwrap().1;
+    let test = format!("{name}::ps_failure_in_the_zombie_probe_names_the_ps_read");
+    let output = fakes::rerun_prepared(
+        &test,
+        &[(CHILD, "1"), ("PATH", path.as_str())],
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        |_| {},
+    );
+    assert!(
+        output.status.success(),
+        "ps-stub child exited {}:\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("ps_failure_in_the_zombie_probe_names_the_ps_read"),
+        "the child ran exactly the ps-stub test:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ps_failure_names_the_ps_read() {
+    // A live pid: nothing about the process is missing, only `ps` fails,
+    // so a non-success status without an error is the case that bites.
+    let pid = std::process::id();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pid_is_zombie(pid)));
+    let failure = outcome.expect_err("the zombie probe fails when ps exits non-success");
+    let message = failure
+        .downcast_ref::<String>()
+        .expect("the failure carries its message");
+    assert!(
+        message.contains("ps to read the state of"),
+        "the failure names the ps read, not the outer wait: {message}"
+    );
+    assert!(
+        message.contains("exit status: 1"),
+        "the failure carries the non-success status: {message}"
+    );
 }
 
 #[test]
