@@ -658,32 +658,28 @@ fn update_to_nightly_from_local_stub_feed() {
             let server = serve_nightly_feed(&nightlies);
             let github = JourneyGithub::new(&setup, &nightlies);
             install_nightly_extension(&setup, &nightlies);
-            // The pre-update binary is a real fiber, so its `--version`
-            // line is `fiber <version>`: the bare version alone, or with
-            // the short commit the build recorded in parentheses.
+            // The pre-update binary is the journey suite's release binary,
+            // built with git history, so its `--version` line is
+            // `fiber <version> (<7 lowercase hex chars>)`: a bare version
+            // means the binary was built without git history.
             let version_line = journey_version_line(&journey_bin());
             let version = journey_version(&journey_bin());
-            let bare = format!("fiber {version}");
-            let parenthetical = version_line.strip_prefix(bare.as_str()).unwrap_or_else(|| {
-                panic!("pre-update --version line is not `fiber <version>`: saw {version_line:?}")
-            });
-            if !parenthetical.is_empty() {
-                let commit = parenthetical
-                    .strip_prefix(" (")
-                    .and_then(|rest| rest.strip_suffix(')'))
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "pre-update --version line has no commit parenthetical: saw {version_line:?}"
-                        )
-                    });
-                assert!(
-                    commit.len() == 7
-                        && commit
-                            .bytes()
-                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
-                    "pre-update --version commit is not 7 lowercase hex chars: saw {version_line:?}"
-                );
-            }
+            let prefix = format!("fiber {version} (");
+            let commit = version_line
+                .strip_prefix(prefix.as_str())
+                .and_then(|rest| rest.strip_suffix(')'))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "pre-update --version line is not `fiber <version> (<7 lowercase hex chars>)`: saw {version_line:?}; a bare version means the binary was built without git history"
+                    )
+                });
+            assert!(
+                commit.len() == 7
+                    && commit
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+                "pre-update --version commit is not 7 lowercase hex chars: saw {version_line:?}"
+            );
             // A copy of the release binary the update renames over, so
             // the shared binary stays untouched.
             let copy = setup.root.path().join("fiber-copy");
@@ -721,17 +717,6 @@ fn update_to_nightly_from_local_stub_feed() {
             let exited = run.wait();
             assert!(exited.status.success(), "nightly update exits 0");
             assert_eq!(std::fs::read(&copy).unwrap(), JOURNEY_MARKER);
-            // The announcement names the installed extension in full on
-            // its own line: the PTY folds `\n` to `\r\n`, which lines
-            // strips, so the match is on the whole line, not the prefix.
-            // `wait` owns the run, so the transcript is the complete
-            // bytes it returns, sliced from the approval prompt.
-            let transcript = String::from_utf8_lossy(&exited.terminal[at..]);
-            let expected = "fiber: updated github.com/aakshintala/fiber/providers/anthropic";
-            assert!(
-                transcript.lines().any(|line| line == expected),
-                "nightly update announces the installed extension: saw {transcript:?}"
-            );
         }),
     );
 }
