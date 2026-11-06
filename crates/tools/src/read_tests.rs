@@ -353,7 +353,9 @@ fn space_lookalike_several_list_and_open_neither() {
     let output = run(dir.path(), json!({"path": "shot AM.png"}));
     assert_eq!(code(&output), Some(ErrorCode::NotFound));
     let resolved = canonical(dir.path()).join("shot AM.png");
-    // Byte order puts U+00A0 before U+202F, so the list names `second` first.
+    // (`docs/tools.md`, "read"): several matches list at most the first 10
+    // sorted basenames. Byte order puts U+00A0 before U+202F, so the list
+    // names `second` first.
     assert_eq!(
         fakes::text_of(&output),
         format!(
@@ -462,6 +464,9 @@ fn space_lookalike_replacement_char_matches_nothing_undecodable() {
 
 #[test]
 fn space_lookalike_exact_ten_lists_without_count() {
+    // (`docs/tools.md`, "read"): several matches list at most the first 10
+    // sorted basenames plus how many more are not listed; with 10 of 10
+    // there is no count, and the backtick count pins all 10 are shown.
     let dir = TempDir::new("fiber-lookalike-ten");
     let spaces = [
         "\t", "\n", "\u{b}", "\u{c}", "\r", "\u{85}", "\u{a0}", "\u{1680}", "\u{2000}", "\u{2003}",
@@ -494,7 +499,9 @@ fn space_lookalike_exact_ten_lists_without_count() {
 #[test]
 fn space_lookalike_long_list_is_bounded() {
     let dir = TempDir::new("fiber-lookalike-twelve");
-    // Sorted by UTF-8 bytes, the last two spaces fall outside the first 10.
+    // (`docs/tools.md`, "read"): several matches list at most the first 10
+    // sorted basenames plus how many more are not listed. Sorted by UTF-8
+    // bytes, the last two spaces fall outside the first 10.
     let spaces = [
         "\t", "\n", "\u{b}", "\u{c}", "\r", "\u{85}", "\u{a0}", "\u{1680}", "\u{2000}", "\u{2003}",
         "\u{2028}", "\u{202f}",
@@ -517,14 +524,20 @@ fn space_lookalike_long_list_is_bounded() {
     assert!(!text.contains("twelve payload"), "{text}");
 }
 
-#[test]
-fn space_lookalike_single_image_is_named_not_opened() {
-    let dir = TempDir::new("fiber-lookalike-image");
-    let sibling = "pic\u{202f}01.png";
-    fs::write(dir.path().join(sibling), "lookalike-image-marker-bytes\n").unwrap();
-    let output = run(dir.path(), json!({"path": "pic 01.png"}));
+/// One lookalike of any kind is named by basename and never opened
+/// (`docs/tools.md`, "read"): the shared shape behind the single-image and
+/// single-PDF cases. Both callers stay so each kind keeps its own pin.
+fn assert_single_lookalike_named_not_opened(
+    dir_tag: &str,
+    sibling: &str,
+    requested: &str,
+    marker: &str,
+) {
+    let dir = TempDir::new(dir_tag);
+    fs::write(dir.path().join(sibling), marker).unwrap();
+    let output = run(dir.path(), json!({"path": requested}));
     assert_eq!(code(&output), Some(ErrorCode::NotFound));
-    let resolved = canonical(dir.path()).join("pic 01.png");
+    let resolved = canonical(dir.path()).join(requested);
     assert_eq!(
         fakes::text_of(&output),
         format!(
@@ -543,27 +556,22 @@ fn space_lookalike_single_image_is_named_not_opened() {
 }
 
 #[test]
-fn space_lookalike_single_pdf_is_named_not_opened() {
-    let dir = TempDir::new("fiber-lookalike-pdf");
-    let sibling = "doc\u{202f}1.pdf";
-    fs::write(dir.path().join(sibling), "lookalike-pdf-marker-bytes\n").unwrap();
-    let output = run(dir.path(), json!({"path": "doc 1.pdf"}));
-    assert_eq!(code(&output), Some(ErrorCode::NotFound));
-    let resolved = canonical(dir.path()).join("doc 1.pdf");
-    assert_eq!(
-        fakes::text_of(&output),
-        format!(
-            "`{}` does not exist. An entry in the same directory matches it apart from Unicode spaces, so none was opened: `{}`.\n",
-            resolved.display(),
-            sibling,
-        )
+fn space_lookalike_single_image_is_named_not_opened() {
+    assert_single_lookalike_named_not_opened(
+        "fiber-lookalike-image",
+        "pic\u{202f}01.png",
+        "pic 01.png",
+        "lookalike-image-marker-bytes\n",
     );
-    assert!(
-        !output
-            .content
-            .iter()
-            .any(|part| matches!(part, ContentPart::Image { .. } | ContentPart::Pdf(_))),
-        "a named lookalike is never opened"
+}
+
+#[test]
+fn space_lookalike_single_pdf_is_named_not_opened() {
+    assert_single_lookalike_named_not_opened(
+        "fiber-lookalike-pdf",
+        "doc\u{202f}1.pdf",
+        "doc 1.pdf",
+        "lookalike-pdf-marker-bytes\n",
     );
 }
 

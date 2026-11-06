@@ -721,6 +721,8 @@ fn several_space_lookalikes_list_every_name() {
 
 #[test]
 fn many_space_lookalikes_show_ten_and_a_count() {
+    // (`docs/tools.md`, "read"): the bounded form lists at most the first 10
+    // sorted basenames and counts the rest, here showing 10 of 12.
     let shown: Vec<PathBuf> = (0..10)
         .map(|n| PathBuf::from(format!("/w/shot{n:02}\u{202f}AM.png")))
         .collect();

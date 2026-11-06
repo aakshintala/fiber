@@ -747,6 +747,10 @@ fn deny_listed_lookalike_sibling_is_denied() {
     let run = setup.run(&["ask", "show the secret"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // (`docs/testing.md`, "Event streams"): the turn's kinds as a set with
+    // counts, so a duplicated or missing event fails; one denied call gives
+    // `denied_kinds(1)` (`docs/testing.md`, "What a test asserts": the call
+    // is refused and never starts).
     assert_eq!(run.kinds(), denied_kinds(1));
     let requested: Vec<_> = run
         .lines
@@ -763,6 +767,7 @@ fn deny_listed_lookalike_sibling_is_denied() {
         .iter()
         .filter(|line| line["kind"] == "tool_call_completed")
         .collect();
+    // One call means one of each line (`docs/testing.md`, "Event streams").
     assert_eq!(requested.len(), 1);
     assert_eq!(resolved.len(), 1);
     assert_eq!(completed.len(), 1);
