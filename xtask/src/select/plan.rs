@@ -16,28 +16,6 @@ const SHARD_TIMEOUT_BASE_MINUTES: u64 = 40;
 /// job after 6 hours, so a larger bound buys nothing.
 const SHARD_TIMEOUT_MAX_MINUTES: u64 = 360;
 
-/// `docs/ci.md`, "Selection": prefixes of release-code paths. Slash-bounded,
-/// so `crates/benchmark/…` does not match; `xtask/src/bench` is the doc's
-/// literal `bench*` prefix (`bench.rs`, `bench_tests.rs`, `bench/…`).
-const RELEASE_CODE_PREFIXES: [&str; 2] = ["crates/bench/", "xtask/src/bench"];
-/// `docs/ci.md`, "Selection": exact release-code files. The performance
-/// table is release code: the release job judges the run against it.
-const RELEASE_CODE_FILES: [&str; 3] = [
-    "scripts/release-size",
-    "scripts/stored-results",
-    "docs/performance.md",
-];
-
-/// Whether `path` is code the release job runs (`docs/ci.md`, "Selection"):
-/// exactly a release-code file, or under a release-code prefix and never a
-/// docs file, so a Markdown file under release-code paths is not release
-/// code. The exact-file list comes first, so the performance table is
-/// release code even though it is a docs file.
-fn is_release_code(path: &str) -> bool {
-    RELEASE_CODE_FILES.contains(&path)
-        || (!super::is_docs_file(path) && RELEASE_CODE_PREFIXES.iter().any(|p| path.starts_with(p)))
-}
-
 /// `docs/ci.md`, "Selection": prefixes whose diffs also run the
 /// 10-busy-turns workload in `release`. The loop holds the session's
 /// state, so a diff elsewhere rarely moves its row. Slash-bounded, so
@@ -267,44 +245,153 @@ pub(crate) fn plan(
     let pr = event == "pull_request";
     let code = mode != "docs";
     let test = !pr || !packages.is_empty();
-    // The backstop runs no mutants: each pull request tested its own diff.
-    // A run that selects no tests runs no mutants either.
-    let shards = if pr && mutants && test {
-        mutant_shards(mutant_count)
-    } else {
-        0
-    };
+    // No event shards mutants: the nightly scheduled whole-workspace run
+    // covers main instead, and a pull request's diff is judged by its Linux
+    // tests and the head-vs-base break rule (`docs/ci.md`). The flags stay
+    // so the `plan` invocation keeps its shape; nothing reads them.
+    let _ = (mutants, mutant_count, release_paths);
+    let shards = 0;
     let jobs = BTreeMap::from([
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
-        // Linux x86_64 alone, so `mutants` can wait for it; `test` runs the
-        // other platforms.
+        // Linux x86_64 runs the selected tests on every event; `test` runs
+        // the other platforms on the backstop alone.
         ("test_linux", test),
-        // A draft skips it (`docs/ci.md`).
-        ("test", test && !draft),
+        // Only the backstop runs it now: a pull request runs the Linux leg
+        // alone (`docs/ci.md`).
+        ("test", !pr && test && !draft),
         ("mutants", shards > 0),
         ("bug_red", pr && code && bug),
-        // A draft skips it (`docs/ci.md`).
-        ("stress", pr && test && !draft),
-        // A draft skips it (`docs/ci.md`). Otherwise it runs with the
-        // binary-level tests, on every push, or when the diff touches release
-        // code (`docs/ci.md`, "Selection").
-        (
-            "release",
-            !draft
-                && (!pr
-                    || packages.iter().any(|p| p == BINARY_TESTS)
-                    || release_paths.iter().any(|p| is_release_code(p))),
-        ),
+        // A draft skips it (`docs/ci.md`). Otherwise the post-merge
+        // backstop stresses what the push touched; pull requests never run
+        // it (`docs/ci.md`).
+        ("stress", !pr && test && !draft),
+        // A draft skips it (`docs/ci.md`). Otherwise the backstop measures
+        // the release build on every push; pull requests never run it
+        // (`docs/ci.md`).
+        ("release", !pr && !draft),
     ]);
     Plan { jobs, shards }
 }
 
+/// What the rerun at the base commit says about one test that failed at
+/// the head: whether it passed, failed, or never ran there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BaseOutcome {
+    Passed,
+    Failed,
+    /// The base test list names the id but the rerun never executed it,
+    /// so the base proves nothing about it.
+    Unrunnable,
+}
+
+/// The base side of the head-vs-base break rule: either the base listing
+/// and rerun completed with one outcome per head-failing test, or the base
+/// could not be tested at all. An untestable base fails closed: every head
+/// failure fails the pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BaseResults {
+    Listed(BTreeMap<String, BaseOutcome>),
+    Untestable,
+}
+
+/// The head-vs-base disposition of the head failures: the ids the pull
+/// request newly broke fail the job; the ids present at base but unrunnable
+/// there are dropped and named, as the stress plan drops and names the tests
+/// the runner left out (`docs/ci.md`, "On every pull request that changes
+/// code").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NewBreaks {
+    pub(crate) broken: Vec<String>,
+    pub(crate) dropped: Vec<String>,
+}
+
+/// The new-breaks disposition of `head_failures` against `base`: a test
+/// that fails at the head and passes at the base commit is newly broken,
+/// and so is one the base list does not name, which the pull request added;
+/// a test that also fails at the base is not. A base pass reached on retry
+/// still counts as a pass: the id failed at the head and passed at the
+/// base, so the head broke it.
+pub(crate) fn new_breaks(head_failures: &[String], base: &BaseResults) -> NewBreaks {
+    let BaseResults::Listed(outcomes) = base else {
+        return NewBreaks {
+            broken: head_failures.to_vec(),
+            dropped: Vec::new(),
+        };
+    };
+    let mut broken = Vec::new();
+    let mut dropped = Vec::new();
+    for id in head_failures {
+        match outcomes.get(id) {
+            None | Some(BaseOutcome::Passed) => broken.push(id.clone()),
+            Some(BaseOutcome::Failed) => {}
+            Some(BaseOutcome::Unrunnable) => dropped.push(id.clone()),
+        }
+    }
+    NewBreaks { broken, dropped }
+}
+
+/// The exact nextest ids that failed at the head, one per line: each line is
+/// the binary id, a space, the test name, the same id the stress plan's
+/// `test` lines and the flake lists use. A line that is not one is an error
+/// naming it.
+pub(crate) fn parse_head_failures(text: &str) -> Result<Vec<String>, String> {
+    let mut ids = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (Some(binary), Some(name)) = (fields.next(), fields.next()) else {
+            return Err(format!("head failures line {}: {line}", index + 1));
+        };
+        if fields.next().is_some() {
+            return Err(format!("head failures line {}: {line}", index + 1));
+        }
+        ids.push(format!("{binary} {name}"));
+    }
+    Ok(ids)
+}
+
+/// The base side's per-test outcomes, one `<outcome>\t<id>` line each: the
+/// outcome is `pass`, `fail` or `unrunnable`, and the id is an exact nextest
+/// id as a `parse_head_failures` line holds it. A line that is not one is an
+/// error naming it, and so is a repeated id.
+pub(crate) fn parse_base_results(text: &str) -> Result<BTreeMap<String, BaseOutcome>, String> {
+    let mut outcomes = BTreeMap::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.is_empty() {
+            continue;
+        }
+        let error = || format!("base results line {}: {line}", index + 1);
+        let Some((outcome, id)) = line.split_once('\t') else {
+            return Err(error());
+        };
+        let outcome = match outcome {
+            "pass" => BaseOutcome::Passed,
+            "fail" => BaseOutcome::Failed,
+            "unrunnable" => BaseOutcome::Unrunnable,
+            _ => return Err(error()),
+        };
+        if id.split_whitespace().count() != 2 || outcomes.insert(id.to_owned(), outcome).is_some() {
+            return Err(error());
+        }
+    }
+    Ok(outcomes)
+}
+
 /// Failures, one line each; empty when `CI` passes. `results` maps each job
 /// `CI` needs to its result, and `jobs` says which the selection chose.
+/// `head_failures` holds the exact nextest ids that failed at the head and
+/// `base` what the rerun at the base commit says about them; the Linux leg
+/// consults the new-breaks disposition, so a failed leg fails only on the
+/// tests the head newly broke. Without head failures the leg fails as any
+/// other selected job does.
 pub(crate) fn verdict(
     results: &BTreeMap<String, String>,
     jobs: &BTreeMap<String, bool>,
+    head_failures: &[String],
+    base: &BaseResults,
 ) -> Vec<String> {
     let select = results.get("select").map_or("missing", String::as_str);
     if select != "success" {
@@ -312,6 +399,17 @@ pub(crate) fn verdict(
     }
     let mut failures = Vec::new();
     for (name, result) in results.iter().filter(|(name, _)| *name != "select") {
+        if name == "test_linux" && result != "success" && !head_failures.is_empty() {
+            // Not selected, or unknown to the selection, falls through to
+            // the arms below, which report that; break data never excuses
+            // a leg the selection did not choose.
+            if jobs.get(name) == Some(&true) {
+                for id in &new_breaks(head_failures, base).broken {
+                    failures.push(format!("test_linux: newly broken: {id}"));
+                }
+                continue;
+            }
+        }
         match jobs.get(name) {
             None => failures.push(format!("{name}: not in the selection")),
             Some(true) if result != "success" => {

@@ -362,7 +362,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"stress\":true,\"test\":true,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
+        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":false,\"release\":false,\"stress\":false,\"test\":false,\"test_linux\":true}\nshards=[]\nshard_total=0\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
     );
     let bad = [
         "plan",
@@ -1211,9 +1211,8 @@ fn stress_cost_prints_the_cost_block() {
     assert_eq!(xtask(&dir, &missing, &home_env(&home), "").0, 2);
 }
 
-/// The `plan` arguments the release-code CLI tests run: a code pull request
-/// without the binary-level tests, so only a release-code path selects
-/// `release`.
+/// The `plan` arguments the release-code CLI tests run: a code push, so the
+/// backstop selects `release` on every run.
 fn release_plan_args(base: &str) -> Vec<&str> {
     vec![
         "plan",
@@ -1224,7 +1223,7 @@ fn release_plan_args(base: &str) -> Vec<&str> {
         "--packages",
         "a",
         "--event",
-        "pull_request",
+        "push",
         "--draft",
         "false",
         "--bug",
@@ -1248,10 +1247,35 @@ fn plan_selects_release(dir: &TempDir, base: &str) -> bool {
     jobs.contains("\"release\":true")
 }
 
+/// The `plan` arguments the workload-selection CLI tests run: a code pull
+/// request, so the ten-turns and base-row rules pin their pull-request
+/// behaviour.
+fn pr_plan_args(base: &str) -> Vec<&str> {
+    vec![
+        "plan",
+        "--base",
+        base,
+        "--mode",
+        "crates",
+        "--packages",
+        "a",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ]
+}
+
 #[test]
 fn plan_runs_the_ten_turns_workload_only_where_it_is_measured() {
     let dir = workspace();
-    let args = release_plan_args("main");
+    let args = pr_plan_args("main");
     let ten_turns = |dir: &TempDir| {
         let (code, out) = xtask(dir, &args, &[], "");
         assert_eq!(code, 0, "{out}");
@@ -1270,7 +1294,7 @@ fn plan_runs_the_ten_turns_workload_only_where_it_is_measured() {
 #[test]
 fn plan_skips_the_base_rows_the_diff_does_not_select() {
     let dir = workspace();
-    let args = release_plan_args("main");
+    let args = pr_plan_args("main");
     let base_skip = |dir: &TempDir| {
         let (code, out) = xtask(dir, &args, &[], "");
         assert_eq!(code, 0, "{out}");
@@ -1292,9 +1316,11 @@ fn plan_skips_the_base_rows_the_diff_does_not_select() {
 }
 
 #[test]
-fn plan_runs_release_for_a_changed_bench_harness() {
+fn plan_runs_release_for_a_push_with_or_without_release_paths() {
+    // A push selects `release` however small the diff: the backstop
+    // measures every push.
     let dir = workspace();
-    assert!(!plan_selects_release(&dir, "main"));
+    assert!(plan_selects_release(&dir, "main"));
     dir.write("xtask/src/bench.rs", "//! bench\n");
     assert!(plan_selects_release(&dir, "main"));
 }
@@ -1308,8 +1334,7 @@ fn plan_runs_release_when_the_bench_harness_is_renamed_away() {
     git(&dir, &["checkout", "-qb", "topic"]);
     git(&dir, &["mv", "xtask/src/bench.rs", "xtask/src/judge.rs"]);
     git(&dir, &["commit", "-qm", "rename"]);
-    // Without `--no-renames` git reports only `xtask/src/judge.rs`, so no
-    // release-code path is seen and `release` stays off.
+    // A push selects `release` however the diff names its paths.
     assert!(plan_selects_release(&dir, "main"));
 }
 
@@ -1320,8 +1345,7 @@ fn plan_runs_release_for_a_non_ascii_bench_path() {
     dir.write("crates/bench/examples/bench/\u{e9}.rs", "//! bench\n");
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "bench"]);
-    // Without `-z` git quotes the path, so the `crates/bench/` prefix is
-    // missed and `release` stays off.
+    // A push selects `release` however git quotes the path.
     assert!(plan_selects_release(&dir, "main"));
 
     let dir = workspace();
@@ -2579,134 +2603,75 @@ fn stale_wait_ratchet_fails_an_unlisted_site_and_passes_at_its_maximum() {
     assert_eq!((code, out.as_str()), (0, "stale-wait-ratchet: ok\n"));
 }
 
-/// Runs `mutants-reuse` in `dir` against two JSON fixture files.
-fn mutants_reuse(dir: &TempDir, runs: &str, jobs: &str) -> (i32, String) {
-    dir.write("runs.json", runs);
-    dir.write("jobs.json", jobs);
-    xtask(
-        dir,
-        &[
-            "mutants-reuse",
-            "--pr",
-            "3899",
-            "--head",
-            "abc123",
-            "--base",
-            "def456",
-            "--mutant-count",
-            "40",
-            "--run-id",
-            "100",
-            "--draft",
-            "false",
-            "--runs",
-            "runs.json",
-            "--jobs",
-            "jobs.json",
-        ],
-        &[],
-        "",
-    )
-}
-
-/// One completed candidate run on the same pull request, head and base.
-// debt: reuse_candidate duplicates xtask/src/select/reuse_tests.rs candidate (same candidate-run
-// JSON shape), ceiling: two builders, upgrade trigger: a third candidate-run fixture or a fence
-// that allows a shared xtask fixture module merges both into one builder.
-fn reuse_candidate(id: u64) -> serde_json::Value {
-    serde_json::json!({
-        "id": id,
-        "head_sha": "abc123",
-        "status": "completed",
-        "pull_requests": [{
-            "number": 3899,
-            "head": { "sha": "abc123" },
-            "base": { "sha": "def456" },
-        }],
-    })
-}
-
-// debt: reuse_shards duplicates xtask/src/select/reuse_tests.rs shard (same "Mutants (shard {index})"
-// JSON), ceiling: two builders, upgrade trigger: a third shard-job fixture or a fence that allows
-// a shared xtask fixture module merges both into one builder.
-fn reuse_shards(total: usize, conclusion: &str) -> serde_json::Value {
-    serde_json::Value::Array(
-        (0..total)
-            .map(|index| {
-                serde_json::json!({ "name": format!("Mutants (shard {index}, base def456)"), "conclusion": conclusion })
-            })
-            .collect(),
-    )
-}
-
 #[test]
-fn mutants_reuse_missing_runs_file_errors() {
-    let dir = workspace();
-    dir.write("jobs.json", "{}");
-    let (code, out) = xtask(
-        &dir,
-        &[
-            "mutants-reuse",
-            "--pr",
-            "3899",
-            "--head",
-            "abc123",
-            "--base",
-            "def456",
-            "--mutant-count",
-            "40",
-            "--run-id",
-            "100",
-            "--draft",
-            "false",
-            "--runs",
-            "runs.json",
-            "--jobs",
-            "jobs.json",
-        ],
-        &[],
-        "",
+fn verdict_excuses_a_test_linux_failure_with_no_new_breaks() {
+    let dir = TempDir::new("xtask-verdict-new-breaks");
+    dir.write(
+        "head-failures.txt",
+        "main::suite old\nmain::suite skipped\n",
     );
-    assert_eq!(code, 2);
-    assert!(out.contains("runs.json"), "{out}");
-}
-
-#[test]
-fn mutants_reuse_malformed_runs_json_prints_false() {
-    let dir = workspace();
-    assert_eq!(
-        mutants_reuse(&dir, "not json", "{}"),
-        (0, "reuse=false\n".to_owned())
+    dir.write(
+        "base-results.txt",
+        "fail\tmain::suite old\nunrunnable\tmain::suite skipped\n",
+    );
+    let head = dir.path().join("head-failures.txt");
+    let base = dir.path().join("base-results.txt");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", head.to_str().unwrap()),
+        ("BASE_RESULTS", base.to_str().unwrap()),
+    ];
+    let (code, out) = xtask(&dir, &["verdict"], &env, "");
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("new-breaks: 2 failing at head, 1 also failing at base, 0 newly broken"),
+        "{out}"
+    );
+    assert!(
+        out.contains("new-breaks dropped (unrunnable at base): main::suite skipped"),
+        "{out}"
+    );
+    assert!(
+        out.contains("verdict: every selected job passed and every other job was skipped"),
+        "{out}"
     );
 }
 
 #[test]
-fn mutants_reuse_matching_fixture_prints_true() {
-    // 40 mutants derive a 3-shard total, and the candidate passed exactly
-    // those three shards; the match also prints the matched run id and
-    // PR-entry head sha for the select log
-    // (docs/ci.md, "On every pull request that changes code").
-    let dir = workspace();
-    let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
-    let jobs = serde_json::json!({ "7": reuse_shards(3, "success") }).to_string();
-    assert_eq!(
-        mutants_reuse(&dir, &runs, &jobs),
-        (
-            0,
-            "reuse=true\nmatched_run_id=7\nmatched_pr_head=abc123\n".to_owned()
-        )
+fn verdict_fails_a_newly_broken_test_linux_failure() {
+    let dir = TempDir::new("xtask-verdict-newly-broken");
+    dir.write("head-failures.txt", "main::suite new\n");
+    dir.write("base-results.txt", "pass\tmain::suite new\n");
+    let head = dir.path().join("head-failures.txt");
+    let base = dir.path().join("base-results.txt");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", head.to_str().unwrap()),
+        ("BASE_RESULTS", base.to_str().unwrap()),
+    ];
+    let (code, out) = xtask(&dir, &["verdict"], &env, "");
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("new-breaks: 1 failing at head, 0 also failing at base, 1 newly broken"),
+        "{out}"
+    );
+    assert!(
+        out.contains("verdict: test_linux: newly broken: main::suite new"),
+        "{out}"
     );
 }
 
 #[test]
-fn mutants_reuse_shard_count_mismatch_prints_false() {
-    // Four successful shards against a derived 3-shard total reuses nothing
-    // (docs/ci.md, "On every pull request that changes code").
-    let dir = workspace();
-    let runs = serde_json::json!({ "workflow_runs": [reuse_candidate(7)] }).to_string();
-    let jobs = serde_json::json!({ "7": reuse_shards(4, "success") }).to_string();
+fn verdict_fails_closed_without_break_data() {
+    let dir = TempDir::new("xtask-verdict-no-break-data");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [("NEEDS", needs), ("JOBS", r#"{"test_linux":true}"#)];
     assert_eq!(
-        mutants_reuse(&dir, &runs, &jobs),
-        (0, "reuse=false\n".to_owned())
+        xtask(&dir, &["verdict"], &env, ""),
+        (1, "verdict: test_linux: selected, but failure\n".to_owned())
     );
 }

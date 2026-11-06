@@ -16,11 +16,10 @@
 //!   which CI jobs run, the mutant shards and each shard's time limit,
 //!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
-//!   if every selected job passed and every other job was skipped
-//! - `mutants-reuse --pr N --head H --base B --mutant-count C --run-id R --draft true|false --runs FILE --jobs FILE`:
-//!   prints `reuse=true` plus the matched run id and PR-entry head sha when
-//!   an earlier completed run on the same pull request, head and base passed
-//!   every mutants shard, else `reuse=false`
+//!   if every selected job passed and every other job was skipped. With the
+//!   `HEAD_FAILURES` and `BASE_RESULTS` files set, a failed `test_linux` leg
+//!   fails only on the tests the head newly broke against the base commit
+//!   (`docs/ci.md`, "On every pull request that changes code").
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
@@ -252,20 +251,6 @@ fn run(args: &[String]) -> Result<bool, String> {
             );
             Ok(true)
         }
-        "mutants-reuse" => {
-            let current = reuse_current(rest)?;
-            let runs = read(&flag(rest, "--runs")?)?;
-            let jobs = read(&flag(rest, "--jobs")?)?;
-            match select::matched_reuse(&current, &runs, &jobs) {
-                Some(matched) => {
-                    println!("reuse=true");
-                    println!("matched_run_id={}", matched.run_id);
-                    println!("matched_pr_head={}", matched.pr_head.0);
-                }
-                None => println!("reuse=false"),
-            }
-            Ok(true)
-        }
         "verdict" => {
             let jobs: BTreeMap<String, bool> = env_object("JOBS")?
                 .into_iter()
@@ -283,7 +268,38 @@ fn run(args: &[String]) -> Result<bool, String> {
                     )
                 })
                 .collect();
-            let failures = select::verdict(&results, &jobs);
+            // The head-vs-base break data the Linux leg uploads on a pull
+            // request whose head run failed (`docs/ci.md`, "On every pull
+            // request that changes code"). Absent everywhere else, when the
+            // verdict falls back to the job results alone; a failed leg with
+            // head failures but no usable base fails closed.
+            let head_failures = match data_file("HEAD_FAILURES")? {
+                None => Vec::new(),
+                Some(text) => select::parse_head_failures(&text)?,
+            };
+            let base = match data_file("BASE_RESULTS")? {
+                None => select::BaseResults::Untestable,
+                Some(text) => select::BaseResults::Listed(select::parse_base_results(&text)?),
+            };
+            if !head_failures.is_empty() {
+                let breaks = select::new_breaks(&head_failures, &base);
+                let base_failed = match &base {
+                    select::BaseResults::Listed(outcomes) => head_failures
+                        .iter()
+                        .filter(|id| outcomes.get(*id) == Some(&select::BaseOutcome::Failed))
+                        .count(),
+                    select::BaseResults::Untestable => 0,
+                };
+                println!(
+                    "new-breaks: {} failing at head, {base_failed} also failing at base, {} newly broken",
+                    head_failures.len(),
+                    breaks.broken.len()
+                );
+                for id in &breaks.dropped {
+                    println!("new-breaks dropped (unrunnable at base): {id}");
+                }
+            }
+            let failures = select::verdict(&results, &jobs, &head_failures, &base);
             report(
                 "verdict",
                 &failures,
@@ -778,26 +794,20 @@ fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
 }
 
-/// The reuse decision's scalar flags for `mutants-reuse`.
-fn reuse_current(args: &[String]) -> Result<select::ReuseCurrent, String> {
-    Ok(select::ReuseCurrent {
-        pr: select::ReusePullRequestNumber(
-            flag(args, "--pr")?
-                .parse()
-                .map_err(|e| format!("--pr: {e}"))?,
-        ),
-        head: select::ReuseCommitSha(flag(args, "--head")?),
-        base: select::ReuseCommitSha(flag(args, "--base")?),
-        mutant_count: flag(args, "--mutant-count")?
-            .parse()
-            .map_err(|e| format!("--mutant-count: {e}"))?,
-        run_id: select::ReuseRunId(
-            flag(args, "--run-id")?
-                .parse()
-                .map_err(|e| format!("--run-id: {e}"))?,
-        ),
-        draft: flag(args, "--draft")? == "true",
-    })
+/// The contents of the file the `name` environment variable points at: `None`
+/// when the variable is unset or empty, so the same invocation runs with and
+/// without the break data. Other reads fail the command: unusable break data
+/// fails closed.
+fn data_file(name: &str) -> Result<Option<String>, String> {
+    let path = std::env::var(name).unwrap_or_default();
+    if path.trim().is_empty() {
+        return Ok(None);
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{name} {path}: {error}")),
+    }
 }
 
 /// Whether `fix` is an ancestor of `tested`: `None` when the object is
