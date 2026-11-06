@@ -208,7 +208,9 @@ fn a_resume_against_a_newer_keeper_declines_naming_its_version_then_recovers() {
         "a refused resume writes nothing"
     );
     assert!(
-        !fakes::matching(&keeper_pattern).unwrap().is_empty(),
+        !fakes::matching(&keeper_pattern, fakes::MUST_SUCCEED_WITHIN)
+            .unwrap()
+            .is_empty(),
         "the keeper is still alive after the refusal"
     );
     let release = gate.clone();
