@@ -24,7 +24,6 @@ thiserror.workspace = true
 [dev-dependencies]
 fakes = { path = "../fakes" }
 insta.workspace = true
-log = { path = "../log" }
 proptest.workspace = true
 
 # The `draw` jig has no unit tests of its own: `crates/tui/tests/draw_jig.rs`

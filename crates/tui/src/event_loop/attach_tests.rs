@@ -5870,10 +5870,10 @@ fn attach_spans_are_discarded_when_the_due_tail_has_no_stream() {
         super::super::tests::new_loop(ratatui::backend::TestBackend::new(60, 12), None);
     lp.app = app;
     let clock: Arc<dyn Clock> = FakeClock::new();
-    let diag = Arc::new(log::diag::Diag::new(
+    let diag = Arc::new(diag::diag::Diag::new(
         home.path(),
-        log::diag::Process::Tui,
-        log::diag::Level::Debug,
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
         clock,
     ));
     lp.timing = crate::timing::Timing::new(diag);
@@ -5950,10 +5950,10 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
         super::super::tests::new_loop(ratatui::backend::TestBackend::new(60, 12), None);
     lp.app = app;
     let clock: Arc<dyn Clock> = FakeClock::new();
-    let diag = Arc::new(log::diag::Diag::new(
+    let diag = Arc::new(diag::diag::Diag::new(
         home.path(),
-        log::diag::Process::Tui,
-        log::diag::Level::Debug,
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
         clock,
     ));
     lp.timing = crate::timing::Timing::new(diag);
@@ -6084,12 +6084,12 @@ mod attach_span_tests {
     }
 
     /// A debug writer in `home` on the stepping clock.
-    fn debug_diag(home: &std::path::Path) -> Arc<log::diag::Diag> {
+    fn debug_diag(home: &std::path::Path) -> Arc<diag::diag::Diag> {
         let clock: Arc<dyn Clock> = StepClock::stepped();
-        Arc::new(log::diag::Diag::new(
+        Arc::new(diag::diag::Diag::new(
             home,
-            log::diag::Process::Tui,
-            log::diag::Level::Debug,
+            diag::diag::Process::Tui,
+            diag::diag::Level::Debug,
             clock,
         ))
     }
