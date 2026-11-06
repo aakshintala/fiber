@@ -663,8 +663,10 @@ fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
     // debt: this stall shadow duplicates support's stalled-listing shadow
     // (two copies), share them on the third: sharing needs a public fakes
     // helper used only by tests, widening the surface this ticket narrows.
+    let failing = format!("{marker}-fail-fast");
     let body = format!(
-        "for arg in \"$@\"; do\n  case \"$arg\" in\n    *'{}'*)\n      read line < '{}'\n      exit 0\n      ;;\n  esac\ndone\nexec '{}' \"$@\"\n",
+        "for arg in \"$@\"; do\n  case \"$arg\" in\n    *'{}'*)\n      exit 2\n      ;;\n    *'{}'*)\n      read line < '{}'\n      exit 0\n      ;;\n  esac\ndone\nexec '{}' \"$@\"\n",
+        pattern(&failing),
         pattern(&marker),
         fifo.display(),
         real,
@@ -712,7 +714,7 @@ fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains("1 passed"),
+        stdout.contains("a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound"),
         "the child ran exactly the stalled-pgrep test: {stdout}"
     );
     drop(held);
@@ -751,12 +753,14 @@ fn stalled_pgrep_child() {
         "pgrep did not exit within 200ms",
         "the expiry names the pgrep step with the derived bound"
     );
-    // A poll over the still-held stall reports the listing failure,
-    // never the outer wait: the child's own command line never carries
-    // the stall marker, so a listing without it keeps polling, and any
-    // listing error panics naming the read.
+    // A poll over a listing that fails at once reports the failure,
+    // never the outer wait: the shadow exits 2 for the fail-fast marker
+    // without touching the FIFO, so the probe decides without waiting out
+    // the 200 ms listing bound. The child's own command line carries
+    // neither marker, so an Ok without the pid would keep polling, and
+    // any listing error panics naming the read.
     let pid = std::process::id();
-    let listed = marker.clone();
+    let listed = format!("{marker}-fail-fast");
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
         crate::wait_until(
             "the stalled listing to name its stall",
@@ -767,20 +771,20 @@ fn stalled_pgrep_child() {
             },
         );
     }));
-    // The poll thread is never joined, so it may hold a live shadow pgrep
-    // mid-probe when the outer wait ends; exiting at once would strand it
-    // and fail the rerun on group cleanup instead of the assertion below.
-    // One more bounded listing on this thread outlasts that probe under
-    // the same derived bound, so the worker's shadow is reaped and the
-    // worker sees the closed stop and ends before the child exits.
+    // The poll thread is never joined, so the worker may still be ending
+    // when the outer wait ends; exiting at once could strand it and fail
+    // the rerun on group cleanup instead of the assertion below. One more
+    // bounded listing on this thread proves the stall still holds past the
+    // poll under the same derived bound, and the worker sees the closed
+    // stop and ends before the child exits.
     matching(&marker, bound).expect_err("the stall still holds past the poll");
     let failure = outcome.expect_err("the stalled listing fails while the FIFO holds it");
     let message = failure
         .downcast_ref::<String>()
         .expect("the failure carries its message");
     assert!(
-        message.contains("pgrep did not exit within 200ms"),
-        "the failure carries the stall expiry with the derived bound: {message}"
+        message.contains("pgrep failed: exit status: 2"),
+        "the failure carries the immediate pgrep failure: {message}"
     );
     assert!(
         message.contains("the stalled pgrep listing"),

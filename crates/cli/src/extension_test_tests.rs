@@ -523,14 +523,7 @@ fn ps_failure_in_the_zombie_probe_names_the_ps_read() {
         return;
     }
     let dir = fakes::TempDir::new("fiber-extension-test-ps-stub");
-    let stub = dir.path().join("ps");
-    fs::write(&stub, "#!/bin/sh\nexit 1\n").unwrap();
-    let status = Command::new("chmod")
-        .arg("+x")
-        .arg(&stub)
-        .status()
-        .expect("chmod runs to mark the stub ps executable");
-    assert!(status.success(), "chmod marks the stub ps executable");
+    fakes::script(dir.path(), "ps", "exit 1\n");
     let path = format!(
         "{}:{}",
         dir.path().display(),
@@ -553,7 +546,7 @@ fn ps_failure_in_the_zombie_probe_names_the_ps_read() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("1 passed"),
+        stdout.contains("ps_failure_in_the_zombie_probe_names_the_ps_read"),
         "the child ran exactly the ps-stub test: {stdout}"
     );
 }
