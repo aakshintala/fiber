@@ -362,7 +362,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"stress\":true,\"test\":true,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
+        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"release\":false,\"stress\":false,\"test\":false,\"test_linux\":true}\nshards=[0,1,2]\nshard_total=3\nshard_timeout=40\nten_turns=false\nbase_skip=\n"
     );
     let bad = [
         "plan",
@@ -1211,9 +1211,8 @@ fn stress_cost_prints_the_cost_block() {
     assert_eq!(xtask(&dir, &missing, &home_env(&home), "").0, 2);
 }
 
-/// The `plan` arguments the release-code CLI tests run: a code pull request
-/// without the binary-level tests, so only a release-code path selects
-/// `release`.
+/// The `plan` arguments the release-code CLI tests run: a code push, so the
+/// backstop selects `release` on every run.
 fn release_plan_args(base: &str) -> Vec<&str> {
     vec![
         "plan",
@@ -1224,7 +1223,7 @@ fn release_plan_args(base: &str) -> Vec<&str> {
         "--packages",
         "a",
         "--event",
-        "pull_request",
+        "push",
         "--draft",
         "false",
         "--bug",
@@ -1248,10 +1247,35 @@ fn plan_selects_release(dir: &TempDir, base: &str) -> bool {
     jobs.contains("\"release\":true")
 }
 
+/// The `plan` arguments the workload-selection CLI tests run: a code pull
+/// request, so the ten-turns and base-row rules pin their pull-request
+/// behaviour.
+fn pr_plan_args(base: &str) -> Vec<&str> {
+    vec![
+        "plan",
+        "--base",
+        base,
+        "--mode",
+        "crates",
+        "--packages",
+        "a",
+        "--event",
+        "pull_request",
+        "--draft",
+        "false",
+        "--bug",
+        "false",
+        "--mutants",
+        "false",
+        "--mutant-count",
+        "0",
+    ]
+}
+
 #[test]
 fn plan_runs_the_ten_turns_workload_only_where_it_is_measured() {
     let dir = workspace();
-    let args = release_plan_args("main");
+    let args = pr_plan_args("main");
     let ten_turns = |dir: &TempDir| {
         let (code, out) = xtask(dir, &args, &[], "");
         assert_eq!(code, 0, "{out}");
@@ -1270,7 +1294,7 @@ fn plan_runs_the_ten_turns_workload_only_where_it_is_measured() {
 #[test]
 fn plan_skips_the_base_rows_the_diff_does_not_select() {
     let dir = workspace();
-    let args = release_plan_args("main");
+    let args = pr_plan_args("main");
     let base_skip = |dir: &TempDir| {
         let (code, out) = xtask(dir, &args, &[], "");
         assert_eq!(code, 0, "{out}");
@@ -1292,9 +1316,11 @@ fn plan_skips_the_base_rows_the_diff_does_not_select() {
 }
 
 #[test]
-fn plan_runs_release_for_a_changed_bench_harness() {
+fn plan_runs_release_for_a_push_with_or_without_release_paths() {
+    // A push selects `release` however small the diff: the backstop
+    // measures every push.
     let dir = workspace();
-    assert!(!plan_selects_release(&dir, "main"));
+    assert!(plan_selects_release(&dir, "main"));
     dir.write("xtask/src/bench.rs", "//! bench\n");
     assert!(plan_selects_release(&dir, "main"));
 }
@@ -1308,8 +1334,7 @@ fn plan_runs_release_when_the_bench_harness_is_renamed_away() {
     git(&dir, &["checkout", "-qb", "topic"]);
     git(&dir, &["mv", "xtask/src/bench.rs", "xtask/src/judge.rs"]);
     git(&dir, &["commit", "-qm", "rename"]);
-    // Without `--no-renames` git reports only `xtask/src/judge.rs`, so no
-    // release-code path is seen and `release` stays off.
+    // A push selects `release` however the diff names its paths.
     assert!(plan_selects_release(&dir, "main"));
 }
 
@@ -1320,8 +1345,7 @@ fn plan_runs_release_for_a_non_ascii_bench_path() {
     dir.write("crates/bench/examples/bench/\u{e9}.rs", "//! bench\n");
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "bench"]);
-    // Without `-z` git quotes the path, so the `crates/bench/` prefix is
-    // missed and `release` stays off.
+    // A push selects `release` however git quotes the path.
     assert!(plan_selects_release(&dir, "main"));
 
     let dir = workspace();
@@ -2708,5 +2732,152 @@ fn mutants_reuse_shard_count_mismatch_prints_false() {
     assert_eq!(
         mutants_reuse(&dir, &runs, &jobs),
         (0, "reuse=false\n".to_owned())
+    );
+}
+
+#[test]
+fn verdict_excuses_a_test_linux_failure_with_no_new_breaks() {
+    let dir = TempDir::new("xtask-verdict-new-breaks");
+    dir.write(
+        "head-failures.txt",
+        "main::suite old\nmain::suite skipped\n",
+    );
+    dir.write("base-ids.txt", "main::suite old\nmain::suite skipped\n");
+    dir.write("base-failed.txt", "main::suite old\n");
+    dir.write("base-executed.txt", "main::suite old\n");
+    let head = dir.path().join("head-failures.txt");
+    let list = dir.path().join("base-ids.txt");
+    let failed = dir.path().join("base-failed.txt");
+    let executed = dir.path().join("base-executed.txt");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", head.to_str().unwrap()),
+        ("BASE_LIST", list.to_str().unwrap()),
+        ("BASE_FAILED", failed.to_str().unwrap()),
+        ("BASE_EXECUTED", executed.to_str().unwrap()),
+    ];
+    let (code, out) = xtask(&dir, &["verdict"], &env, "");
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains("new-breaks: 2 failing at head, 1 also failing at base, 0 newly broken"),
+        "{out}"
+    );
+    assert!(
+        out.contains("new-breaks dropped (unrunnable at base): main::suite skipped"),
+        "{out}"
+    );
+    assert!(
+        out.contains("verdict: every selected job passed and every other job was skipped"),
+        "{out}"
+    );
+}
+
+#[test]
+fn verdict_fails_a_newly_broken_test_linux_failure() {
+    let dir = TempDir::new("xtask-verdict-newly-broken");
+    dir.write("head-failures.txt", "main::suite new\n");
+    dir.write("base-ids.txt", "main::suite new\n");
+    dir.write("base-failed.txt", "");
+    dir.write("base-executed.txt", "main::suite new\n");
+    let head = dir.path().join("head-failures.txt");
+    let list = dir.path().join("base-ids.txt");
+    let failed = dir.path().join("base-failed.txt");
+    let executed = dir.path().join("base-executed.txt");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", head.to_str().unwrap()),
+        ("BASE_LIST", list.to_str().unwrap()),
+        ("BASE_FAILED", failed.to_str().unwrap()),
+        ("BASE_EXECUTED", executed.to_str().unwrap()),
+    ];
+    let (code, out) = xtask(&dir, &["verdict"], &env, "");
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("new-breaks: 1 failing at head, 0 also failing at base, 1 newly broken"),
+        "{out}"
+    );
+    assert!(
+        out.contains("verdict: test_linux: newly broken: main::suite new"),
+        "{out}"
+    );
+}
+
+#[test]
+fn verdict_fails_closed_without_break_data() {
+    let dir = TempDir::new("xtask-verdict-no-break-data");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [("NEEDS", needs), ("JOBS", r#"{"test_linux":true}"#)];
+    assert_eq!(
+        xtask(&dir, &["verdict"], &env, ""),
+        (1, "verdict: test_linux: selected, but failure\n".to_owned())
+    );
+}
+
+#[test]
+fn verdict_treats_a_missing_break_file_as_absent() {
+    // A break file that does not exist (NotFound) falls back to the job
+    // results alone instead of failing closed.
+    let dir = TempDir::new("xtask-verdict-missing-break-file");
+    let missing = dir.path().join("head-failures.txt");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", missing.to_str().unwrap()),
+    ];
+    assert_eq!(
+        xtask(&dir, &["verdict"], &env, ""),
+        (1, "verdict: test_linux: selected, but failure\n".to_owned())
+    );
+}
+
+#[test]
+fn verdict_fails_closed_on_an_unreadable_break_file() {
+    // A break file that fails for any reason other than absence is unusable
+    // break data: the verdict fails closed instead of falling back. Reading
+    // a directory always fails with a non-NotFound error on every platform
+    // the verdict runs on.
+    let dir = TempDir::new("xtask-verdict-unreadable-break-file");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", dir.path().to_str().unwrap()),
+    ];
+    let (code, out) = xtask(&dir, &["verdict"], &env, "");
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("HEAD_FAILURES"), "{out}");
+}
+
+#[test]
+fn verdict_keeps_a_touched_retry_failure_with_no_new_breaks() {
+    let dir = TempDir::new("xtask-verdict-touched-retry");
+    dir.write("head-failures.txt", "main::suite old\n");
+    dir.write("base-ids.txt", "main::suite old\n");
+    dir.write("base-failed.txt", "main::suite old\n");
+    dir.write("base-executed.txt", "main::suite old\n");
+    let head = dir.path().join("head-failures.txt");
+    let list = dir.path().join("base-ids.txt");
+    let failed = dir.path().join("base-failed.txt");
+    let executed = dir.path().join("base-executed.txt");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", head.to_str().unwrap()),
+        ("BASE_LIST", list.to_str().unwrap()),
+        ("BASE_FAILED", failed.to_str().unwrap()),
+        ("BASE_EXECUTED", executed.to_str().unwrap()),
+        ("TOUCHED_FAILED", "true"),
+    ];
+    let (code, out) = xtask(&dir, &["verdict"], &env, "");
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("verdict: test_linux: touched test passed only on retry"),
+        "{out}"
     );
 }

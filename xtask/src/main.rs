@@ -16,7 +16,11 @@
 //!   which CI jobs run, the mutant shards and each shard's time limit,
 //!   as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
-//!   if every selected job passed and every other job was skipped
+//!   if every selected job passed and every other job was skipped. With the
+//!   `HEAD_FAILURES` file plus the `BASE_LIST`, `BASE_FAILED` and
+//!   `BASE_EXECUTED` files set, a failed `test_linux` leg fails only on the
+//!   tests the head newly broke against the base commit
+//!   (`docs/ci.md`, "On every pull request that changes code").
 //! - `mutants-reuse --pr N --head H --base B --mutant-count C --run-id R --draft true|false --runs FILE --jobs FILE`:
 //!   prints `reuse=true` plus the matched run id and PR-entry head sha when
 //!   an earlier completed run on the same pull request, head and base passed
@@ -221,7 +225,6 @@ fn run(args: &[String]) -> Result<bool, String> {
                 bug,
                 mutants,
                 mutant_count,
-                &release_paths,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
@@ -283,7 +286,52 @@ fn run(args: &[String]) -> Result<bool, String> {
                     )
                 })
                 .collect();
-            let failures = select::verdict(&results, &jobs);
+            // The head-vs-base break data the Linux leg uploads on a pull
+            // request whose head run failed (`docs/ci.md`, "On every pull
+            // request that changes code"): the head's failed ids plus the
+            // base test list, failures and executions, classified in tested
+            // code. Absent everywhere else, when the verdict falls back to
+            // the job results alone; a failed leg with head failures but no
+            // usable base fails closed.
+            let head_failures = match data_file("HEAD_FAILURES")? {
+                None => Vec::new(),
+                Some(text) => select::parse_head_failures(&text)?,
+            };
+            let base = match (
+                data_file("BASE_LIST")?,
+                data_file("BASE_FAILED")?,
+                data_file("BASE_EXECUTED")?,
+            ) {
+                (Some(list), Some(failed), Some(executed)) => select::BaseResults::Listed(
+                    select::classify_base(&head_failures, &list, &failed, &executed),
+                ),
+                _ => select::BaseResults::Untestable,
+            };
+            if !head_failures.is_empty() {
+                let breaks = select::new_breaks(&head_failures, &base);
+                let base_failed = match &base {
+                    select::BaseResults::Listed(outcomes) => head_failures
+                        .iter()
+                        .filter(|id| outcomes.get(*id) == Some(&select::BaseOutcome::Failed))
+                        .count(),
+                    select::BaseResults::Untestable => 0,
+                };
+                println!(
+                    "new-breaks: {} failing at head, {base_failed} also failing at base, {} newly broken",
+                    head_failures.len(),
+                    breaks.broken.len()
+                );
+                for id in &breaks.dropped {
+                    println!("new-breaks dropped (unrunnable at base): {id}");
+                }
+            }
+            // Whether the Linux leg's `touched-retries` step failed: a
+            // touched test that passes only on retry blocks the merge
+            // (`docs/testing/running.md`, "Flaky tests"), and break data
+            // never excuses it. Unset when the leg never ran, so the
+            // verdict falls back to the job results alone.
+            let touched_failed = std::env::var("TOUCHED_FAILED").as_deref() == Ok("true");
+            let failures = select::verdict(&results, &jobs, &head_failures, &base, touched_failed);
             report(
                 "verdict",
                 &failures,
@@ -798,6 +846,22 @@ fn reuse_current(args: &[String]) -> Result<select::ReuseCurrent, String> {
         ),
         draft: flag(args, "--draft")? == "true",
     })
+}
+
+/// The contents of the file the `name` environment variable points at: `None`
+/// when the variable is unset or empty, so the same invocation runs with and
+/// without the break data. Other reads fail the command: unusable break data
+/// fails closed.
+fn data_file(name: &str) -> Result<Option<String>, String> {
+    let path = std::env::var(name).unwrap_or_default();
+    if path.trim().is_empty() {
+        return Ok(None);
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{name} {path}: {error}")),
+    }
 }
 
 /// Whether `fix` is an ancestor of `tested`: `None` when the object is

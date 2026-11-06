@@ -3,6 +3,7 @@ use crate::select::tests::strings;
 
 fn jobs(
     lint: bool,
+    test_linux: bool,
     test: bool,
     mutants: bool,
     bug_red: bool,
@@ -11,7 +12,7 @@ fn jobs(
 ) -> BTreeMap<&'static str, bool> {
     BTreeMap::from([
         ("lint", lint),
-        ("test_linux", test),
+        ("test_linux", test_linux),
         ("test", test),
         ("mutants", mutants),
         ("bug_red", bug_red),
@@ -22,11 +23,11 @@ fn jobs(
 
 #[test]
 fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
-    let plan = plan("docs", &[], "pull_request", false, true, true, 100, &[]);
+    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, false, false, false, false, false),
+            jobs: jobs(false, false, false, false, false, false, false),
             shards: 0
         }
     );
@@ -42,12 +43,11 @@ fn a_code_pull_request_runs_what_it_selected() {
         true,
         true,
         100,
-        &[],
     );
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, true, true, false, true),
+            jobs: jobs(true, true, false, true, true, false, false),
             shards: 7
         }
     );
@@ -63,15 +63,20 @@ fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
         false,
         true,
         100,
-        &[],
     );
-    assert_eq!(plan.jobs, jobs(true, true, true, false, false, true));
+    assert_eq!(
+        plan.jobs,
+        jobs(true, true, false, true, false, false, false)
+    );
 }
 
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
-    let plan = plan("crates", &[], "pull_request", false, false, true, 100, &[]);
-    assert_eq!(plan.jobs, jobs(true, false, false, false, false, false));
+    let plan = plan("crates", &[], "pull_request", false, false, true, 100);
+    assert_eq!(
+        plan.jobs,
+        jobs(true, false, false, false, false, false, false)
+    );
     assert_eq!(plan.shards, 0);
 }
 
@@ -85,7 +90,6 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
         true,
         true,
         100,
-        &[],
     );
     let ready = plan(
         "crates",
@@ -95,7 +99,6 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
         true,
         true,
         100,
-        &[],
     );
     assert!(!draft.jobs["test"]);
     assert!(draft.jobs["test_linux"]);
@@ -104,12 +107,12 @@ fn a_draft_pull_request_skips_test_but_runs_test_linux() {
     }
     assert!(!draft.jobs["release"]);
     assert!(!draft.jobs["stress"]);
-    assert!(ready.jobs["stress"]);
+    assert!(!ready.jobs["stress"]);
     assert_eq!(draft.shards, ready.shards);
 }
 
 #[test]
-fn only_a_ready_pull_request_runs_the_release_job_for_each_input_that_selects_it() {
+fn no_pull_request_runs_the_release_job_for_any_input_that_selected_it() {
     let inputs = [
         ("binary package", strings(&["main"]), vec![]),
         (
@@ -124,30 +127,21 @@ fn only_a_ready_pull_request_runs_the_release_job_for_each_input_that_selects_it
         ),
     ];
 
-    for (input, packages, release_paths) in inputs {
+    for (input, packages, _release_paths) in inputs {
         for draft in [true, false] {
-            let plan = plan(
-                "crates",
-                &packages,
-                "pull_request",
-                draft,
-                false,
-                false,
-                0,
-                &release_paths,
-            );
-            assert_eq!(plan.jobs["release"], !draft, "{input}, draft {draft}");
+            let plan = plan("crates", &packages, "pull_request", draft, false, false, 0);
+            assert!(!plan.jobs["release"], "{input}, draft {draft}");
             assert!(plan.jobs["lint"], "{input}, draft {draft}");
             assert!(plan.jobs["test_linux"], "{input}, draft {draft}");
         }
     }
 
-    let push = plan("crates", &[], "push", false, false, false, 0, &[]);
+    let push = plan("crates", &[], "push", false, false, false, 0);
     assert!(push.jobs["release"]);
 }
 
 #[test]
-fn a_ready_pull_request_with_packages_runs_the_stress_job() {
+fn a_ready_pull_request_with_packages_skips_the_stress_job() {
     let plan = plan(
         "crates",
         &strings(&["log"]),
@@ -156,9 +150,8 @@ fn a_ready_pull_request_with_packages_runs_the_stress_job() {
         true,
         true,
         100,
-        &[],
     );
-    assert!(plan.jobs["stress"]);
+    assert!(!plan.jobs["stress"]);
 }
 
 #[test]
@@ -171,35 +164,25 @@ fn a_draft_pull_request_skips_the_stress_job() {
         true,
         true,
         100,
-        &[],
     );
     assert!(!plan.jobs["stress"]);
 }
 
 #[test]
 fn a_pull_request_without_packages_skips_the_stress_job() {
-    let plan = plan("crates", &[], "pull_request", false, true, true, 100, &[]);
+    let plan = plan("crates", &[], "pull_request", false, true, true, 100);
     assert!(!plan.jobs["stress"]);
 }
 
 #[test]
-fn a_push_skips_the_stress_job() {
-    let plan = plan(
-        "crates",
-        &strings(&["log"]),
-        "push",
-        false,
-        true,
-        true,
-        100,
-        &[],
-    );
-    assert!(!plan.jobs["stress"]);
+fn a_push_runs_the_stress_job() {
+    let plan = plan("crates", &strings(&["log"]), "push", false, true, true, 100);
+    assert!(plan.jobs["stress"]);
 }
 
 #[test]
 fn a_docs_only_pull_request_skips_the_stress_job() {
-    let plan = plan("docs", &[], "pull_request", false, true, true, 100, &[]);
+    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
     assert!(!plan.jobs["stress"]);
 }
 
@@ -213,7 +196,6 @@ fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
         false,
         false,
         100,
-        &[],
     );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
@@ -221,40 +203,38 @@ fn an_unlabelled_draft_skips_mutants_and_runs_the_rest() {
 }
 
 #[test]
-fn a_docs_push_runs_lint_and_tests_but_no_mutants() {
-    let plan = plan("docs", &[], "push", false, true, true, 100, &[]);
+fn a_docs_push_runs_lint_tests_release_and_stress_but_no_mutants() {
+    let plan = plan("docs", &[], "push", false, true, true, 100);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false, true, false),
+            jobs: jobs(true, true, true, false, false, true, true),
             shards: 0
         }
     );
 }
 
 #[test]
-fn a_code_push_runs_lint_tests_and_release_but_no_mutants_or_bug_check() {
-    let plan = plan(
-        "all",
-        &strings(&["log"]),
-        "push",
-        false,
-        true,
-        true,
-        1000,
-        &[],
-    );
+fn a_code_push_runs_lint_tests_release_and_stress_but_no_mutants_or_bug_check() {
+    let plan = plan("all", &strings(&["log"]), "push", false, true, true, 1000);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false, true, false),
+            jobs: jobs(true, true, true, false, false, true, true),
             shards: 0
         }
     );
 }
 
 #[test]
-fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
+fn a_push_with_mutants_requested_starts_no_shard() {
+    let plan = plan("all", &strings(&["log"]), "push", false, true, true, 1000);
+    assert!(!plan.jobs["mutants"]);
+    assert_eq!(plan.shards, 0);
+}
+
+#[test]
+fn a_pull_request_that_selects_the_binary_skips_the_release_job() {
     let plan = plan(
         "crates",
         &strings(&["log", "main"]),
@@ -263,25 +243,21 @@ fn a_pull_request_that_selects_the_binary_runs_the_release_job() {
         false,
         true,
         100,
-        &[],
     );
-    assert_eq!(plan.jobs, jobs(true, true, true, false, true, true));
+    assert_eq!(
+        plan.jobs,
+        jobs(true, true, false, true, false, false, false)
+    );
 }
 
 #[test]
-fn a_pull_request_that_runs_everything_runs_the_release_job() {
+fn a_pull_request_that_runs_everything_skips_the_release_job() {
     let packages = strings(&["config", "log", "main", "xtask"]);
-    let plan = plan(
-        "all",
-        &packages,
-        "pull_request",
-        false,
-        false,
-        true,
-        100,
-        &[],
+    let plan = plan("all", &packages, "pull_request", false, false, true, 100);
+    assert_eq!(
+        plan.jobs,
+        jobs(true, true, false, true, false, false, false)
     );
-    assert_eq!(plan.jobs, jobs(true, true, true, false, true, true));
 }
 
 #[test]
@@ -294,13 +270,15 @@ fn a_pull_request_without_the_binary_skips_the_release_job() {
         false,
         true,
         100,
-        &[],
     );
-    assert_eq!(plan.jobs, jobs(true, true, true, false, false, true));
+    assert_eq!(
+        plan.jobs,
+        jobs(true, true, false, true, false, false, false)
+    );
 }
 
 #[test]
-fn a_pull_request_touching_the_bench_crate_runs_the_release_job() {
+fn a_pull_request_touching_the_bench_crate_skips_the_release_job() {
     for path in [
         "crates/bench/src/lib.rs",
         "crates/bench/examples/bench/wheel.rs",
@@ -313,14 +291,13 @@ fn a_pull_request_touching_the_bench_crate_runs_the_release_job() {
             false,
             true,
             100,
-            &strings(&[path]),
         );
-        assert!(plan.jobs["release"], "{path}");
+        assert!(!plan.jobs["release"], "{path}");
     }
 }
 
 #[test]
-fn a_pull_request_touching_the_bench_harness_runs_the_release_job() {
+fn a_pull_request_touching_the_bench_harness_skips_the_release_job() {
     for path in [
         "xtask/src/bench.rs",
         "xtask/src/bench_tests.rs",
@@ -334,14 +311,13 @@ fn a_pull_request_touching_the_bench_harness_runs_the_release_job() {
             false,
             true,
             100,
-            &strings(&[path]),
         );
-        assert!(plan.jobs["release"], "{path}");
+        assert!(!plan.jobs["release"], "{path}");
     }
 }
 
 #[test]
-fn a_pull_request_touching_the_release_size_script_runs_the_release_job() {
+fn a_pull_request_touching_the_release_size_script_skips_the_release_job() {
     let plan = plan(
         "crates",
         &strings(&["log"]),
@@ -350,13 +326,12 @@ fn a_pull_request_touching_the_release_size_script_runs_the_release_job() {
         false,
         true,
         100,
-        &strings(&["scripts/release-size"]),
     );
-    assert!(plan.jobs["release"]);
+    assert!(!plan.jobs["release"]);
 }
 
 #[test]
-fn a_pull_request_touching_the_stored_results_script_runs_the_release_job() {
+fn a_pull_request_touching_the_stored_results_script_skips_the_release_job() {
     let plan = plan(
         "crates",
         &strings(&["log"]),
@@ -365,13 +340,12 @@ fn a_pull_request_touching_the_stored_results_script_runs_the_release_job() {
         false,
         true,
         100,
-        &strings(&["scripts/stored-results"]),
     );
-    assert!(plan.jobs["release"]);
+    assert!(!plan.jobs["release"]);
 }
 
 #[test]
-fn a_pull_request_touching_only_the_performance_table_runs_the_release_job() {
+fn a_pull_request_touching_only_the_performance_table_skips_the_release_job() {
     let plan = plan(
         "crates",
         &strings(&["xtask"]),
@@ -380,12 +354,11 @@ fn a_pull_request_touching_only_the_performance_table_runs_the_release_job() {
         false,
         false,
         0,
-        &strings(&["docs/performance.md"]),
     );
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false, true, true),
+            jobs: jobs(true, true, false, false, false, false, false),
             shards: 0
         }
     );
@@ -401,12 +374,11 @@ fn a_pull_request_touching_another_docs_file_skips_the_release_job() {
         false,
         false,
         0,
-        &strings(&["docs/ci.md"]),
     );
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, false, false, false, true),
+            jobs: jobs(true, true, false, false, false, false, false),
             shards: 0
         }
     );
@@ -430,7 +402,6 @@ fn a_pull_request_touching_a_release_path_lookalike_skips_the_release_job() {
             false,
             true,
             100,
-            &strings(&[path]),
         );
         assert!(!plan.jobs["release"], "{path}");
     }
@@ -438,20 +409,11 @@ fn a_pull_request_touching_a_release_path_lookalike_skips_the_release_job() {
 
 #[test]
 fn a_docs_only_pull_request_touching_the_bench_crate_runs_no_job() {
-    let plan = plan(
-        "docs",
-        &[],
-        "pull_request",
-        false,
-        true,
-        true,
-        100,
-        &strings(&["crates/bench/README.md"]),
-    );
+    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, false, false, false, false, false),
+            jobs: jobs(false, false, false, false, false, false, false),
             shards: 0
         }
     );
@@ -459,20 +421,11 @@ fn a_docs_only_pull_request_touching_the_bench_crate_runs_no_job() {
 
 #[test]
 fn an_ordinary_docs_only_pull_request_still_runs_no_job() {
-    let plan = plan(
-        "docs",
-        &[],
-        "pull_request",
-        false,
-        true,
-        true,
-        100,
-        &strings(&["docs/workflow.md", "README.md"]),
-    );
+    let plan = plan("docs", &[], "pull_request", false, true, true, 100);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, false, false, false, false, false),
+            jobs: jobs(false, false, false, false, false, false, false),
             shards: 0
         }
     );
@@ -488,7 +441,6 @@ fn a_code_pull_request_with_a_bench_readme_skips_the_release_job() {
         false,
         true,
         100,
-        &strings(&["crates/log/src/lib.rs", "crates/bench/README.md"]),
     );
     assert!(!plan.jobs["release"]);
 }
@@ -732,7 +684,10 @@ fn ci_passes_when_selected_jobs_passed_and_the_rest_skipped() {
         ("test", "success"),
         ("mutants", "skipped"),
     ]);
-    assert_eq!(verdict(&needs, &selected()), Vec::<String>::new());
+    assert_eq!(
+        verdict(&needs, &selected(), &[], &BaseResults::Untestable, false),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -745,7 +700,7 @@ fn ci_fails_when_a_selected_job_failed_or_was_skipped() {
             ("mutants", "skipped"),
         ]);
         assert_eq!(
-            verdict(&needs, &selected()),
+            verdict(&needs, &selected(), &[], &BaseResults::Untestable, false),
             vec![format!("test: selected, but {result}")]
         );
     }
@@ -760,7 +715,7 @@ fn ci_fails_when_an_unselected_job_ran() {
         ("mutants", "success"),
     ]);
     assert_eq!(
-        verdict(&needs, &selected()),
+        verdict(&needs, &selected(), &[], &BaseResults::Untestable, false),
         vec!["mutants: not selected, but success".to_owned()]
     );
 }
@@ -780,7 +735,10 @@ fn ci_passes_when_stress_was_not_selected_and_was_skipped() {
         ("mutants".to_owned(), false),
         ("stress".to_owned(), false),
     ]);
-    assert_eq!(verdict(&needs, &jobs), Vec::<String>::new());
+    assert_eq!(
+        verdict(&needs, &jobs, &[], &BaseResults::Untestable, false),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
@@ -799,7 +757,7 @@ fn ci_fails_when_selected_stress_failed() {
         ("stress".to_owned(), true),
     ]);
     assert!(
-        !verdict(&needs, &jobs).is_empty(),
+        !verdict(&needs, &jobs, &[], &BaseResults::Untestable, false).is_empty(),
         "a selected stress failure must fail the verdict"
     );
 }
@@ -813,11 +771,23 @@ fn ci_fails_when_the_selection_fails() {
         ("mutants", "skipped"),
     ]);
     assert_eq!(
-        verdict(&needs, &BTreeMap::new()),
+        verdict(
+            &needs,
+            &BTreeMap::new(),
+            &[],
+            &BaseResults::Untestable,
+            false
+        ),
         vec!["select: failure, so the selection failed".to_owned()]
     );
     assert_eq!(
-        verdict(&BTreeMap::new(), &selected()),
+        verdict(
+            &BTreeMap::new(),
+            &selected(),
+            &[],
+            &BaseResults::Untestable,
+            false
+        ),
         vec!["select: missing, so the selection failed".to_owned()]
     );
 }
@@ -832,7 +802,7 @@ fn ci_fails_on_a_job_the_selection_does_not_name() {
         ("extra", "skipped"),
     ]);
     assert_eq!(
-        verdict(&needs, &selected()),
+        verdict(&needs, &selected(), &[], &BaseResults::Untestable, false),
         vec!["extra: not in the selection".to_owned()]
     );
 }
@@ -891,10 +861,359 @@ fn a_selected_run_with_no_mutants_starts_no_shard() {
         "pull_request",
         false,
         false,
-        true,
+        false,
         0,
-        &[],
     );
     assert!(!plan.jobs["mutants"]);
     assert_eq!(plan.shards, 0);
+}
+
+fn listed(pairs: &[(&str, BaseOutcome)]) -> BaseResults {
+    BaseResults::Listed(
+        pairs
+            .iter()
+            .map(|(id, outcome)| ((*id).to_owned(), *outcome))
+            .collect(),
+    )
+}
+
+#[test]
+fn a_head_failure_passing_at_base_is_newly_broken() {
+    // A base pass reached on retry still counts as a pass: the id failed
+    // at the head and passed at the base, so the head broke it.
+    let head = strings(&["main::suite case"]);
+    assert_eq!(
+        new_breaks(&head, &listed(&[("main::suite case", BaseOutcome::Passed)])),
+        NewBreaks {
+            broken: head.clone(),
+            dropped: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn a_head_failure_also_failing_at_base_is_not_newly_broken() {
+    assert_eq!(
+        new_breaks(
+            &strings(&["main::suite case"]),
+            &listed(&[("main::suite case", BaseOutcome::Failed)]),
+        ),
+        NewBreaks {
+            broken: Vec::new(),
+            dropped: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn a_head_failure_missing_at_base_is_pr_added_and_fails() {
+    // The base list does not name the id, so the pull request added the
+    // test and the head broke it.
+    let head = strings(&["main::suite new_case"]);
+    assert_eq!(
+        new_breaks(&head, &listed(&[])),
+        NewBreaks {
+            broken: head.clone(),
+            dropped: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn a_head_failure_unrunnable_at_base_is_dropped_not_failed() {
+    assert_eq!(
+        new_breaks(
+            &strings(&["main::suite case"]),
+            &listed(&[("main::suite case", BaseOutcome::Unrunnable)]),
+        ),
+        NewBreaks {
+            broken: Vec::new(),
+            dropped: strings(&["main::suite case"]),
+        }
+    );
+}
+
+#[test]
+fn an_untestable_base_fails_every_head_failure_closed() {
+    let head = strings(&["main::suite first", "main::suite second"]);
+    assert_eq!(
+        new_breaks(&head, &BaseResults::Untestable),
+        NewBreaks {
+            broken: head.clone(),
+            dropped: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn a_mixed_base_splits_broken_from_dropped_in_head_order() {
+    let head = strings(&[
+        "main::suite added",
+        "main::suite old",
+        "main::suite new",
+        "main::suite skipped",
+    ]);
+    assert_eq!(
+        new_breaks(
+            &head,
+            &listed(&[
+                ("main::suite old", BaseOutcome::Failed),
+                ("main::suite new", BaseOutcome::Passed),
+                ("main::suite skipped", BaseOutcome::Unrunnable),
+            ]),
+        ),
+        NewBreaks {
+            broken: strings(&["main::suite added", "main::suite new"]),
+            dropped: strings(&["main::suite skipped"]),
+        }
+    );
+}
+
+#[test]
+fn head_failures_parse_to_exact_nextest_ids() {
+    assert_eq!(
+        parse_head_failures("main::suite case\n\nlib::other other\n"),
+        Ok(strings(&["main::suite case", "lib::other other"]))
+    );
+    assert_eq!(
+        parse_head_failures("main::suite  padded\n"),
+        Ok(strings(&["main::suite padded"]))
+    );
+}
+
+#[test]
+fn head_failures_reject_a_line_that_is_not_an_id() {
+    for text in ["lonely\n", "three part id\n", "pass\tmain::suite case\n"] {
+        assert!(parse_head_failures(text).is_err(), "{text:?}");
+    }
+}
+
+#[test]
+fn base_outcomes_match_by_exact_binary_and_name() {
+    // The same test name under another binary is another test: only the
+    // exact `binary-id name` line decides, and an id the base list does
+    // not name gets no line (the pull request added it).
+    let head = strings(&["b fold::tests::first", "c fold::tests::first"]);
+    assert_eq!(
+        classify_base(
+            &head,
+            "a fold::tests::first\nb fold::tests::first\n",
+            "",
+            "b fold::tests::first\n",
+        ),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Passed)]),
+    );
+}
+
+#[test]
+fn a_base_failure_beats_an_execution() {
+    let head = strings(&["b fold::tests::first"]);
+    assert_eq!(
+        classify_base(
+            &head,
+            "b fold::tests::first\n",
+            "b fold::tests::first\n",
+            "b fold::tests::first\n",
+        ),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Failed)]),
+    );
+}
+
+#[test]
+fn a_base_pass_on_retry_counts_as_a_pass() {
+    // Executed without failing: the base passed, if only on retry, so a
+    // retry never masks a head break.
+    let head = strings(&["b fold::tests::first"]);
+    assert_eq!(
+        classify_base(
+            &head,
+            "b fold::tests::first\n",
+            "",
+            "b fold::tests::first\n",
+        ),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Passed)]),
+    );
+}
+
+#[test]
+fn a_listed_but_unexecuted_id_is_unrunnable() {
+    let head = strings(&["b fold::tests::first"]);
+    assert_eq!(
+        classify_base(&head, "b fold::tests::first\n", "", "",),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Unrunnable)]),
+    );
+}
+
+#[test]
+fn base_lists_skip_empty_lines() {
+    let head = strings(&["b fold::tests::first"]);
+    assert_eq!(
+        classify_base(
+            &head,
+            "\nb fold::tests::first\n\n",
+            "\n",
+            "\nb fold::tests::first\n",
+        ),
+        BTreeMap::from([("b fold::tests::first".to_owned(), BaseOutcome::Passed)]),
+    );
+}
+
+fn break_jobs() -> BTreeMap<String, bool> {
+    BTreeMap::from([("test_linux".to_owned(), true)])
+}
+
+fn break_needs(result: &str) -> BTreeMap<String, String> {
+    results(&[("select", "success"), ("test_linux", result)])
+}
+
+#[test]
+fn ci_passes_when_every_head_failure_also_fails_at_base() {
+    assert_eq!(
+        verdict(
+            &break_needs("failure"),
+            &break_jobs(),
+            &strings(&["main::suite old"]),
+            &listed(&[("main::suite old", BaseOutcome::Failed)]),
+            false,
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn ci_passes_when_every_head_failure_is_dropped_at_base() {
+    assert_eq!(
+        verdict(
+            &break_needs("failure"),
+            &break_jobs(),
+            &strings(&["main::suite skipped"]),
+            &listed(&[("main::suite skipped", BaseOutcome::Unrunnable)]),
+            false,
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn ci_fails_listing_only_newly_broken_ids() {
+    assert_eq!(
+        verdict(
+            &break_needs("failure"),
+            &break_jobs(),
+            &strings(&["main::suite new", "main::suite old"]),
+            &listed(&[
+                ("main::suite new", BaseOutcome::Passed),
+                ("main::suite old", BaseOutcome::Failed),
+            ]),
+            false,
+        ),
+        vec!["test_linux: newly broken: main::suite new".to_owned()]
+    );
+}
+
+#[test]
+fn ci_fails_a_newly_broken_id_the_base_list_does_not_name() {
+    assert_eq!(
+        verdict(
+            &break_needs("failure"),
+            &break_jobs(),
+            &strings(&["main::suite added"]),
+            &listed(&[]),
+            false,
+        ),
+        vec!["test_linux: newly broken: main::suite added".to_owned()]
+    );
+}
+
+#[test]
+fn ci_fails_closed_when_a_failed_leg_has_no_break_data() {
+    assert_eq!(
+        verdict(
+            &break_needs("failure"),
+            &break_jobs(),
+            &[],
+            &BaseResults::Untestable,
+            false,
+        ),
+        vec!["test_linux: selected, but failure".to_owned()]
+    );
+}
+
+#[test]
+fn ci_passes_a_successful_leg_even_with_break_data() {
+    assert_eq!(
+        verdict(
+            &break_needs("success"),
+            &break_jobs(),
+            &strings(&["main::suite new"]),
+            &listed(&[("main::suite new", BaseOutcome::Passed)]),
+            false,
+        ),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn ci_does_not_excuse_a_leg_the_selection_did_not_choose() {
+    assert_eq!(
+        verdict(
+            &break_needs("failure"),
+            &BTreeMap::from([("test_linux".to_owned(), false)]),
+            &strings(&["main::suite old"]),
+            &listed(&[("main::suite old", BaseOutcome::Failed)]),
+            false,
+        ),
+        vec!["test_linux: not selected, but failure".to_owned()]
+    );
+}
+
+#[test]
+fn ci_keeps_a_touched_retry_failure_with_no_new_breaks() {
+    // Every head failure also fails at the base, so nothing is newly
+    // broken, but a touched test passed only on retry, which blocks the
+    // merge (`docs/testing/running.md`, "Flaky tests").
+    assert_eq!(
+        verdict(
+            &break_needs("failure"),
+            &break_jobs(),
+            &strings(&["main::suite old"]),
+            &listed(&[("main::suite old", BaseOutcome::Failed)]),
+            true,
+        ),
+        vec!["test_linux: touched test passed only on retry".to_owned()]
+    );
+}
+
+#[test]
+fn ci_reports_both_new_breaks_and_a_touched_retry() {
+    assert_eq!(
+        verdict(
+            &break_needs("failure"),
+            &break_jobs(),
+            &strings(&["main::suite new", "main::suite old"]),
+            &listed(&[
+                ("main::suite new", BaseOutcome::Passed),
+                ("main::suite old", BaseOutcome::Failed),
+            ]),
+            true,
+        ),
+        vec![
+            "test_linux: newly broken: main::suite new".to_owned(),
+            "test_linux: touched test passed only on retry".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn ci_passes_a_successful_leg_despite_a_touched_retry_signal() {
+    assert_eq!(
+        verdict(
+            &break_needs("success"),
+            &break_jobs(),
+            &strings(&["main::suite old"]),
+            &listed(&[("main::suite old", BaseOutcome::Failed)]),
+            true,
+        ),
+        Vec::<String>::new()
+    );
 }
