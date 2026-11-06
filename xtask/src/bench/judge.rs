@@ -510,6 +510,10 @@ pub(super) const MEASURED: &[(&str, Check)] = &[
         ]),
     ),
     (
+        "Keeper, one running job",
+        Check::Memory(&["keeper_rss_kib"]),
+    ),
+    (
         "`web_fetch` converting a 10 MiB HTML page, the download cap",
         Check::Within {
             row: BUSY,

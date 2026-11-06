@@ -10,6 +10,7 @@ const DOC: &str = concat!(
     "| Session, idle, headless | 12 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, idle | 9,048 KiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |\n",
     "| Session, busy or resumed | 24 MiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |\n",
+    "| Keeper, one running job | 13,760 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |\n",
     "| `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 24 MiB peak RSS | Linux x86_64 | from components | — | — | — | — | — |\n",
     "| Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact | — | — | — | — | — |\n",
     "| Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact | — | — | — | — | — |\n",
@@ -80,6 +81,7 @@ fn head() -> Value {
             "resume_20k_rss_kib": [11000, 11010, 10990, 11005, 10995],
             "resume_2m_rss_kib": [14000, 14010, 13990, 14005, 13995],
             "web_fetch_rss_kib": [22000, 22010, 21990, 22005, 21995],
+            "keeper_rss_kib": [6880, 6872, 6876, 6880, 6880],
             "fsyncs": [fsync_run(430, 429, 1718)],
             "turn_log_bytes": vec![log_run(1_700_000, 1_520_000, 429); 5],
             "paging_rss_kib": [10612, 10604, 10620, 10612, 10608],
@@ -6776,12 +6778,13 @@ fn memory_budgets_lists_exactly_the_memory_budgets() {
     // remeasure, so the merge's `_kib` skip depends on exactly this set.
     // The memory budgets are the Budgets-table rows whose ceilings read
     // peak RSS, RssAnon, or within a peak RSS (`docs/performance.md`,
-    // lines 62-65, 73-74, 76 and 79).
+    // "Budgets").
     let budgets = super::memory_budgets();
     let expected: std::collections::BTreeSet<&str> = [
         "Session, idle, headless",
         "Terminal, idle",
         "Session, busy or resumed",
+        "Keeper, one running job",
         "`web_fetch` converting a 10 MiB HTML page, the download cap",
         "Terminal, attaching a 10 MiB session",
         "Session, memory kept after the busy turn",

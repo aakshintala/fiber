@@ -11,7 +11,7 @@ is `docs/dependencies.md`, "Measuring memory".
 
 ## What a budget covers
 
-A budget covers one process: a session or the terminal. MCP servers,
+A budget covers one process: a session, the keeper or the terminal. MCP servers,
 process extensions, shell commands, delegates, image children and the hub
 are processes of their own and are not counted. A delegate is a session
 process and holds the same budgets as any session. The hub's own budgets,
@@ -50,6 +50,10 @@ copy. It runs no provider extension and no compiled-in tool: it measures the
 terminal's paging and drawing alone, so the fresh-install load above does not
 apply to it.
 
+The keeper row measures the keeper process while its one shell job runs:
+the job is the workload the budget covers, so the fresh-install load above
+does not apply to it.
+
 Memory follows the context window, not the transcript. After a handoff the
 session holds the handoff note and what came after it, and a resumed session
 reads from its last handoff (`docs/handoff.md`). A 2-million-token session and
@@ -62,6 +66,7 @@ a 20-thousand-token one fit the same ceiling.
 | Session, idle, headless | 14,336 KiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |
 | Terminal, idle | 20,088 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Session, busy or resumed | 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
+| Keeper, one running job | 13,760 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | `web_fetch` converting a 10 MiB HTML page, the download cap | within the busy session's 46,720 KiB peak RSS | Linux x86_64 | measured | — | — | — | — | — |
 | Idle CPU, session and terminal | zero context switches in the idle window, on every thread | Linux x86_64 | exact | — | — | — | — | — |
 | Threads, idle headless session | 5, plus 2 per client, plus 1 per Lua extension in use | Linux x86_64 | exact | — | — | — | — | — |
@@ -96,6 +101,11 @@ require an admitted-model tracker and reader callbacks even before the first
 query, so they can answer for a previously queued model switch. Label
 enumeration is on demand; no picker or additional reader thread runs in a
 headless session.
+
+The keeper ceiling is 13,760 KiB of peak RSS with one running job. The
+benchmark has never run on main, so the figure is the median of its five
+runs on the pull request that added it, 6,880 KiB, doubled per Basis below
+(run 42137584416, which failed elsewhere with its benchmark job green).
 
 Basis says where a number came from:
 
