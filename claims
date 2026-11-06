@@ -172,3 +172,5 @@ xtask/src/rules_tests.rs	fiber-4277	plan	2026-11-06T12:19:07Z	roundhouse-7010-pl
 docs/permissions.md	fiber-4292	plan	2026-11-06T12:22:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/support/src/peer.rs	fiber-4292	plan	2026-11-06T12:25:24Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 crates/support/src/peer_tests.rs	fiber-4292	plan	2026-11-06T12:25:24Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/main/tests/extension_commands.rs	fiber-4307	plan	2026-11-06T13:33:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4310,4309,4308,4303,4297,4296
+crates/main/tests/support/mod.rs	fiber-4307	plan	2026-11-06T13:33:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4310,4309,4308,4303,4297,4296
