@@ -294,12 +294,38 @@ local function has_api(apis, want)
   return false
 end
 
+-- The Claude models whose entries defer tools: a Databricks Claude row
+-- carries `deferred_tools` exactly when its model's Anthropic row does, as
+-- gateway pass-through to Anthropic was probed on
+-- `databricks-claude-opus-5-5`; `claude-opus-5` stays out because its
+-- Anthropic row carries no such flag. A model key missing here reads as no
+-- deferral, and non-Claude entries never carry the field.
+local DEFERRED_CLAUDE = {
+  ["claude-fable-5"] = true,
+  ["claude-fable-5-1"] = true,
+  ["claude-haiku-4-5"] = true,
+  ["claude-haiku-4-5-20251001"] = true,
+  ["claude-haiku-5-5"] = true,
+  ["claude-opus-4-5"] = true,
+  ["claude-opus-4-5-20251101"] = true,
+  ["claude-opus-4-6"] = true,
+  ["claude-opus-4-7"] = true,
+  ["claude-opus-4-8"] = true,
+  ["claude-opus-5-5"] = true,
+  ["claude-sonnet-4-5"] = true,
+  ["claude-sonnet-4-5-20250929"] = true,
+  ["claude-sonnet-4-6"] = true,
+  ["claude-sonnet-5"] = true,
+  ["claude-sonnet-5-5"] = true,
+}
+
 -- The entry for one model service, or nil to leave it out: kept only when
 -- its API list holds the Responses or chat API, and left out when its bare
 -- name ends `-image` or matches an `image_generation` row. A Claude
 -- service, by its row's `provider_type` or its `claude-` name, is
--- `anthropic-messages` with `compat.bearer`; else a Responses service is
--- `openai-responses`, else `openai-completions`. The window is the row's
+-- `anthropic-messages` with `compat.bearer` and defers tools when its model
+-- key is in the set above; else a Responses service is `openai-responses`,
+-- else `openai-completions`. The window is the row's
 -- `max_input`, except the pair 922000/128000 which reads as 1,050,000; a
 -- service with no row, or a row with no numeric `max_input`, has no window.
 -- A service takes the thinking row its bare name's match key names in the
@@ -342,6 +368,9 @@ local function entry_for(service, catalog, image_keys, thinking)
   }
   if claude then
     entry.compat = { bearer = true }
+    if DEFERRED_CLAUDE[model_key(bare)] then
+      entry.deferred_tools = true
+    end
   end
   local vision = type(row) == "table"
     and type(row.capabilities) == "table"
