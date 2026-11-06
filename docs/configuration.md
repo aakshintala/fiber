@@ -690,7 +690,8 @@ declares") lists:
   Absent levels mean the model takes none. A default not among the levels
   leaves the model out with `model_invalid`.
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the
-  model sees"). Absent means false.
+  model sees"), except the Databricks Claude rows set from their
+  `providers/anthropic` counterparts there. Absent means false.
 - `cost` is in US dollars per million tokens. A model priced by request size
   adds `tiers`, a list of the same four prices, each with `input_tokens_above`:
   the highest threshold the request's whole input exceeds prices the whole
