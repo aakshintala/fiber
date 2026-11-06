@@ -1183,6 +1183,7 @@ fn fold_until(dir: &Path, action: &str) -> Vec<r#loop::Reviewed> {
             &event,
             envelope.action_id.as_ref(),
             envelope.seq,
+            &mut r#loop::PendingAsks::default(),
         );
         if envelope.kind() == EventKind::ToolCallRequested
             && envelope.action_id.as_ref().is_some_and(|id| id.0 == action)

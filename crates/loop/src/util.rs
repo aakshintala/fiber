@@ -52,6 +52,9 @@ pub(crate) struct Transcript<'a> {
     pub(crate) conversation: &'a mut Vec<Input>,
     /// What the reviewer is shown, rendered from the same events.
     pub(crate) reviewed: &'a mut Vec<crate::reviewer::Reviewed>,
+    /// The eliciting requests a person's answer resolves, staged by
+    /// request id for the renderer's resolve arm.
+    pub(crate) asks: &'a mut crate::reviewer::PendingAsks,
     /// The content the model last had per instruction file path.
     pub(crate) had: &'a mut BTreeMap<String, String>,
     /// The render state a handoff reads.
@@ -98,7 +101,7 @@ impl Transcript<'_> {
                 line.seq,
             );
             if !was_summary && !self.carry.in_summary() {
-                crate::reviewer::render_reviewed(self.reviewed, event, action, line.seq);
+                crate::reviewer::render_reviewed(self.reviewed, event, action, line.seq, self.asks);
             }
         }
         Ok(())
@@ -121,6 +124,7 @@ impl crate::Loop {
         Transcript {
             conversation: &mut self.conversation,
             reviewed: &mut self.reviewed,
+            asks: &mut self.pending_asks,
             had: &mut self.changes.had,
             carry: &mut self.handoff.carry,
             known: &mut self.known_hosts,

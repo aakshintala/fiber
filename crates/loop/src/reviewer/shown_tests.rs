@@ -10,16 +10,17 @@
 )]
 
 use contract::events::{
-    AssistantMessageCompleted, Event, HandoffCompleted, InputItem, KeptMessage, MessageOutcome,
-    Note, Outcome, ReviewerKept, SessionStarted, SteeringApplied, TextCompleted, ToolCallRequested,
+    Answer, AssistantMessageCompleted, Event, FormAnswer, HandoffCompleted, InputItem, Interaction,
+    InteractionRequested, InteractionResolved, KeptMessage, MessageOutcome, Note, Outcome,
+    ResolvedBy, ReviewerKept, SessionStarted, SteeringApplied, TextCompleted, ToolCallRequested,
     TurnCompleted, TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::Input;
-use contract::shapes::{ContentPart, Failure, Origin, Sender};
-use contract::{ActionId, CommandId, ErrorCode, Seq, SessionId, TurnId};
+use contract::shapes::{Choice, ContentPart, Failure, Origin, Question, Sender, True};
+use contract::{ActionId, CommandId, ErrorCode, RequestId, Seq, SessionId, TurnId};
 use serde_json::json;
 
-use super::{REPLY_CAP, Reviewed, Shown, render_reviewed};
+use super::{PendingAsks, REPLY_CAP, Reviewed, Shown, render_reviewed};
 
 fn driver() -> Sender {
     Sender {
@@ -115,6 +116,7 @@ fn a_person_message_carries_its_line_and_its_index() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed,
@@ -140,6 +142,7 @@ fn a_steered_message_is_the_lines_only_item() {
         }),
         None,
         Some(Seq(31)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed,
@@ -163,6 +166,7 @@ fn another_senders_message_renders_nothing() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -173,6 +177,7 @@ fn another_senders_message_renders_nothing() {
         }),
         None,
         Some(Seq(13)),
+        &mut PendingAsks::default(),
     );
     assert!(reviewed.is_empty());
 }
@@ -186,6 +191,7 @@ fn a_call_is_shown_by_its_action() {
         &Event::ToolCallRequested(call("shell")),
         Some(&action),
         Some(Seq(40)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed,
@@ -209,6 +215,7 @@ fn a_person_message_with_no_seq_renders_nothing() {
         }),
         None,
         None,
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -219,6 +226,7 @@ fn a_person_message_with_no_seq_renders_nothing() {
         }),
         None,
         None,
+        &mut PendingAsks::default(),
     );
     assert!(reviewed.is_empty());
 }
@@ -233,6 +241,7 @@ fn reviewer_kept_leaves_the_named_message_word_for_word() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     let action = ActionId("a_1".into());
     render_reviewed(
@@ -240,6 +249,7 @@ fn reviewer_kept_leaves_the_named_message_word_for_word() {
         &Event::ToolCallRequested(call("shell")),
         Some(&action),
         Some(Seq(13)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -252,6 +262,7 @@ fn reviewer_kept_leaves_the_named_message_word_for_word() {
         }),
         None,
         Some(Seq(31)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(reviewed.len(), 3);
     render_reviewed(
@@ -259,6 +270,7 @@ fn reviewer_kept_leaves_the_named_message_word_for_word() {
         &kept_event(vec![kept(12, 0)]),
         None,
         Some(Seq(57)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed,
@@ -282,8 +294,15 @@ fn reviewer_kept_with_nothing_empties_the_input() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &kept_event(Vec::new()), None, Some(Seq(57)));
+    render_reviewed(
+        &mut reviewed,
+        &kept_event(Vec::new()),
+        None,
+        Some(Seq(57)),
+        &mut PendingAsks::default(),
+    );
     assert!(reviewed.is_empty());
 }
 
@@ -297,12 +316,14 @@ fn reviewer_kept_naming_nothing_present_keeps_nothing_extra() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &kept_event(vec![kept(99, 0), kept(12, 3)]),
         None,
         Some(Seq(57)),
+        &mut PendingAsks::default(),
     );
     assert!(reviewed.is_empty());
 }
@@ -317,6 +338,7 @@ fn lines_after_reviewer_kept_append_after_the_kept_items() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -325,12 +347,14 @@ fn lines_after_reviewer_kept_append_after_the_kept_items() {
         }),
         None,
         Some(Seq(31)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &kept_event(vec![kept(31, 0)]),
         None,
         Some(Seq(57)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -341,6 +365,7 @@ fn lines_after_reviewer_kept_append_after_the_kept_items() {
         }),
         None,
         Some(Seq(60)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed
@@ -375,6 +400,7 @@ fn the_reviewer_keeps_an_inner_call() {
         &Event::ToolCallRequested(inner),
         Some(&ActionId("a_inner".into())),
         Some(Seq(41)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(reviewed.len(), 1);
     assert_eq!(reviewed[0].shown, Shown::Call(ActionId("a_inner".into())));
@@ -428,12 +454,14 @@ fn busy_turn(reviewed: &mut Vec<Reviewed>) {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         reviewed,
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_1".into())),
         Some(Seq(13)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         reviewed,
@@ -442,12 +470,14 @@ fn busy_turn(reviewed: &mut Vec<Reviewed>) {
         }),
         None,
         Some(Seq(31)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         reviewed,
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_2".into())),
         Some(Seq(32)),
+        &mut PendingAsks::default(),
     );
 }
 
@@ -470,7 +500,13 @@ fn a_completed_handoff_drops_earlier_calls_and_keeps_persons_word_for_word() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
     assert_eq!(reviewed.len(), 4);
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert!(
         reviewed
             .iter()
@@ -507,10 +543,17 @@ fn a_completed_handoff_on_calls_only_empties_the_input() {
             &Event::ToolCallRequested(call("shell")),
             Some(&ActionId((*action).into())),
             Some(Seq(13 + n as u64)),
+            &mut PendingAsks::default(),
         );
     }
     assert_eq!(reviewed.len(), 2);
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert!(reviewed.is_empty(), "{reviewed:?}");
 }
 
@@ -524,6 +567,7 @@ fn a_completed_handoff_keeps_every_person_message() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -534,9 +578,16 @@ fn a_completed_handoff_keeps_every_person_message() {
         }),
         None,
         Some(Seq(13)),
+        &mut PendingAsks::default(),
     );
     let before = reviewed.clone();
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(reviewed, before);
     assert_eq!(
         person_text(&reviewed),
@@ -550,7 +601,13 @@ fn a_completed_handoff_keeps_every_person_message() {
 #[test]
 fn a_completed_handoff_on_empty_input_stays_empty() {
     let mut reviewed = Vec::new();
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert!(reviewed.is_empty());
 }
 
@@ -559,7 +616,13 @@ fn a_failed_handoff_keeps_calls_and_persons_byte_identical() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
     let before = reviewed.clone();
-    render_reviewed(&mut reviewed, &handoff_failed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_failed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(reviewed.len(), before.len());
     assert_eq!(reviewed, before);
 }
@@ -569,7 +632,13 @@ fn a_cancelled_handoff_keeps_calls_and_persons_byte_identical() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
     let before = reviewed.clone();
-    render_reviewed(&mut reviewed, &handoff_cancelled(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_cancelled(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(reviewed.len(), before.len());
     assert_eq!(reviewed, before);
 }
@@ -578,12 +647,19 @@ fn a_cancelled_handoff_keeps_calls_and_persons_byte_identical() {
 fn reviewer_kept_after_a_completed_handoff_selects_the_kept_persons() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     render_reviewed(
         &mut reviewed,
         &kept_event(vec![kept(31, 0)]),
         None,
         Some(Seq(57)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed,
@@ -605,6 +681,7 @@ fn lines_without_a_durable_identity_add_nothing() {
         &Event::ToolCallRequested(call("shell")),
         None,
         Some(Seq(40)),
+        &mut PendingAsks::default(),
     );
     assert!(reviewed.is_empty());
 }
@@ -613,7 +690,13 @@ fn lines_without_a_durable_identity_add_nothing() {
 fn successive_completed_handoffs_drop_each_cut_before_them() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     render_reviewed(
         &mut reviewed,
         &Event::TurnStarted(TurnStarted {
@@ -621,14 +704,22 @@ fn successive_completed_handoffs_drop_each_cut_before_them() {
         }),
         None,
         Some(Seq(51)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_3".into())),
         Some(Seq(52)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(60)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(60)),
+        &mut PendingAsks::default(),
+    );
     assert!(
         reviewed
             .iter()
@@ -655,20 +746,29 @@ fn a_call_after_the_cut_stays_and_a_call_before_it_goes() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_1".into())),
         Some(Seq(13)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     let after = ActionId("a_2".into());
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallRequested(call("shell")),
         Some(&after),
         Some(Seq(41)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed,
@@ -701,6 +801,7 @@ fn the_cut_releases_the_calls_allocation() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -709,6 +810,7 @@ fn the_cut_releases_the_calls_allocation() {
         }),
         None,
         Some(Seq(13)),
+        &mut PendingAsks::default(),
     );
     for n in 0..300u64 {
         render_reviewed(
@@ -716,11 +818,18 @@ fn the_cut_releases_the_calls_allocation() {
             &Event::ToolCallRequested(call("shell")),
             Some(&ActionId(format!("a_{n}"))),
             Some(Seq(14 + n)),
+            &mut PendingAsks::default(),
         );
     }
     let before = reviewed.capacity();
     assert_eq!(reviewed.len(), 302);
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(400)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(400)),
+        &mut PendingAsks::default(),
+    );
     // Length alone would still hold the peak's pages: the allocation
     // itself must fall with the dropped calls.
     assert_eq!(reviewed.len(), 2);
@@ -851,7 +960,13 @@ fn the_live_fold_and_the_history_fold_agree_at_each_side_of_the_cut() {
                 continue;
             }
             if let Some(event) = Event::from_envelope(&line).unwrap() {
-                render_reviewed(&mut live, &event, line.action_id.as_ref(), line.seq);
+                render_reviewed(
+                    &mut live,
+                    &event,
+                    line.action_id.as_ref(),
+                    line.seq,
+                    &mut PendingAsks::default(),
+                );
             }
         }
         assert_eq!(folded.reviewed, live, "at seq {point}");
@@ -866,8 +981,15 @@ fn a_reply_then_a_person_message_keeps_the_pair() {
         &text_completed("Delete the 3 stale branches?"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(21)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("yes"),
+        None,
+        Some(Seq(21)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(
         reviewed,
         vec![
@@ -897,6 +1019,7 @@ fn a_reply_with_no_person_message_after_it_stays_held() {
         &text_completed("Delete the 3 stale branches?"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(reviewed.len(), 1);
     assert!(
@@ -919,14 +1042,22 @@ fn agent_text_then_a_tool_call_then_a_person_message_carries_no_reply() {
         &text_completed("Delete the 3 stale branches?"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_1".into())),
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(22)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("yes"),
+        None,
+        Some(Seq(22)),
+        &mut PendingAsks::default(),
+    );
     assert!(
         reviewed
             .iter()
@@ -944,6 +1075,7 @@ fn an_unshown_tool_call_between_text_and_message_breaks_the_link() {
         &text_completed("Delete the 3 stale branches?"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     // A hosted call carries no action, so the reviewer never sees it, but
     // it still breaks the link.
@@ -952,8 +1084,15 @@ fn an_unshown_tool_call_between_text_and_message_breaks_the_link() {
         &Event::ToolCallRequested(call("shell")),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(22)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("yes"),
+        None,
+        Some(Seq(22)),
+        &mut PendingAsks::default(),
+    );
     assert!(
         reviewed
             .iter()
@@ -966,20 +1105,34 @@ fn an_unshown_tool_call_between_text_and_message_breaks_the_link() {
 #[test]
 fn text_tool_call_text_person_shows_only_the_second_text() {
     let mut reviewed = Vec::new();
-    render_reviewed(&mut reviewed, &text_completed("first"), None, Some(Seq(20)));
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("first"),
+        None,
+        Some(Seq(20)),
+        &mut PendingAsks::default(),
+    );
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_1".into())),
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &text_completed("second"),
         None,
         Some(Seq(22)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(23)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("yes"),
+        None,
+        Some(Seq(23)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(
         reviewed,
         vec![
@@ -1016,12 +1169,14 @@ fn two_text_parts_join_with_a_newline() {
         &text_completed("line one"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &text_completed("line two"),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed,
@@ -1038,14 +1193,38 @@ fn two_text_parts_join_with_a_newline() {
 #[test]
 fn an_empty_or_whitespace_part_adds_nothing() {
     let mut reviewed = Vec::new();
-    render_reviewed(&mut reviewed, &text_completed(""), None, Some(Seq(20)));
-    render_reviewed(&mut reviewed, &text_completed("   "), None, Some(Seq(21)));
+    render_reviewed(
+        &mut reviewed,
+        &text_completed(""),
+        None,
+        Some(Seq(20)),
+        &mut PendingAsks::default(),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("   "),
+        None,
+        Some(Seq(21)),
+        &mut PendingAsks::default(),
+    );
     assert!(
         reviewed.is_empty(),
         "empty parts start no reply: {reviewed:?}"
     );
-    render_reviewed(&mut reviewed, &text_completed("kept"), None, Some(Seq(22)));
-    render_reviewed(&mut reviewed, &text_completed("  "), None, Some(Seq(23)));
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("kept"),
+        None,
+        Some(Seq(22)),
+        &mut PendingAsks::default(),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("  "),
+        None,
+        Some(Seq(23)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(
         reviewed,
         vec![Reviewed {
@@ -1066,6 +1245,7 @@ fn two_driver_messages_on_one_line_share_one_reply() {
         &text_completed("which?"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -1074,6 +1254,7 @@ fn two_driver_messages_on_one_line_share_one_reply() {
         }),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         person_text(&reviewed),
@@ -1092,6 +1273,7 @@ fn an_extension_message_after_a_reply_removes_it() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -1100,6 +1282,7 @@ fn an_extension_message_after_a_reply_removes_it() {
         }),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert!(
         reviewed.is_empty(),
@@ -1115,6 +1298,7 @@ fn a_driver_message_with_no_seq_after_a_reply_removes_it() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -1123,6 +1307,7 @@ fn a_driver_message_with_no_seq_after_a_reply_removes_it() {
         }),
         None,
         None,
+        &mut PendingAsks::default(),
     );
     assert!(
         reviewed.is_empty(),
@@ -1138,6 +1323,7 @@ fn a_drivers_steering_message_after_a_reply_keeps_it() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -1148,6 +1334,7 @@ fn a_drivers_steering_message_after_a_reply_keeps_it() {
         }),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         person_text(&reviewed),
@@ -1163,6 +1350,7 @@ fn an_extensions_steering_message_after_a_reply_removes_it() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -1173,6 +1361,7 @@ fn an_extensions_steering_message_after_a_reply_removes_it() {
         }),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert!(
         reviewed.is_empty(),
@@ -1188,12 +1377,14 @@ fn a_failed_assistant_message_removes_the_held_reply() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &assistant_completed(MessageOutcome::Failed),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert!(
         reviewed.is_empty(),
@@ -1209,12 +1400,14 @@ fn a_completed_assistant_message_keeps_the_held_reply() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &assistant_completed(MessageOutcome::Completed),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(reviewed.len(), 1);
     assert_eq!(reviewed[0].shown, Shown::Reply("proposal".into()));
@@ -1228,12 +1421,14 @@ fn an_interrupted_turn_removes_the_held_reply() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &turn_completed(TurnOutcome::Interrupted),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert!(
         reviewed.is_empty(),
@@ -1249,12 +1444,14 @@ fn a_failed_turn_removes_the_held_reply() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &turn_completed(TurnOutcome::Failed),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert!(
         reviewed.is_empty(),
@@ -1270,12 +1467,14 @@ fn a_completed_turn_keeps_the_held_reply() {
         &text_completed("proposal"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &turn_completed(TurnOutcome::Completed),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(reviewed.len(), 1);
     assert_eq!(reviewed[0].shown, Shown::Reply("proposal".into()));
@@ -1286,7 +1485,13 @@ fn a_reply_at_one_under_and_at_the_cap_shows_whole() {
     for len in [REPLY_CAP - 1, REPLY_CAP] {
         let mut reviewed = Vec::new();
         let body = "x".repeat(len);
-        render_reviewed(&mut reviewed, &text_completed(&body), None, Some(Seq(20)));
+        render_reviewed(
+            &mut reviewed,
+            &text_completed(&body),
+            None,
+            Some(Seq(20)),
+            &mut PendingAsks::default(),
+        );
         assert_eq!(reviewed.len(), 1, "at length {len}");
         assert_eq!(
             reviewed[0].input,
@@ -1308,7 +1513,13 @@ fn a_reply_at_one_under_and_at_the_cap_shows_whole() {
 fn a_reply_one_over_the_cap_cuts_the_head_and_counts_the_rest() {
     let mut reviewed = Vec::new();
     let raw = "x".repeat(REPLY_CAP + 1);
-    render_reviewed(&mut reviewed, &text_completed(&raw), None, Some(Seq(20)));
+    render_reviewed(
+        &mut reviewed,
+        &text_completed(&raw),
+        None,
+        Some(Seq(20)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(reviewed.len(), 1);
     assert_eq!(
         reviewed[0].input,
@@ -1336,6 +1547,7 @@ fn the_cap_counts_characters_never_bytes() {
             &text_completed(&"é".repeat(len)),
             None,
             Some(Seq(20)),
+            &mut PendingAsks::default(),
         );
         assert_eq!(reviewed.len(), 1, "at length {len}");
         assert_eq!(
@@ -1357,8 +1569,20 @@ fn the_cap_applies_across_parts_without_cutting_the_stored_text() {
     let mut reviewed = Vec::new();
     let first = "y".repeat(7_000);
     let second = "z".repeat(50);
-    render_reviewed(&mut reviewed, &text_completed(&first), None, Some(Seq(20)));
-    render_reviewed(&mut reviewed, &text_completed(&second), None, Some(Seq(21)));
+    render_reviewed(
+        &mut reviewed,
+        &text_completed(&first),
+        None,
+        Some(Seq(20)),
+        &mut PendingAsks::default(),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &text_completed(&second),
+        None,
+        Some(Seq(21)),
+        &mut PendingAsks::default(),
+    );
     let raw = format!("{first}\n{second}");
     assert_eq!(raw.chars().count(), 7_000 + 1 + 50);
     assert_eq!(
@@ -1380,8 +1604,20 @@ fn the_cap_applies_across_parts_without_cutting_the_stored_text() {
 
 /// A reply awaiting its person message, then the message on the next line.
 fn pair(reviewed: &mut Vec<Reviewed>, reply: &str, message: &str, at: u64) {
-    render_reviewed(reviewed, &text_completed(reply), None, Some(Seq(at)));
-    render_reviewed(reviewed, &person_turn(message), None, Some(Seq(at + 1)));
+    render_reviewed(
+        reviewed,
+        &text_completed(reply),
+        None,
+        Some(Seq(at)),
+        &mut PendingAsks::default(),
+    );
+    render_reviewed(
+        reviewed,
+        &person_turn(message),
+        None,
+        Some(Seq(at + 1)),
+        &mut PendingAsks::default(),
+    );
 }
 
 #[test]
@@ -1395,6 +1631,7 @@ fn reviewer_kept_keeps_a_pair_and_drops_an_unnamed_pairs_reply() {
         &kept_event(vec![kept(31, 0)]),
         None,
         Some(Seq(40)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         person_text(&reviewed),
@@ -1412,6 +1649,7 @@ fn a_kept_second_message_of_a_two_message_line_keeps_the_shared_reply() {
         &text_completed("which?"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -1420,12 +1658,14 @@ fn a_kept_second_message_of_a_two_message_line_keeps_the_shared_reply() {
         }),
         None,
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &kept_event(vec![kept(21, 1)]),
         None,
         Some(Seq(40)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         person_text(&reviewed),
@@ -1441,9 +1681,22 @@ fn a_reply_answers_only_the_run_on_its_own_line() {
         &text_completed("which?"),
         None,
         Some(Seq(20)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &person_turn("A"), None, Some(Seq(21)));
-    render_reviewed(&mut reviewed, &person_turn("B"), None, Some(Seq(22)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("A"),
+        None,
+        Some(Seq(21)),
+        &mut PendingAsks::default(),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("B"),
+        None,
+        Some(Seq(22)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(reviewed.len(), 3);
     // Only the later line is named: the reply answered the earlier
     // line, so it goes with it. Keeping the later line must not keep
@@ -1453,6 +1706,7 @@ fn a_reply_answers_only_the_run_on_its_own_line() {
         &kept_event(vec![kept(22, 0)]),
         None,
         Some(Seq(40)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(person_text(&reviewed), ["The person: B"]);
     assert_eq!(reviewed[0].shown, Shown::Person(kept(22, 0)));
@@ -1467,6 +1721,7 @@ fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_1".into())),
         Some(Seq(22)),
+        &mut PendingAsks::default(),
     );
     pair(&mut reviewed, "second?", "two", 30);
     render_reviewed(
@@ -1474,14 +1729,22 @@ fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_2".into())),
         Some(Seq(32)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &text_completed("unanswered"),
         None,
         Some(Seq(33)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(
         person_text(&reviewed),
         [
@@ -1493,7 +1756,13 @@ fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
     );
     // A proposal made before the handoff is cleared: the "yes" after it
     // answers nothing.
-    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(41)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("yes"),
+        None,
+        Some(Seq(41)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(
         person_text(&reviewed),
         [
@@ -1515,10 +1784,23 @@ fn a_failed_handoff_with_replies_keeps_everything_byte_identical() {
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_1".into())),
         Some(Seq(22)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &text_completed("held"), None, Some(Seq(23)));
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("held"),
+        None,
+        Some(Seq(23)),
+        &mut PendingAsks::default(),
+    );
     let before = reviewed.clone();
-    render_reviewed(&mut reviewed, &handoff_failed(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_failed(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(reviewed.len(), before.len());
     assert_eq!(reviewed, before);
 }
@@ -1532,10 +1814,23 @@ fn a_cancelled_handoff_with_replies_keeps_everything_byte_identical() {
         &Event::ToolCallRequested(call("shell")),
         Some(&ActionId("a_1".into())),
         Some(Seq(22)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &text_completed("held"), None, Some(Seq(23)));
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("held"),
+        None,
+        Some(Seq(23)),
+        &mut PendingAsks::default(),
+    );
     let before = reviewed.clone();
-    render_reviewed(&mut reviewed, &handoff_cancelled(), None, Some(Seq(40)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_cancelled(),
+        None,
+        Some(Seq(40)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(reviewed.len(), before.len());
     assert_eq!(reviewed, before);
 }
@@ -1544,9 +1839,21 @@ fn a_cancelled_handoff_with_replies_keeps_everything_byte_identical() {
 fn successive_completed_handoffs_keep_old_pairs_intact() {
     let mut reviewed = Vec::new();
     pair(&mut reviewed, "first?", "one", 20);
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(30)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(30)),
+        &mut PendingAsks::default(),
+    );
     pair(&mut reviewed, "second?", "two", 40);
-    render_reviewed(&mut reviewed, &handoff_completed(), None, Some(Seq(50)));
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(50)),
+        &mut PendingAsks::default(),
+    );
     assert_eq!(
         person_text(&reviewed),
         [
@@ -1566,6 +1873,7 @@ fn person_pairs_reuse_rendered_replies_for_each_occurrence() {
         &text_completed("Which color?"),
         None,
         Some(Seq(10)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -1574,14 +1882,22 @@ fn person_pairs_reuse_rendered_replies_for_each_occurrence() {
         }),
         None,
         Some(Seq(11)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &text_completed("Which number?"),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &person_turn("Seven"), None, Some(Seq(13)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("Seven"),
+        None,
+        Some(Seq(13)),
+        &mut PendingAsks::default(),
+    );
 
     // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
@@ -1611,6 +1927,7 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
         &person_turn("unprompted"),
         None,
         Some(Seq(14)),
+        &mut PendingAsks::default(),
     );
     // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
@@ -1623,8 +1940,15 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
         &text_completed(&"é".repeat(REPLY_CAP + 1)),
         None,
         Some(Seq(15)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &person_turn("yes"), None, Some(Seq(16)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("yes"),
+        None,
+        Some(Seq(16)),
+        &mut PendingAsks::default(),
+    );
     let Input::User { text: reply, .. } = &reviewed[1].input else {
         panic!("not a rendered reply");
     };
@@ -1647,9 +1971,22 @@ fn a_reply_does_not_cross_a_different_sequence_person() {
         &text_completed("Which color?"),
         None,
         Some(Seq(10)),
+        &mut PendingAsks::default(),
     );
-    render_reviewed(&mut reviewed, &person_turn("Blue"), None, Some(Seq(11)));
-    render_reviewed(&mut reviewed, &person_turn("Green"), None, Some(Seq(12)));
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("Blue"),
+        None,
+        Some(Seq(11)),
+        &mut PendingAsks::default(),
+    );
+    render_reviewed(
+        &mut reviewed,
+        &person_turn("Green"),
+        None,
+        Some(Seq(12)),
+        &mut PendingAsks::default(),
+    );
 
     // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
@@ -1661,5 +1998,756 @@ fn a_reply_does_not_cross_a_different_sequence_person() {
             ),
             (kept(12, 0), "The person: Green".into())
         ]
+    );
+}
+
+// The person's answers reach the reviewer with their eliciting context
+// (`docs/permissions.md`, "What it is shown"): every interaction a person
+// resolves renders through one rule, whatever its kind and raiser.
+
+fn person_request_id(tag: &str) -> RequestId {
+    RequestId(format!("r_person_{tag}"))
+}
+
+fn person_requested(
+    tag: &str,
+    interaction: Interaction,
+    action_ids: Option<Vec<ActionId>>,
+    extension: Option<&str>,
+) -> InteractionRequested {
+    InteractionRequested {
+        request_id: person_request_id(tag),
+        interaction,
+        action_ids,
+        extension: extension.map(str::to_owned),
+        resumes: false,
+    }
+}
+
+fn tool_ids() -> Option<Vec<ActionId>> {
+    Some(vec![ActionId("a_ask".into())])
+}
+
+fn person_choice(label: &str) -> Choice {
+    Choice {
+        label: label.into(),
+        description: None,
+    }
+}
+
+fn person_question(header: &str, question: &str, options: Vec<Choice>) -> Question {
+    Question {
+        header: header.into(),
+        question: question.into(),
+        options,
+        multi_select: None,
+    }
+}
+
+fn person_form() -> Interaction {
+    Interaction::Form {
+        fields: vec![
+            person_question(
+                "Deploy",
+                "Which pipeline should run?",
+                vec![
+                    Choice {
+                        label: "nightly".into(),
+                        description: Some("Recommended".into()),
+                    },
+                    person_choice("weekly"),
+                ],
+            ),
+            person_question("Region", "Which region holds the run?", Vec::new()),
+        ],
+    }
+}
+
+fn person_form_answer() -> Answer {
+    Answer::Form {
+        answers: vec![
+            FormAnswer::Answered {
+                labels: vec!["nightly".into()],
+                text: Some("us-east-1".into()),
+            },
+            FormAnswer::Skipped { skipped: True },
+        ],
+        note: Some("after lunch".into()),
+    }
+}
+
+/// Stages `requested`, then resolves it as `by` with `answer`: every kind
+/// and raiser shape exercises the same render path.
+fn person_input_rendered(
+    requested: InteractionRequested,
+    by: ResolvedBy,
+    answer: Answer,
+    seq: u64,
+) -> Vec<Reviewed> {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    let id = requested.request_id.clone();
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(requested),
+        None,
+        Some(Seq(seq)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: id,
+            by,
+            answer,
+        }),
+        None,
+        Some(Seq(seq + 1)),
+        &mut asks,
+    );
+    reviewed
+}
+
+fn person_input_texts(reviewed: &[Reviewed]) -> Vec<String> {
+    reviewed
+        .iter()
+        .map(|item| match &item.input {
+            Input::User { text, .. } => text.clone(),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => {
+                panic!("reviewer input holds user text, got {:?}", item.input)
+            }
+        })
+        .collect()
+}
+
+/// Every interaction kind in every raiser shape reaches the reviewer
+/// through the one person rule: the person's answer as a `Person` item
+/// with its eliciting context as the `Reply` before it. A `fiber`
+/// resolution renders nothing in every shape.
+#[test]
+fn person_input_every_kind_and_raiser_pairs() {
+    struct Case {
+        interaction: Interaction,
+        answer: Answer,
+        body: &'static str,
+        prompt_words: &'static [&'static str],
+    }
+    let cases = [
+        Case {
+            interaction: person_form(),
+            answer: person_form_answer(),
+            body: "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
+            prompt_words: &[
+                "Which pipeline should run?",
+                "Which region holds the run?",
+                "nightly",
+                "weekly",
+                "Recommended",
+            ],
+        },
+        Case {
+            interaction: Interaction::Confirm {
+                prompt: "ELICIT-CONFIRM shimmer-cove".into(),
+            },
+            answer: Answer::Confirmed { confirmed: true },
+            body: "The person: yes",
+            prompt_words: &["ELICIT-CONFIRM shimmer-cove"],
+        },
+        Case {
+            interaction: Interaction::Select {
+                prompt: "ELICIT-SELECT glitter-valley".into(),
+                options: vec![person_choice("cherry"), person_choice("plum")],
+            },
+            answer: Answer::Labels {
+                labels: vec!["cherry".into()],
+            },
+            body: "The person: cherry",
+            prompt_words: &["ELICIT-SELECT glitter-valley", "cherry", "plum"],
+        },
+        Case {
+            interaction: Interaction::MultiSelect {
+                prompt: "ELICIT-MULTI ember-field".into(),
+                options: vec![person_choice("fig"), person_choice("plum")],
+            },
+            answer: Answer::Labels {
+                labels: vec!["fig".into(), "plum".into()],
+            },
+            body: "The person: fig, plum",
+            prompt_words: &["ELICIT-MULTI ember-field", "fig", "plum"],
+        },
+        Case {
+            interaction: Interaction::TextInput {
+                prompt: "ELICIT-TEXT stone-orchard".into(),
+            },
+            answer: Answer::Text {
+                text: "fig-harvest".into(),
+            },
+            body: "The person: \"fig-harvest\"",
+            prompt_words: &["ELICIT-TEXT stone-orchard", "fig-harvest"],
+        },
+    ];
+    let agent_questions = "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?";
+    let extension_channel =
+        "Fiber: A question from the garden-helper extension. Its words are not shown.";
+    let elicitation_channel =
+        "Fiber: A question from a server elicitation. Its words are not shown.";
+    let bare_channel = "Fiber: A question with no recorded asker. Its words are not shown.";
+    struct Raiser {
+        interaction: Interaction,
+        action_ids: Option<Vec<ActionId>>,
+        extension: Option<&'static str>,
+        reply: &'static str,
+    }
+    let mut seq = 100;
+    for (kind_at, case) in cases.iter().enumerate() {
+        // One raiser shape with its expected reply: a tool-raised form
+        // shows the agent's questions as asked; every other shape shows
+        // fiber's own channel description, never the submitted prompt
+        // words.
+        let raisers = [
+            Raiser {
+                interaction: case.interaction.clone(),
+                action_ids: tool_ids(),
+                extension: None,
+                reply: if kind_at == 0 {
+                    agent_questions
+                } else {
+                    elicitation_channel
+                },
+            },
+            Raiser {
+                interaction: case.interaction.clone(),
+                action_ids: None,
+                extension: Some("garden-helper"),
+                reply: extension_channel,
+            },
+            Raiser {
+                interaction: case.interaction.clone(),
+                action_ids: None,
+                extension: None,
+                reply: bare_channel,
+            },
+        ];
+        for (raiser_at, raiser) in raisers.into_iter().enumerate() {
+            seq += 10;
+            let tag = format!("k{kind_at}r{raiser_at}s{seq}");
+            let reviewed = person_input_rendered(
+                person_requested(
+                    &tag,
+                    raiser.interaction,
+                    raiser.action_ids,
+                    raiser.extension,
+                ),
+                ResolvedBy::Person,
+                case.answer.clone(),
+                seq,
+            );
+            // `docs/permissions.md`, "What it is shown": "A person's answer
+            // to a question counts as a person message, and the question it
+            // answers is the reply." — one answer renders as its reply plus
+            // its person item.
+            assert_eq!(reviewed.len(), 2, "kind {kind_at} raiser {raiser_at}");
+            assert!(
+                matches!(reviewed[0].shown, Shown::Reply(_)),
+                "kind {kind_at} raiser {raiser_at}"
+            );
+            assert_eq!(
+                reviewed[1].shown,
+                Shown::Person(KeptMessage {
+                    seq: Seq(seq + 1),
+                    item: 0,
+                }),
+                "kind {kind_at} raiser {raiser_at}"
+            );
+            let texts = person_input_texts(&reviewed);
+            assert_eq!(texts[0], raiser.reply, "kind {kind_at} raiser {raiser_at}");
+            assert_eq!(texts[1], case.body, "kind {kind_at} raiser {raiser_at}");
+            if raiser_at > 0 || kind_at > 0 {
+                for words in case.prompt_words {
+                    assert!(
+                        !texts[0].contains(words),
+                        "kind {kind_at} raiser {raiser_at}: reply leaks {words:?}"
+                    );
+                }
+            }
+            // A `fiber` resolution is no person's input: nothing renders.
+            let dropped = person_input_rendered(
+                person_requested(&tag, case.interaction.clone(), tool_ids(), None),
+                ResolvedBy::Fiber,
+                case.answer.clone(),
+                seq + 4,
+            );
+            assert!(
+                dropped.is_empty(),
+                "kind {kind_at}: a fiber resolve renders nothing"
+            );
+        }
+    }
+    // The fail-closed side: a form with empty `action_ids` is no
+    // agent-raised form, so its question words stay out.
+    seq += 10;
+    let reviewed = person_input_rendered(
+        person_requested("empty", person_form(), Some(Vec::new()), None),
+        ResolvedBy::Person,
+        person_form_answer(),
+        seq,
+    );
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
+    assert_eq!(reviewed.len(), 2);
+    let texts = person_input_texts(&reviewed);
+    assert_eq!(texts[0], bare_channel);
+    assert_eq!(
+        texts[1],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+}
+
+fn person_harbor_form() -> Interaction {
+    Interaction::Form {
+        fields: vec![person_question(
+            "Harbor",
+            "Which harbor holds the boats?",
+            vec![person_choice("stone"), person_choice("glass")],
+        )],
+    }
+}
+
+fn person_harbor_answer() -> Answer {
+    Answer::Form {
+        answers: vec![FormAnswer::Answered {
+            labels: vec!["glass".into()],
+            text: None,
+        }],
+        note: None,
+    }
+}
+
+/// Concurrent pending forms pair by `request_id`, not by position: each
+/// resolve answers with its own eliciting reply, in either order.
+#[test]
+fn person_input_two_forms_resolve_reversed() {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    for (seq, event) in [
+        (
+            200,
+            Event::InteractionRequested(person_requested("first", person_form(), tool_ids(), None)),
+        ),
+        (
+            201,
+            Event::InteractionRequested(person_requested(
+                "second",
+                person_harbor_form(),
+                tool_ids(),
+                None,
+            )),
+        ),
+        (
+            202,
+            Event::InteractionResolved(InteractionResolved {
+                request_id: person_request_id("second"),
+                by: ResolvedBy::Person,
+                answer: person_harbor_answer(),
+            }),
+        ),
+        (
+            203,
+            Event::InteractionResolved(InteractionResolved {
+                request_id: person_request_id("first"),
+                by: ResolvedBy::Person,
+                answer: person_form_answer(),
+            }),
+        ),
+    ] {
+        render_reviewed(&mut reviewed, &event, None, Some(Seq(seq)), &mut asks);
+    }
+    // Each resolve appends its own question reply immediately before its
+    // person item, so the second request resolved first still pairs exact.
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply" and "The reply a human message answers is the model's
+    // text directly before it." — two answers render as two reply-plus-
+    // person pairs.
+    assert_eq!(reviewed.len(), 4);
+    assert!(matches!(reviewed[0].shown, Shown::Reply(_)));
+    assert!(matches!(reviewed[2].shown, Shown::Reply(_)));
+    assert_eq!(
+        reviewed[1].shown,
+        Shown::Person(KeptMessage {
+            seq: Seq(202),
+            item: 0,
+        })
+    );
+    assert_eq!(
+        reviewed[3].shown,
+        Shown::Person(KeptMessage {
+            seq: Seq(203),
+            item: 0,
+        })
+    );
+    let texts = person_input_texts(&reviewed);
+    assert_eq!(
+        texts[0],
+        "The agent: Which harbor holds the boats?\n- stone\n- glass"
+    );
+    assert_eq!(texts[1], "The person: Harbor: glass");
+    assert_eq!(
+        texts[2],
+        "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?"
+    );
+    assert_eq!(
+        texts[3],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+    assert_eq!(
+        Reviewed::person_pairs(&reviewed),
+        [
+            (
+                KeptMessage {
+                    seq: Seq(202),
+                    item: 0,
+                },
+                "The agent: Which harbor holds the boats?\n- stone\n- glass\nThe person: Harbor: glass"
+                    .into()
+            ),
+            (
+                KeptMessage {
+                    seq: Seq(203),
+                    item: 0,
+                },
+                "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?\nThe person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"".into()
+            ),
+        ]
+    );
+}
+
+/// A tool call between the agent's text and the person's answer breaks
+/// the link: the staged eliciting context answers, never stale model
+/// prose from before the call.
+#[test]
+fn person_input_answer_with_stale_proposal_before_call() {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    render_reviewed(
+        &mut reviewed,
+        &text_completed("a stale proposal the person never answered"),
+        None,
+        Some(Seq(300)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_1".into())),
+        Some(Seq(301)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(person_requested("stale", person_form(), tool_ids(), None)),
+        None,
+        Some(Seq(302)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: person_request_id("stale"),
+            by: ResolvedBy::Person,
+            answer: person_form_answer(),
+        }),
+        None,
+        Some(Seq(303)),
+        &mut asks,
+    );
+    // `docs/permissions.md`, "What it is shown": "The human's messages, the
+    // agent's tool calls, and the agent's reply that each human message
+    // answers" plus "A person's answer to a question counts as a person
+    // message, and the question it answers is the reply." — one call plus
+    // one reply-plus-person pair.
+    assert_eq!(reviewed.len(), 3);
+    assert!(matches!(reviewed[0].shown, Shown::Call(_)));
+    assert!(matches!(reviewed[1].shown, Shown::Reply(_)));
+    assert_eq!(
+        reviewed[2].shown,
+        Shown::Person(KeptMessage {
+            seq: Seq(303),
+            item: 0,
+        })
+    );
+    let texts = person_input_texts(&reviewed);
+    assert!(
+        texts.iter().all(|text| !text.contains("stale proposal")),
+        "{texts:?}"
+    );
+    assert_eq!(
+        texts[1],
+        "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?"
+    );
+    assert_eq!(
+        texts[2],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+}
+
+/// A person's decline renders the single `declined` line with the staged
+/// eliciting content as its reply.
+#[test]
+fn person_input_person_decline_wording() {
+    let reviewed = person_input_rendered(
+        person_requested("decline", person_form(), tool_ids(), None),
+        ResolvedBy::Person,
+        Answer::Declined { declined: True },
+        400,
+    );
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
+    assert_eq!(reviewed.len(), 2);
+    assert!(matches!(reviewed[0].shown, Shown::Reply(_)));
+    assert_eq!(
+        reviewed[1].shown,
+        Shown::Person(KeptMessage {
+            seq: Seq(401),
+            item: 0,
+        })
+    );
+    let texts = person_input_texts(&reviewed);
+    assert_eq!(
+        texts[0],
+        "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?"
+    );
+    assert_eq!(texts[1], "The person: declined");
+}
+
+/// A resolve with no staged request renders nothing, whoever resolves it,
+/// with or without a line of its own.
+#[test]
+fn person_input_resolve_without_request_ignored() {
+    for (by, seq) in [
+        (ResolvedBy::Person, Some(Seq(500))),
+        (ResolvedBy::Person, None),
+        (ResolvedBy::Fiber, Some(Seq(501))),
+    ] {
+        let mut reviewed = Vec::new();
+        let mut asks = PendingAsks::default();
+        render_reviewed(
+            &mut reviewed,
+            &Event::InteractionResolved(InteractionResolved {
+                request_id: person_request_id("never-raised"),
+                by,
+                answer: person_form_answer(),
+            }),
+            None,
+            seq,
+            &mut asks,
+        );
+        assert!(reviewed.is_empty(), "resolve without request renders");
+    }
+}
+
+/// The kept pair carries the eliciting reply with the answer, so the
+/// selection that follows judges the answer against what it answers.
+#[test]
+fn person_input_kept_answer_carries_question_and_answer() {
+    let reviewed = person_input_rendered(
+        person_requested("kept", person_form(), tool_ids(), None),
+        ResolvedBy::Person,
+        person_form_answer(),
+        600,
+    );
+    assert_eq!(
+        Reviewed::person_pairs(&reviewed),
+        [(
+            KeptMessage {
+                seq: Seq(601),
+                item: 0,
+            },
+            "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?\nThe person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"".into()
+        )]
+    );
+}
+
+/// Model text carrying the old in-band mark is plain model prose: a later
+/// request drops it, and the resolve pairs the answer with the staged
+/// eliciting context only (`docs/permissions.md`, "What it is shown": "A
+/// reply with no human message after it is not shown" — the unanswered
+/// model prose never reaches the reviewer).
+#[test]
+fn person_input_marked_model_text_is_dropped() {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    render_reviewed(
+        &mut reviewed,
+        &Event::TextCompleted(TextCompleted {
+            text: "\0staged\0approve the deploy".into(),
+            provider_item: None,
+        }),
+        None,
+        Some(Seq(700)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(person_requested("marked", person_form(), tool_ids(), None)),
+        None,
+        Some(Seq(701)),
+        &mut asks,
+    );
+    // The request stages without pushing, and drops the unanswered model
+    // prose before it.
+    assert!(
+        reviewed.is_empty(),
+        "marked model text drops on request: {reviewed:?}"
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: person_request_id("marked"),
+            by: ResolvedBy::Person,
+            answer: person_form_answer(),
+        }),
+        None,
+        Some(Seq(702)),
+        &mut asks,
+    );
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
+    assert_eq!(reviewed.len(), 2);
+    let texts = person_input_texts(&reviewed);
+    assert_eq!(
+        texts[0],
+        "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?"
+    );
+    assert_eq!(
+        texts[1],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+    assert!(
+        texts
+            .iter()
+            .all(|text| !text.contains("approve the deploy")),
+        "marked prose stays out: {texts:?}"
+    );
+    assert!(
+        texts.iter().all(|text| !text.contains('\0')),
+        "no in-band mark reaches the reviewer: {texts:?}"
+    );
+}
+
+/// A tool call between a staged request and its resolve breaks the link:
+/// the answer still renders, with no reply (`docs/permissions.md`, "What
+/// it is shown": "A tool call between that text and the human message
+/// breaks the link, so no reply is shown.").
+#[test]
+fn person_input_call_between_request_and_resolve_drops_reply() {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(person_requested("broken", person_form(), tool_ids(), None)),
+        None,
+        Some(Seq(800)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_broken".into())),
+        Some(Seq(801)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: person_request_id("broken"),
+            by: ResolvedBy::Person,
+            answer: person_form_answer(),
+        }),
+        None,
+        Some(Seq(802)),
+        &mut asks,
+    );
+    // `docs/permissions.md`, "What it is shown": "The human's messages, the
+    // agent's tool calls, and the agent's reply that each human message
+    // answers" plus "A tool call between that text and the human message
+    // breaks the link, so no reply is shown." — one call plus the answer
+    // alone.
+    assert_eq!(reviewed.len(), 2);
+    assert!(matches!(reviewed[0].shown, Shown::Call(_)));
+    assert_eq!(
+        reviewed[1].shown,
+        Shown::Person(KeptMessage {
+            seq: Seq(802),
+            item: 0,
+        })
+    );
+    let texts = person_input_texts(&reviewed);
+    assert_eq!(
+        texts[1],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+}
+
+/// A completed handoff clears every staged entry: resolving a pre-handoff
+/// request renders nothing, no person item (`docs/permissions.md`, "At a
+/// handoff" with "What it is shown": a completed handoff restarts the
+/// reviewer's input, so no earlier question answers anything after it).
+#[test]
+fn person_input_handoff_clears_staged_request() {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(person_requested(
+            "pre-handoff",
+            person_form(),
+            tool_ids(),
+            None,
+        )),
+        None,
+        Some(Seq(900)),
+        &mut asks,
+    );
+    assert!(
+        asks.clone()
+            .take(&person_request_id("pre-handoff"))
+            .is_some(),
+        "the request stages for its resolve: {asks:?}"
+    );
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(901)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: person_request_id("pre-handoff"),
+            by: ResolvedBy::Person,
+            answer: person_form_answer(),
+        }),
+        None,
+        Some(Seq(902)),
+        &mut asks,
+    );
+    assert!(
+        reviewed
+            .iter()
+            .all(|item| !matches!(item.shown, Shown::Person(_))),
+        "a pre-handoff resolve renders no person item: {reviewed:?}"
+    );
+    assert!(
+        reviewed.is_empty(),
+        "a pre-handoff resolve renders nothing: {reviewed:?}"
     );
 }

@@ -8,23 +8,26 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::conversation::{rebuild_and_sent, summary_conversation};
 use contract::events::{
-    Anchor, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event, EventKind,
-    Grant, HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem, ModelChanged,
-    ModelSettings, Moved, OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent,
-    PermissionResolved, PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered,
-    RepositoryCodeResolved, Rewound, SessionStarted, SkillLoad, SkillSent, SkillsResent,
-    SteeringApplied, SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted,
-    UsageRecorded, Variables, VariablesSource,
+    Anchor, Answer, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event,
+    EventKind, FormAnswer, Grant, HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem,
+    Interaction, InteractionRequested, InteractionResolved, ModelChanged, ModelSettings, Moved,
+    OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent, PermissionResolved,
+    PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered, RepositoryCodeResolved,
+    ResolvedBy, Rewound, SessionStarted, SkillLoad, SkillSent, SkillsResent, SteeringApplied,
+    SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted, UsageRecorded, Variables,
+    VariablesSource,
 };
 use contract::provider::Input;
-use contract::shapes::{ContentPart, Origin, Point, Sender, Tokens};
-use contract::{ActionId, Envelope, GenerationId, SCHEMA_VERSION, Seq, SessionId, TurnId};
+use contract::shapes::{Choice, ContentPart, Origin, Point, Question, Sender, Tokens, True};
+use contract::{
+    ActionId, Envelope, GenerationId, RequestId, SCHEMA_VERSION, Seq, SessionId, TurnId,
+};
 use serde_json::json;
 
 use super::*;
@@ -2728,5 +2731,358 @@ fn a_completed_handoff_clears_seen_while_a_failed_one_keeps_it() {
     assert_eq!(
         before_handoff.seen_files(),
         &BTreeMap::from([(PathBuf::from("/w/a.txt"), 1)])
+    );
+}
+
+// The person's answers reach the reviewer through the history fold with
+// their eliciting context (`docs/permissions.md`, "What it is shown").
+
+fn person_form_requested(id: &str) -> Event {
+    Event::InteractionRequested(InteractionRequested {
+        request_id: RequestId(id.into()),
+        interaction: Interaction::Form {
+            fields: vec![
+                Question {
+                    header: "Deploy".into(),
+                    question: "Which pipeline should run?".into(),
+                    options: vec![
+                        Choice {
+                            label: "nightly".into(),
+                            description: Some("Recommended".into()),
+                        },
+                        Choice {
+                            label: "weekly".into(),
+                            description: None,
+                        },
+                    ],
+                    multi_select: None,
+                },
+                Question {
+                    header: "Region".into(),
+                    question: "Which region holds the run?".into(),
+                    options: Vec::new(),
+                    multi_select: None,
+                },
+            ],
+        },
+        action_ids: Some(vec![ActionId("a_ask".into())]),
+        extension: None,
+        resumes: false,
+    })
+}
+
+fn person_form_answer() -> Answer {
+    Answer::Form {
+        answers: vec![
+            FormAnswer::Answered {
+                labels: vec!["nightly".into()],
+                text: Some("us-east-1".into()),
+            },
+            FormAnswer::Skipped { skipped: True },
+        ],
+        note: Some("after lunch".into()),
+    }
+}
+
+fn person_resolved(id: &str, answer: Answer) -> Event {
+    Event::InteractionResolved(InteractionResolved {
+        request_id: RequestId(id.into()),
+        by: ResolvedBy::Person,
+        answer,
+    })
+}
+
+fn person_reviewed_texts(reviewed: &[crate::reviewer::Reviewed]) -> Vec<String> {
+    reviewed
+        .iter()
+        .map(|item| match &item.input {
+            Input::User { text, .. } => text.clone(),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => {
+                panic!("reviewer input holds user text, got {:?}", item.input)
+            }
+        })
+        .collect()
+}
+
+/// A folded request and resolve deliver the person's answer with the
+/// asked questions as its reply.
+#[test]
+fn person_input_resume_fold_delivers_interactions() {
+    let (_home, sessions) = sessions("person-input-fold");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &person_form_requested("r_ask")),
+            envelope(
+                A,
+                2,
+                Some("t_1"),
+                None,
+                &person_resolved("r_ask", person_form_answer()),
+            ),
+        ],
+    );
+    let folded = fold(&log::history(&sessions.join(A)).unwrap()).unwrap();
+    assert_eq!(
+        person_reviewed_texts(&folded.reviewed),
+        [
+            "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?",
+            "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
+        ]
+    );
+    assert_eq!(
+        folded.reviewed[1].shown,
+        crate::reviewer::Shown::Person(contract::events::KeptMessage {
+            seq: Seq(2),
+            item: 0,
+        })
+    );
+}
+
+/// An unresolved form request survives a resume through the seed carry:
+/// the fold holds its staged eliciting content with no person item yet,
+/// and the resumed loop answers the live resolve with its reply.
+#[test]
+fn person_input_resumed_form_answers_after_resume() {
+    let (home, sessions) = sessions("person-input-resume");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &person_form_requested("r_ask")),
+        ],
+    );
+    let folded = fold(&log::history(&sessions.join(A)).unwrap()).unwrap();
+    // The seed carry holds the staged eliciting fields: the store is no
+    // longer empty, while no person item rendered yet.
+    assert_ne!(
+        folded.seed.pending_asks,
+        crate::reviewer::PendingAsks::default()
+    );
+    assert!(
+        folded
+            .reviewed
+            .iter()
+            .all(|item| !matches!(item.shown, crate::reviewer::Shown::Person(_)))
+    );
+    // The staged fields answer with the asked questions as their reply:
+    // the same request stages again idempotently, then its resolve
+    // repairs the pair.
+    let mut asks = folded.seed.pending_asks.clone();
+    let mut staged = Vec::new();
+    crate::reviewer::render_reviewed(
+        &mut staged,
+        &person_form_requested("r_ask"),
+        None,
+        Some(Seq(1)),
+        &mut asks,
+    );
+    crate::reviewer::render_reviewed(
+        &mut staged,
+        &person_resolved("r_ask", person_form_answer()),
+        None,
+        Some(Seq(2)),
+        &mut asks,
+    );
+    assert_eq!(
+        person_reviewed_texts(&staged),
+        [
+            "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?",
+            "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
+        ]
+    );
+    // The production path: the resumed loop inherits the fold's staged
+    // entries, so the live resolve renders the answer with its reply.
+    use std::sync::{Arc, mpsc};
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log =
+        Arc::new(log::Log::open(&sessions, SessionId(A.to_owned()), Arc::clone(&clock)).unwrap());
+    let provider = Arc::new(fakes::ScriptedProvider::new(Vec::new()));
+    let (_inbox, rx) = mpsc::channel();
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut looped = crate::Loop::resume(
+        crate::Session {
+            log,
+            provider: Arc::clone(&provider) as Arc<dyn contract::provider::Provider>,
+            model: crate::Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                sessions.join(A).join("events.jsonl").display().to_string(),
+                Arc::clone(&clock),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(fakes::NoRules),
+            },
+        },
+        resumed(&sessions.join(A)).unwrap(),
+    )
+    .unwrap();
+    looped
+        .write(
+            &person_resolved("r_ask", person_form_answer()),
+            Some(&TurnId("t_1".into())),
+            None,
+        )
+        .unwrap();
+    let texts = person_reviewed_texts(&looped.reviewed);
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
+    assert_eq!(texts.len(), 2);
+    assert_eq!(
+        texts[0],
+        "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?"
+    );
+    assert_eq!(
+        texts[1],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+    assert!(matches!(
+        looped.reviewed[1].shown,
+        crate::reviewer::Shown::Person(_)
+    ));
+}
+
+/// A command-raised `host.ask` stages with no `ToolCallRequested` between
+/// the model text and the request: the prior held reply answers nothing,
+/// and only the staged channel description plus the answer render.
+#[test]
+fn person_input_command_ask_clears_prior_reply() {
+    let mut reviewed = Vec::new();
+    let mut asks = crate::reviewer::PendingAsks::default();
+    crate::reviewer::render_reviewed(
+        &mut reviewed,
+        &Event::TextCompleted(contract::events::TextCompleted {
+            text: "a stale command proposal".into(),
+            provider_item: None,
+        }),
+        None,
+        Some(Seq(10)),
+        &mut asks,
+    );
+    crate::reviewer::render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(InteractionRequested {
+            request_id: RequestId("r_command".into()),
+            interaction: Interaction::TextInput {
+                prompt: "HOST-PROMPT ember-orchard".into(),
+            },
+            action_ids: None,
+            extension: Some("garden-helper".into()),
+            resumes: false,
+        }),
+        None,
+        Some(Seq(11)),
+        &mut asks,
+    );
+    crate::reviewer::render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: RequestId("r_command".into()),
+            by: ResolvedBy::Person,
+            answer: Answer::Text {
+                text: "fig-harvest".into(),
+            },
+        }),
+        None,
+        Some(Seq(12)),
+        &mut asks,
+    );
+    let texts = person_reviewed_texts(&reviewed);
+    assert_eq!(
+        texts,
+        [
+            "Fiber: A question from the garden-helper extension. Its words are not shown.",
+            "The person: \"fig-harvest\"",
+        ]
+    );
+}
+
+/// The `TurnStarted` snapshot clones the staged store, so a rewind to it
+/// keeps the pending question: resolving from the snapshot's store renders
+/// the answer with its staged context (`docs/permissions.md`, "What it is
+/// shown": "A person's answer to a question counts as a person message,
+/// and the question it answers is the reply.").
+#[test]
+fn person_input_turn_snapshot_keeps_staged_request() {
+    let (_home, sessions) = sessions("person-input-turn-snapshot");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/w", None))],
+    );
+    let mut folded = resumed(&sessions.join(A)).unwrap();
+    let mut pass = Pass {
+        own_segment: true,
+        index: 0,
+        workspace: None,
+        previous_workspace: None,
+        parent_ledger: crate::usage::Ledger::default(),
+        asks: crate::reviewer::PendingAsks::default(),
+        running: crate::handoff::Carry::default(),
+        starts: HashMap::new(),
+        orphans: crate::jobs::Orphans::default(),
+        delegate_sessions: HashMap::new(),
+        summary: false,
+    };
+    fold_line(
+        &envelope(A, 1, Some("t_1"), None, &person_form_requested("r_ask")),
+        &mut folded,
+        &mut pass,
+    )
+    .unwrap();
+    fold_line(
+        &envelope(A, 2, Some("t_1"), None, &turn()),
+        &mut folded,
+        &mut pass,
+    )
+    .unwrap();
+    // The rewind point keeps the staged eliciting content: without the
+    // snapshot clone the store reads empty and the resolve below renders
+    // nothing.
+    let snapshot = pass
+        .starts
+        .get(&TurnId("t_1".into()))
+        .unwrap_or_else(|| panic!("turn t_1 snapshots: {:?}", pass.starts.keys()))
+        .1
+        .clone();
+    assert_ne!(
+        snapshot.pending_asks,
+        crate::reviewer::PendingAsks::default()
+    );
+    let mut asks = snapshot.pending_asks.clone();
+    let mut staged = Vec::new();
+    crate::reviewer::render_reviewed(
+        &mut staged,
+        &person_resolved("r_ask", person_form_answer()),
+        None,
+        Some(Seq(3)),
+        &mut asks,
+    );
+    assert_eq!(
+        person_reviewed_texts(&staged),
+        [
+            "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?",
+            "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
+        ]
     );
 }
