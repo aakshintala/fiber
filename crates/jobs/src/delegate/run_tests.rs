@@ -197,9 +197,7 @@ impl Script {
         let mut deliver_lines = |lines: &[Envelope]| {
             for line in lines.iter().filter(|line| deliver(line)) {
                 self.emit(line, on_line);
-                if classify_job_kind(EventKind::from_name(&line.kind))
-                    == Some(JobEventKind::FiberExited)
-                {
+                if classify_job_kind(line.kind()) == Some(JobEventKind::FiberExited) {
                     break;
                 }
             }

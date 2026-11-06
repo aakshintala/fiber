@@ -571,6 +571,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
+    use contract::HubEventKind;
     use contract::clock::Clock;
     use fakes::clock::{FakeClock, Miss};
     use support::clock::Sleep;
@@ -741,7 +742,7 @@ mod tests {
         worker.join().unwrap();
         assert!(matched, "hello parks at {expected:?}, found {actual:?}");
         let (_, line) = result.expect("the connected hub answers its hello");
-        assert_eq!(line.kind, "hub_hello");
+        assert_eq!(line.kind(), HubEventKind::HubHello);
     }
 
     /// A missing `hub.log` reports missing, while an unreadable one

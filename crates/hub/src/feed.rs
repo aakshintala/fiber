@@ -35,7 +35,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake, wall_ms};
-use contract::events::{SessionState, SessionStatus};
+use contract::events::{EventKind, SessionState, SessionStatus};
 use contract::{CommandId, Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
 use support::lock;
@@ -769,7 +769,7 @@ fn may_be_unseen(now: &SessionStatus) -> bool {
 /// The payload of a `session_status` line; `None` for any other line.
 fn parse_status(bytes: &[u8]) -> Option<SessionStatus> {
     let line: Envelope = serde_json::from_slice(bytes).ok()?;
-    if line.kind != "session_status" {
+    if line.kind() != EventKind::SessionStatus {
         return None;
     }
     serde_json::from_value(Value::Object(line.payload)).ok()

@@ -874,12 +874,15 @@ fn control_boundary_recognizes_only_exact_names() {
     use super::super::writer::ControlKind;
 
     assert_eq!(
-        ControlKind::recognize("doors.stop"),
+        ControlKind::recognize(&EventKind::from_name("doors.stop")),
         Some(ControlKind::Stop)
     );
-    assert_eq!(ControlKind::recognize("doors.cut"), Some(ControlKind::Cut));
     assert_eq!(
-        ControlKind::recognize("doors.level"),
+        ControlKind::recognize(&EventKind::from_name("doors.cut")),
+        Some(ControlKind::Cut)
+    );
+    assert_eq!(
+        ControlKind::recognize(&EventKind::from_name("doors.level")),
         Some(ControlKind::Level)
     );
 
@@ -913,7 +916,11 @@ fn control_boundary_recognizes_only_exact_names() {
         "doors.stopdoors.cut",
     ];
     for name in rejected {
-        assert_eq!(ControlKind::recognize(name), None, "{name:?}");
+        assert_eq!(
+            ControlKind::recognize(&EventKind::from_name(name)),
+            None,
+            "{name:?}"
+        );
     }
 }
 

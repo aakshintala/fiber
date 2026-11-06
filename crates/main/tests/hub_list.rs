@@ -9,6 +9,8 @@
 #[path = "support/hub_start.rs"]
 mod hub_start;
 mod support;
+
+use contract::HubEventKind;
 use serde_json::{Value, json};
 use std::fs;
 use std::net::TcpListener;
@@ -78,7 +80,7 @@ fn listed_hubs_pair_list_authenticate_revoke_and_remove_without_a_local_hub() {
             a.fiber(&["hub", "serve", "--installed"])
         },
     );
-    assert_eq!(served.hub.1.kind, "hub_hello");
+    assert_eq!(served.hub.1.kind(), HubEventKind::HubHello);
     let address = format!("ws://127.0.0.1:{}", served.port);
     let code = run(&a, &["hub", "pair", "laptop"]);
     succeeds(&code);

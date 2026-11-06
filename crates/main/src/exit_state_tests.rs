@@ -1,6 +1,6 @@
 //! The exit boundary closes, drains and only then writes the last line.
 
-use contract::events::{CallStatus, Event};
+use contract::events::{CallStatus, Event, EventKind};
 use contract::hook::{AfterToolCall, ContextOutcome, Hooks, TurnEnd};
 use extensions::SessionExtensions;
 use fakes::Deadline;
@@ -95,11 +95,8 @@ fn exit_state_closes_drains_once_and_precedes_fiber_exited() {
     super::write_state_at_exit(&log, &dir, &session).unwrap();
     let lines = log::read(&dir).unwrap();
     assert_eq!(
-        lines
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["extension_state_set", "fiber_exited"]
+        lines.iter().map(|line| line.kind()).collect::<Vec<_>>(),
+        [EventKind::ExtensionStateSet, EventKind::FiberExited]
     );
     assert_eq!(lines[0].payload["key"], "boot");
     assert_eq!(closing(session.clone()), "closing");
@@ -199,12 +196,14 @@ fn exit_state_timer_write_uses_an_injected_clock_and_survives_clean_exit() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.kind == "extension_state_set" && line.payload["key"] == "late")
+            .filter(
+                |line| line.kind() == EventKind::ExtensionStateSet && line.payload["key"] == "late"
+            )
             .count(),
         1
     );
-    assert_eq!(lines[0].kind, "extension_state_set");
-    assert_eq!(lines.last().unwrap().kind, "fiber_exited");
+    assert_eq!(lines[0].kind(), EventKind::ExtensionStateSet);
+    assert_eq!(lines.last().unwrap().kind(), EventKind::FiberExited);
 }
 
 /// The drain exit keeps the `fiber_exited` code normally and the shutdown

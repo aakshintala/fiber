@@ -28,13 +28,9 @@ pub(crate) struct StoppedJob {
 /// Whether `kind` is a job-record line: the four kinds the stop wait writes
 /// between `write_last_settled` and `rewound`, so nothing else in the run
 /// is the stop's.
-///
-/// debt: raw kind strings duplicating the `Event` variants, ceiling six
-/// kinds and two passes; decode each line once and match on the variants
-/// when this reader grows a third pass or a seventh kind.
-fn is_job_record(kind: &str) -> bool {
+fn is_job_record(kind: EventKind) -> bool {
     matches!(
-        EventKind::from_name(kind),
+        kind,
         EventKind::JobStarted
             | EventKind::DelegateStarted
             | EventKind::DelegateFinished
@@ -46,9 +42,9 @@ fn is_job_record(kind: &str) -> bool {
 /// carried with a changed end. The scan reads past these without
 /// crossing the settlement boundary below. A hook's `notice` is
 /// ephemeral and never reaches the log, so it cannot interleave here.
-fn is_hook_line(kind: &str) -> bool {
+fn is_hook_line(kind: EventKind) -> bool {
     matches!(
-        EventKind::from_name(kind),
+        kind,
         EventKind::ExtensionStateSet | EventKind::ExtensionStateUnset
     )
 }
@@ -95,10 +91,10 @@ pub(crate) fn stopped_jobs(old: &Path) -> Result<Vec<StoppedJob>, Error> {
     }
     let mut run = Vec::new();
     for line in lines.iter().rev().skip(1) {
-        if is_hook_line(&line.kind) {
+        if is_hook_line(line.kind()) {
             continue;
         }
-        if !is_job_record(&line.kind) {
+        if !is_job_record(line.kind()) {
             break;
         }
         run.push(line);

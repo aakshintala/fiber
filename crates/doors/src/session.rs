@@ -20,8 +20,8 @@ use contract::clock::{Clock, Wake};
 use contract::diag::Timing;
 use contract::emit::Emit;
 use contract::events::{
-    Clients, CommandInfo, CommandResult, CredentialLabels, Event, McpServerRow, QuotaInfo,
-    SkillInfo, ToolInfo, ToolState,
+    Clients, CommandInfo, CommandResult, CredentialLabels, Event, EventKind, McpServerRow,
+    QuotaInfo, SkillInfo, ToolInfo, ToolState,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
@@ -1210,7 +1210,7 @@ impl Session {
 /// read, or a line that does not parse before the first, keeps the session,
 /// so nothing is deleted on a guess.
 fn prompted(dir: &Path) -> bool {
-    if log::last_line(dir).is_some_and(|line| line.kind == "moved") {
+    if log::last_line(dir).is_some_and(|line| line.kind() == EventKind::Moved) {
         return true;
     }
     log::lines(dir).map_or(true, |mut lines| {
@@ -1256,7 +1256,7 @@ fn prompt_message(prompt: String) -> Message {
 /// held (`docs/events.md`, "Rewind", "Change workspace").
 fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
     while let Ok(Some(line)) = watcher.recv() {
-        if client::ControlKind::recognize(&line.kind) == Some(client::ControlKind::Stop) {
+        if client::ControlKind::recognize(&line.kind()) == Some(client::ControlKind::Stop) {
             drain(&mut watcher, out.as_mut());
             return;
         }
@@ -1274,7 +1274,9 @@ fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> bool {
     if client::write_line(out, line).is_err() {
         return true;
     }
-    line.kind == "fiber_exited" || line.kind == "rewound" || line.kind == "moved"
+    line.kind() == EventKind::FiberExited
+        || line.kind() == EventKind::Rewound
+        || line.kind() == EventKind::Moved
 }
 
 /// Prints what `print` has not yet reached once its stop control arrived: the
@@ -1284,7 +1286,7 @@ fn write_until_stop(out: &mut dyn Write, line: &contract::Envelope) -> bool {
 /// printing before those lines are recovered, including `fiber_exited`.
 fn drain(watcher: &mut Watcher, out: &mut dyn Write) {
     while let Ok(Some(line)) = watcher.try_recv() {
-        if client::ControlKind::recognize(&line.kind) == Some(client::ControlKind::Stop) {
+        if client::ControlKind::recognize(&line.kind()) == Some(client::ControlKind::Stop) {
             continue;
         }
         if write_until_stop(out, &line) {

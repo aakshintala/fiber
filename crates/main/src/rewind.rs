@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use contract::events::{Moved, Parent};
+use contract::events::{EventKind, Moved, Parent};
 use contract::shapes::{Failure, Point};
 use contract::{ErrorCode, SessionId};
 
@@ -279,7 +279,10 @@ pub(crate) fn session_rewound(
         ));
     }
     let last = log::last_line(old_dir.path());
-    if last.as_ref().is_some_and(|line| line.kind == "moved") {
+    if last
+        .as_ref()
+        .is_some_and(|line| line.kind() == EventKind::Moved)
+    {
         return session_moved(new, old, last, context, clock, signals, process);
     }
     let (mut point, summary) = match r#loop::rewound_from(last, &new, &old) {

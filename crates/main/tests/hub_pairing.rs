@@ -10,6 +10,8 @@
 #[path = "support/hub_start.rs"]
 mod hub_start;
 mod support;
+
+use contract::HubEventKind;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
@@ -296,7 +298,7 @@ fn a_revoked_token_is_refused_over_the_port() {
     );
     let port = served.port;
     let (stream, hello) = served.hub;
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     let local = Socket::from(setup.deadline, stream);
     let output = run(&setup, &["hub", "pair", "phone"]);
     assert_eq!(

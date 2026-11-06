@@ -87,7 +87,7 @@ use std::time::Duration;
 
 use config::{Config, Layer, Sources};
 use contract::diag::DebugLog as _;
-use contract::events::Event;
+use contract::events::{Event, EventKind};
 use contract::inbox::Delivery;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -878,7 +878,9 @@ fn write_state_at_exit(
     use contract::hook::Hooks;
     extensions.close_state();
     let lines = extensions.take_state_lines();
-    if log::last_line(dir).is_some_and(|line| line.kind == "rewound" || line.kind == "moved") {
+    if log::last_line(dir)
+        .is_some_and(|line| line.kind() == EventKind::Rewound || line.kind() == EventKind::Moved)
+    {
         return Ok(());
     }
     for event in lines {

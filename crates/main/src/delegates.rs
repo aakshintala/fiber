@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use contract::clock::{Clock, utc_time};
-use contract::events::VariablesSource;
+use contract::events::{EventKind, VariablesSource};
 use contract::shapes::{Failure, Point};
 use contract::{ActionId, ErrorCode, Seq, SessionId};
 use extensions::{Quota, QuotaEntry, Window, WindowUse};
@@ -835,7 +835,8 @@ fn read_fork_point(
             let call_seq = lines
                 .iter()
                 .filter(|line| {
-                    line.kind == "tool_call_requested" && line.action_id.as_ref() == Some(action)
+                    line.kind() == EventKind::ToolCallRequested
+                        && line.action_id.as_ref() == Some(action)
                 })
                 .filter_map(|line| line.seq)
                 .max()
@@ -844,7 +845,7 @@ fn read_fork_point(
             lines
                 .iter()
                 .filter(|line| {
-                    line.kind == "assistant_message_started"
+                    line.kind() == EventKind::AssistantMessageStarted
                         && line.seq.is_some_and(|seq| seq.0 < call_seq)
                 })
                 .max_by_key(|line| line.seq.map(|seq| seq.0))
@@ -854,7 +855,7 @@ fn read_fork_point(
         }
         None => lines
             .iter()
-            .filter(|line| line.kind == "assistant_message_started" && line.seq.is_some())
+            .filter(|line| line.kind() == EventKind::AssistantMessageStarted && line.seq.is_some())
             .max_by_key(|line| line.seq.map(|seq| seq.0))
             .ok_or_else(|| unreadable("no `assistant_message_started`".to_owned()))?,
     };
@@ -867,7 +868,8 @@ fn read_fork_point(
     let model = lines
         .iter()
         .find(|line| {
-            line.kind == "usage_recorded" && line.action_id.as_ref() == calling.action_id.as_ref()
+            line.kind() == EventKind::UsageRecorded
+                && line.action_id.as_ref() == calling.action_id.as_ref()
         })
         .and_then(|line| line.payload.get("model"))
         .and_then(serde_json::Value::as_str)
@@ -879,7 +881,7 @@ fn read_fork_point(
         let mut current = action.clone();
         let mut seen = vec![current.clone()];
         while let Some(line) = lines.iter().find(|line| {
-            line.kind == "tool_call_requested" && line.action_id.as_ref() == Some(&current)
+            line.kind() == EventKind::ToolCallRequested && line.action_id.as_ref() == Some(&current)
         }) {
             let ran_by = line.payload.get("ran_by");
             let command = ran_by

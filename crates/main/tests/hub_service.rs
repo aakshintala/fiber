@@ -16,6 +16,8 @@
 
 mod support;
 
+use contract::HubEventKind;
+
 use fakes::ProviderServer;
 use serde_json::json;
 use std::ffi::OsString;
@@ -115,7 +117,7 @@ fn hub_client(setup: &Setup) -> Socket {
             }
         }
     };
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     Socket::from(deadline, stream)
 }
 

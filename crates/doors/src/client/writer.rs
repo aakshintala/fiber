@@ -190,7 +190,7 @@ pub(crate) fn write_loop(
         // what the cut decided now and carries on: `Session::quiesce`
         // cuts while the log is open, and ending here would strand
         // `fiber_exited`, which is written after the quiesce wait.
-        match ControlKind::recognize(&line.kind) {
+        match ControlKind::recognize(&line.kind()) {
             Some(ControlKind::Cut) => {
                 if let Some(flight) = flight
                     && flight.gate.accepted.unanswered(flight.reader) > 0
@@ -264,7 +264,7 @@ fn past_end(
                 .note(crate::session::tests::Probe::WriterPastEnd);
         }
         let line = writing.watcher.recv_after_end();
-        match ControlKind::recognize(&line.kind) {
+        match ControlKind::recognize(&line.kind()) {
             Some(ControlKind::Cut) => {}
             Some(ControlKind::Stop) => {
                 if flight.is_none() {
@@ -295,7 +295,7 @@ fn past_end(
 /// streaming, so `fiber_exited` still reaches the client.
 fn write_cut(writing: &mut Writing, stream: &mut dyn Write, flight: &Flight) -> Ended {
     while let Ok(Some(line)) = writing.watcher.try_recv() {
-        match ControlKind::recognize(&line.kind) {
+        match ControlKind::recognize(&line.kind()) {
             Some(ControlKind::Stop | ControlKind::Cut | ControlKind::Level) => continue,
             None => {}
         }
@@ -330,7 +330,7 @@ fn write_one(
     stream: &mut dyn Write,
     flight: Option<&Flight>,
 ) -> std::io::Result<()> {
-    if writing.summary && !summary_line(&line.kind) {
+    if writing.summary && !summary_line(line.kind()) {
         return Ok(());
     }
     if line.seq.is_some_and(|seq| seq.0 < writing.cutoff) {
@@ -373,9 +373,9 @@ pub(super) fn write_counted(
     write_line(stream, line)
 }
 
-fn summary_line(kind: &str) -> bool {
+fn summary_line(kind: EventKind) -> bool {
     matches!(
-        EventKind::from_name(kind),
+        kind,
         EventKind::SessionStatus
             | EventKind::ExtensionsLoaded
             | EventKind::CommandAccepted
@@ -413,8 +413,11 @@ impl ControlKind {
     }
 
     /// The control whose name is exactly `name`, or `None` for every other string.
-    pub(crate) fn recognize(name: &str) -> Option<Self> {
-        match name {
+    pub(crate) fn recognize(kind: &EventKind) -> Option<Self> {
+        let EventKind::Unknown(name) = kind else {
+            return None;
+        };
+        match name.as_str() {
             "doors.stop" => Some(Self::Stop),
             "doors.cut" => Some(Self::Cut),
             "doors.level" => Some(Self::Level),

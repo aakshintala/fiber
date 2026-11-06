@@ -11,11 +11,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use contract::events::{
-    CommandAccepted, CommandRejected, CommandResult, Notice, SessionNamed, SessionStatus,
-    ShellCommand, SteeringQueue, TurnStarted,
+    CommandAccepted, CommandRejected, CommandResult, EventKind, Notice, SessionNamed,
+    SessionStatus, ShellCommand, SteeringQueue, TurnStarted,
 };
 use contract::shapes::ContentPart;
-use contract::{Envelope, ErrorCode, HubLine, Seq, SessionId};
+use contract::{Envelope, ErrorCode, HubEventKind, HubLine, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::layout::Rect;
 use serde_json::{Map, Value};
@@ -790,7 +790,7 @@ impl App {
     }
 
     fn observe_session_status(&mut self, envelope: &Envelope) {
-        if envelope.kind != "session_status" {
+        if envelope.kind() != EventKind::SessionStatus {
             return;
         }
         let Some(status) = read!(envelope, SessionStatus) else {
@@ -980,7 +980,7 @@ impl App {
     /// session on screen. Any other line, or no waiting `/pwd`, leaves
     /// the wait alone.
     fn pwd_arrived(&mut self, envelope: &Envelope) {
-        if envelope.kind != "session_started" {
+        if envelope.kind() != EventKind::SessionStarted {
             return;
         }
         if !self.pwd_pending {
@@ -1553,15 +1553,15 @@ impl App {
     }
 
     fn on_hub(&mut self, hub: &HubLine, answer: Option<&answer::Answer<'_>>) -> Vec<String> {
-        match hub.kind.as_str() {
-            "hub_hello" if hub.schema_version == contract::SCHEMA_VERSION => {
+        match hub.kind() {
+            HubEventKind::HubHello if hub.schema_version == contract::SCHEMA_VERSION => {
                 self.hub_hello_version(&hub.payload);
                 let mut lines = std::mem::take(&mut self.outbox.held);
                 lines.extend(self.reconnected());
                 self.outbox.link = Link::Up;
                 lines
             }
-            "hub_hello" => {
+            HubEventKind::HubHello => {
                 self.hub_hello_version(&hub.payload);
                 // The hub was reached, so the refusal always says why.
                 self.hub_reached();
@@ -1573,7 +1573,7 @@ impl App {
                 self.outbox.link = Link::Refused;
                 Vec::new()
             }
-            "command_accepted" => {
+            HubEventKind::CommandAccepted => {
                 let Some(answer) = answer else {
                     return Vec::new();
                 };
@@ -1648,7 +1648,7 @@ impl App {
                     _ => Vec::new(),
                 }
             }
-            "command_rejected" => {
+            HubEventKind::CommandRejected => {
                 if let Some(answer) = answer {
                     let id = answer.id;
                     let message = hub_string(&hub.payload, "message").unwrap_or_default();
@@ -1743,19 +1743,19 @@ impl App {
                     Vec::new()
                 }
             }
-            "attention" => {
+            HubEventKind::Attention => {
                 self.attention_line(&hub.payload);
                 Vec::new()
             }
             // The hub holds no subscription for the open session any more:
             // keep what arrived, say so, and leave the retry to a reopen.
-            "stream_reopened" => {
+            HubEventKind::StreamReopened => {
                 // A reopening ends a `history` wait at once: its late
                 // answer folds nowhere.
                 self.rewind_reopened();
                 Vec::new()
             }
-            "stream_closed" => {
+            HubEventKind::StreamClosed => {
                 let closed = hub_string(&hub.payload, "session_id");
                 if closed.as_deref() == self.session().map(|session| session.0.as_str())
                     && let Some(session) = closed
@@ -1768,7 +1768,9 @@ impl App {
                 }
                 Vec::new()
             }
-            _ => Vec::new(),
+            HubEventKind::DeviceChanged | HubEventKind::SessionLeft | HubEventKind::Unknown(_) => {
+                Vec::new()
+            }
         }
     }
 
@@ -2024,7 +2026,7 @@ impl App {
         }
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
-        if approvals::KINDS.contains(&envelope.kind.as_str()) {
+        if approvals::KINDS.contains(&envelope.kind()) {
             self.queue.fold(envelope);
             self.request_arrived(envelope);
         }
@@ -2032,7 +2034,7 @@ impl App {
         // A `model` command's acceptance settles what it waited on,
         // from its own session: choosing may span a switch, but a late
         // accept after one, or another session's, names no row.
-        if envelope.kind == "command_accepted"
+        if envelope.kind() == EventKind::CommandAccepted
             && let Some(accepted) = read!(envelope, CommandAccepted)
         {
             let id = accepted.command_id.0.clone();
@@ -2051,8 +2053,8 @@ impl App {
         // settle below, as any non-attached session's do.
         if self.is_item_session(&envelope.session_id) {
             self.item_session_line(envelope);
-            match envelope.kind.as_str() {
-                "command_accepted" => {
+            match envelope.kind() {
+                EventKind::CommandAccepted => {
                     let accepted = read!(envelope, CommandAccepted);
                     self.accepted_settled(envelope, accepted.as_ref());
                     if let Some(accepted) = accepted {
@@ -2065,7 +2067,7 @@ impl App {
                         );
                     }
                 }
-                "command_rejected" => {
+                EventKind::CommandRejected => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
@@ -2075,7 +2077,76 @@ impl App {
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
-                _ => {}
+                EventKind::FiberStarted
+                | EventKind::FiberExited
+                | EventKind::SessionStarted
+                | EventKind::Rewound
+                | EventKind::Moved
+                | EventKind::TurnStarted
+                | EventKind::StepStarted
+                | EventKind::TurnCompleted
+                | EventKind::SteeringApplied
+                | EventKind::SteeringQueue
+                | EventKind::ShellCommand
+                | EventKind::DirectoryAdded
+                | EventKind::SessionNamed
+                | EventKind::Clients
+                | EventKind::SessionStatus
+                | EventKind::ContextAdded
+                | EventKind::AssistantMessageStarted
+                | EventKind::AssistantMessageDelta
+                | EventKind::AssistantMessageCompleted
+                | EventKind::TextCompleted
+                | EventKind::ToolCallArgumentsDelta
+                | EventKind::ReasoningStarted
+                | EventKind::ReasoningDelta
+                | EventKind::ReasoningCompleted
+                | EventKind::ToolCallRequested
+                | EventKind::ToolCallStarted
+                | EventKind::ToolCallDelta
+                | EventKind::ToolCallCompleted
+                | EventKind::PermissionRequested
+                | EventKind::PermissionResolved
+                | EventKind::InteractionRequested
+                | EventKind::InteractionResolved
+                | EventKind::RepositoryCodeOffered
+                | EventKind::RepositoryCodeResolved
+                | EventKind::UsageRecorded
+                | EventKind::QuotaNoticed
+                | EventKind::QuotaRearmed
+                | EventKind::RetryScheduled
+                | EventKind::Notice
+                | EventKind::PreambleBuilt
+                | EventKind::ModelChanged
+                | EventKind::OpeningMessage
+                | EventKind::InstructionFile
+                | EventKind::DateChanged
+                | EventKind::SkillsChanged
+                | EventKind::HandoffStarted
+                | EventKind::HandoffCompleted
+                | EventKind::SkillsResent
+                | EventKind::ContextNudged
+                | EventKind::ReviewerKept
+                | EventKind::McpServerFailed
+                | EventKind::McpServerReady
+                | EventKind::Reloaded
+                | EventKind::ExtensionsLoaded
+                | EventKind::ExtensionStateSet
+                | EventKind::ExtensionStateUnset
+                | EventKind::ExtensionUi
+                | EventKind::ExtensionMessage
+                | EventKind::ExtensionLog
+                | EventKind::ExtensionExec
+                | EventKind::ExtensionHello
+                | EventKind::ExtensionRequest
+                | EventKind::JobStarted
+                | EventKind::DelegateStarted
+                | EventKind::JobDelta
+                | EventKind::JobLine
+                | EventKind::DelegateFinished
+                | EventKind::JobCompleted
+                | EventKind::JobsPendingNotified
+                | EventKind::Unknown(_) => {}
             }
             return send;
         }
@@ -2087,8 +2158,8 @@ impl App {
             // `cancel`, so a second settle here finds nothing to do. An
             // accepted import opens its report on whatever surface
             // shows, through the same settle as the attached session's.
-            match envelope.kind.as_str() {
-                "command_accepted" => {
+            match envelope.kind() {
+                EventKind::CommandAccepted => {
                     // No `commands_answered`: a `commands` answer from
                     // another session is ignored, and a resent command
                     // needs only its pending entry closed.
@@ -2104,7 +2175,7 @@ impl App {
                         );
                     }
                 }
-                "command_rejected" => {
+                EventKind::CommandRejected => {
                     if let Some(rejected) = read!(envelope, CommandRejected)
                         && let Some(id) = rejected.command_id
                     {
@@ -2114,7 +2185,76 @@ impl App {
                         self.refused(&id.0, &rejected.code, rejected.message);
                     }
                 }
-                _ => {}
+                EventKind::FiberStarted
+                | EventKind::FiberExited
+                | EventKind::SessionStarted
+                | EventKind::Rewound
+                | EventKind::Moved
+                | EventKind::TurnStarted
+                | EventKind::StepStarted
+                | EventKind::TurnCompleted
+                | EventKind::SteeringApplied
+                | EventKind::SteeringQueue
+                | EventKind::ShellCommand
+                | EventKind::DirectoryAdded
+                | EventKind::SessionNamed
+                | EventKind::Clients
+                | EventKind::SessionStatus
+                | EventKind::ContextAdded
+                | EventKind::AssistantMessageStarted
+                | EventKind::AssistantMessageDelta
+                | EventKind::AssistantMessageCompleted
+                | EventKind::TextCompleted
+                | EventKind::ToolCallArgumentsDelta
+                | EventKind::ReasoningStarted
+                | EventKind::ReasoningDelta
+                | EventKind::ReasoningCompleted
+                | EventKind::ToolCallRequested
+                | EventKind::ToolCallStarted
+                | EventKind::ToolCallDelta
+                | EventKind::ToolCallCompleted
+                | EventKind::PermissionRequested
+                | EventKind::PermissionResolved
+                | EventKind::InteractionRequested
+                | EventKind::InteractionResolved
+                | EventKind::RepositoryCodeOffered
+                | EventKind::RepositoryCodeResolved
+                | EventKind::UsageRecorded
+                | EventKind::QuotaNoticed
+                | EventKind::QuotaRearmed
+                | EventKind::RetryScheduled
+                | EventKind::Notice
+                | EventKind::PreambleBuilt
+                | EventKind::ModelChanged
+                | EventKind::OpeningMessage
+                | EventKind::InstructionFile
+                | EventKind::DateChanged
+                | EventKind::SkillsChanged
+                | EventKind::HandoffStarted
+                | EventKind::HandoffCompleted
+                | EventKind::SkillsResent
+                | EventKind::ContextNudged
+                | EventKind::ReviewerKept
+                | EventKind::McpServerFailed
+                | EventKind::McpServerReady
+                | EventKind::Reloaded
+                | EventKind::ExtensionsLoaded
+                | EventKind::ExtensionStateSet
+                | EventKind::ExtensionStateUnset
+                | EventKind::ExtensionUi
+                | EventKind::ExtensionMessage
+                | EventKind::ExtensionLog
+                | EventKind::ExtensionExec
+                | EventKind::ExtensionHello
+                | EventKind::ExtensionRequest
+                | EventKind::JobStarted
+                | EventKind::DelegateStarted
+                | EventKind::JobDelta
+                | EventKind::JobLine
+                | EventKind::DelegateFinished
+                | EventKind::JobCompleted
+                | EventKind::JobsPendingNotified
+                | EventKind::Unknown(_) => {}
             }
             return send;
         }
@@ -2131,7 +2271,7 @@ impl App {
         self.output_line(envelope);
         send.extend(self.session_views_line(envelope, answer));
         send.extend(self.config_views_line(envelope, answer));
-        if envelope.kind == "turn_started"
+        if envelope.kind() == EventKind::TurnStarted
             && let Some(started) = read!(envelope, TurnStarted)
         {
             self.history.saw(&envelope.session_id, &started.input);
@@ -2147,8 +2287,8 @@ impl App {
             self.fold_pages(&envelope.session_id).apply(envelope)
         };
         let mut changed = applied.changed;
-        match envelope.kind.as_str() {
-            "command_accepted" => {
+        match envelope.kind() {
+            EventKind::CommandAccepted => {
                 let accepted = read!(envelope, CommandAccepted);
                 let sent = self.accepted_settled(envelope, accepted.as_ref());
                 if let Some(accepted) = accepted {
@@ -2165,7 +2305,7 @@ impl App {
                     changed |= !kept && self.fold_pages(&envelope.session_id).add_shell(item);
                 }
             }
-            "shell_command" => {
+            EventKind::ShellCommand => {
                 if let Some(ran) = read!(envelope, ShellCommand) {
                     changed |= !kept
                         && self
@@ -2173,7 +2313,7 @@ impl App {
                             .add_shell(Some(shell::ran(&ran)));
                 }
             }
-            "command_rejected" => {
+            EventKind::CommandRejected => {
                 if let Some(rejected) = read!(envelope, CommandRejected)
                     && let Some(id) = rejected.command_id
                 {
@@ -2190,32 +2330,91 @@ impl App {
             // list (`docs/events.md`, "`extensions_loaded`"). A turn
             // start may change the runnable set, so `turn_started` asks
             // too (`docs/invocation.md`, "What each command does").
-            "reloaded" | "extensions_loaded" | "turn_started" => {
+            EventKind::Reloaded | EventKind::ExtensionsLoaded | EventKind::TurnStarted => {
                 self.record_extensions(envelope);
                 if self.outbox.is_up() {
                     send.push(self.ask_commands(&envelope.session_id));
                 }
             }
-            "usage_recorded" => self.config_views_usage(envelope),
-            "session_named" => {
+            EventKind::UsageRecorded => self.config_views_usage(envelope),
+            EventKind::SessionNamed => {
                 if let Some(named) = read!(envelope, SessionNamed) {
                     self.name = named.name;
                 }
             }
-            "notice" => {
+            EventKind::Notice => {
                 if let Some(notice) = read!(envelope, Notice) {
                     self.notices.push(notice.code.clone(), notice.message);
                 }
             }
-            "repository_code_offered" | "repository_code_resolved" => {
+            EventKind::RepositoryCodeOffered | EventKind::RepositoryCodeResolved => {
                 self.offer.fold(envelope);
             }
-            "steering_queue" => {
+            EventKind::SteeringQueue => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {
                     self.steering.fold(&queue, &mut self.draft);
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::DirectoryAdded
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::Unknown(_) => {}
         }
         if let Some(busy) = applied.busy {
             if folding {

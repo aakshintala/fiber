@@ -728,9 +728,9 @@ struct Head<'a> {
 /// Whether `keep_latest` keeps a line of this kind: the latest-wins kinds.
 /// `Log::open` fully parses these, the pending-offer pair, and the kinds
 /// the rate fold reads.
-fn latest_wins(kind: &str) -> bool {
+fn latest_wins(kind: &contract::events::EventKind) -> bool {
     matches!(
-        contract::events::EventKind::from_name(kind),
+        kind,
         contract::events::EventKind::SessionStatus
             | contract::events::EventKind::ExtensionsLoaded
             | contract::events::EventKind::SteeringQueue
@@ -742,13 +742,14 @@ fn latest_wins(kind: &str) -> bool {
 /// Whether `Log::open` fully parses a line of this kind: the kinds a fold
 /// reads.
 fn folded(kind: &str) -> bool {
-    latest_wins(kind) || offer_kind(kind) || RateFold::reads(kind)
+    let parsed = contract::events::EventKind::from_name(kind);
+    latest_wins(&parsed) || offer_kind(&parsed) || RateFold::reads(kind)
 }
 
 /// The event kinds that maintain the pending repository offer.
-fn offer_kind(kind: &str) -> bool {
+fn offer_kind(kind: &contract::events::EventKind) -> bool {
     matches!(
-        contract::events::EventKind::from_name(kind),
+        kind,
         contract::events::EventKind::RepositoryCodeOffered
             | contract::events::EventKind::RepositoryCodeResolved
     )
@@ -785,7 +786,7 @@ pub(crate) fn full_parses() -> usize {
 /// one key for the status line and one per widget; a clearing line (`status`
 /// `""`, or empty `lines`) removes its key.
 fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
-    if offer_kind(&line.kind) {
+    if offer_kind(&line.kind()) {
         match contract::events::Event::from_envelope(line) {
             Ok(Some(contract::events::Event::RepositoryCodeOffered(_))) => {
                 latest.insert(line.kind.clone(), line.clone());
@@ -804,7 +805,7 @@ fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
     } else if line.kind() == contract::events::EventKind::PreambleBuilt {
         latest.remove("repository_code_offered");
     }
-    if latest_wins(&line.kind) && line.kind() != contract::events::EventKind::ExtensionUi {
+    if latest_wins(&line.kind()) && line.kind() != contract::events::EventKind::ExtensionUi {
         latest.insert(line.kind.clone(), line.clone());
         return;
     }

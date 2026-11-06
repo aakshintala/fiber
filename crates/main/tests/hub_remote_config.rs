@@ -9,6 +9,8 @@
 #[path = "support/hub_start.rs"]
 mod hub_start;
 mod support;
+
+use contract::HubEventKind;
 use serde_json::{Value, json};
 use std::fs;
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
@@ -212,7 +214,7 @@ fn the_hub_searches_its_own_machine_over_the_port() {
     );
     let port = served.port;
     let (stream, hello) = served.hub;
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     let local = Socket::from(setup.deadline, stream);
     let mut unauth = Ws::connect(&setup, port);
     assert_eq!(unauth.text(&setup)["kind"], "hub_hello");
@@ -341,7 +343,7 @@ fn the_hub_answers_configuration_from_its_own_home_over_the_port() {
     );
     let port = served.port;
     let (stream, hello) = served.hub;
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     let rule = json!({"decision":"allow","tool":"shell","prefix":"npm test"});
     fs::write(setup.home().join("rules"), format!("{rule}\n")).unwrap();
     let local = Socket::from(setup.deadline, stream);
