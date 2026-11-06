@@ -2818,6 +2818,42 @@ fn verdict_fails_closed_without_break_data() {
 }
 
 #[test]
+fn verdict_treats_a_missing_break_file_as_absent() {
+    // A break file that does not exist (NotFound) falls back to the job
+    // results alone instead of failing closed.
+    let dir = TempDir::new("xtask-verdict-missing-break-file");
+    let missing = dir.path().join("head-failures.txt");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", missing.to_str().unwrap()),
+    ];
+    assert_eq!(
+        xtask(&dir, &["verdict"], &env, ""),
+        (1, "verdict: test_linux: selected, but failure\n".to_owned())
+    );
+}
+
+#[test]
+fn verdict_fails_closed_on_an_unreadable_break_file() {
+    // A break file that fails for any reason other than absence is unusable
+    // break data: the verdict fails closed instead of falling back. Reading
+    // a directory always fails with a non-NotFound error on every platform
+    // the verdict runs on.
+    let dir = TempDir::new("xtask-verdict-unreadable-break-file");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", dir.path().to_str().unwrap()),
+    ];
+    let (code, out) = xtask(&dir, &["verdict"], &env, "");
+    assert_eq!(code, 2, "{out}");
+    assert!(out.contains("HEAD_FAILURES"), "{out}");
+}
+
+#[test]
 fn verdict_keeps_a_touched_retry_failure_with_no_new_breaks() {
     let dir = TempDir::new("xtask-verdict-touched-retry");
     dir.write("head-failures.txt", "main::suite old\n");
