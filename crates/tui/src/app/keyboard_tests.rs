@@ -2,8 +2,7 @@
 //! person's bindings reaching every handler.
 
 use contract::ErrorCode;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::path::PathBuf;

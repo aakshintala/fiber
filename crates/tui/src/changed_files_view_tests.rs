@@ -8,12 +8,11 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use contract::HubEventKind;
 use contract::clock::Clock;
 use contract::events::CommandResult;
-use contract::events::EventKind;
 use contract::shapes::Process;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

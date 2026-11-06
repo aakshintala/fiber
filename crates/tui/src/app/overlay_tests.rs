@@ -5,9 +5,8 @@
 use std::path::PathBuf;
 
 use contract::ErrorCode;
-use contract::HubEventKind;
-use contract::events::EventKind;
 use contract::{ActionId, JobId, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};

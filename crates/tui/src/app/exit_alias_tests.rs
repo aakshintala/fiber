@@ -7,8 +7,7 @@ use super::commands_testkit::{
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::slash;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::json;
 use std::path::PathBuf;
 

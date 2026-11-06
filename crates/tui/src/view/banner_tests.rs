@@ -8,8 +8,7 @@ use serde_json::{Value, json};
 
 use crate::app::App;
 use crate::link::Line;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 

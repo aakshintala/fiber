@@ -3,8 +3,7 @@
 use super::super::{App, Effect};
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::link::Line;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 

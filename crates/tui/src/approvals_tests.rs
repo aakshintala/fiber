@@ -1037,9 +1037,8 @@ mod through_the_app {
     use crate::app::{App, Effect};
     use crate::keys::Key;
     use crate::link::Line;
-    use contract::HubEventKind;
     use contract::clock::Clock;
-    use contract::events::EventKind;
+    use contract::{HubEventKind, events::EventKind};
     use std::path::PathBuf;
 
     /// An app connected to the hub and attached to `S_A`.

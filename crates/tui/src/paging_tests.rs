@@ -10,10 +10,9 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
 use contract::{ActionId, Envelope, Seq, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 use super::{Draw, Folded, Pages, Part, fold};

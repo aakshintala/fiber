@@ -1,8 +1,7 @@
 //! Tests for bare URLs (`docs/tui.md`, "Links").
 
 use super::urls;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 /// The URLs `text` holds, as text.
 fn found(text: &str) -> Vec<String> {

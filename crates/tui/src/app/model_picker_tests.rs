@@ -7,9 +7,8 @@ use crate::catalogue::{Catalogue, ModelEntry};
 use crate::configure::ConfigureError;
 use crate::home::Launch;
 use contract::ErrorCode;
-use contract::HubEventKind;
-use contract::events::EventKind;
 use contract::events::Notice;
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
@@ -3596,9 +3595,9 @@ fn scripted_remote_named(
             };
             let answer = Line::Hub(contract::HubLine {
                 kind: if accepted {
-                    "command_accepted".to_owned()
+                    HubEventKind::CommandAccepted.name().to_owned()
                 } else {
-                    "command_rejected".to_owned()
+                    HubEventKind::CommandRejected.name().to_owned()
                 },
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,

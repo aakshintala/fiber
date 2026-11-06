@@ -4,9 +4,8 @@
 
 use std::path::PathBuf;
 
-use contract::HubEventKind;
-use contract::events::EventKind;
 use contract::{ActionId, JobId, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 use super::super::{App, Effect};

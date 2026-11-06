@@ -11,9 +11,8 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Instant;
 
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::json;
 
 use super::{App, Effect};

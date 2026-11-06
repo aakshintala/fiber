@@ -5,10 +5,9 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use contract::HubEventKind;
 use contract::SessionId;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 use super::super::{App, Effect};

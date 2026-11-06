@@ -24,8 +24,7 @@ use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 use crate::graphics::test_support::bounded_sixel_test;
 
 use crate::convert::tests::PNG as CONVERTED_PNG;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 

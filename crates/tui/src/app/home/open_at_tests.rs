@@ -7,9 +7,8 @@ use crate::OpenAt;
 use crate::app::testkit::{hello, home_with};
 use crate::home::{Level, Spot};
 use crate::link::Line;
-use contract::HubEventKind;
 use contract::SessionId;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 

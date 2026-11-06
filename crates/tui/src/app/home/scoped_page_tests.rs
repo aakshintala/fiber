@@ -9,10 +9,9 @@ use crate::app::testkit::{hello, home_with};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::Key;
 use crate::link::Line;
-use contract::HubEventKind;
 use contract::SessionId;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 

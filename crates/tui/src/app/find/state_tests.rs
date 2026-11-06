@@ -9,8 +9,7 @@ use super::super::tests::{
 };
 use crate::app::{App, Effect};
 use crate::keys::Key;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 #[test]
 fn a_match_on_the_top_row_at_the_start_is_current() {

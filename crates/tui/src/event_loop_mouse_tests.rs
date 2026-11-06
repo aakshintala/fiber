@@ -4,8 +4,7 @@
 use super::Input;
 use super::tests::{Sink, feed, new_loop, offering};
 use crate::link::Line;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use fakes::Deadline;
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
 use ratatui::buffer::Cell;

@@ -14,8 +14,7 @@ use crate::home::{Launch, Spot};
 use crate::keys::{Edit, Key};
 use crate::link::Line;
 use crate::stroke::Stroke;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 /// The stroke `name` names.
 fn stroke(name: &str) -> Stroke {

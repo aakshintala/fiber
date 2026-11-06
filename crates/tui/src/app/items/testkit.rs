@@ -2,8 +2,7 @@
 
 use std::path::PathBuf;
 
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use contract::{JobId, SessionId};
 use serde_json::{Value, json};
 

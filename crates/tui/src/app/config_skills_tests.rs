@@ -13,8 +13,7 @@ use crate::configure_fake::{Fake, row};
 use crate::home::Launch;
 use crate::keys::{Edit, Key};
 use crate::link::Line;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 

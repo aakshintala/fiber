@@ -5,9 +5,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 use crate::app::App;

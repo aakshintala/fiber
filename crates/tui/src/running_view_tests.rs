@@ -4,10 +4,9 @@
 use std::path::PathBuf;
 
 use crate::theme::Role;
-use contract::HubEventKind;
 use contract::SessionId;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 use super::*;

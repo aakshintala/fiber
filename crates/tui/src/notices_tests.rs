@@ -8,10 +8,9 @@ use crate::app::App;
 use crate::keys::Key;
 use crate::link::Line;
 use contract::ErrorCode;
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
 use contract::events::Notice;
+use contract::{HubEventKind, events::EventKind};
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 

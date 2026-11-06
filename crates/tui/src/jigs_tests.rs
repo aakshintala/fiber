@@ -6,8 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use contract::Envelope;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::json;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -757,7 +756,7 @@ fn folding_the_fixture_counts_each_borrowed_decode_once() {
     .iter()
     .map(|(kind, payload)| {
         serde_json::to_string(&Envelope {
-            kind: (*kind).to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: contract::SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

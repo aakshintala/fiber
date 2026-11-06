@@ -5,10 +5,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::HubEventKind;
 use contract::Seq;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use fakes::clock::FakeClock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

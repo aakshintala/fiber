@@ -2,8 +2,7 @@
 
 use super::{Credits, Feed, Line, QUEUE, answers, parse_line, read_lines, write_line};
 use crate::Input;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use fakes::Deadline;
 use std::io::Read;
 use std::os::unix::net::UnixStream;

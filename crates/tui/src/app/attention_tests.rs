@@ -3,9 +3,8 @@
 
 use std::path::PathBuf;
 
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 use super::super::App;
 use crate::Attention;

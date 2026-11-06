@@ -1,10 +1,9 @@
 //! The repository offer's frame: snapshots, its click targets and the
 //! cursor.
 
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
 use contract::events::OfferDecision;
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};

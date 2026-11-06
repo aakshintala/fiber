@@ -10,10 +10,9 @@ use super::super::{App, Effect, Target};
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::TargetId;
-use contract::HubEventKind;
 use contract::SessionId;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

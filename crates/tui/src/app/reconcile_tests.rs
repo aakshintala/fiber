@@ -10,8 +10,7 @@ use super::super::{App, Link};
 use crate::app::testkit::{SESSION as S_A, hello, home_with};
 use crate::home::Launch;
 use crate::link::Line;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
 

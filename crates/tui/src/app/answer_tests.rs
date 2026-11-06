@@ -3,9 +3,8 @@
 use super::Answer;
 use crate::app::outbox::{Outbox, Waiting};
 use crate::link::Line;
-use contract::HubEventKind;
-use contract::events::EventKind;
 use contract::{Envelope, HubLine, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 fn line(session: bool, kind: &str, payload: Value) -> Line {

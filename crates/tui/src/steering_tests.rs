@@ -3,10 +3,9 @@
 use super::LaidRow;
 use super::Steering;
 use crate::input::Draft;
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
 use contract::events::SteeringQueue;
+use contract::{HubEventKind, events::EventKind};
 
 /// A draft holding `text`, the cursor at its end.
 fn typed(text: &str) -> Draft {

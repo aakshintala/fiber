@@ -24,9 +24,8 @@ use crate::keyset::Context;
 use crate::link::Line;
 use crate::mouse::{self, Pointer, TargetId};
 use contract::ErrorCode;
-use contract::HubEventKind;
-use contract::events::EventKind;
 use contract::events::ImportedNames;
+use contract::{HubEventKind, events::EventKind};
 use contract::{JobId, SessionId};
 
 pub(in crate::app) const SESSION: &str = "s_aaaaaaaaaaaaaaaa";

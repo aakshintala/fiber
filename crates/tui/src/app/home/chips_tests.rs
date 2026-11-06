@@ -8,8 +8,7 @@ use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::model_picker::Mode;
 use crate::mouse::TargetId;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use std::path::PathBuf;
 
 /// Draws the home frame, so the stops match what is on screen.

@@ -6,9 +6,8 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;

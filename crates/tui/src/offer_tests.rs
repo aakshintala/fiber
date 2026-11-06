@@ -1,9 +1,8 @@
 //! Tests for the repository offer's state.
 
-use contract::HubEventKind;
-use contract::events::EventKind;
 use contract::events::OfferDecision;
 use contract::{Envelope, SessionId};
+use contract::{HubEventKind, events::EventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};

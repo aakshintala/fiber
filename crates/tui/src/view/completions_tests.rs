@@ -11,9 +11,8 @@ use super::{cut_left, match_in, range_text};
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::theme::Role;
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 /// An app at `width` by `height`, connected to the hub and attached to
 /// a session.

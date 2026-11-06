@@ -21,9 +21,8 @@ use crate::model_picker::{
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
 use crate::theme::Role;
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 /// An app at `width` by `height`, connected to the hub and attached to
 /// a session.

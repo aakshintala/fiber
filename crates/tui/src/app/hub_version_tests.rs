@@ -2,8 +2,7 @@
 //! notice, and the reason an unreadable row gives.
 
 use contract::ErrorCode;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
 use super::super::notices::NoticeLine;

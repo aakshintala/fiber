@@ -14,9 +14,8 @@ use crate::completion_rows::Completions;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::theme::Role;
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 

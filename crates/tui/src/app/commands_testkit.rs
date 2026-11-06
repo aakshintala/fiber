@@ -4,9 +4,8 @@
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::link::Line;
-use contract::HubEventKind;
 use contract::clock::Clock;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Instant;

@@ -4,8 +4,7 @@
 //! (`docs/tui.md`, "Swapped views").
 
 use contract::ErrorCode;
-use contract::HubEventKind;
-use contract::events::EventKind;
+use contract::{HubEventKind, events::EventKind};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
