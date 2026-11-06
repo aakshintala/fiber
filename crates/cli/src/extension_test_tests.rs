@@ -541,13 +541,16 @@ fn ps_failure_in_the_zombie_probe_names_the_ps_read() {
     );
     assert!(
         output.status.success(),
-        "ps-stub child exited {}",
-        output.status
+        "ps-stub child exited {}:\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("ps_failure_in_the_zombie_probe_names_the_ps_read"),
-        "the child ran exactly the ps-stub test: {stdout}"
+        "the child ran exactly the ps-stub test:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }
 
