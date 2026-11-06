@@ -803,6 +803,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "diag"
+version = "0.0.0"
+dependencies = [
+ "contract",
+ "fakes",
+ "libc",
+ "serde",
+ "serde_json",
+ "support",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

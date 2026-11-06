@@ -3,10 +3,10 @@
 //! reported in `usage_recorded`, whether uncached, read from the cache or
 //! written to it, over that request's input size in bytes. A request that
 //! reported no input tokens, as one that failed before the provider named
-//! its generation, is skipped for the next. [`Log::open`](crate::Log) folds
+//! its generation, is skipped for the next. `Log::open` folds
 //! one over the events it replays; the appends after it are not folded here,
 //! so whoever wants the rate to follow them folds the events
-//! [`Log::subscribe`](crate::Log) offers.
+//! `Log::subscribe` offers.
 
 use std::collections::HashSet;
 
@@ -90,7 +90,7 @@ impl RateFold {
 
     /// Whether [`RateFold::fold`] reads a line of this kind. `Log::open`
     /// fully parses only these and the latest-wins kinds.
-    pub(crate) fn reads(kind: &str) -> bool {
+    pub fn reads(kind: &str) -> bool {
         matches!(
             EventKind::from_name(kind),
             EventKind::PreambleBuilt

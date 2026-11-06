@@ -618,6 +618,11 @@ fn at_info_timed_reads_no_clock_and_writes_nothing() {
     assert!(!home.path().join("logs").exists());
 }
 
+// Not run under `--features alloc-stats` (RULING-4276-6, see #4294):
+// build configuration — the timer line carries alloc fields there, so this
+// exact-shape assertion holds in the default build only, and CI never runs
+// tests under that feature. Base evidence:
+// /home/aakshintala/work/fiber-worktrees/flywheel/run/fiber-4276-base-alloc.log.
 #[test]
 fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
     let home = Home::new("ld-timed-drop");
@@ -986,6 +991,11 @@ fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
     }
 }
 
+// Not run under `--features alloc-stats` (RULING-4276-6, see #4294):
+// build configuration — the timer line carries alloc fields there, so this
+// exact-shape assertion holds in the default build only, and CI never runs
+// tests under that feature. Base evidence:
+// /home/aakshintala/work/fiber-worktrees/flywheel/run/fiber-4276-base-alloc.log.
 #[test]
 fn op_timing_data_holds_only_op_ms_and_tool() {
     let home = Home::new("ld-timed-data");
@@ -1012,6 +1022,11 @@ fn op_timing_data_holds_only_op_ms_and_tool() {
     }
 }
 
+// Not run under `--features alloc-stats` (RULING-4276-6, see #4294):
+// build configuration — the timer line carries alloc fields there, so this
+// exact-shape assertion holds in the default build only, and CI never runs
+// tests under that feature. Base evidence:
+// /home/aakshintala/work/fiber-worktrees/flywheel/run/fiber-4276-base-alloc.log.
 #[test]
 fn every_process_shape_writes_the_closed_data_keys() {
     for (process, kind) in [
