@@ -479,7 +479,9 @@ fn transient_lock_hold_does_not_fail_install_url() {
                 let _ = sender.send(()).ok();
             }
             if let Some(holder) = self.holder.take() {
-                let _ = holder.join();
+                match holder.join() {
+                    Ok(()) | Err(_) => {}
+                }
             }
         }
     }
