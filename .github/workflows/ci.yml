@@ -617,9 +617,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # Linux arm64 and macOS. The plan decides whether it runs: a draft skips
-  # it, so a draft runs Linux x86_64 only, and marking it ready runs all
-  # three (docs/ci.md).
+  # Linux arm64 and macOS. The plan runs it only on the backstop, never on a
+  # pull request (docs/ci.md).
   test:
     name: Tests (${{ matrix.runner }})
     needs: select
@@ -636,12 +635,12 @@ jobs:
       BASE: ${{ needs.select.outputs.base }}
     steps: *test-steps
 
-  # The tests the pull request touches, each run 30 times (100 when the
-  # pull request fixes a flaky test), beside the test jobs: one failure stops
-  # the merge, so a test this pull request touches must not be flaky
+  # The tests the push touches, each run 30 times (100 when the
+  # push fixes a flaky test), beside the test jobs on the backstop: one failure
+  # files an issue, so a test this push touches must not be flaky
   # (docs/ci.md, "On every pull request that changes code").
   stress:
-    name: Stress the tests the pull request touches
+    name: Stress the tests the push touches
     needs: select
     if: fromJSON(needs.select.outputs.jobs).stress
     runs-on: ubuntu-24.04
