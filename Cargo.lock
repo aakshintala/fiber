@@ -975,12 +975,21 @@ dependencies = [
 name = "fakes"
 version = "0.0.0"
 dependencies = [
- "contract",
  "flate2",
  "libc",
  "rustix",
  "serde_json",
  "signal-hook",
+ "support",
+]
+
+[[package]]
+name = "fakes-contract"
+version = "0.0.0"
+dependencies = [
+ "contract",
+ "fakes",
+ "serde_json",
  "support",
 ]
 
