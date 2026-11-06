@@ -30,7 +30,7 @@ use super::reviewer_eval::{
     reviewed_items, sample, scan_line,
 };
 use contract::events::{
-    AskStep, DecidedBy, Event, HandoffCompleted, Outcome, ReviewedCall, ReviewerUse,
+    AskStep, DecidedBy, Event, EventKind, HandoffCompleted, Outcome, ReviewedCall, ReviewerUse,
     ToolCallRequested, ToolCallStarted,
 };
 use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
@@ -39,8 +39,8 @@ use contract::shapes::{DeclaredEffects, Failure};
 use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
 use contract::{ActionId, ErrorCode, SessionId, TurnId};
 use r#loop::{
-    BlockLimits, Loop, Model, Permissions, PromptInputs, ReviewPrepared, Reviewed, Reviewer,
-    Session, Shown, render_reviewed,
+    BlockLimits, Loop, Model, PendingAsks, Permissions, PromptInputs, ReviewPrepared, Reviewed,
+    Reviewer, Session, Shown, render_reviewed,
 };
 use serde_json::{Map, Value, json};
 
@@ -171,7 +171,7 @@ fn load_chain(dir: &Path) -> Result<(String, Vec<Indexed>), String> {
             dir.display()
         ));
     };
-    if first.envelope.kind != "session_started" {
+    if first.envelope.kind() != EventKind::SessionStarted {
         return Err(format!(
             "review: {} holds no session: the log does not begin with session_started",
             first.dir.display()
@@ -528,6 +528,9 @@ struct Driver {
     seam: Arc<Seam>,
     /// The source fold: what the reviewer is shown, line by line.
     reviewed: Vec<Reviewed>,
+    /// The eliciting requests a person's answer resolves, staged by
+    /// request id for the source fold's own reviewed list.
+    asks: PendingAsks,
     /// The request ids already emitted, so a repeated request id prints
     /// once.
     seen: HashSet<String>,
@@ -618,6 +621,7 @@ impl Driver {
             looped,
             seam,
             reviewed: Vec::new(),
+            asks: PendingAsks::default(),
             seen: HashSet::new(),
             _home: home,
             _inbox: inbox,
@@ -637,7 +641,7 @@ impl Driver {
                     "review: {} {}: a {} payload that does not parse: {error}",
                     item.dir.display(),
                     describe(envelope, position),
-                    envelope.kind,
+                    envelope.kind().name(),
                 )
             })?;
             let Some(event) = event else {
@@ -663,6 +667,7 @@ impl Driver {
                         &Event::HandoffCompleted(done),
                         envelope.action_id.as_ref(),
                         envelope.seq,
+                        &mut self.asks,
                     );
                 }
                 continue;
@@ -672,6 +677,7 @@ impl Driver {
                 &event,
                 envelope.action_id.as_ref(),
                 envelope.seq,
+                &mut self.asks,
             );
             if let Event::ToolCallRequested(call) = event {
                 // Inner and provider-hosted calls are history, never reviewed
@@ -706,7 +712,7 @@ impl Driver {
                     "review: {} {}: a {} payload that does not parse: {error}",
                     item.dir.display(),
                     describe(envelope, position),
-                    envelope.kind,
+                    envelope.kind().name(),
                 )
             })?;
             let Some(event) = event else {
@@ -1046,6 +1052,7 @@ impl Driver {
             &Event::HandoffCompleted(done.clone()),
             envelope.action_id.as_ref(),
             envelope.seq,
+            &mut self.asks,
         );
         let turn = envelope
             .turn_id
@@ -1342,6 +1349,7 @@ fn emit_sampled(
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let mut reviewed: Vec<Reviewed> = Vec::new();
+    let mut asks = PendingAsks::default();
     let mut added_folders: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     let mut summary = false;
@@ -1352,7 +1360,7 @@ fn emit_sampled(
                 "review: {} {}: a {} payload that does not parse: {error}",
                 item.dir.display(),
                 describe(envelope, position),
-                envelope.kind,
+                envelope.kind().name(),
             )
         })?;
         let Some(event) = event else {
@@ -1369,6 +1377,7 @@ fn emit_sampled(
             &event,
             envelope.action_id.as_ref(),
             envelope.seq,
+            &mut asks,
         );
         if let Event::ToolCallRequested(call) = event
             && call.ran_by.is_none()

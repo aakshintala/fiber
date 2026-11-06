@@ -24,7 +24,7 @@ use serde_json::{Map, Value, json};
 
 use super::shown::Shown;
 use super::{First, ReviewerUse, Second, Stage1Worker, fanout_stage1, read_first, read_second};
-use super::{render_reviewed, sections, system_prompt};
+use super::{PendingAsks, render_reviewed, sections, system_prompt};
 use fakes::{Deadline, NoRules};
 
 const PROMPT: &str = include_str!("../prompt/reviewer.md");
@@ -131,6 +131,7 @@ fn only_the_persons_messages_reach_the_reviewer() {
         }),
         None,
         Some(Seq(11)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -141,6 +142,7 @@ fn only_the_persons_messages_reach_the_reviewer() {
         }),
         None,
         Some(Seq(12)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
@@ -151,6 +153,7 @@ fn only_the_persons_messages_reach_the_reviewer() {
         }),
         None,
         Some(Seq(13)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(
         reviewed
@@ -211,7 +214,13 @@ fn the_models_prose_reasoning_and_results_are_left_out() {
             loaded: None,
         }),
     ] {
-        render_reviewed(&mut reviewed, &event, Some(&action), Some(Seq(20)));
+        render_reviewed(
+            &mut reviewed,
+            &event,
+            Some(&action),
+            Some(Seq(20)),
+            &mut PendingAsks::default(),
+        );
     }
     // The model's text stays held for the person's next message; nothing
     // else reaches the reviewer.
@@ -250,12 +259,14 @@ fn a_call_renders_with_the_arguments_that_run() {
         &Event::ToolCallRequested(call("shell")),
         Some(&action),
         Some(Seq(21)),
+        &mut PendingAsks::default(),
     );
     render_reviewed(
         &mut reviewed,
         &Event::ToolCallRequested(repaired),
         Some(&ActionId("a_8".into())),
         Some(Seq(22)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(reviewed.len(), 2);
     assert_eq!(
@@ -429,6 +440,7 @@ fn a_started_rewrite_leaves_the_reviewers_history_as_it_was() {
         &Event::ToolCallRequested(call("shell")),
         Some(&action),
         Some(Seq(23)),
+        &mut PendingAsks::default(),
     );
     let before = reviewed.clone();
     assert_eq!(before.len(), 1);
@@ -451,6 +463,7 @@ fn a_started_rewrite_leaves_the_reviewers_history_as_it_was() {
         }),
         Some(&action),
         Some(Seq(24)),
+        &mut PendingAsks::default(),
     );
     assert_eq!(reviewed, before);
 }
@@ -623,6 +636,7 @@ fn the_effects_item_names_the_call_under_review() {
         &Event::ToolCallRequested(call("shell")),
         Some(&earlier),
         Some(Seq(1)),
+        &mut PendingAsks::default(),
     );
     let under_call = call("shell");
     render_reviewed(
@@ -630,6 +644,7 @@ fn the_effects_item_names_the_call_under_review() {
         &Event::ToolCallRequested(under_call.clone()),
         Some(&under_id),
         Some(Seq(2)),
+        &mut PendingAsks::default(),
     );
     let turn = TurnId("t_test".into());
     let tool: Arc<dyn contract::tool::Tool> = Arc::new(ReviewTool { note: None });
@@ -706,6 +721,7 @@ fn batch_stage1_build_matches_the_serial_path_byte_for_byte() {
             &Event::ToolCallRequested(call("shell")),
             Some(id),
             Some(seq),
+            &mut PendingAsks::default(),
         );
     }
     let turn = TurnId("t_test".into());
@@ -1069,7 +1085,7 @@ mod supervised {
     use std::time::Duration;
 
     use contract::emit::Emit;
-    use contract::events::{TurnOutcome, VariablesSource};
+    use contract::events::{EventKind, TurnOutcome, VariablesSource};
     use contract::inbox::{Ack, Delivery, Message};
     use contract::provider::{Delta, Provider, ReplyAction, ToolDefinition};
     use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
@@ -1315,14 +1331,14 @@ mod supervised {
         }
     }
 
-    fn kinds(lines: &[contract::Envelope]) -> Vec<&str> {
-        lines.iter().map(|line| line.kind.as_str()).collect()
+    fn kinds(lines: &[contract::Envelope]) -> Vec<EventKind> {
+        lines.iter().map(|line| line.kind()).collect()
     }
 
     fn resolved(lines: &[contract::Envelope]) -> Vec<&contract::Envelope> {
         lines
             .iter()
-            .filter(|line| line.kind == "permission_resolved")
+            .filter(|line| line.kind() == EventKind::PermissionResolved)
             .collect()
     }
 
@@ -1389,12 +1405,13 @@ mod supervised {
                 "usage_recorded",
                 "assistant_message_completed",
                 "turn_completed",
-            ],
+            ]
+            .map(EventKind::from_name),
             "complete ordered kinds"
         );
         let started = lines
             .iter()
-            .find(|line| line.kind == "session_started")
+            .find(|line| line.kind() == EventKind::SessionStarted)
             .expect("a session_started line");
         // Fixed at start and recorded (`docs/permissions.md`, "Supervised
         // sessions": "`supervised` is fixed at `start`, recorded on
@@ -1406,8 +1423,8 @@ mod supervised {
         // escalation where no answer is possible writes no
         // `permission_requested`, recorded as a `permission_resolved` with
         // `decided_by: reviewer`).
-        assert!(!kinds(&lines).contains(&"permission_requested"));
-        assert!(!kinds(&lines).contains(&"notice"));
+        assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
+        assert!(!kinds(&lines).contains(&EventKind::Notice));
         let denied = resolved(&lines);
         // One judged call, one block (`docs/permissions.md`, "Supervised
         // sessions": "Its own reviewer judges every call. An escalation is
@@ -1420,7 +1437,7 @@ mod supervised {
         // is returned to the model ... The turn continues.").
         let end = lines
             .iter()
-            .find(|line| line.kind == "turn_completed")
+            .find(|line| line.kind() == EventKind::TurnCompleted)
             .expect("a turn_completed line");
         assert_eq!(end.payload["outcome"], json!("completed"));
         // Nothing ran: `tool_call_requested` with no `tool_call_started`
@@ -1523,7 +1540,8 @@ mod supervised {
                 "usage_recorded",
                 "assistant_message_completed",
                 "turn_completed",
-            ],
+            ]
+            .map(EventKind::from_name),
             "complete ordered kinds"
         );
         // The retry is judged again, never answered by the steer itself
@@ -1557,7 +1575,7 @@ mod supervised {
             later.iter().any(reads_grant),
             "the retry's reviews read the grant"
         );
-        assert!(!kinds(&lines).contains(&"permission_requested"));
+        assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
         let judged = resolved(&lines);
         // Two judged calls: the block, then the allowed retry
         // (`docs/permissions.md`, "Supervised sessions": "Its own reviewer

@@ -8,7 +8,9 @@ name: Release
 # No step creates a tag before every earlier step has passed: a failure
 # leaves only a draft, which the failure step deletes, so a failed release
 # leaves no tag and no Release. A failed run is re-run from the Actions tab
-# on the same commit. The preflight job compares the fiber crate's version
+# on the same commit; a failed nightly run's pause also ends at the next
+# scheduled nightly going green on a fixed main, while a green that skipped
+# the failed scope does not end it. The preflight job compares the fiber crate's version
 # at the push's base and head; every release job runs only when it changed.
 # A daily schedule builds a nightly pre-release instead, when main moved
 # since the last nightly: the nightly preflight computes the next nightly

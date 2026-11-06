@@ -20,7 +20,7 @@ use std::thread;
 
 use contract::commands::RewindArgs;
 use contract::events::{
-    CommandResult, Event, JobCompleted, JobStarted, Outcome, Parent, SessionStarted,
+    CommandResult, Event, EventKind, JobCompleted, JobStarted, Outcome, Parent, SessionStarted,
     ToolCallRequested, TurnOutcome, Variables, VariablesSource,
 };
 use contract::inbox::{Ack, Answer, Claim, Delivery, JobNotice, Rejection};
@@ -267,7 +267,7 @@ fn run_chained_a() -> (Session, u64, u64, u64) {
     let lines = log::read(&session.dir).unwrap();
     let mut starts = lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .map(|line| line.seq.unwrap().0);
     let first = starts.next().unwrap();
     let second = starts.next().unwrap();
@@ -417,7 +417,7 @@ fn rewind_checked(dir: &std::path::Path) -> (Delivery, mpsc::Receiver<Answer>) {
             args(None, None, false, false),
             Ack(Box::new(move |answer| {
                 let last = log::read(&dir).unwrap().pop().unwrap();
-                assert_eq!(last.kind, "rewound");
+                assert_eq!(last.kind(), EventKind::Rewound);
                 let _sent = tx.send(answer);
             })),
         ),
@@ -440,15 +440,12 @@ fn a_rewind_with_no_job_running_writes_only_rewound() {
     accepted(answer_of(answered));
     assert_eq!(outcome, None);
     let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(2)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "turn_completed"]);
+    let tail: Vec<EventKind> = lines.iter().rev().take(2).map(|line| line.kind()).collect();
+    assert_eq!(tail, [EventKind::Rewound, EventKind::TurnCompleted]);
     assert!(
-        lines.iter().all(|line| line.kind != "job_completed"),
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::JobCompleted),
         "no job end is written"
     );
 }
@@ -490,13 +487,15 @@ fn a_rewind_stops_two_running_jobs_before_rewound() {
     assert_eq!(outcome, None);
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(3)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "job_completed", "job_completed"]);
+    let tail: Vec<EventKind> = lines.iter().rev().take(3).map(|line| line.kind()).collect();
+    assert_eq!(
+        tail,
+        [
+            EventKind::Rewound,
+            EventKind::JobCompleted,
+            EventKind::JobCompleted
+        ]
+    );
     assert_eq!(lines[lines.len() - 3].payload["job_id"], json!("j_1"));
     assert_eq!(lines[lines.len() - 2].payload["job_id"], json!("j_2"));
 }
@@ -547,9 +546,13 @@ fn an_at_end_rewind_stops_running_jobs_after_the_point() {
     // normal stop ends it ... before `rewound`", and "`rewound` is the
     // last line the process writes to that log".)
     let lines = log::read(&dir).unwrap();
-    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
-    let mut expected: Vec<&str> = before.iter().map(|line| line.kind.as_str()).collect();
-    expected.extend(["job_completed", "job_completed", "rewound"]);
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    let mut expected: Vec<EventKind> = before.iter().map(|line| line.kind()).collect();
+    expected.extend([
+        EventKind::JobCompleted,
+        EventKind::JobCompleted,
+        EventKind::Rewound,
+    ]);
     assert_eq!(kinds, expected, "{kinds:?}");
     // `rewound` names the admission-time point, not the later job ends.
     assert_eq!(lines.last().unwrap().payload["seq"], json!(at));
@@ -647,13 +650,15 @@ fn a_job_ending_indeterminate_is_written_verbatim_before_rewound() {
     assert_eq!(outcome, None);
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(3)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "job_completed", "job_completed"]);
+    let tail: Vec<EventKind> = lines.iter().rev().take(3).map(|line| line.kind()).collect();
+    assert_eq!(
+        tail,
+        [
+            EventKind::Rewound,
+            EventKind::JobCompleted,
+            EventKind::JobCompleted
+        ]
+    );
     assert_eq!(lines[lines.len() - 3].payload["job_id"], json!("j_1"));
     assert_eq!(lines[lines.len() - 3].payload["status"], json!("failed"));
     assert_eq!(
@@ -696,7 +701,7 @@ fn a_job_that_never_ends_keeps_the_wait_open_until_its_end_arrives() {
         log::read(&dir)
             .unwrap()
             .iter()
-            .all(|line| line.kind != "rewound"),
+            .all(|line| line.kind() != EventKind::Rewound),
         "no rewound is written while the job runs"
     );
     // Once its end arrives the wait returns and the rewind completes.
@@ -707,13 +712,8 @@ fn a_job_that_never_ends_keeps_the_wait_open_until_its_end_arrives() {
     assert_eq!(outcome, None);
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(2)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "job_completed"]);
+    let tail: Vec<EventKind> = lines.iter().rev().take(2).map(|line| line.kind()).collect();
+    assert_eq!(tail, [EventKind::Rewound, EventKind::JobCompleted]);
     assert_eq!(lines[lines.len() - 2].payload["job_id"], json!("j_1"));
 }
 
@@ -782,8 +782,8 @@ fn deliveries_during_the_stop_wait_are_refused_closing_or_dropped() {
     // Only the job's end and `rewound` were written.
     let after = log::read(&dir).unwrap();
     assert_eq!(after.len(), before + 2);
-    assert_eq!(after[after.len() - 2].kind, "job_completed");
-    assert_eq!(after.last().unwrap().kind, "rewound");
+    assert_eq!(after[after.len() - 2].kind(), EventKind::JobCompleted);
+    assert_eq!(after.last().unwrap().kind(), EventKind::Rewound);
 }
 
 #[test]
@@ -827,10 +827,10 @@ fn a_monitor_batch_during_the_stop_wait_is_dropped() {
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
     assert!(
-        lines.iter().all(|line| line.kind != "job_line"),
+        lines.iter().all(|line| line.kind() != EventKind::JobLine),
         "no monitor batch is written"
     );
-    assert_eq!(lines.last().unwrap().kind, "rewound");
+    assert_eq!(lines.last().unwrap().kind(), EventKind::Rewound);
 }
 
 #[test]
@@ -868,13 +868,8 @@ fn a_rewind_to_an_ancestor_point_stops_the_jobs_in_the_old_log() {
     // The stop lines land in the rewound session's own log, before
     // `rewound`, even though the point counts in the ancestor's.
     let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(2)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "job_completed"]);
+    let tail: Vec<EventKind> = lines.iter().rev().take(2).map(|line| line.kind()).collect();
+    assert_eq!(tail, [EventKind::Rewound, EventKind::JobCompleted]);
     assert_eq!(lines[lines.len() - 2].payload["job_id"], json!("j_1"));
     assert_eq!(lines.last().unwrap().payload["seq"], json!(first - 1));
 }
@@ -901,19 +896,19 @@ fn refusals_send_no_stop_with_jobs_running() {
     assert_eq!(
         lines[before..]
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind())
             .collect::<Vec<_>>(),
         [
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed"
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert_eq!(lines.last().unwrap().payload["outcome"], "failed");
-    assert!(lines.iter().all(|line| line.kind != "rewound"));
+    assert!(lines.iter().all(|line| line.kind() != EventKind::Rewound));
     assert!(stops.try_recv().is_err(), "no stop was sent");
     // A bad point is refused the same way, with the jobs still running.
     let mut session = run_a_with_id(A_ID);
@@ -969,7 +964,7 @@ fn a_job_end_admitted_with_the_rewind_refuses_busy() {
         log::read(&dir)
             .unwrap()
             .iter()
-            .all(|line| line.kind != "rewound"),
+            .all(|line| line.kind() != EventKind::Rewound),
         "nothing is rewound"
     );
     assert!(stops.try_recv().is_err(), "no stop was sent");
@@ -1003,9 +998,11 @@ fn a_closed_inbox_ends_the_wait_with_the_job_still_running() {
     assert_eq!(outcome, None);
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
-    assert_eq!(lines.last().unwrap().kind, "rewound");
+    assert_eq!(lines.last().unwrap().kind(), EventKind::Rewound);
     assert!(
-        lines.iter().all(|line| line.kind != "job_completed"),
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::JobCompleted),
         "no end is invented for the job that never ended"
     );
 }
@@ -1293,13 +1290,8 @@ fn a_job_ending_during_the_rewind_stop_wait_is_redacted_in_its_end_and_its_file(
     assert_eq!(outcome, None);
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(2)
-        .map(|line| line.kind.as_str())
-        .collect();
-    assert_eq!(tail, ["rewound", "job_completed"]);
+    let tail: Vec<EventKind> = lines.iter().rev().take(2).map(|line| line.kind()).collect();
+    assert_eq!(tail, [EventKind::Rewound, EventKind::JobCompleted]);
     let end = &lines[lines.len() - 2];
     assert_eq!(end.payload["job_id"], json!("j_1"));
     let notice = end.payload["notice"]
@@ -1474,7 +1466,7 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
     let finish = lines
         .iter()
         .rev()
-        .find(|line| line.kind == "delegate_finished")
+        .find(|line| line.kind() == EventKind::DelegateFinished)
         .expect("the delegate finish is written");
     assert_eq!(finish.payload["changed_by"], json!(["redactor"]));
     let artifact = finish.payload["artifact"]

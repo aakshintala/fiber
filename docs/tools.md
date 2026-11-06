@@ -331,7 +331,22 @@ path's directory, ending in `/`.
   carries a result's images, as `image` blocks right after the `toolResult`
   in the same user message: Mistral and Qwen models on Bedrock refused an
   image inside it (`docs/model-routing.md`, "Bedrock Converse wire facts").
-- A path that does not exist fails with `not_found`.
+- A path that does not exist fails with `not_found`. When the wanted name
+  differs from an entry in the same directory only by Unicode spaces, the
+  failure stays `not_found` and names the lookalike instead of opening
+  anything: every character with the Unicode White_Space property
+  (U+0020, U+00A0, U+202F, U+2003, U+2028, U+2029, tab, line feed, vertical
+  tab, form feed, carriage return, next line and the other separator and
+  control spaces) folds to U+0020 for the comparison, while a zero-width
+  space (U+200B) does not fold and never matches. Entries of any kind —
+  file, directory or symlink — report by basename only; nothing is opened,
+  stated or followed. One match stays `not_found`, names the one basename
+  and says the names differ only in Unicode spaces. Several matches stay
+  `not_found` and list at most the first 10 sorted basenames plus how many
+  more are not listed. The directory is read once, after the open failed,
+  and never on a successful read; when it cannot be read, or the wanted
+  name is not valid Unicode, the failure is the plain `not_found`,
+  byte for byte.
 - Any other file that is not UTF-8 text, and any directory or device, fails
   with `unsupported_file`, giving its size and detected type.
 - Effects: `reads`, reversible, with the resolved path.
@@ -563,6 +578,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   start marker before the user program runs; the call fails instead of
   ending normally when the marker never arrives. Each call starts fresh: a
   `cd` does not carry over to the next call.
+- When the session sandbox is on and available, the `shell` definition
+  carries one more sentence: the call runs confined with no sockets and
+  writes limited to the workspace, temp and granted paths, and a call with
+  `unconfined: true` or `detach` set runs outside the sandbox and is
+  reviewed as with the sandbox off.
 - Its optional arguments are typed nullable and listed in `required`. The
   `minimum` limits put its schema outside the strict subset, so it is sent
   with `strict: false`.
@@ -1848,17 +1868,28 @@ its tools are deferred, change only when the preamble is built.
 
 - A model's provider data says whether deferral works for it
   (`docs/model-routing.md`). It says so only after a probe shows a deferred
-  tool loading through that provider, because support varies within a
+  tool loading through that provider (except the Databricks Claude rows set
+  from their `providers/anthropic` counterparts under RULING-4040-1 below),
+  because support varies within a
   protocol: probed on September 24, 2026, Muse's `openai-responses` endpoint
   deferred and kept the cache, while OpenRouter's accepted the same request for
   GPT-6 Luna, sent every definition in full and let the model call a deferred
   tool without loading it.
-- The probe is `cargo run -p provider --example probe -- PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE]...` (`docs/testing/fakes.md`, "Jigs"). It sends the model one request with the probe's tools in full and two with them deferred, and prints `pass` or `fail` for `load` (the model searches first, and calls the loaded tool only after the load) and `cache` (the request after the load reads cache tokens); a check the run did not establish prints `fail` with the reason. It exits 0 when all pass, 1 when a check fails, 2 on a usage error, 3 when it cannot tell and 4 when the key is refused. A model's data sets `deferred_tools` only for a `pass` recorded below. A row probed after this change carries its spend on the run's printed summary line.
+- The probe is `cargo run -p provider --example probe -- PROTOCOL BASE_URL MODEL KEY [--bearer] [--store=false] [NAME:VALUE]...` (`docs/testing/fakes.md`, "Jigs"). It sends the model one request with the probe's tools in full and two with them deferred, and prints `pass` or `fail` for `load` (the model searches first, and calls the loaded tool only after the load) and `cache` (the request after the load reads cache tokens); a check the run did not establish prints `fail` with the reason. It exits 0 when all pass, 1 when a check fails, 2 on a usage error, 3 when it cannot tell and 4 when the key is refused. A model's data sets `deferred_tools` only for a `pass` recorded below, except the Databricks Claude rows set from their `providers/anthropic` counterparts under RULING-4040-1 below. A row probed after this change carries its spend on the run's printed summary line.
 - The probe printed no spend for the 2026-11-03 runs: the only token figure it emitted was the final request's input count inside the cache detail, which covers one of three requests and no output tokens, so the spend for each row below is unknown and is not estimated.
 - Probed 2026-11-03 on `https://api.anthropic.com/v1`: `anthropic/claude-fable-5` pass, spend unknown; `anthropic/claude-fable-5-1` pass, spend unknown; `anthropic/claude-haiku-4-5` pass, spend unknown; `anthropic/claude-haiku-4-5-20251001` pass, spend unknown; `anthropic/claude-haiku-5-5` pass, spend unknown; `anthropic/claude-opus-4-5` pass, spend unknown; `anthropic/claude-opus-4-5-20251101` pass, spend unknown; `anthropic/claude-opus-4-6` pass, spend unknown; `anthropic/claude-opus-4-7` pass, spend unknown; `anthropic/claude-opus-4-8` pass, spend unknown; `anthropic/claude-opus-5` inconclusive (probe declined to answer: This request was blocked as it seems to violate Anthropic's Terms of Service restrictions on reverse engineering or duplicating model outputs. To learn more, visit https://www.anthropic.com/legal/commercial-terms. API integrators: you can reduce refusals for your users by configuring a fallback model — see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback.), spend unknown; `anthropic/claude-opus-5-5` pass, spend unknown; `anthropic/claude-sonnet-4-5` pass, spend unknown; `anthropic/claude-sonnet-4-5-20250929` pass, spend unknown; `anthropic/claude-sonnet-4-6` pass, spend unknown; `anthropic/claude-sonnet-5` pass, spend unknown; `anthropic/claude-sonnet-5-5` pass., spend unknown
 - Probed 2026-11-03 on `https://api.openai.com/v1`: `openai/gpt-5.4` pass, spend unknown; `openai/gpt-5.4-mini` pass, spend unknown; `openai/gpt-5.4-nano` fail (load: HTTP 400: Tool 'tool_search' is not supported with gpt-5.4-nano.), spend unknown; `openai/gpt-5.4-pro` fail (cache: cache read 0 of 4354 input tokens), spend unknown; `openai/gpt-5.5` pass, spend unknown; `openai/gpt-5.5-pro` fail (cache: cache read 0 of 4598 input tokens), spend unknown; `openai/gpt-5.6-luna` pass, spend unknown; `openai/gpt-5.6-sol` pass, spend unknown; `openai/gpt-5.6-terra` pass, spend unknown; `openai/gpt-6-astra` inconclusive (the model did not call the loaded tool), spend unknown; `openai/gpt-6-luna` pass, spend unknown; `openai/gpt-6-sol` pass, spend unknown; `openai/gpt-6.1-sol` inconclusive (the model did not call the loaded tool)., spend unknown
 - Probed 2026-11-03 on `https://api.openai.com/v1` (repeat): `openai/gpt-6-astra` inconclusive (the model did not call the loaded tool), spend unknown; `openai/gpt-6.1-sol` inconclusive (the model did not call the loaded tool), spend unknown.
 - Total spend for the 2026-11-03 probe runs: unknown.
+- Probed 2026-11-04 on the Databricks AI gateway (`/ai-gateway/anthropic/v1`): `databricks/databricks-claude-opus-5-5` pass, spend 19470 input and 153 output tokens. The run printed:
+  ```
+  probe: anthropic-messages databricks-claude-opus-5-5
+  load: pass (searched, loaded probe_calendar_create, then called it)
+  cache: pass (cache read 6329 of 6524 input tokens)
+  probe: pass
+  spend: 19470 input, 153 output tokens
+  ```
+- The other Databricks Claude rows follow their `providers/anthropic` counterparts: set when that row has `deferred_tools`, unset when unset or inconclusive (`databricks-claude-opus-5`); `databricks-claude-opus-5-5` is set from its direct 2026-11-04 probe. Pass-through was proved only on that model; uniform handling across rows is assumed.
 - Anthropic and OpenAI Responses (gpt-5.4 and later) both defer natively.
   `openai-completions` and `google-generative-ai` do not.
 - On a model without deferral, every tool is declared in full and

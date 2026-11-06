@@ -307,7 +307,7 @@ crates/hub/src/sessions_stop/transport.rs 1
 crates/hub/src/spawn.rs 2
 crates/hub/src/start.rs 2
 crates/jobs/src/error.rs 1
-crates/log/src/diag.rs 4
+crates/diag/src/diag.rs 4
 crates/log/src/escalations.rs 2
 crates/log/src/escalations/reviewer_shell_calls.rs 2
 crates/log/src/name.rs 1

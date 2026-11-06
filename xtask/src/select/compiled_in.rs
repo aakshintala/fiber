@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 use super::{Members, is_docs_file, string_literal};
 use crate::rules::RustFile;
@@ -59,6 +59,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("crates/tools/prompt/guidelines.md", "tools"),
     ("providers/codex/tests/quota-two-windows.json", "main"),
     ("crates/picture/tests/fixtures/cmyk.jpg", "main"),
+    ("crates/provider/tests/support/probes.rs", "main"),
     ("extensions/hooks/extension.json", "extensions"),
     ("extensions/hooks/init.lua", "extensions"),
     ("providers/anthropic/providers/anthropic.json", "extensions"),
@@ -2418,6 +2419,32 @@ fn include_path(stream: TokenStream) -> Option<String> {
     string_literal(&lit.to_string())
 }
 
+/// The file a `#[path = "..."]` attribute names, when `stream` is exactly
+/// that attribute's body. Every other group, including doc comments
+/// (`#[doc = "..."]`), falls through to the plain walk.
+fn path_literal(stream: TokenStream) -> Option<String> {
+    let mut tokens = stream.into_iter();
+    let TokenTree::Ident(name) = tokens.next()? else {
+        return None;
+    };
+    if name != "path" {
+        return None;
+    }
+    let TokenTree::Punct(equals) = tokens.next()? else {
+        return None;
+    };
+    if equals.as_char() != '=' {
+        return None;
+    }
+    let TokenTree::Literal(lit) = tokens.next()? else {
+        return None;
+    };
+    if tokens.next().is_some() {
+        return None;
+    }
+    Some(lit.to_string())
+}
+
 fn include_literals(source: &str) -> Result<(Vec<String>, bool), proc_macro2::LexError> {
     fn walk(stream: TokenStream, out: &mut Vec<String>, unresolvable: &mut bool) {
         let mut tokens = stream.into_iter();
@@ -2434,7 +2461,18 @@ fn include_literals(source: &str) -> Result<(Vec<String>, bool), proc_macro2::Le
                         }
                     }
                 }
-                TokenTree::Group(group) => walk(group.stream(), out, unresolvable),
+                TokenTree::Group(group) => {
+                    // A `#[path]` attribute reads its target like an
+                    // include: only a bracket group holding exactly the
+                    // attribute counts, never a larger expression.
+                    if group.delimiter() == Delimiter::Bracket
+                        && let Some(lit) = path_literal(group.stream())
+                        && let Some(path) = string_literal(&lit)
+                    {
+                        out.push(path);
+                    }
+                    walk(group.stream(), out, unresolvable)
+                }
                 TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
             }
         }

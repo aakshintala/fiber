@@ -22,7 +22,8 @@ use std::time::Duration;
 use contract::clock::Clock;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{
-    Clients, Decision, Event, ExtensionExec, FiberExited, OfferDecision, OfferedItem, OfferedKind,
+    Clients, Decision, Event, EventKind, ExtensionExec, FiberExited, OfferDecision, OfferedItem,
+    OfferedKind,
 };
 use contract::inbox::{Ack, Answer, Delivery};
 use contract::repository::{Decided, RepositoryCode, Unapproved};
@@ -223,18 +224,20 @@ fn close(session: &Session) {
 }
 
 fn until_kind(watcher: Watcher, kind: &'static str) -> (Watcher, Vec<Envelope>) {
-    read_until(watcher, kind, move |line| line.kind == kind)
+    read_until(watcher, kind, move |line| {
+        line.kind() == EventKind::from_name(kind)
+    })
 }
 
 fn request_of(line: &Envelope) -> RequestId {
     RequestId(line.payload["request_id"].as_str().unwrap().to_owned())
 }
 
-fn durable_kinds(session: &Session) -> Vec<String> {
+fn durable_kinds(session: &Session) -> Vec<EventKind> {
     log::read(&session.dir)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect()
 }
 
@@ -242,7 +245,7 @@ fn durable(session: &Session, kind: &str) -> Vec<Envelope> {
     log::read(&session.dir)
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == kind)
+        .filter(|line| line.kind() == EventKind::from_name(kind))
         .collect()
 }
 
@@ -273,7 +276,9 @@ fn drain(watcher: &mut Watcher) -> Vec<Envelope> {
 fn notices(lines: &[Envelope]) -> Vec<String> {
     lines
         .iter()
-        .filter(|line| line.kind == "notice" && line.payload["code"] == "repository_code_skipped")
+        .filter(|line| {
+            line.kind() == EventKind::Notice && line.payload["code"] == "repository_code_skipped"
+        })
         .map(|line| line.payload["message"].as_str().unwrap().to_owned())
         .collect()
 }
@@ -295,7 +300,7 @@ fn a_prompt_raises_one_offer_before_the_preamble_and_waits_for_the_reply() {
 
     let (watcher, lines) = until_kind(watcher, "repository_code_offered");
     assert!(
-        !lines.iter().any(|l| l.kind == "preamble_built"),
+        !lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt),
         "the offer comes before the preamble"
     );
     let offered = lines.last().unwrap();
@@ -304,7 +309,7 @@ fn a_prompt_raises_one_offer_before_the_preamble_and_waits_for_the_reply() {
     assert!(request.0.starts_with("r_"), "{}", request.0);
 
     let (watcher, lines) = read_until(watcher, "a waiting session_status", |line| {
-        line.kind == "session_status" && line.payload["state"] == "waiting"
+        line.kind() == EventKind::SessionStatus && line.payload["state"] == "waiting"
     });
     let status = lines.last().unwrap();
     assert_eq!(status.payload["waiting"]["kind"], "offer");
@@ -328,7 +333,7 @@ fn a_prompt_raises_one_offer_before_the_preamble_and_waits_for_the_reply() {
                 let resolved = log::read(&dir)
                     .unwrap()
                     .iter()
-                    .any(|line| line.kind == "repository_code_resolved");
+                    .any(|line| line.kind() == EventKind::RepositoryCodeResolved);
                 tx.send((answer.is_ok(), resolved)).unwrap();
             })),
         ))
@@ -345,7 +350,7 @@ fn a_prompt_raises_one_offer_before_the_preamble_and_waits_for_the_reply() {
         resolved.payload["decisions"],
         serde_json::json!(["approve", "skip", "never"])
     );
-    assert!(lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     assert_eq!(
         code.decides(),
         [
@@ -359,7 +364,11 @@ fn a_prompt_raises_one_offer_before_the_preamble_and_waits_for_the_reply() {
     // The complete, ordered durable kinds: the offer waits, resolves, then
     // the turn runs.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -410,7 +419,11 @@ fn a_reply_that_does_not_fit_is_rejected_and_the_offer_stays_pending() {
     assert_eq!(durable(&session, "repository_code_resolved").len(), 1);
     // The complete, ordered durable kinds.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -449,7 +462,11 @@ fn a_decision_the_seam_fails_rejects_the_reply_and_a_second_reply_resolves() {
     ended(&finished).unwrap();
     // The complete, ordered durable kinds.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -468,7 +485,7 @@ fn content_that_changed_under_an_answer_is_offered_again_alone() {
     assert!(answered(&reply).is_ok());
 
     let (watcher, lines) = until_kind(watcher, "repository_code_offered");
-    assert!(!lines.iter().any(|l| l.kind == "preamble_built"));
+    assert!(!lines.iter().any(|l| l.kind() == EventKind::PreambleBuilt));
     let again = lines.last().unwrap();
     let second = request_of(again);
     assert_ne!(second, first);
@@ -484,7 +501,11 @@ fn content_that_changed_under_an_answer_is_offered_again_alone() {
     // The complete, ordered durable kinds: the first offer resolves, the
     // changed item is offered again alone, then the turn runs.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered repository_code_resolved repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -537,7 +558,11 @@ fn deliveries_while_an_offer_waits_go_where_they_belong() {
     ended(&finished).unwrap();
     // The complete, ordered durable kinds.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered extension_exec repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -559,7 +584,11 @@ fn never_marked_items_and_items_answered_in_this_process_are_not_offered() {
     assert!(notices(&drain(&mut all)).is_empty());
     // The complete, ordered durable kinds: nothing offered, the turn runs.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -584,7 +613,11 @@ fn a_required_item_a_person_skips_fails_nothing() {
     assert!(code.decides().is_empty());
     // The complete, ordered durable kinds.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -660,15 +693,22 @@ fn with_nobody_to_answer_each_item_is_skipped_with_a_notice() {
             ],
             "{clients:?} {answerable}"
         );
-        let kinds: Vec<&str> = lines.iter().map(|l| l.kind.as_str()).collect();
-        let notice = kinds.iter().position(|k| *k == "notice").unwrap();
-        let preamble = kinds.iter().position(|k| *k == "preamble_built").unwrap();
+        let kinds: Vec<EventKind> = lines.iter().map(|l| l.kind()).collect();
+        let notice = kinds.iter().position(|k| *k == EventKind::Notice).unwrap();
+        let preamble = kinds
+            .iter()
+            .position(|k| *k == EventKind::PreambleBuilt)
+            .unwrap();
         assert!(notice < preamble, "{kinds:?}");
         assert_eq!(durable(&session, "turn_completed").len(), 1);
         assert!(code.decides().is_empty());
         // The complete, ordered durable kinds.
         assert_eq!(
-            durable_kinds(&session).join(" "),
+            durable_kinds(&session)
+                .iter()
+                .map(|kind| kind.name())
+                .collect::<Vec<_>>()
+                .join(" "),
             "session_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed",
             "{clients:?} {answerable}"
         );
@@ -700,7 +740,14 @@ fn with_nobody_to_answer_a_required_item_fails_the_run_with_its_kinds_code() {
             assert!(durable(&session, "turn_started").is_empty());
             assert!(session.provider.requests().is_empty());
             // The complete, ordered durable kinds.
-            assert_eq!(durable_kinds(&session).join(" "), "session_started");
+            assert_eq!(
+                durable_kinds(&session)
+                    .iter()
+                    .map(|kind| kind.name())
+                    .collect::<Vec<_>>()
+                    .join(" "),
+                "session_started"
+            );
         }
     }
 }
@@ -733,7 +780,11 @@ fn a_second_turn_gathers_nothing_more() {
     assert_eq!(durable(&session, "repository_code_offered").len(), 1);
     // The complete, ordered durable kinds: one offer, then two turns.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered repository_code_resolved preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -754,7 +805,11 @@ fn without_a_seam_nothing_is_offered() {
     assert!(durable(&session, "repository_code_offered").is_empty());
     // The complete, ordered durable kinds: without a seam the turn runs.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -812,8 +867,8 @@ fn waiting_on_an_offer_is_idle() {
         .expect("run ended in time");
     run.result.unwrap();
     let kinds = durable_kinds(&session);
-    assert!(!kinds.iter().any(|k| k == "repository_code_resolved"));
-    assert!(!kinds.iter().any(|k| k == "preamble_built"));
+    assert!(!kinds.contains(&EventKind::RepositoryCodeResolved));
+    assert!(!kinds.contains(&EventKind::PreambleBuilt));
     assert!(
         matches!(
             Deadline::after(DEADLINE).recv(&prompt_answer),
@@ -827,7 +882,11 @@ fn waiting_on_an_offer_is_idle() {
     // The complete, ordered durable kinds: the offer waits, then the idle
     // exit suspends on it.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered fiber_exited"
     );
 }
@@ -845,7 +904,7 @@ fn close_while_an_offer_waits_skips_its_items_and_runs_the_turn() {
     let (watcher, _) = until_kind(watcher, "preamble_built");
     // The status leaves `waiting` once the preamble is built.
     let (_, _) = read_until(watcher, "a session_status that is not waiting", |line| {
-        line.kind == "session_status" && line.payload["state"] != "waiting"
+        line.kind() == EventKind::SessionStatus && line.payload["state"] != "waiting"
     });
     ended(&finished).unwrap();
     assert!(durable(&session, "repository_code_resolved").is_empty());
@@ -857,7 +916,11 @@ fn close_while_an_offer_waits_skips_its_items_and_runs_the_turn() {
     // The complete, ordered durable kinds: the close skips the offer, then
     // the turn runs.
     assert_eq!(
-        durable_kinds(&session).join(" "),
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
         "session_started repository_code_offered preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
     );
 }
@@ -873,17 +936,27 @@ fn the_failure_names_each_required_item_and_how_to_approve() {
     // The complete, ordered live kinds of the failed run, setting the
     // `session_status` line aside: whether the helper's `close_if_running`
     // lands before the failed run ends is timing.
-    let live: Vec<&str> = lines
+    let live: Vec<String> = lines
         .iter()
-        .map(|line| line.kind.as_str())
-        .filter(|kind| *kind != "session_status")
+        .map(|line| line.kind())
+        .filter(|kind| *kind != EventKind::SessionStatus)
+        .map(|kind| kind.name().to_owned())
         .collect();
     assert_eq!(live.join(" "), "");
     assert!(
-        lines.iter().any(|line| line.kind == "session_status"),
+        lines
+            .iter()
+            .any(|line| line.kind() == EventKind::SessionStatus),
         "at least one session_status was written"
     );
-    assert_eq!(durable_kinds(&session).join(" "), "session_started");
+    assert_eq!(
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started"
+    );
     let code = Fake::new(vec![
         item(OfferedKind::McpServer, "db", true),
         item(OfferedKind::Hook, "fmt", true),
@@ -896,17 +969,27 @@ fn the_failure_names_each_required_item_and_how_to_approve() {
     );
     // The complete, ordered live kinds of the failed run, setting the
     // `session_status` line aside, as above.
-    let live: Vec<&str> = lines
+    let live: Vec<String> = lines
         .iter()
-        .map(|line| line.kind.as_str())
-        .filter(|kind| *kind != "session_status")
+        .map(|line| line.kind())
+        .filter(|kind| *kind != EventKind::SessionStatus)
+        .map(|kind| kind.name().to_owned())
         .collect();
     assert_eq!(live.join(" "), "");
     assert!(
-        lines.iter().any(|line| line.kind == "session_status"),
+        lines
+            .iter()
+            .any(|line| line.kind() == EventKind::SessionStatus),
         "at least one session_status was written"
     );
-    assert_eq!(durable_kinds(&session).join(" "), "session_started");
+    assert_eq!(
+        durable_kinds(&session)
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>()
+            .join(" "),
+        "session_started"
+    );
 }
 
 // Resume: a pending offer is raised again, the session's skips hold, and an
@@ -963,7 +1046,7 @@ impl support::History {
         let exited = log::read(dir)
             .unwrap()
             .into_iter()
-            .rfind(|line| line.kind == "fiber_exited")
+            .rfind(|line| line.kind() == EventKind::FiberExited)
             .unwrap();
         Value::Object(exited.payload)
     }
@@ -1016,7 +1099,7 @@ impl support::History {
     fn of(&self, kind: &str) -> Vec<Envelope> {
         self.lines()
             .into_iter()
-            .filter(|line| line.kind == kind)
+            .filter(|line| line.kind() == EventKind::from_name(kind))
             .collect()
     }
 
@@ -1190,7 +1273,7 @@ fn a_pending_offer_is_raised_again_before_any_prompt_when_a_client_is_attached()
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started repository_code_offered fiber_exited fiber_started repository_code_offered repository_code_resolved fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
@@ -1219,7 +1302,7 @@ fn a_pending_offer_is_not_raised_again_with_nobody_to_answer() {
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started repository_code_offered fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
@@ -1272,7 +1355,7 @@ fn a_skip_from_an_earlier_process_holds_for_the_same_content_only() {
             history
                 .lines()
                 .iter()
-                .map(|line| line.kind.as_str())
+                .map(|line| line.kind().name().to_owned())
                 .collect::<Vec<_>>()
                 .join(" "),
             expected,
@@ -1316,7 +1399,7 @@ fn content_changed_under_a_pending_offer_is_offered_fresh_after_it_resolves() {
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started repository_code_offered fiber_exited fiber_started repository_code_offered repository_code_resolved repository_code_offered repository_code_resolved"
@@ -1345,7 +1428,7 @@ fn an_offer_already_resolved_is_not_raised_again() {
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started repository_code_offered repository_code_resolved fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
@@ -1362,7 +1445,11 @@ fn an_offer_comes_before_a_suspended_approval_and_both_are_answered_in_order() {
     let (looped, inbox) = history.resume(&code, true);
     let finished = run_on(looped);
     let (watcher, lines) = until_kind(watcher, "repository_code_offered");
-    assert!(!lines.iter().any(|l| l.kind == "permission_requested"));
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.kind() == EventKind::PermissionRequested)
+    );
     let offer = request_of(lines.last().unwrap());
     let reply = reply_on(&inbox, offer.0.as_str(), decisions(&[Approve]));
     assert!(answered(&reply).is_ok());
@@ -1382,7 +1469,7 @@ fn an_offer_comes_before_a_suspended_approval_and_both_are_answered_in_order() {
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
@@ -1419,7 +1506,7 @@ fn an_approvals_reply_sent_while_the_offer_waits_answers_it_after() {
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
@@ -1472,7 +1559,7 @@ fn an_idle_exit_on_the_offer_keeps_the_suspended_approval_for_the_next_resume() 
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered permission_requested fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
@@ -1536,7 +1623,7 @@ fn a_failed_offer_step_keeps_the_suspended_approval_and_a_repaired_resume_finish
             history
                 .lines()
                 .iter()
-                .map(|line| line.kind.as_str())
+                .map(|line| line.kind().name().to_owned())
                 .collect::<Vec<_>>()
                 .join(" "),
             "session_started fiber_started turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started permission_requested fiber_exited fiber_started preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed",
@@ -1596,7 +1683,7 @@ fn a_pending_offer_waits_for_a_client_at_the_prompt() {
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started repository_code_offered fiber_exited fiber_started preamble_built opening_message turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built turn_started step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
@@ -1637,7 +1724,7 @@ fn an_idle_exit_on_a_raised_again_offer_leaves_it_for_the_next_resume() {
             history
                 .lines()
                 .iter()
-                .map(|line| line.kind.as_str())
+                .map(|line| line.kind().name().to_owned())
                 .collect::<Vec<_>>()
                 .join(" "),
             expected,
@@ -1662,11 +1749,15 @@ fn an_answer_to_the_offer_sent_before_it_is_raised_again_is_taken_first() {
     let (watcher, lines) = until_kind(watcher, "permission_requested");
     let raised: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "repository_code_offered")
+        .filter(|l| l.kind() == EventKind::RepositoryCodeOffered)
         .collect();
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].payload["request_id"], "r_old");
-    assert!(lines.iter().any(|l| l.kind == "repository_code_resolved"));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.kind() == EventKind::RepositoryCodeResolved)
+    );
     let reply = reply_on(&inbox, "r_9", deny(None));
     assert!(answered(&reply).is_ok());
     let (_, _) = until_kind(watcher, "turn_completed");
@@ -1677,7 +1768,7 @@ fn an_answer_to_the_offer_sent_before_it_is_raised_again_is_taken_first() {
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started repository_code_offered turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered repository_code_resolved preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"
@@ -1708,7 +1799,7 @@ fn a_close_sent_before_the_offer_is_raised_again_leaves_nobody_to_answer() {
         history
             .lines()
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind().name().to_owned())
             .collect::<Vec<_>>()
             .join(" "),
         "session_started fiber_started repository_code_offered turn_started assistant_message_started tool_call_requested permission_requested fiber_exited fiber_started repository_code_offered preamble_built opening_message permission_requested permission_resolved tool_call_completed step_started assistant_message_started text_completed usage_recorded assistant_message_completed turn_completed"

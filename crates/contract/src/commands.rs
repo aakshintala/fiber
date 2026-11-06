@@ -124,6 +124,8 @@ pub enum Command {
     Background,
     /// Re-reads configuration and declares the tool set again.
     Reload,
+    /// Turns the session sandbox on or off (`docs/sandbox.md`, "The rule").
+    Sandbox(SandboxArgs),
     /// Copies another harness's configuration into Fiber home, once.
     Import(ImportArgs),
     /// Answers with every declared tool.
@@ -670,6 +672,17 @@ pub struct AddDirectoryArgs {
     pub path: String,
 }
 
+/// The `args` of `sandbox`: whether the session sandbox confines the
+/// session's shell calls until `/reload` (`docs/sandbox.md`, "The rule").
+/// Required: a missing, null or wrong-typed `enabled` is refused
+/// `invalid_arguments`, and there is no absent-means-toggle form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxArgs {
+    /// Whether the sandbox confines the session's shell calls.
+    pub enabled: bool,
+}
+
 /// The `args` of `close`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -733,6 +746,7 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "logout",
     "approvals",
     "reload",
+    "sandbox",
     "import",
     "clear",
     "close",

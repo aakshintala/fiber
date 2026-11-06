@@ -130,6 +130,7 @@ impl Loop {
             model,
             conversation,
             reviewed,
+            pending_asks,
             known_hosts,
             changes,
             handoff,
@@ -139,6 +140,7 @@ impl Loop {
         let mut transcript = util::Transcript {
             conversation,
             reviewed,
+            asks: pending_asks,
             had: &mut changes.had,
             carry: &mut handoff.carry,
             known: known_hosts,

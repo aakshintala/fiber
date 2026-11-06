@@ -17,12 +17,13 @@ mod support;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::sync::mpsc;
 
 use extension_harness::*;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Deadline, Setup, function_call, session_dir, wait_for_effect_after_accept};
+use support::{
+    Setup, function_call, held_wait_passes_after_release, session_dir, wait_for_effect_after_accept,
+};
 
 const SYNC: &str = "fiber.command(\"sync-now\", { timeout = 8000, description = \"Sync now.\", run = function(text) host.status(\"synced \" .. text) end })\n";
 
@@ -513,25 +514,23 @@ fn command_effect_wait_proves_the_parked_run_ended() {
     // through the pause for the id-matched answer. The client rides back
     // with the lines: every assertion stays on the test thread.
     send(&client, r#"{"id":"c_2","command":"commands"}"#);
-    let (entered_tx, entered) = mpsc::channel::<()>();
-    let (done_tx, done) = mpsc::channel::<(Vec<Value>, Socket)>();
-    std::thread::spawn(move || {
-        entered_tx.send(()).unwrap_or(());
-        let lines = wait_for_effect_after_accept(
-            "the second command's answer",
-            "c_2",
-            |what, got| client.next(what, got),
-            |line| line["payload"].get("result").is_some(),
-        );
-        done_tx.send((lines, client)).unwrap_or(());
-    });
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&entered)
-        .expect("the waiter entered its wait");
-    held.release();
-    let (lines, client) = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&done)
-        .expect("the wait answers once released");
+    let (lines, mut client) = held_wait_passes_after_release(
+        "the second command's answer",
+        fakes::MUST_SUCCEED_WITHIN,
+        move |deadline| {
+            let mut client = client;
+            client.set_deadline(deadline);
+            let lines = wait_for_effect_after_accept(
+                "the second command's answer",
+                "c_2",
+                |what, got| client.next(what, got),
+                |line| line["payload"].get("result").is_some(),
+            );
+            (lines, client)
+        },
+        move || held.release(),
+    );
+    client.set_deadline(setup.deadline);
     assert_eq!(
         lines.last().unwrap()["kind"],
         "command_accepted",

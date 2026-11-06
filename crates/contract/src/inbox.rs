@@ -121,6 +121,9 @@ pub enum Delivery {
     Credential(crate::commands::CredentialArgs, Ack),
     /// Re-reads the session's configuration and declares its tools again.
     Reload(Ack),
+    /// Turns the session sandbox on or off: taken at once while idle,
+    /// running or waiting like `Name`, and rejected `closing` at settle.
+    Sandbox(crate::commands::SandboxArgs, Ack),
     /// Restarts one failed MCP server (`docs/mcp.md`, "Servers, their
     /// state and the per-server commands"). Rejected `busy` while a turn
     /// runs and `closing` after `close`, as a reload is; the loop

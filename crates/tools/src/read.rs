@@ -1,6 +1,6 @@
 //! The `read` tool (`docs/tools.md`, "File tools").
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use contract::emit::Emit;
@@ -10,7 +10,7 @@ use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::error::{FileError, ReadError};
+use crate::error::{FileError, InspectError, ReadError};
 use crate::files::{
     Inspected, Shared, attach_seen, declare, effects_error, hash_bytes, inspect, resolve,
 };
@@ -25,6 +25,10 @@ const CAP: usize = 16_384;
 /// How far the loop's bound for a `read` sits above its own cut, so the loop
 /// never cuts a `read`'s own result and a cut `read` writes no artifact.
 const NOTICE_ROOM: usize = 16_384;
+
+/// At most this many sibling names a missing-path message lists; the rest
+/// collapse into a count (`docs/tools.md`, "read").
+const MAX_LOOKALIKES: usize = 10;
 
 /// Reads a text file or an image.
 pub struct Read {
@@ -189,7 +193,7 @@ impl Tool for Read {
                     hint,
                 }));
             }
-            Err(error) => return errored(ReadError::from(FileError::from(error))),
+            Err(error) => return errored(missing(error)),
         };
         let body = text.strip_prefix('\u{feff}').unwrap_or(text.as_str());
         match slice_text(body, offset, limit, self.cap) {
@@ -221,6 +225,81 @@ impl Tool for Read {
     fn guidelines(&self) -> Option<String> {
         crate::guidelines::of("read")
     }
+}
+
+/// A failed inspection's error. A missing path names a same-directory entry
+/// whose name matches apart from Unicode spaces (`docs/tools.md`, "read");
+/// every other failure keeps its own error. Nothing is ever opened here.
+fn missing(error: InspectError) -> ReadError {
+    let InspectError::NotFound { path } = error else {
+        return ReadError::from(FileError::from(error));
+    };
+    let Some(parent) = path.parent().map(Path::to_path_buf) else {
+        return ReadError::from(FileError::from(InspectError::NotFound { path }));
+    };
+    let Some(wanted) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+    else {
+        return ReadError::from(FileError::from(InspectError::NotFound { path }));
+    };
+    let (shown, omitted) = space_lookalikes(&parent, &wanted);
+    if shown.is_empty() {
+        return ReadError::from(FileError::from(InspectError::NotFound { path }));
+    }
+    ReadError::SpaceLookalike {
+        requested: path,
+        shown,
+        omitted,
+    }
+}
+
+/// Every whitespace character folded to one plain space for sibling-name
+/// comparison (`docs/tools.md`, "read"). All else compares as itself, so a
+/// zero-width space never matches.
+fn fold_spaces(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect()
+}
+
+/// Basenames in `dir` matching `wanted` apart from Unicode spaces: at most
+/// the 10 smallest sorted matches plus the count of the rest. Names that do
+/// not decode never match. Any failure reading the directory discards the
+/// partials and reports no match, so the caller falls back to its plain
+/// `not_found`.
+fn space_lookalikes(dir: &Path, wanted: &str) -> (Vec<PathBuf>, usize) {
+    let folded = fold_spaces(wanted);
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return (Vec::new(), 0),
+    };
+    let mut kept: Vec<PathBuf> = Vec::new();
+    let mut total = 0usize;
+    for entry in entries {
+        let path = match entry {
+            Ok(entry) => entry.path(),
+            Err(_) => return (Vec::new(), 0),
+        };
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if fold_spaces(name) != folded {
+            continue;
+        }
+        total += 1;
+        let position = kept
+            .binary_search(&path)
+            .unwrap_or_else(|position| position);
+        // Inserting at the end of a full list then truncating drops the
+        // inserted path again, so no guard is needed: the list always holds
+        // at most the 10 smallest sorted matches.
+        kept.insert(position, path);
+        kept.truncate(MAX_LOOKALIKES);
+    }
+    let omitted = total - kept.len();
+    (kept, omitted)
 }
 
 /// Fails the call when `pages` names a file that is not a PDF

@@ -37,6 +37,61 @@ pub(crate) enum ReadError {
         /// The file as resolved.
         path: std::path::PathBuf,
     },
+    /// The path does not exist, but a sibling name matches apart from
+    /// Unicode spaces (`docs/tools.md`, "read"). Nothing was opened.
+    #[error("{}", space_lookalike_message(requested, shown, *omitted))]
+    SpaceLookalike {
+        /// The file as resolved.
+        requested: std::path::PathBuf,
+        /// At most the first 10 sorted match paths; only basenames show.
+        shown: Vec<std::path::PathBuf>,
+        /// How many further matches are not shown.
+        omitted: usize,
+    },
+}
+
+/// The `not_found` message for [`ReadError::SpaceLookalike`]: one match is
+/// named with how it differs, several are listed with at most the first 10
+/// sorted basenames plus the count left out. Only basenames ever show.
+fn space_lookalike_message(
+    requested: &std::path::Path,
+    shown: &[std::path::PathBuf],
+    omitted: usize,
+) -> String {
+    let head = format!("`{}` does not exist.", requested.display());
+    match (shown, omitted) {
+        ([only], 0) => format!(
+            "{head} An entry in the same directory matches it apart from Unicode spaces, so none was opened: {}.",
+            quoted_base(only)
+        ),
+        _ => {
+            let list = shown
+                .iter()
+                .map(|path| quoted_base(path))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if omitted == 0 {
+                format!(
+                    "{head} These names match it apart from Unicode spaces, so none was opened: {list}."
+                )
+            } else {
+                format!(
+                    "{head} These names match it apart from Unicode spaces, so none was opened (showing {} of {}): {list}, and {omitted} more are not listed.",
+                    shown.len(),
+                    shown.len() + omitted,
+                )
+            }
+        }
+    }
+}
+
+/// One match path's entry file name in backticks for the lookalike message.
+fn quoted_base(path: &std::path::Path) -> String {
+    let base = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .unwrap_or_default();
+    format!("`{base}`")
 }
 
 /// Every way `write` fails.
@@ -135,6 +190,7 @@ impl ReadError {
             Self::File(error) => error.code(),
             Self::Pdf(error) => error.code(),
             Self::Arguments(error) => error.code(),
+            Self::SpaceLookalike { .. } => contract::ErrorCode::NotFound,
             Self::LineBelowOne { .. }
             | Self::LineTooLarge { .. }
             | Self::OffsetPastEnd { .. }

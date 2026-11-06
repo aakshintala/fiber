@@ -1530,6 +1530,22 @@ mod refusal_tests {
         }
     }
 
+    fn sandbox(enabled: bool) -> Command {
+        Command::Sandbox(contract::commands::SandboxArgs { enabled })
+    }
+
+    #[test]
+    fn sandbox_sharing_a_session_process_is_refused_by_name() {
+        let script = host_target(session_argv(OWNED));
+        for command in [sandbox(true), sandbox(false)] {
+            let refused = refused(&local(PEER, &[HOST]), &command, &other_id(), &script)
+                .expect("a sandbox toggle sharing a session process is refused");
+            assert_eq!(refused.code, contract::ErrorCode::FromSession);
+            assert!(refused.message.contains("sandbox"), "{}", refused.message);
+            assert!(refused.message.contains(OTHER), "{}", refused.message);
+        }
+    }
+
     #[test]
     fn prompt_and_steer_sharing_a_session_process_are_refused() {
         let script = host_target(session_argv(OWNED));

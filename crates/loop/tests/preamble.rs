@@ -11,7 +11,7 @@
 
 mod support;
 
-use contract::events::CacheLifetime;
+use contract::events::{CacheLifetime, EventKind};
 use fakes::Scripted;
 use serde_json::Value;
 
@@ -31,8 +31,12 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
             "opening_message",
             "turn_started"
         ]
+        .map(EventKind::from_name)
     );
-    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    let built = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::PreambleBuilt)
+        .unwrap();
     assert_eq!(built.payload["reason"], "start");
     assert_eq!(built.payload["model"], MODEL);
     assert_eq!(built.payload["context_window"], fakes::CONTEXT_WINDOW);
@@ -60,7 +64,10 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
     assert!(built.payload.get("replaced").is_none());
     // The opening message follows the preamble build, and renders as the
     // conversation's first message.
-    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    let opening = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::OpeningMessage)
+        .unwrap();
     assert_eq!(opening.payload["environment"]["date"], "2023-11-14");
     assert_eq!(opening.payload["environment"]["shell"], "/bin/sh");
     assert_eq!(opening.payload["instruction_files"], Value::Array(vec![]));
@@ -85,7 +92,10 @@ fn a_workspace_skill_is_logged_in_the_opening_message_listing() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    let opening = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::OpeningMessage)
+        .unwrap();
     let path = skill.canonicalize().unwrap().display().to_string();
     assert_eq!(
         opening.payload["skills"],
@@ -105,7 +115,7 @@ fn a_workspace_skill_is_logged_in_the_opening_message_listing() {
         "{text}"
     );
     // No notice: the skill is well formed.
-    assert!(lines.iter().all(|l| l.kind != "notice"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::Notice));
 }
 
 #[test]
@@ -126,8 +136,12 @@ fn an_unreadable_instruction_file_is_a_notice_after_the_opening_message() {
             "notice",
             "turn_started",
         ]
+        .map(EventKind::from_name)
     );
-    let notice = lines.iter().find(|l| l.kind == "notice").unwrap();
+    let notice = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::Notice)
+        .unwrap();
     assert_eq!(notice.payload["code"], "io_failed");
     assert!(
         notice.payload["message"]
@@ -137,7 +151,10 @@ fn an_unreadable_instruction_file_is_a_notice_after_the_opening_message() {
         "{}",
         notice.payload["message"]
     );
-    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    let opening = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::OpeningMessage)
+        .unwrap();
     assert_eq!(opening.payload["instruction_files"], Value::Array(vec![]));
 }
 
@@ -164,7 +181,7 @@ fn a_tool_registered_twice_records_what_it_replaced() {
     let built = session
         .lines()
         .into_iter()
-        .find(|line| line.kind == "preamble_built")
+        .find(|line| line.kind() == EventKind::PreambleBuilt)
         .unwrap();
     assert_eq!(
         built.payload["replaced"],
@@ -182,7 +199,7 @@ fn a_tool_registered_twice_records_what_it_replaced() {
 fn a_loop_that_takes_no_turn_writes_no_preamble() {
     let session = Session::new(vec![Scripted::text("Done.")], None);
     let lines: Vec<contract::Envelope> = log::read(&session.dir).unwrap();
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
 }
 
 #[test]
@@ -211,7 +228,10 @@ fn the_preamble_is_built_once_per_loop_not_per_turn() {
     session.turn();
     let lines = log::read(&session.dir).unwrap();
     assert_eq!(
-        lines.iter().filter(|l| l.kind == "preamble_built").count(),
+        lines
+            .iter()
+            .filter(|l| l.kind() == EventKind::PreambleBuilt)
+            .count(),
         1
     );
     let requests = session.requests();
@@ -249,8 +269,12 @@ fn trigger_at_is_absent_when_automatic_handoff_is_off() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    let built = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::PreambleBuilt)
+        .unwrap();
     assert!(built.payload.get("trigger_at").is_none());
 }
 
@@ -280,8 +304,12 @@ fn trigger_at_follows_the_configured_tokens() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    let built = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::PreambleBuilt)
+        .unwrap();
     assert_eq!(built.payload["trigger_at"], 1_234);
 }
 
@@ -327,8 +355,12 @@ fn an_extension_section_is_logged_and_sent_after_the_instruction_files() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    let opening = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::OpeningMessage)
+        .unwrap();
     assert_eq!(
         opening.payload["extension_sections"],
         serde_json::json!([{
@@ -398,8 +430,12 @@ fn a_section_whose_files_are_all_missing_has_no_entry() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    let opening = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::OpeningMessage)
+        .unwrap();
     // The missing file sends nothing, and the all-missing extension has
     // no section: only the present file is recorded.
     assert_eq!(
@@ -409,7 +445,7 @@ fn a_section_whose_files_are_all_missing_has_no_entry() {
             "files": [{"path": present.display().to_string(), "content": "Here.\n"}],
         }])
     );
-    assert!(lines.iter().all(|l| l.kind != "notice"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::Notice));
 }
 
 #[test]
@@ -441,6 +477,7 @@ fn over_budget_ends_the_section_with_the_prune_line_and_under_does_not() {
                 "assistant_message_completed",
                 "turn_completed",
             ]
+            .map(EventKind::from_name)
         );
         let text = opening_text(&session);
         if over {
@@ -479,8 +516,12 @@ fn a_five_minute_input_reaches_the_preamble_and_the_requests() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    let built = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::PreambleBuilt)
+        .unwrap();
     assert_eq!(built.payload["cache_lifetime"], "5m");
     // Every request sends the input's lifetime, and `preamble_built`
     // records it.
@@ -516,8 +557,12 @@ fn a_thinking_level_is_recorded_and_sent_on_every_request() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    let built = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::PreambleBuilt)
+        .unwrap();
     assert_eq!(built.payload["thinking"], "high");
     let requests = session.requests();
     assert_eq!(requests.len(), 1);
@@ -532,7 +577,7 @@ fn definition_bytes(tools: Vec<std::sync::Arc<dyn contract::tool::Tool>>) -> u64
     let built = session
         .lines()
         .into_iter()
-        .find(|line| line.kind == "preamble_built")
+        .find(|line| line.kind() == EventKind::PreambleBuilt)
         .unwrap();
     built
         .payload
@@ -574,10 +619,13 @@ fn tool_turn(window: u64) -> (Vec<String>, Vec<Value>) {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    let kinds = kinds(&lines).into_iter().map(str::to_owned).collect();
+    let kinds: Vec<String> = kinds(&lines)
+        .into_iter()
+        .map(|kind| kind.name().to_owned())
+        .collect();
     let notices = lines
         .into_iter()
-        .filter(|line| line.kind == "notice")
+        .filter(|line| line.kind() == EventKind::Notice)
         .map(|line| Value::Object(line.payload))
         .collect();
     (kinds, notices)
@@ -621,7 +669,10 @@ fn an_oversize_notice_on_a_deferring_model_without_a_search_factory_says_deferra
     let lines = session.lines();
     // The full stream as a multiset, so a missing or duplicated
     // non-notice event fails (`docs/testing.md`, "Event streams").
-    let mut stream = kinds(&lines);
+    let mut stream: Vec<String> = kinds(&lines)
+        .into_iter()
+        .map(|kind| kind.name().to_owned())
+        .collect();
     stream.sort_unstable();
     let mut expected = TURN_KINDS.to_vec();
     expected.push("notice");
@@ -629,7 +680,7 @@ fn an_oversize_notice_on_a_deferring_model_without_a_search_factory_says_deferra
     assert_eq!(stream, expected);
     let notices: Vec<Value> = lines
         .into_iter()
-        .filter(|line| line.kind == "notice")
+        .filter(|line| line.kind() == EventKind::Notice)
         .map(|line| Value::Object(line.payload))
         .collect();
     assert_eq!(notices.len(), 1);
@@ -656,10 +707,10 @@ fn a_budget_reaches_preamble_built() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    assert_eq!(kinds(&lines), TURN_KINDS);
+    assert_eq!(kinds(&lines), TURN_KINDS.map(EventKind::from_name));
     let built = lines
         .into_iter()
-        .find(|line| line.kind == "preamble_built")
+        .find(|line| line.kind() == EventKind::PreambleBuilt)
         .unwrap();
     assert_eq!(built.payload["budget"], 2.5);
 }
@@ -670,10 +721,10 @@ fn budget_is_absent_when_none_is_set() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    assert_eq!(kinds(&lines), TURN_KINDS);
+    assert_eq!(kinds(&lines), TURN_KINDS.map(EventKind::from_name));
     let built = lines
         .into_iter()
-        .find(|line| line.kind == "preamble_built")
+        .find(|line| line.kind() == EventKind::PreambleBuilt)
         .unwrap();
     assert!(built.payload.get("budget").is_none());
 }

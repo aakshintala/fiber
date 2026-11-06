@@ -632,7 +632,8 @@ For each model:
   dialect it speaks
 - the thinking levels it supports ("Thinking")
 - whether deferred tools work for it, declared only after a probe
-  (`docs/tools.md`, "Which tools the model sees")
+  (`docs/tools.md`, "Which tools the model sees"), except the Databricks
+  Claude rows set from their `providers/anthropic` counterparts there
 - `web_search`: the vendor's own hosted-search tool type, exactly as it is
   sent, such as `web_search_20250305` or `google_search`; absent when the
   model's provider hosts no search for it ("Hosted web search")
@@ -769,6 +770,11 @@ fills it, and the declared variable when one exists.
   stream that set `stream_options.include_usage` and none in the one that did not. OpenRouter, with
   `z-ai/glm-5.3-flash`, sends a usage chunk either way, and repeats
   `finish_reason` on it.
+- A model with `compat.gemini`, such as a Databricks Gemini service, sends
+  no `stream_options` or `prompt_cache_key`, and each nullable `type` pair
+  `[T, "null"]` outside an `enum`, `const`, `default` or `examples` value
+  is sent as `type: T` with `nullable: true`: the gateway's
+  Gemini route rejects all three.
 - OpenRouter, with `z-ai/glm-5.3-flash`, streams reasoning as `reasoning` plus
   `reasoning_details` entries of type `reasoning.text`. Across the streams run
   on that model, it sent no `reasoning_content` or `reasoning_text`.
@@ -810,8 +816,9 @@ models work only through its Anthropic route, because its default route rejects
 `reasoning_effort`. So the extension declares each Claude model with
 `anthropic-messages`, the `/ai-gateway/anthropic/v1` base URL and `compat.bearer`. Models that
 support the Responses API get `openai-responses`, and the rest get
-`openai-completions`. It also sends one custom header on every request. All of
-that is data.
+`openai-completions`. It also sends one custom header on every request. A
+`gemini-` service, or one whose catalog row names `GEMINI_ENTERPRISE`,
+carries `compat.gemini` on the protocol already chosen. All of that is data.
 
 ### Model discovery
 

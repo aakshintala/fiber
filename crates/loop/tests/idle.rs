@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::commands::{Reply, ReplyAnswer};
-use contract::events::Decision;
+use contract::events::{Decision, EventKind};
 use contract::inbox::{Ack, Delivery};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::tool::Tool;
@@ -65,11 +65,11 @@ fn stale_reply(session: &Session) -> mpsc::Receiver<bool> {
     rejected
 }
 
-fn durable(session: &Session) -> Vec<String> {
+fn durable(session: &Session) -> Vec<EventKind> {
     log::read(&session.dir)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect()
 }
 
@@ -116,7 +116,7 @@ fn an_empty_inbox_parks_until_the_idle_deadline() {
         .recv(&finished)
         .expect("run ended at the deadline");
     assert!(ran.is_ok(), "{ran:?}");
-    assert_eq!(durable(&session), ["session_started"]);
+    assert_eq!(durable(&session), [EventKind::SessionStarted]);
 }
 
 #[test]
@@ -144,6 +144,7 @@ fn a_queued_prompt_starts_a_turn_even_at_a_zero_delay() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -258,7 +259,7 @@ fn close_ends_the_idle_wait_at_once() {
         .recv(&finished)
         .expect("close ends the idle wait");
     assert!(ran.is_ok(), "{ran:?}");
-    assert_eq!(durable(&session), ["session_started"]);
+    assert_eq!(durable(&session), [EventKind::SessionStarted]);
 }
 
 #[test]
@@ -368,16 +369,16 @@ fn an_approval_wait_parks_until_the_idle_deadline_and_writes_nothing_more() {
     assert_eq!(
         durable(&session),
         [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "permission_requested",
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::PermissionRequested,
         ]
     );
 }
@@ -436,6 +437,7 @@ fn a_reply_before_the_deadline_resolves_the_approval() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines.last().unwrap().payload["outcome"], "completed");
 }

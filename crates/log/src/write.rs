@@ -18,11 +18,10 @@ use contract::events::{Class, Event};
 use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
-use crate::diag::{Diag, Timer, timed};
 use crate::offsets::Offsets;
-use crate::rate::RateFold;
 use crate::read::{Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
+use diag::{Diag, RateFold, Timer, timed};
 
 /// One subscriber delivery fan-out: what a subscriber is offered for every
 /// appended event. A plain callback, not a second `Queue`: an extension

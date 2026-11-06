@@ -15,7 +15,7 @@ mod support;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
-use contract::events::TurnOutcome;
+use contract::events::{EventKind, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::Input;
 use contract::rules::{Rule, RuleDecision, StandingRules};
@@ -168,7 +168,7 @@ fn allow_on_reraise(session: &Session) -> thread::JoinHandle<()> {
 fn new_kinds(session: &Session, before: usize) -> Vec<String> {
     support::kinds(&log::read(&session.dir).unwrap()[before..])
         .into_iter()
-        .map(str::to_owned)
+        .map(|kind| kind.name().to_owned())
         .collect()
 }
 
@@ -219,7 +219,7 @@ fn a_suspended_resume_writes_a_passing_hook_context_after_the_batch_results() {
     );
     let context = log::read(&session.dir).unwrap()[lines_before..]
         .iter()
-        .find(|line| line.kind == "context_added")
+        .find(|line| line.kind() == EventKind::ContextAdded)
         .unwrap()
         .clone();
     assert_eq!(context.payload["hook"], "session_start");
@@ -363,7 +363,7 @@ fn a_rewound_loop_runs_session_start_with_reason_rewind() {
     let lines: Vec<Envelope> = log::read(&session.dir).unwrap();
     let mut starts = lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .map(|line| line.seq.unwrap().0);
     starts.next().unwrap();
     let from = contract::shapes::Point {
@@ -467,7 +467,7 @@ fn a_forked_loop_runs_session_start_with_reason_fork() {
     let lines: Vec<Envelope> = log::read(&session.dir).unwrap();
     let mut starts = lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .map(|line| line.seq.unwrap().0);
     starts.next().unwrap();
     let from = contract::shapes::Point {

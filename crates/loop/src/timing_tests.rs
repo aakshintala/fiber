@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::diag::Observe;
 use contract::emit::Emit;
-use contract::events::{CacheLifetime, Control, ToolCallRequested, TurnOutcome};
+use contract::events::{CacheLifetime, Control, EventKind, ToolCallRequested, TurnOutcome};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{
     CallError, Delta, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
@@ -76,22 +76,22 @@ pub(crate) fn arm_cancel_after_subscribe() {
 }
 
 /// Fails the next stream sink write once with `Error::Log`.
-pub(crate) fn arm_fail_stream_write() {
+fn arm_fail_stream_write() {
     *lock(&FAIL_STREAM_WRITE) = Some(true);
 }
 
 /// Fails the next handoff-started record once with `Error::Log`.
-pub(crate) fn arm_fail_handoff_started() {
+fn arm_fail_handoff_started() {
     *lock(&FAIL_HANDOFF_STARTED) = Some(true);
 }
 
 /// Fails the next handoff-completed record once with `Error::Log`.
-pub(crate) fn arm_fail_handoff_completed() {
+fn arm_fail_handoff_completed() {
     *lock(&FAIL_HANDOFF_COMPLETED) = Some(true);
 }
 
 /// Fails the next handoff restart once with `Error::Log`.
-pub(crate) fn arm_fail_restarted() {
+fn arm_fail_restarted() {
     *lock(&FAIL_RESTARTED) = Some(true);
 }
 
@@ -1001,11 +1001,11 @@ fn assert_wire(records: &[OpRecord]) {
     }
 }
 
-fn kinds(world: &World) -> Vec<String> {
+fn kinds(world: &World) -> Vec<EventKind> {
     log::read(&world.home.path().join("s_test"))
         .unwrap()
         .iter()
-        .map(|line| line.kind.clone())
+        .map(|line| line.kind())
         .collect()
 }
 
@@ -1030,18 +1030,19 @@ fn the_first_build_times_only_the_build() {
     assert_wire(&p7_records(&world));
     assert_eq!(
         kinds(&world),
-        vec![
-            "session_started".to_owned(),
-            "preamble_built".to_owned(),
-            "opening_message".to_owned(),
-            "turn_started".to_owned(),
-            "step_started".to_owned(),
-            "assistant_message_started".to_owned(),
-            "text_completed".to_owned(),
-            "usage_recorded".to_owned(),
-            "assistant_message_completed".to_owned(),
-            "turn_completed".to_owned(),
-        ],
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+        .map(EventKind::from_name),
         "the preamble journey writes exactly these durable events",
     );
 }
@@ -1354,7 +1355,7 @@ fn at_info_the_build_runs_but_writes_no_timer_line() {
     prompt(&world, "hi");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
     assert!(
-        kinds(&world).contains(&"preamble_built".to_owned()),
+        kinds(&world).contains(&EventKind::PreambleBuilt),
         "construction still runs at info"
     );
     assert!(
@@ -1468,7 +1469,7 @@ fn a_note_request_times_its_assembly() {
     assert_eq!(requests[1].ms, 0, "the ordinary send advanced nothing");
     assert_wire(&p7_records(&world));
     assert!(
-        kinds(&world).contains(&"handoff_completed".to_owned()),
+        kinds(&world).contains(&EventKind::HandoffCompleted),
         "a handoff ran: {:?}",
         kinds(&world)
     );
@@ -1765,7 +1766,7 @@ fn a_hook_note_writes_no_request_scope_for_the_handoff() {
     assert_eq!(requests[0].ms, 0);
     assert_wire(&p7_records(&world));
     assert!(
-        kinds(&world).contains(&"handoff_completed".to_owned()),
+        kinds(&world).contains(&EventKind::HandoffCompleted),
         "a handoff ran: {:?}",
         kinds(&world)
     );
@@ -1904,10 +1905,10 @@ fn a_failed_attempt_times_its_hold() {
     assert_eq!(models[0].ms, 7);
     let kinds = kinds(&world);
     assert!(
-        kinds.contains(&"assistant_message_completed".to_owned()),
+        kinds.contains(&EventKind::AssistantMessageCompleted),
         "{kinds:?}"
     );
-    assert!(kinds.contains(&"turn_completed".to_owned()), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::TurnCompleted), "{kinds:?}");
 }
 
 #[test]
@@ -1942,16 +1943,16 @@ fn a_partial_failure_after_deltas_times_its_hold() {
     assert_eq!(models[0].ms, 7);
     let kinds = kinds(&world);
     assert!(
-        kinds.contains(&"assistant_message_completed".to_owned()),
+        kinds.contains(&EventKind::AssistantMessageCompleted),
         "{kinds:?}"
     );
-    assert!(kinds.contains(&"usage_recorded".to_owned()), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::UsageRecorded), "{kinds:?}");
     // The partial usage names the generation the deltas streamed under:
     // the failure arrived after streamed fragments, not before any.
     let generations: Vec<String> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .iter()
-        .filter(|line| line.kind == "usage_recorded")
+        .filter(|line| line.kind() == EventKind::UsageRecorded)
         .filter_map(|line| line.payload.get("generation_id"))
         .filter_map(|id| id.as_str().map(str::to_owned))
         .collect();
@@ -2422,19 +2423,19 @@ fn an_automatic_handoff_nests_its_note_scopes() {
     assert_eq!(ops(&world, "turn.model_call").len(), 3);
     let kinds = kinds(&world);
     for kind in ["handoff_started", "handoff_completed", "opening_message"] {
-        assert!(kinds.contains(&kind.to_owned()), "{kinds:?}");
+        assert!(kinds.contains(&EventKind::from_name(kind)), "{kinds:?}");
     }
     let started = kinds
         .iter()
-        .position(|kind| kind == "handoff_started")
+        .position(|kind| *kind == EventKind::HandoffStarted)
         .unwrap();
     let completed = kinds
         .iter()
-        .position(|kind| kind == "handoff_completed")
+        .position(|kind| *kind == EventKind::HandoffCompleted)
         .unwrap();
     let opening = kinds
         .iter()
-        .rposition(|kind| kind == "opening_message")
+        .rposition(|kind| *kind == EventKind::OpeningMessage)
         .unwrap();
     assert!(started < completed && completed < opening, "{kinds:?}");
 }
@@ -2460,7 +2461,7 @@ fn a_person_handoff_requests_its_note() {
         world.loop_mut().handoff.step_ran,
         "a person handoff ran this step"
     );
-    assert!(kinds(&world).contains(&"handoff_started".to_owned()));
+    assert!(kinds(&world).contains(&EventKind::HandoffStarted));
 }
 
 #[test]
@@ -2483,8 +2484,8 @@ fn an_overflow_handoff_requests_its_note() {
     assert_eq!(ops(&world, "turn.handoff").len(), 1);
     assert_eq!(ops(&world, "turn.request").len(), 3);
     let kinds = kinds(&world);
-    assert!(kinds.contains(&"handoff_started".to_owned()), "{kinds:?}");
-    assert!(kinds.contains(&"handoff_completed".to_owned()), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::HandoffStarted), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::HandoffCompleted), "{kinds:?}");
 }
 
 #[test]
@@ -2510,11 +2511,11 @@ fn a_tool_handoff_makes_no_note_request() {
         "a tool handoff leaves the step flag unset"
     );
     assert!(
-        !kinds(&world).contains(&"handoff_started".to_owned()),
+        !kinds(&world).contains(&EventKind::HandoffStarted),
         "a tool source writes no started: {:?}",
         kinds(&world)
     );
-    assert!(kinds(&world).contains(&"handoff_completed".to_owned()));
+    assert!(kinds(&world).contains(&EventKind::HandoffCompleted));
     assert_eq!(
         world.provider.requests.lock().unwrap().len(),
         2,
@@ -2559,7 +2560,7 @@ fn two_tool_notes_join_one_handoff_in_call_order() {
     let completed: Vec<Value> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "handoff_completed")
+        .filter(|line| line.kind() == EventKind::HandoffCompleted)
         .map(|line| Value::Object(line.payload.clone()))
         .collect();
     assert_eq!(completed.len(), 1, "one joined handoff");
@@ -2672,7 +2673,7 @@ fn a_refused_note_fails_the_handoff_and_blocks() {
     let completed: Vec<Value> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind == "handoff_completed")
+        .filter(|line| line.kind() == EventKind::HandoffCompleted)
         .map(|line| Value::Object(line.payload.clone()))
         .collect();
     assert_eq!(completed.len(), 1);
@@ -2849,11 +2850,8 @@ fn a_failed_handoff_start_writes_one_scope_and_no_started() {
     assert_eq!(error.code(), ErrorCode::IoFailed);
     assert_eq!(ops(&world, "turn.handoff").len(), 1);
     let kinds = kinds(&world);
-    assert!(!kinds.contains(&"handoff_started".to_owned()), "{kinds:?}");
-    assert!(
-        !kinds.contains(&"handoff_completed".to_owned()),
-        "{kinds:?}"
-    );
+    assert!(!kinds.contains(&EventKind::HandoffStarted), "{kinds:?}");
+    assert!(!kinds.contains(&EventKind::HandoffCompleted), "{kinds:?}");
 }
 
 #[test]
@@ -2870,11 +2868,8 @@ fn a_failed_handoff_completion_writes_one_scope_and_no_fabrication() {
     assert_eq!(error.code(), ErrorCode::IoFailed);
     assert_eq!(ops(&world, "turn.handoff").len(), 1);
     let kinds = kinds(&world);
-    assert!(kinds.contains(&"handoff_started".to_owned()), "{kinds:?}");
-    assert!(
-        !kinds.contains(&"handoff_completed".to_owned()),
-        "{kinds:?}"
-    );
+    assert!(kinds.contains(&EventKind::HandoffStarted), "{kinds:?}");
+    assert!(!kinds.contains(&EventKind::HandoffCompleted), "{kinds:?}");
 }
 
 #[test]
@@ -2891,11 +2886,11 @@ fn a_failed_restart_writes_one_scope_and_no_second_opening() {
     assert_eq!(error.code(), ErrorCode::IoFailed);
     assert_eq!(ops(&world, "turn.handoff").len(), 1);
     let kinds = kinds(&world);
-    assert!(kinds.contains(&"handoff_completed".to_owned()), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::HandoffCompleted), "{kinds:?}");
     assert_eq!(
         kinds
             .iter()
-            .filter(|kind| *kind == "opening_message")
+            .filter(|kind| **kind == EventKind::OpeningMessage)
             .count(),
         1,
         "no restart opening was fabricated: {kinds:?}"

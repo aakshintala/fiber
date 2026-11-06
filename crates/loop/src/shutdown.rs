@@ -113,6 +113,7 @@ impl Loop {
             | Delivery::McpReconnect(..)
             | Delivery::Name(..)
             | Delivery::AddDirectory(..)
+            | Delivery::Sandbox(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)
             | Delivery::Handoff(..)
@@ -273,6 +274,7 @@ impl Loop {
             | Delivery::McpReconnect(_, ack)
             | Delivery::AddDirectory(_, ack)
             | Delivery::Name(_, ack)
+            | Delivery::Sandbox(_, ack)
             | Delivery::Credential(_, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }

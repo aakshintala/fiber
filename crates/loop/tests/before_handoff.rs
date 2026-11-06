@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use contract::events::{HandoffTrigger, Notice, TurnOutcome};
+use contract::events::{EventKind, HandoffTrigger, Notice, TurnOutcome};
 use contract::hook::{
     BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, ContextAnswer, ContextOutcome,
     HookFailure, Hooks,
@@ -945,7 +945,7 @@ fn a_cancel_before_the_handoff_check_runs_no_hook() {
     // check: the hook is never called.
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
     assert_eq!(hooks.calls(), 0);
-    assert!(!kinds(&lines).contains(&"handoff_started"));
+    assert!(!kinds(&lines).contains(&EventKind::HandoffStarted));
 }
 
 /// A reply calling the trip tool, with `tokens` in its prompt.
@@ -996,7 +996,10 @@ fn a_shutdown_while_the_step_tool_runs_runs_no_hook() {
             assert_eq!(hooks.calls(), 0);
         }
         let lines = session.lines();
-        let kinds_now: Vec<String> = kinds(&lines).into_iter().map(str::to_owned).collect();
+        let kinds_now: Vec<String> = kinds(&lines)
+            .into_iter()
+            .map(|kind| kind.name().to_owned())
+            .collect();
         all_kinds.push(kinds_now);
     }
     assert_eq!(outcomes[0], outcomes[1], "the outcomes match");

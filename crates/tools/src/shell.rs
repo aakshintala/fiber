@@ -287,9 +287,12 @@ impl Shell {
 
 impl Tool for Shell {
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "shell".to_owned(),
-            description: "Runs a command in a new process session. `command` is the command. \
+        // The session sandbox state qualifies the definition: only an
+        // enabled and available sandbox adds the confinement sentence, so
+        // off-state and unavailable-state definitions read byte-identical
+        // (`docs/sandbox.md`, "The rule").
+        let mut description =
+            "Runs a command in a new process session. `command` is the command. \
                  `workdir` defaults to the workspace; a relative path is resolved against it. \
                  A background call with no `timeout_ms` has no timeout: it runs until it exits, \
                  until `jobs stop`, or until the session shuts down. Any other call with no \
@@ -297,7 +300,19 @@ impl Tool for Shell {
                  A monitor's maximum is 1800000, or 600000 in a non-interactive run. Standard output \
                  and standard error are one stream, except in a monitor, whose standard error goes to its own file. \
                  A call with `detach` set starts a command that outlives the session."
-                .to_owned(),
+                .to_owned();
+        let settings = self.selected();
+        if settings.enabled && sandbox::check_available(&settings, &self.workspace).is_ok() {
+            description.push_str(
+                " When the session sandbox is on and available, the call runs confined \
+                 with no sockets and writes limited to the workspace, temp and granted paths; \
+                 a call with `unconfined: true` or `detach` set runs outside the sandbox \
+                 and is reviewed as with the sandbox off.",
+            );
+        }
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description,
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -338,7 +353,8 @@ impl Tool for Shell {
                 "required": ["command", "workdir", "timeout_ms", "run_in_background", "tty", "monitor", "unconfined", "detach"],
                 "additionalProperties": false
             }),
-            deferred: false, hosted: None,
+            deferred: false,
+            hosted: None,
         }
     }
 

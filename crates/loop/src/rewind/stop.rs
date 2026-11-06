@@ -221,6 +221,7 @@ impl Loop {
             | Delivery::Credential(..)
             | Delivery::Name(..)
             | Delivery::AddDirectory(..)
+            | Delivery::Sandbox(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)
             | Delivery::Handoff(..)

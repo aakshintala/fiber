@@ -167,6 +167,11 @@ impl State {
     }
 }
 
+/// The session sandbox latch, shared with the toggle: swapping to
+/// `true` reports whether the unavailable line was already said this
+/// session, so the toggle's reply says it at most once.
+pub(crate) type LatchHandle = Arc<dyn Fn() -> bool + Send + Sync>;
+
 pub(crate) struct State {
     pub(crate) sources: config::Sources,
     pub(crate) template: r#loop::PromptInputs,
@@ -347,11 +352,33 @@ impl State {
     /// The reload preparer and the late preparer: the late one prepares
     /// the same set, but drops every notice the startup already wrote,
     /// so an approval installs the new lines only.
+    /// The pre-toggle shape, kept for the existing preparation tests.
+    #[cfg(test)]
     pub(crate) fn preparers(
         self,
         written: Vec<contract::events::Notice>,
     ) -> (r#loop::PrepareReload, r#loop::PrepareReload) {
+        self.preparers_with_latch(written).0
+    }
+
+    /// `preparers` plus the session sandbox latch handle: the handle
+    /// shares this state's latch through the `Arc`, so a repeated
+    /// unavailable enable, a startup-unavailable session that is then
+    /// enabled, and an enable followed by a reload each say the line once
+    /// per session. The reload path below is unchanged.
+    pub(crate) fn preparers_with_latch(
+        self,
+        written: Vec<contract::events::Notice>,
+    ) -> ((r#loop::PrepareReload, r#loop::PrepareReload), LatchHandle) {
         let state = Arc::new(self);
+        let latch: LatchHandle = Arc::new({
+            let state = Arc::clone(&state);
+            move || {
+                state
+                    .sandbox_notice_reported
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+            }
+        });
         let reload = {
             let state = state.clone();
             let reads = state.switching.reads();
@@ -375,7 +402,7 @@ impl State {
                 move |purpose, work| reads.run(purpose, work),
             )
         };
-        (reload, late)
+        ((reload, late), latch)
     }
 
     fn prepare_inner(

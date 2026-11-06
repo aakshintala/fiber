@@ -10,7 +10,7 @@ mod support;
 
 use contract::Envelope;
 use contract::clock::Clock;
-use contract::events::{QuotaInfo, TurnOutcome};
+use contract::events::{EventKind, QuotaInfo, TurnOutcome};
 use contract::provider::Input;
 use fakes::Scripted;
 use serde_json::{Value, json};
@@ -45,19 +45,22 @@ fn turn(session: &mut Session) -> Vec<Envelope> {
 fn quota_events(lines: &[Envelope]) -> Vec<&Envelope> {
     lines
         .iter()
-        .filter(|line| line.kind.starts_with("quota_"))
+        .filter(|line| line.kind().name().starts_with("quota_"))
         .collect()
 }
 
 fn check_turn(lines: &[Envelope], quota: &[&str], fiber: Option<&str>) {
     let at = lines
         .iter()
-        .position(|line| line.kind == "turn_started")
+        .position(|line| line.kind() == EventKind::TurnStarted)
         .unwrap();
     assert!(matches!(
         kinds(&lines[..at]).as_slice(),
-        [] | ["session_started", "preamble_built", "opening_message"]
-            | ["fiber_started", "preamble_built"]
+        [] | [
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage
+        ] | [EventKind::FiberStarted, EventKind::PreambleBuilt]
     ));
     let mut expected = vec!["turn_started"];
     expected.extend_from_slice(quota);
@@ -71,7 +74,13 @@ fn check_turn(lines: &[Envelope], quota: &[&str], fiber: Option<&str>) {
         "assistant_message_completed",
         "turn_completed",
     ]);
-    assert_eq!(kinds(&lines[at..]), expected);
+    assert_eq!(
+        kinds(&lines[at..]),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let input = lines[at].payload["input"].as_array().unwrap();
     assert_eq!(input.len(), if fiber.is_some() { 2 } else { 1 });
     if let Some(text) = fiber {
@@ -115,7 +124,7 @@ fn quota_notice_is_input_not_preamble_and_fires_once_until_a_low_reading() {
         kinds(&plain),
         kinds(&lines)
             .into_iter()
-            .filter(|kind| *kind != "quota_noticed")
+            .filter(|kind| *kind != EventKind::QuotaNoticed)
             .collect::<Vec<_>>()
     );
     assert_eq!(quota_events(&lines)[0].payload, serde_json::from_value::<serde_json::Map<String,Value>>(json!({"provider":"codex","credential":"work","window":"weekly","percent_used":83.5,"resets_at":1760000000000_u64,"notice_at":80.0})).unwrap());
@@ -133,12 +142,12 @@ fn quota_notice_is_input_not_preamble_and_fires_once_until_a_low_reading() {
     assert_eq!(
         lines
             .iter()
-            .find(|l| l.kind == "preamble_built")
+            .find(|l| l.kind() == EventKind::PreambleBuilt)
             .unwrap()
             .payload,
         plain
             .iter()
-            .find(|l| l.kind == "preamble_built")
+            .find(|l| l.kind() == EventKind::PreambleBuilt)
             .unwrap()
             .payload
     );
@@ -296,5 +305,8 @@ fn quota_notice_fold_reads_only_the_sessions_own_log() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(quota_events(&child_lines).len(), 1);
-    assert_eq!(quota_events(&child_lines)[0].kind, "quota_noticed");
+    assert_eq!(
+        quota_events(&child_lines)[0].kind(),
+        EventKind::QuotaNoticed
+    );
 }

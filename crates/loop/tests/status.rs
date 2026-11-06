@@ -21,7 +21,9 @@ use std::time::Duration;
 
 use contract::Envelope;
 use contract::JobId;
-use contract::events::{CacheLifetime, Event, JobCompleted, Outcome, Progress, TextDelta};
+use contract::events::{
+    CacheLifetime, Event, EventKind, JobCompleted, Outcome, Progress, TextDelta,
+};
 use contract::inbox::{Ack, Claim, Delivery, JobNotice};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::provider::{
@@ -48,11 +50,11 @@ fn statuses_until(
     until: impl Fn(&Envelope) -> bool + Send + 'static,
 ) -> (Watcher, Vec<Envelope>) {
     let (watcher, lines) = support::read_until(watcher, "a session_status line", move |line| {
-        line.kind == "session_status" && until(line)
+        line.kind() == EventKind::SessionStatus && until(line)
     });
     let found: Vec<Envelope> = lines
         .into_iter()
-        .filter(|line| line.kind == "session_status")
+        .filter(|line| line.kind() == EventKind::SessionStatus)
         .collect();
     (watcher, found)
 }
@@ -121,12 +123,12 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
         .recv(&finished)
         .expect("close ended the loop")
         .unwrap();
-    let kinds: Vec<String> = log::read(&session.dir)
+    let kinds: Vec<EventKind> = log::read(&session.dir)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
-    assert!(!kinds.iter().any(|k| k == "session_status"));
+    assert!(!kinds.contains(&EventKind::SessionStatus));
 }
 
 #[test]
@@ -175,7 +177,7 @@ fn two_calls_report_their_classified_subject_and_session_start() {
     let started = log::read(&session.dir)
         .unwrap()
         .into_iter()
-        .find(|line| line.kind == "session_started")
+        .find(|line| line.kind() == EventKind::SessionStarted)
         .unwrap()
         .ts;
     let watcher = session.log.watch();
@@ -318,7 +320,7 @@ fn a_new_subscriber_reads_closing_after_the_close_is_accepted() {
     // The turn still completes: durable lines reach the watcher whatever
     // the observer is doing.
     let (_watcher, _) = support::read_until(watcher, "the prompt's turn_completed", |line| {
-        line.kind == "turn_completed"
+        line.kind() == EventKind::TurnCompleted
     });
     release_tx.send(()).unwrap();
     let log = Arc::clone(&session.log);
@@ -387,11 +389,11 @@ fn no_status_follows_the_line_written_after_run_returns() {
     // As `fiber ask` does: `fiber_exited` after `run` returns.
     r#loop::fiber_exited(&session.log, &ran.summary, Ok(()), true, None).unwrap();
     let (mut watcher, lines) = support::read_until(watcher, "a fiber_exited line", |line| {
-        line.kind == "fiber_exited"
+        line.kind() == EventKind::FiberExited
     });
     let statuses: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "session_status")
+        .filter(|line| line.kind() == EventKind::SessionStatus)
         .collect();
     assert!(
         !statuses.is_empty(),
@@ -405,11 +407,11 @@ fn no_status_follows_the_line_written_after_run_returns() {
     assert!(
         lines
             .iter()
-            .rposition(|line| line.kind == "fiber_exited")
+            .rposition(|line| line.kind() == EventKind::FiberExited)
             .unwrap()
             > lines
                 .iter()
-                .rposition(|line| line.kind == "session_status")
+                .rposition(|line| line.kind() == EventKind::SessionStatus)
                 .unwrap(),
         "no status after fiber_exited"
     );
@@ -477,7 +479,8 @@ fn a_resumed_session_writes_one_status_for_its_history() {
     loop {
         match lines.try_recv() {
             Ok(Some(line)) => assert_ne!(
-                line.kind, "session_status",
+                line.kind(),
+                EventKind::SessionStatus,
                 "only one status for the whole history"
             ),
             Ok(None) => break,
@@ -602,16 +605,16 @@ fn tool_output_at_stops_at_the_running_calls_last_output() {
     // once the delta is on the log.
     let gate_opened = Arc::clone(&gate);
     let (_watcher, lines) = support::read_until(watcher, "the turn's idle status", move |line| {
-        if line.kind == "tool_call_delta" {
+        if line.kind() == EventKind::ToolCallDelta {
             gate_opened.open();
         }
-        line.kind == "session_status"
+        line.kind() == EventKind::SessionStatus
             && line.payload["state"] == "idle"
             && line.payload["name"] == "go"
     });
     let deltas: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_delta")
+        .filter(|line| line.kind() == EventKind::ToolCallDelta)
         .collect();
     // No count is promised for `tool_call_delta` lines: the tool emits then waits at its gate,
     // so at least one delta is on the log. docs/events.md, "session_status": `tool_output_at`
@@ -623,7 +626,7 @@ fn tool_output_at_stops_at_the_running_calls_last_output() {
     let at = deltas.last().expect("a tool delta").ts;
     let statuses: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "session_status")
+        .filter(|line| line.kind() == EventKind::SessionStatus)
         .collect();
     let tools: Vec<&&Envelope> = statuses
         .iter()

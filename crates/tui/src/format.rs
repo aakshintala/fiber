@@ -536,7 +536,7 @@ impl Spend {
 
     /// The docs' `usage` shape over the lines kept.
     pub(crate) fn usage(&self) -> Usage {
-        log::usage(self.calls.values().map(|(_, line)| line))
+        diag::usage(self.calls.values().map(|(_, line)| line))
     }
 
     /// The first turn and latest line per generation, in

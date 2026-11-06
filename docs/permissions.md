@@ -298,6 +298,17 @@ target the reply proposed. A reply that offers options proposes none of them,
 so a bare "yes" under it approves nothing and a pick by label or by its words
 approves that option alone. A reply with no human message after it is not
 shown, so a proposal the person never answered approves nothing.
+
+**A person's answer to a question counts as a person message, and the question
+it answers is the reply.** Anything the person types or answers reaches the
+reviewer through one rule: an `ask_user` answer, a server elicitation answer,
+and an extension's `host.ask` answer each render as the person's input with
+its eliciting context as the reply. The reply holds the agent's questions as
+asked; for a server or extension channel it holds fiber's own description of
+the channel, never the submitted prompt words. The consent is still the
+person's answer, and it covers only the one action and target an agent reply
+proposed, so a foreign question never approves the call under review by
+itself.
 A reply longer than 6,000 characters is cut to its first 6,000, followed by
 a line saying how many characters were left out.
 
@@ -791,7 +802,9 @@ A process owned by another account is never a session process, and its
 arguments are never read; the walk continues through it to PID 1. If the
 kernel will not report PID 1's effective uid, Fiber treats it as root and
 continues the walk. An unreadable effective uid for any other process
-makes the walk incomplete. When the walk is incomplete — a parent pid cannot
+makes the walk incomplete. When a just-read parent exits mid-walk, the walk
+re-reads the child's parent once and continues only from a changed parent,
+which proves the child was reparented. When the walk is incomplete — a parent pid cannot
 be read, an effective uid other than PID 1's cannot be read, or this
 account's process's arguments cannot be read — the refusals above still apply, and the rejection message names the
 unreadable pid. The second refusal still admits

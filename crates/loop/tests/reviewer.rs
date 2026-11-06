@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use contract::commands::{Remember, RememberScope, Reply, ReplyAnswer};
-use contract::events::{CacheLifetime, Decision, TurnOutcome};
+use contract::events::{CacheLifetime, Decision, EventKind, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::{Input, ModelRequest};
 use contract::rules::{Rule, RuleDecision, StandingRules};
@@ -40,13 +40,16 @@ fn go(session: &mut Session) -> Vec<Envelope> {
 }
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
-    lines.iter().find(|l| l.kind == kind).unwrap()
+    lines
+        .iter()
+        .find(|l| l.kind() == EventKind::from_name(kind))
+        .unwrap()
 }
 
 fn usages(lines: &[Envelope]) -> Vec<&Envelope> {
     lines
         .iter()
-        .filter(|l| l.kind == "usage_recorded")
+        .filter(|l| l.kind() == EventKind::UsageRecorded)
         .collect()
 }
 
@@ -54,18 +57,18 @@ fn usages(lines: &[Envelope]) -> Vec<&Envelope> {
 /// with no text and whose second says "Done.", with `middle` in place of
 /// the decision lines and `reviews` reviewer `usage_recorded` lines after
 /// the reply's own.
-fn kinds_with(middle: &[&str], reviews: usize) -> Vec<String> {
+fn kinds_with(middle: &[&str], reviews: usize) -> Vec<EventKind> {
     let mut kinds = vec![
-        "session_started".to_owned(),
-        "preamble_built".to_owned(),
-        "opening_message".to_owned(),
+        EventKind::from_name("session_started"),
+        EventKind::from_name("preamble_built"),
+        EventKind::from_name("opening_message"),
     ];
     kinds.extend(kinds_next(middle, reviews));
     kinds
 }
 
 /// As [`kinds_with`], for a turn after the first: no `session_started`.
-fn kinds_next(middle: &[&str], reviews: usize) -> Vec<String> {
+fn kinds_next(middle: &[&str], reviews: usize) -> Vec<EventKind> {
     let mut kinds = vec![
         "turn_started",
         "step_started",
@@ -92,7 +95,7 @@ fn kinds_next(middle: &[&str], reviews: usize) -> Vec<String> {
         .iter()
         .copied(),
     );
-    kinds.into_iter().map(str::to_owned).collect()
+    kinds.into_iter().map(EventKind::from_name).collect()
 }
 
 /// One turn whose reply calls `shell` once, reviewed with `review`: the
@@ -159,7 +162,7 @@ fn a_stage_1_allow_runs_the_call_with_one_token() {
         json!({"model": REVIEWER_MODEL, "stage": 1})
     );
     assert_eq!(resolved.payload.get("reason"), None);
-    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
     let done = completed(&lines)[0];
     assert_eq!(done.payload["status"], "completed");
     assert_eq!(tool.ran().len(), 1);
@@ -370,7 +373,7 @@ fn a_block_returns_the_reason_and_the_turn_continues() {
         kinds(&lines),
         kinds_with(&["permission_resolved", "tool_call_completed"], 2)
     );
-    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "reviewer");
@@ -438,6 +441,7 @@ fn a_second_call_is_reviewed_with_the_first_as_history() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(tool.ran().len(), 2);
     assert_eq!(completed(&lines).len(), 2);
@@ -550,7 +554,7 @@ fn a_verdict_still_unreadable_escalates() {
     assert_eq!(resolved.payload["decision"], "allow");
     assert_eq!(resolved.payload["decided_by"], "person");
     assert_eq!(reviewer.requests().len(), 2);
-    assert!(kinds(&lines).contains(&"tool_call_started"));
+    assert!(kinds(&lines).contains(&EventKind::ToolCallStarted));
 }
 
 #[test]
@@ -605,6 +609,7 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 
     let requested = line(&lines, "permission_requested");
@@ -683,19 +688,23 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 
-    let notices: Vec<&Envelope> = lines.iter().filter(|l| l.kind == "notice").collect();
+    let notices: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::Notice)
+        .collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].payload["code"], "no_model");
     assert_eq!(
         notices[0].payload["message"],
         "No reviewer model is set, so every reviewed call goes to a person. Set reviewer.model."
     );
-    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     for line in &resolved {
@@ -711,7 +720,7 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
         assert_eq!(done.payload["status"], "denied");
         assert_eq!(done.payload["reason"], "reviewer");
     }
-    assert!(!kinds(&lines).contains(&"tool_call_started"));
+    assert!(!kinds(&lines).contains(&EventKind::ToolCallStarted));
     assert!(tool.ran().is_empty());
 }
 
@@ -976,6 +985,7 @@ fn the_session_limit_escalates_with_a_raised_consecutive_limit() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 
     let done = completed(&lines);
@@ -1089,6 +1099,7 @@ fn a_persons_allow_with_remember_adds_a_grant_later_calls_match() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "allow");
@@ -1149,9 +1160,10 @@ fn a_headless_session_ends_the_turn_once_the_block_budget_runs_out() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
 
-    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
     for done in completed(&lines) {
         assert_eq!(done.payload["status"], "denied");
         assert_eq!(done.payload["reason"], "reviewer");
@@ -1177,7 +1189,7 @@ fn a_colon_block_is_handled_as_a_block() {
         kinds(&lines),
         kinds_with(&["permission_resolved", "tool_call_completed"], 2)
     );
-    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "reviewer");
@@ -1281,8 +1293,12 @@ fn headless_failures_count_toward_the_block_budget() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    for line in lines.iter().filter(|l| l.kind == "permission_resolved") {
+    for line in lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
+    {
         assert_eq!(line.payload["decision"], "deny");
         assert_eq!(line.payload["decided_by"], "reviewer");
         assert_eq!(line.payload["reason"], "the reviewer timed out");
@@ -1376,8 +1392,8 @@ fn an_unanswerable_escalation_denies_and_the_turn_carries_on() {
     );
     // No escalation line: nobody was asked, so no person or model is
     // named as an approver anywhere in the log.
-    assert!(!kinds(&lines).contains(&"permission_requested"));
-    assert!(!kinds(&lines).contains(&"notice"));
+    assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
+    assert!(!kinds(&lines).contains(&EventKind::Notice));
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "deny");
     assert_eq!(resolved.payload["decided_by"], "reviewer");
@@ -1438,11 +1454,12 @@ fn a_review_at_the_spending_budget_denies_without_sending() {
             "step_started",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(reviewer.requests().len(), 1);
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved[0].payload["decision"], "allow");
     assert_eq!(resolved[1].payload["decision"], "deny");
@@ -1546,10 +1563,11 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 3);
     assert_eq!(
@@ -1567,7 +1585,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
     );
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 3);
     // With no sender left nobody can answer: every denial is the close's,
@@ -1660,12 +1678,13 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // One request, for the first call: the second escalation denies without
     // raising one.
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     assert_eq!(
@@ -1674,7 +1693,7 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
     );
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     // The close denies the pending request itself: `cancel`, naming the
@@ -1768,10 +1787,11 @@ fn close_taken_during_a_failed_review_names_the_failed_stage_on_later_calls() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     assert_eq!(
@@ -1783,7 +1803,7 @@ fn close_taken_during_a_failed_review_names_the_failed_stage_on_later_calls() {
     );
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     assert_eq!(
@@ -1870,10 +1890,11 @@ fn close_taken_during_a_no_model_escalation_denies_later_calls_as_no_reviewer() 
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     assert_eq!(
@@ -1888,7 +1909,7 @@ fn close_taken_during_a_no_model_escalation_denies_later_calls_as_no_reviewer() 
     );
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     assert_eq!(
@@ -1992,16 +2013,17 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let requested: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_requested")
+        .filter(|l| l.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(requested.len(), 1);
     assert_eq!(requested[0].payload["step"], "standing_ask");
     let resolved: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     // The batch asks the standing ask inline, so the close lands there;
     // the review-bound call's escalation then finds no one to answer and
@@ -2074,6 +2096,7 @@ fn an_unanswered_escalation_past_the_session_limit_ends_the_turn_blocked() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let requested = line(&lines, "permission_requested");
     assert_eq!(requested.payload["step"], "review");
@@ -2239,8 +2262,8 @@ fn a_remembered_allow_taken_before_the_shutdown_stands_and_the_call_never_runs()
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["status"], "cancelled");
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
-    assert_eq!(lines.last().unwrap().kind, "turn_completed");
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
+    assert_eq!(lines.last().unwrap().kind(), EventKind::TurnCompleted);
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
 
@@ -2275,7 +2298,7 @@ fn a_shutdown_that_closes_the_inbox_during_an_escalation_leaves_the_request_pend
     std::thread::scope(|scope| {
         scope.spawn(move || {
             support::read_until(watcher, "a permission_requested line", |line| {
-                line.kind == "permission_requested"
+                line.kind() == EventKind::PermissionRequested
             });
             // The wait parks in `recv` with no deadline, so the drop below
             // disconnects it: the shutdown's wake would end the wait
@@ -2296,10 +2319,10 @@ fn a_shutdown_that_closes_the_inbox_during_an_escalation_leaves_the_request_pend
     // timeouts").
     let lines: Vec<contract::Envelope> = log::read(&session.dir).unwrap();
     let kinds = kinds(&lines);
-    assert_eq!(kinds.last(), Some(&"permission_requested"));
-    assert!(!kinds.contains(&"permission_resolved"));
-    assert!(!kinds.contains(&"tool_call_completed"));
-    assert!(!kinds.contains(&"turn_completed"));
+    assert_eq!(kinds.last(), Some(&EventKind::PermissionRequested));
+    assert!(!kinds.contains(&EventKind::PermissionResolved));
+    assert!(!kinds.contains(&EventKind::ToolCallCompleted));
+    assert!(!kinds.contains(&EventKind::TurnCompleted));
     assert!(tool.ran().is_empty());
     let request_id = lines.last().unwrap().payload["request_id"].clone();
     let written = r#loop::fiber_exited(
@@ -2966,6 +2989,7 @@ fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The cancel landed before write-back, so the fanned-out allow is
     // discarded: no resolution and no usage for the approved call. The
@@ -2973,11 +2997,11 @@ fn a_reviewer_allow_cancelled_before_its_start_keeps_the_effects() {
     // The approved call never started.
     let resolved: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "permission_resolved")
+        .filter(|l| l.kind() == EventKind::PermissionResolved)
         .collect();
     assert_eq!(resolved.len(), 1);
     assert_eq!(resolved[0].payload["decision"], "deny");
     assert_eq!(resolved[0].payload["decided_by"], "cancel");
-    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(lines.iter().all(|l| l.kind() != EventKind::ToolCallStarted));
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }

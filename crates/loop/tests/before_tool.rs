@@ -20,8 +20,8 @@ use std::thread;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    AskStep, Decision, Escalation, Event, FiberExited, Interaction, PermissionRequested, RuleOffer,
-    ToolCallRequested, TurnOutcome,
+    AskStep, Decision, Escalation, Event, EventKind, FiberExited, Interaction, PermissionRequested,
+    RuleOffer, ToolCallRequested, TurnOutcome,
 };
 use contract::hook::{
     BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall,
@@ -610,8 +610,11 @@ fn user_text_or_none(input: &Input) -> Option<&str> {
 
 /// The complete, ordered kinds of `lines`: every line the turn wrote, so
 /// a duplicated, missing or reordered line fails.
-fn turn_kinds(lines: &[contract::Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn turn_kinds(lines: &[contract::Envelope]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| line.kind().name().to_owned())
+        .collect()
 }
 
 /// The complete kinds of a later turn whose reply says nothing and calls
@@ -836,7 +839,7 @@ impl History {
         ran.result.as_ref().unwrap();
         let mut statuses = Vec::new();
         while let Ok(Some(line)) = watcher.try_recv() {
-            if line.kind == "session_status" {
+            if line.kind() == EventKind::SessionStatus {
                 statuses.push(line);
             }
         }
@@ -886,7 +889,7 @@ fn on_reraise(history: &History, send: impl FnOnce() + Send + 'static) -> thread
     let watcher = history.log.watch();
     thread::spawn(move || {
         support::read_until(watcher, "a re-raised permission_requested line", |line| {
-            line.kind == "permission_requested"
+            line.kind() == EventKind::PermissionRequested
         });
         send();
     })
@@ -908,13 +911,18 @@ fn reply_allow(request_id: &str) -> Delivery {
 }
 
 fn line<'a>(lines: &'a [contract::Envelope], kind: &str) -> &'a contract::Envelope {
-    lines.iter().find(|line| line.kind == kind).unwrap()
+    lines
+        .iter()
+        .find(|line| line.kind() == EventKind::from_name(kind))
+        .unwrap()
 }
 
 /// The complete, ordered kinds of `new`: every line the resumed turn
 /// wrote, so a duplicated, missing or reordered line fails.
-fn new_kinds(new: &[contract::Envelope]) -> Vec<&str> {
-    new.iter().map(|line| line.kind.as_str()).collect()
+fn new_kinds(new: &[contract::Envelope]) -> Vec<String> {
+    new.iter()
+        .map(|line| line.kind().name().to_owned())
+        .collect()
 }
 
 /// The complete kinds of a resumed turn that re-raises its request, runs
@@ -988,7 +996,7 @@ fn assert_exited_settled(history: &History, summary: &r#loop::Summary) {
     let exited = history
         .lines()
         .into_iter()
-        .rfind(|line| line.kind == "fiber_exited")
+        .rfind(|line| line.kind() == EventKind::FiberExited)
         .expect("the exit was written");
     assert!(
         exited.payload.get("suspended_on").is_none(),
@@ -1044,7 +1052,7 @@ fn a_resumed_rewrite_is_raised_judged_and_run_again() {
     let new = history.new_lines();
     let raised: Vec<_> = new
         .iter()
-        .filter(|line| line.kind == "permission_requested")
+        .filter(|line| line.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].payload["request_id"], "r_9");
@@ -1089,7 +1097,8 @@ fn a_resumed_refusal_answers_its_request_by_hook_and_runs_the_rest() {
 
     let new = history.new_lines();
     assert!(
-        !new.iter().any(|line| line.kind == "permission_requested"),
+        !new.iter()
+            .any(|line| line.kind() == EventKind::PermissionRequested),
         "the request is not raised again"
     );
     assert_eq!(new_kinds(&new), settled_kinds());
@@ -1106,7 +1115,7 @@ fn a_resumed_refusal_answers_its_request_by_hook_and_runs_the_rest() {
     );
     let completed: Vec<_> = new
         .iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .collect();
     assert_eq!(completed.len(), 2);
     assert_eq!(completed[0].payload["status"], "denied");
@@ -1140,7 +1149,8 @@ fn a_resumed_hook_failure_answers_its_request_by_hook_and_fails_the_call() {
 
     let new = history.new_lines();
     assert!(
-        !new.iter().any(|line| line.kind == "permission_requested"),
+        !new.iter()
+            .any(|line| line.kind() == EventKind::PermissionRequested),
         "the request is not raised again"
     );
     assert_eq!(new_kinds(&new), refused_kinds());
@@ -1174,7 +1184,8 @@ fn a_resumed_rewrite_the_schema_rejects_answers_its_request_by_hook() {
 
     let new = history.new_lines();
     assert!(
-        !new.iter().any(|line| line.kind == "permission_requested"),
+        !new.iter()
+            .any(|line| line.kind() == EventKind::PermissionRequested),
         "the request is not raised again"
     );
     assert_eq!(new_kinds(&new), refused_kinds());
@@ -1207,7 +1218,8 @@ fn a_resumed_rewrite_its_effects_reject_answers_its_request_by_hook() {
 
     let new = history.new_lines();
     assert!(
-        !new.iter().any(|line| line.kind == "permission_requested"),
+        !new.iter()
+            .any(|line| line.kind() == EventKind::PermissionRequested),
         "the request is not raised again"
     );
     assert_eq!(new_kinds(&new), refused_kinds());
@@ -1269,7 +1281,8 @@ fn a_resumed_rewrite_into_credentials_is_refused_without_asking() {
 
     let new = history.new_lines();
     assert!(
-        !new.iter().any(|line| line.kind == "permission_requested"),
+        !new.iter()
+            .any(|line| line.kind() == EventKind::PermissionRequested),
         "the request is not raised again"
     );
     let resolved = line(&new, "permission_resolved");
@@ -1299,7 +1312,7 @@ fn a_call_gone_at_resume_raises_its_request_and_fails_on_allow() {
     let new = history.new_lines();
     let raised: Vec<_> = new
         .iter()
-        .filter(|line| line.kind == "permission_requested")
+        .filter(|line| line.kind() == EventKind::PermissionRequested)
         .collect();
     assert_eq!(raised.len(), 1);
     assert_eq!(raised[0].payload["request_id"], "r_9");
@@ -1650,7 +1663,7 @@ fn suspended_form() -> (Session, Arc<AskTool>, Arc<FakeHooks>, String) {
         Some(143),
     )
     .unwrap();
-    let lines = session.events_until("fiber_exited", |line| line.kind == "fiber_exited");
+    let lines = session.events_until("fiber_exited", |line| line.kind() == EventKind::FiberExited);
     assert_eq!(
         of_kind(&lines, "fiber_exited")[0].payload["suspended_on"],
         request

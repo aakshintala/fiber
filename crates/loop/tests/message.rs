@@ -15,6 +15,7 @@ mod support;
 
 use std::sync::mpsc;
 
+use contract::events::EventKind;
 use contract::inbox::{Ack, Answer, Delivery, SessionMessage};
 use contract::provider::Input;
 use contract::{CommandId, Envelope, ErrorCode, SessionId};
@@ -67,8 +68,8 @@ fn drop_of(command: &str) -> (Delivery, mpsc::Receiver<Answer>) {
     (Delivery::SteerDrop(CommandId(command.into()), ack), answers)
 }
 
-fn plain() -> Vec<&'static str> {
-    vec![
+fn plain() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -82,6 +83,9 @@ fn plain() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// The user messages `request` sends, in order.
@@ -199,10 +203,16 @@ fn a_session_message_mid_turn_is_applied_as_steering_at_the_next_step() {
         "assistant_message_completed",
         "turn_completed",
     ];
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let queued: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "steering_queue")
+        .filter(|line| line.kind() == EventKind::SteeringQueue)
         .collect();
     assert_eq!(queued.len(), 2);
     assert_eq!(queued[0].payload["messages"][0]["source"], "session");
@@ -211,7 +221,7 @@ fn a_session_message_mid_turn_is_applied_as_steering_at_the_next_step() {
     assert_eq!(queued[1].payload["messages"], json!([]));
     let applied = lines
         .iter()
-        .find(|line| line.kind == "steering_applied")
+        .find(|line| line.kind() == EventKind::SteeringApplied)
         .expect("the message applies");
     assert_eq!(applied.payload["source"], "session");
     assert_eq!(applied.payload["from_session_id"], FROM);
@@ -299,7 +309,7 @@ fn a_steer_drop_naming_a_queued_session_message_mid_turn_is_stale_and_the_messag
     let lines = session.lines();
     let applied = lines
         .iter()
-        .find(|line| line.kind == "steering_applied")
+        .find(|line| line.kind() == EventKind::SteeringApplied)
         .expect("the message applies");
     assert_eq!(applied.payload["command_id"], COMMAND);
     assert_eq!(applied.payload["content"][0]["text"], json!(NAMED));

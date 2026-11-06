@@ -8,7 +8,7 @@ use std::os::unix::process::ExitStatusExt as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use contract::SessionId;
@@ -23,6 +23,27 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// How long after a crash the keeper holds its jobs before stopping them
+/// shutdown-style (`docs/tools.md`, "The keeper").
+const KEEPER_BOUND: Duration = Duration::from_secs(7_200);
+
+/// The keeper's post-crash hold bound: 2 hours, or the debug-only
+/// millisecond hook when it parses. Release builds always enforce 2 hours.
+#[cfg(debug_assertions)]
+fn keeper_bound() -> Duration {
+    std::env::var("FIBER_KEEPER_BOUND_MS")
+        .ok()
+        .and_then(|text| text.parse::<u64>().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(KEEPER_BOUND)
+}
+
+/// The keeper's post-crash hold bound: 2 hours.
+#[cfg(not(debug_assertions))]
+fn keeper_bound() -> Duration {
+    KEEPER_BOUND
 }
 
 enum Sink {
@@ -186,6 +207,28 @@ impl Runtime {
                                 &contract::events::Event::JobCompleted(tools::kept_end(
                                     job_id, &exit,
                                 )),
+                                None,
+                                None,
+                            )
+                            .map_err(|error| io::Error::other(error.to_string()))?;
+                    }
+                }
+                Step::WriteKeeperTimeout { job_id, exit, .. } => {
+                    if lock(&self.logged).contains(&job_id.0) {
+                        continue;
+                    }
+                    if let Some(log) = log.as_ref() {
+                        let mut completed = tools::kept_end(job_id, &exit);
+                        completed.status = contract::events::Outcome::Failed;
+                        completed.error = Some(contract::shapes::Failure {
+                            code: contract::ErrorCode::KeeperTimeout,
+                            message: "The session stayed gone for 2 hours after a crash, so its keeper stopped the job.".into(),
+                            retry_after_ms: None,
+                            provider: None,
+                        });
+                        log.log
+                            .append(
+                                &contract::events::Event::JobCompleted(completed),
                                 None,
                                 None,
                             )
@@ -480,6 +523,25 @@ impl Runtime {
         }
     }
 
+    /// Parks until the post-crash bound, then stops every held job. After
+    /// each return the clock is re-read and the bound decides only when it
+    /// has passed, so an early wake re-parks instead of firing.
+    fn bound_watch(self: &Arc<Self>, bound_at: Instant) {
+        let parker = Arc::new(support::clock::Parker::new());
+        let wake: Arc<dyn contract::clock::Wake> = parker.clone();
+        self.clock.subscribe(Arc::downgrade(&wake));
+        loop {
+            let seen = parker.generation();
+            if self.clock.now() >= bound_at {
+                match self.decide(Supervisor::bound_elapsed) {
+                    Ok(()) | Err(_) => {}
+                }
+                return;
+            }
+            parker.park(&*self.clock, Some(bound_at), seen);
+        }
+    }
+
     fn control(self: &Arc<Self>, control: UnixStream) -> io::Result<()> {
         let mut reader = BufReader::new(control);
         let mut chunk = Vec::new();
@@ -599,7 +661,14 @@ pub(crate) fn serve(
     control
         .join()
         .map_err(|_| io::Error::other("keeper control reader panicked"))??;
+    let crash_at = runtime.clock.now();
     runtime.decide(Supervisor::lifeline_eof)?;
+    if lock(&runtime.log).is_some() {
+        // The crash left jobs behind: watch the bound from the crash instant.
+        let bound_at = crash_at + keeper_bound();
+        let watcher = Arc::clone(&runtime);
+        thread::spawn(move || watcher.bound_watch(bound_at));
+    }
     result
         .recv()
         .map_err(|_| io::Error::other("keeper ending lost"))?

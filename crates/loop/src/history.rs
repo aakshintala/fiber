@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::handoff::Carry;
 use crate::resume::Resumed;
-use crate::reviewer::render_reviewed;
+use crate::reviewer::{PendingAsks, render_reviewed};
 
 /// The kinds the fold reads a payload of. Every other line's envelope is
 /// read and its payload never parsed, except the three request kinds the
@@ -31,6 +31,8 @@ const FOLDED: &[EventKind] = &[
     EventKind::PreambleBuilt,
     EventKind::ModelChanged,
     EventKind::PermissionResolved,
+    EventKind::InteractionRequested,
+    EventKind::InteractionResolved,
     EventKind::TurnStarted,
     EventKind::SteeringApplied,
     EventKind::TextCompleted,
@@ -105,6 +107,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // there keeps the model its call was first recorded at, as the
         // ledger does for the own segment. Never written anywhere.
         parent_ledger: crate::usage::Ledger::default(),
+        asks: PendingAsks::default(),
         // The jobs running and the session log's path as of the line read.
         running: Carry::default(),
         // Each turn's latest `turn_started` since the last completed
@@ -159,6 +162,10 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         return Err(Error::NoSessionStarted);
     };
     resumed.workspace = workspace;
+    // An unresolved eliciting request survives a resume only through the
+    // persisted store: the fold's running store rides the seed carry, so
+    // the resumed loop stages no request twice and answers what is pending.
+    resumed.seed.pending_asks = pass.asks.clone();
     // Every request the own segment left open belongs to an earlier process.
     resumed.exit.carry();
     resumed.orphans = pass.orphans.finish();
@@ -177,6 +184,9 @@ struct Pass {
     workspace: Option<String>,
     previous_workspace: Option<String>,
     parent_ledger: crate::usage::Ledger,
+    // The eliciting requests a person's answer resolves, staged by
+    // request id for the fold's own reviewed list.
+    asks: PendingAsks,
     running: Carry,
     starts: HashMap<TurnId, ((usize, u64), Carry)>,
     orphans: crate::jobs::Orphans,
@@ -204,18 +214,20 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     let kind = line.kind();
     // The requests an earlier process left open are read from the raw
     // payload: a line outside the handoff window never has to parse for the
-    // exit to report them.
-    if pass.own_segment
-        && line.is_durable()
-        && matches!(
+    // exit to report them. Interaction lines seed the exit the same way,
+    // then fall through to the typed parse below, so the reviewer reads
+    // the person's answers with what they answer.
+    if pass.own_segment && line.is_durable() {
+        if kind == EventKind::PermissionRequested {
+            resumed.exit.seed_raw(&line.kind, &line.payload);
+            return Ok(());
+        }
+        if matches!(
             kind,
-            EventKind::PermissionRequested
-                | EventKind::InteractionRequested
-                | EventKind::InteractionResolved
-        )
-    {
-        resumed.exit.seed_raw(&line.kind, &line.payload);
-        return Ok(());
+            EventKind::InteractionRequested | EventKind::InteractionResolved
+        ) {
+            resumed.exit.seed_raw(&line.kind, &line.payload);
+        }
     }
     // Process starts close the reviewer's summary window even though the
     // fold itself does not use them. Leave every other unused payload unread.
@@ -272,6 +284,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             &event,
             line.action_id.as_ref(),
             line.seq,
+            &mut pass.asks,
         );
     }
     resumed.known_hosts.fold(&event);
@@ -411,6 +424,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
                 session_log: pass.running.session_log.clone(),
                 skills: pass.running.skills.clone(),
                 reviewed: pass.running.reviewed.clone(),
+                pending_asks: pass.asks.clone(),
                 ..Carry::default()
             };
             pass.starts

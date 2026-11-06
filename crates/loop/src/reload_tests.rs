@@ -6,7 +6,7 @@
     reason = "test code"
 )]
 use super::*;
-use contract::events::PreambleReason;
+use contract::events::{EventKind, PreambleReason};
 use contract::inbox::Answer;
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::{ErrorCode, SessionId, TurnId};
@@ -31,7 +31,10 @@ fn failed_reload_append_drops_the_ack_without_accepting_it() {
         Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&rx),
         Err(mpsc::RecvTimeoutError::Disconnected)
     ));
-    assert_eq!(kinds(&w.looped), ["session_started"]);
+    assert_eq!(
+        kinds(&w.looped),
+        ["session_started"].map(EventKind::from_name)
+    );
 }
 
 #[test]
@@ -100,13 +103,13 @@ fn a_deferred_reload_runs_once_before_the_next_prompt() {
     // after `reloaded` ("Repository code", "`reloaded`", "`extensions_loaded`");
     // it leaves the rest open, so the rest is a set.
     let seen = kinds(&w.looped);
-    let at = |name: &str| seen.iter().position(|kind| kind == name).unwrap();
-    assert_eq!(seen[0], "session_started");
+    let at = |name: &str| seen.iter().position(|kind| kind.name() == name).unwrap();
+    assert_eq!(seen[0], EventKind::SessionStarted);
     assert!(at("repository_code_offered") < at("repository_code_resolved"));
     assert!(at("reloaded") < at("extensions_loaded"));
     assert!(at("reloaded") < at("preamble_built"));
     let mut set = seen.clone();
-    set.sort();
+    set.sort_by(|a, b| a.name().cmp(b.name()));
     assert_eq!(
         set,
         [
@@ -117,6 +120,7 @@ fn a_deferred_reload_runs_once_before_the_next_prompt() {
             "repository_code_resolved",
             "session_started"
         ]
+        .map(EventKind::from_name)
     );
 }
 struct EmptyRepository;
@@ -247,11 +251,11 @@ fn ack() -> (Ack, mpsc::Receiver<Answer>) {
     let (tx, rx) = mpsc::channel();
     (Ack(Box::new(move |answer| tx.send(answer).unwrap())), rx)
 }
-fn kinds(looped: &Loop) -> Vec<String> {
+fn kinds(looped: &Loop) -> Vec<EventKind> {
     log::read(looped.log.dir())
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect()
 }
 
@@ -364,7 +368,10 @@ fn a_late_apply_drains_the_prepared_hooks_state() {
         hooks.state.lock().unwrap().is_empty(),
         "the drain takes the recorded state, as `apply_reload` does"
     );
-    assert_eq!(kinds(&w.looped), ["session_started", "extensions_loaded"]);
+    assert_eq!(
+        kinds(&w.looped),
+        ["session_started", "extensions_loaded"].map(EventKind::from_name)
+    );
 }
 
 #[test]
@@ -416,7 +423,10 @@ fn closing_busy_and_rewound_refuse_without_preparing_or_writing() {
             }
         );
         assert_eq!(called.load(Ordering::SeqCst), 0);
-        assert_eq!(kinds(&w.looped), ["session_started"]);
+        assert_eq!(
+            kinds(&w.looped),
+            ["session_started"].map(EventKind::from_name)
+        );
     }
 }
 
@@ -433,7 +443,10 @@ fn no_reloader_is_invalid_arguments() {
             .code,
         ErrorCode::InvalidArguments
     );
-    assert_eq!(kinds(&w.looped), ["session_started"]);
+    assert_eq!(
+        kinds(&w.looped),
+        ["session_started"].map(EventKind::from_name)
+    );
 }
 
 #[test]
@@ -473,6 +486,7 @@ fn applied_reload_swaps_settings_before_installation_and_accepts_after_the_event
             "extensions_loaded",
             "preamble_built"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(w.looped.preamble_reason, PreambleReason::Reload);
     assert_eq!(w.looped.prompt.system.as_deref(), Some("new system"));
@@ -508,7 +522,7 @@ fn failed_preamble_append_ends_after_the_reload_ack_is_accepted() {
     );
     assert_eq!(
         kinds(&w.looped),
-        ["session_started", "reloaded", "extensions_loaded"]
+        ["session_started", "reloaded", "extensions_loaded"].map(EventKind::from_name)
     );
 }
 
@@ -556,7 +570,7 @@ fn a_reload_groups_the_prepared_notices_by_code() {
         move || {
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
-                let done = line.kind == "preamble_built";
+                let done = line.kind() == EventKind::PreambleBuilt;
                 streamed.push(line);
                 if done {
                     break;
@@ -565,14 +579,19 @@ fn a_reload_groups_the_prepared_notices_by_code() {
             streamed
         },
     );
-    let seen: Vec<&str> = streamed.iter().map(|line| line.kind.as_str()).collect();
+    let seen: Vec<EventKind> = streamed.iter().map(|line| line.kind()).collect();
     assert_eq!(
         seen,
-        ["reloaded", "extensions_loaded", "notice", "preamble_built"]
+        [
+            EventKind::Reloaded,
+            EventKind::ExtensionsLoaded,
+            EventKind::Notice,
+            EventKind::PreambleBuilt
+        ]
     );
     let notices: Vec<_> = streamed
         .iter()
-        .filter(|line| line.kind == "notice")
+        .filter(|line| line.kind() == EventKind::Notice)
         .collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].payload["code"], "extension_shadowed");
@@ -607,7 +626,10 @@ fn a_preparer_cancel_rejects_without_applying() {
             .code,
         ErrorCode::Closing
     );
-    assert_eq!(kinds(&w.looped), ["session_started"]);
+    assert_eq!(
+        kinds(&w.looped),
+        ["session_started"].map(EventKind::from_name)
+    );
 }
 
 /// A tool that only names itself: the reconnect merge test registers
@@ -653,7 +675,10 @@ fn take_reconnect_without_a_reconnector_rejects_invalid_arguments() {
             .code,
         ErrorCode::InvalidArguments
     );
-    assert_eq!(kinds(&w.looped), ["session_started"]);
+    assert_eq!(
+        kinds(&w.looped),
+        ["session_started"].map(EventKind::from_name)
+    );
 }
 
 #[test]
@@ -694,7 +719,7 @@ fn take_reconnect_merges_the_registry_and_writes_the_records_before_accepting() 
     );
     assert!(w.looped.tools.contains_key("db__list"));
     assert!(!w.looped.tools.contains_key("db__old"));
-    assert!(kinds(&w.looped).contains(&"mcp_server_ready".to_owned()));
+    assert!(kinds(&w.looped).contains(&EventKind::McpServerReady));
 }
 
 #[test]
@@ -771,7 +796,7 @@ fn reconnects_in_one_idle_batch_start_one_failing_process() {
                 let failed: Vec<_> = log::read(w.looped.log.dir())
                     .unwrap()
                     .into_iter()
-                    .filter(|line| line.kind == "mcp_server_failed")
+                    .filter(|line| line.kind() == EventKind::McpServerFailed)
                     .collect();
                 assert_eq!(failed.len(), 1);
                 assert_eq!(failed[0].payload["server"], "db");
@@ -818,8 +843,8 @@ fn a_duplicate_behind_a_rejected_reconnect_keeps_its_own_verdict() {
     }
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     let mut recorded = kinds(&w.looped);
-    recorded.sort();
-    assert_eq!(recorded, ["session_started"]);
+    recorded.sort_by(|a, b| a.name().cmp(b.name()));
+    assert_eq!(recorded, ["session_started"].map(EventKind::from_name));
 }
 
 #[test]
@@ -845,7 +870,10 @@ fn reconnect_duplicates_accept_after_the_shared_outcome_and_a_later_retry_runs()
                 Ack(Box::new(move |outcome| {
                     // An accepted join cannot precede the durable server outcome
                     // (`docs/mcp.md`, "Servers, their state and the per-server commands").
-                    assert_eq!(log::read(log.dir()).unwrap().last().unwrap().kind, expected);
+                    assert_eq!(
+                        log::read(log.dir()).unwrap().last().unwrap().kind(),
+                        EventKind::from_name(expected)
+                    );
                     observed.send(()).unwrap();
                     (joined.0)(outcome);
                 })),
@@ -914,14 +942,19 @@ fn reconnect_duplicates_accept_after_the_shared_outcome_and_a_later_retry_runs()
         // Count outcomes without pinning incidental event order; the ack
         // callback above checks the required publication-before-accept edge.
         let mut recorded = kinds(&w.looped);
-        recorded.sort();
-        assert_eq!(recorded, [expected, expected, "session_started"]);
+        recorded.sort_by(|a, b| a.name().cmp(b.name()));
+        assert_eq!(
+            recorded.iter().map(|kind| kind.name()).collect::<Vec<_>>(),
+            [expected, expected, "session_started"]
+        );
     }
 }
 
 #[test]
 fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
-    use contract::events::{McpServerFailed, McpServerReady, ReloadFailure, ServerFailure};
+    use contract::events::{
+        EventKind, McpServerFailed, McpServerReady, ReloadFailure, ServerFailure,
+    };
     let mut w = world();
     w.looped = w.looped.reloader(Arc::new(|_| {
         let mut next = prepared();
@@ -975,6 +1008,7 @@ fn applied_reload_writes_server_records_before_reloaded_with_the_grouping() {
             "extensions_loaded",
             "preamble_built"
         ]
+        .map(EventKind::from_name)
     );
     let lines: Vec<_> = log::read(w.looped.log.dir())
         .unwrap()
