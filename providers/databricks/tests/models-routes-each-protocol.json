@@ -22,7 +22,7 @@
         },
         "reply": {
           "status": 200,
-          "body": "{\"model_services\":[{\"name\":\"model-services/system.ai.claude-opus-5\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.gpt-6-sol\",\"supported_api_types\":[\"openai/v1/responses\",\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.glm-5.3\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.gemma-ocr\",\"supported_api_types\":[\"embeddings\"]}]}"
+          "body": "{\"model_services\":[{\"name\":\"model-services/system.ai.claude-opus-5\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.gpt-6-sol\",\"supported_api_types\":[\"openai/v1/responses\",\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.glm-5.3\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.gemini-2-5-flash\",\"supported_api_types\":[\"mlflow/v1/chat/completions\"]},{\"name\":\"model-services/system.ai.gemma-ocr\",\"supported_api_types\":[\"embeddings\"]}]}"
         }
       },
       {
@@ -36,7 +36,7 @@
         },
         "reply": {
           "status": 200,
-          "body": "{\"models\":[{\"model_name\":\"claude-opus-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":200000,\"max_output\":64000},\"capabilities\":{\"vision\":true},\"base_pricing\":{\"input_cost_per_million_tokens\":5,\"output_cost_per_million_tokens\":25,\"cache_read_input_cost_per_million_tokens\":0.5,\"cache_creation_input_cost_per_million_tokens\":6.25}},{\"model_name\":\"gpt-6-sol\",\"mode\":\"chat\",\"provider_type\":\"OPENAI\",\"context_window\":{\"max_input\":400000,\"max_output\":160000},\"capabilities\":{\"vision\":false},\"base_pricing\":{\"input_per_million_tokens\":2,\"output_per_million_tokens\":8}},{\"model_name\":\"glm-5.3\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":200000,\"max_tokens\":32000},\"capabilities\":{},\"base_pricing\":{\"input_cost_per_million_tokens\":0.6,\"output_cost_per_million_tokens\":2.2,\"cache_read_input_cost_per_million_tokens\":0.06}}]}"
+          "body": "{\"models\":[{\"model_name\":\"claude-opus-5\",\"mode\":\"chat\",\"provider_type\":\"ANTHROPIC\",\"context_window\":{\"max_input\":200000,\"max_output\":64000},\"capabilities\":{\"vision\":true},\"base_pricing\":{\"input_cost_per_million_tokens\":5,\"output_cost_per_million_tokens\":25,\"cache_read_input_cost_per_million_tokens\":0.5,\"cache_creation_input_cost_per_million_tokens\":6.25}},{\"model_name\":\"gpt-6-sol\",\"mode\":\"chat\",\"provider_type\":\"OPENAI\",\"context_window\":{\"max_input\":400000,\"max_output\":160000},\"capabilities\":{\"vision\":false},\"base_pricing\":{\"input_per_million_tokens\":2,\"output_per_million_tokens\":8}},{\"model_name\":\"glm-5.3\",\"mode\":\"chat\",\"provider_type\":\"MICROSOFT_FOUNDRY\",\"context_window\":{\"max_input\":200000,\"max_tokens\":32000},\"capabilities\":{},\"base_pricing\":{\"input_cost_per_million_tokens\":0.6,\"output_cost_per_million_tokens\":2.2,\"cache_read_input_cost_per_million_tokens\":0.06}},{\"model_name\":\"gemini-2-5-flash\",\"mode\":\"chat\",\"provider_type\":\"GEMINI_ENTERPRISE\",\"context_window\":{\"max_input\":200000,\"max_tokens\":32000},\"capabilities\":{},\"base_pricing\":{\"input_cost_per_million_tokens\":0.6,\"output_cost_per_million_tokens\":2.2,\"cache_read_input_cost_per_million_tokens\":0.06}}]}"
         }
       }
     ]
@@ -60,6 +60,25 @@
         "output": 25,
         "cache_read": 0.5,
         "cache_write": 6.25
+      }
+    },
+    {
+      "id": "databricks-gemini-2-5-flash",
+      "protocol": "openai-completions",
+      "base_url": "https://{workspace}/ai-gateway/mlflow/v1",
+      "compat": {
+        "gemini": true
+      },
+      "context_window": 200000,
+      "max_output_tokens": 32000,
+      "input": [
+        "text"
+      ],
+      "cost": {
+        "input": 0.6,
+        "output": 2.2,
+        "cache_read": 0.06,
+        "cache_write": 0
       }
     },
     {
