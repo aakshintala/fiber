@@ -5,8 +5,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use contract::HubEventKind;
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use serde_json::{Value, json};
 
 use super::super::{App, Effect};
@@ -41,7 +43,7 @@ fn home() -> App {
 /// A `hub_hello` this terminal reads.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -51,7 +53,7 @@ fn hello() -> Line {
 /// One envelope of the attached session.
 fn session_line(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -140,7 +142,7 @@ fn live(session: &str, state: Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -156,7 +158,7 @@ fn session_accepted(session: &str, id: &str) -> Line {
     let mut payload = serde_json::Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.to_owned()));
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -170,7 +172,7 @@ fn session_accepted(session: &str, id: &str) -> Line {
 /// A session `command_rejected` for `id` from `session` with `code`.
 fn session_refused(session: &str, id: &str, code: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_rejected".to_owned(),
+        kind: EventKind::CommandRejected.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -193,7 +195,7 @@ fn session_refused(session: &str, id: &str, code: &str) -> Line {
 /// A hub refusal for an in-flight subscribe.
 fn hub_refused(id: &str, code: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({

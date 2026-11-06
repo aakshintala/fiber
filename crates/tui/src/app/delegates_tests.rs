@@ -10,7 +10,9 @@ use crate::home::{Launch, Spot as HomeSpot};
 use crate::keys::{Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::TargetId;
+use contract::HubEventKind;
 use contract::JobId;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -41,7 +43,7 @@ fn panel_app(names: &[&str]) -> App {
 /// One envelope of the attached session.
 fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -244,7 +246,7 @@ fn home() -> App {
 /// A `hub_hello` this terminal reads.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -289,7 +291,7 @@ fn live(session: &str, state: Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -315,7 +317,7 @@ fn delegate_status(session: &str, parent: &str, state: Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -420,7 +422,7 @@ fn session_accepted(session: &str, id: &str) -> Line {
     let mut payload = serde_json::Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.to_owned()));
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -439,7 +441,7 @@ fn session_refused(session: &str, id: &str) -> Line {
 /// A session `command_rejected` for `id` from `session` with `code`.
 fn session_refused_with(session: &str, id: &str, code: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_rejected".to_owned(),
+        kind: EventKind::CommandRejected.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
