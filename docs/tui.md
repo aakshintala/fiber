@@ -3176,7 +3176,7 @@ handler never sees their keys. The choices, their keys and the `reply` they
 send stay the terminal's, so an extension never approves a tool call
 (`docs/extensions.md`, "Host calls").
 
-**Not built yet (slot key handlers and extension slash commands): see #2720.**
+**Not built yet (extension slash commands): see #2720.**
 
 A TUI extension also binds keys to its own commands or to built-in actions, and
 adds slash commands, which join the one list ("Slash commands"). A theme stays
