@@ -1851,7 +1851,7 @@ impl App {
                 // draft alone.
                 let row = if *kind == Kind::Shell {
                     shell::parse(&draft.expand())
-                        .map(|(command, _)| shell::error_row(command, code.name(), &message))
+                        .map(|(command, _)| shell::error_row(command, &code, &message))
                 } else {
                     None
                 };

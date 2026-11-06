@@ -1,6 +1,7 @@
 //! Tests for `!` commands.
 
 use super::{answered, error_row, item, parse, ran, row};
+use contract::ErrorCode;
 use contract::events::{CommandResult, ShellCommand};
 use contract::shapes::Process;
 
@@ -120,7 +121,10 @@ fn a_row_with_empty_output_is_the_command_the_note_and_the_exit() {
 
 #[test]
 fn an_error_row_shows_what_arrived_verbatim() {
-    assert_eq!(error_row("ls", "busy", "no"), "! ls\nbusy: no");
+    assert_eq!(
+        error_row("ls", &ErrorCode::from_name("busy"), "no"),
+        "! ls\nbusy: no"
+    );
 }
 
 #[test]

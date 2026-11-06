@@ -1,6 +1,7 @@
 //! `!` commands: a draft that runs a shell command, and how its output
 //! shows (`docs/tui.md`, "The input box"; `docs/invocation.md`, `shell`).
 
+use contract::ErrorCode;
 use contract::SessionId;
 use contract::events::{CommandResult, ShellCommand};
 use contract::shapes::Process;
@@ -89,7 +90,8 @@ pub(crate) fn row(command: &str, note: &str, output: &str, process: &Process) ->
 
 /// The transcript row for a command that could not start: `! <command>`
 /// then `<code>: <message>` exactly as it arrived.
-pub(crate) fn error_row(command: &str, code: &str, message: &str) -> String {
+pub(crate) fn error_row(command: &str, code: &ErrorCode, message: &str) -> String {
+    let code = code.name();
     format!("! {command}\n{code}: {message}")
 }
 
