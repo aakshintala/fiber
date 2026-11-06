@@ -235,29 +235,24 @@ fn missing(error: InspectError) -> ReadError {
         return ReadError::from(FileError::from(error));
     };
     let Some(parent) = path.parent().map(Path::to_path_buf) else {
-        return not_found(path);
+        return ReadError::from(FileError::from(InspectError::NotFound { path }));
     };
     let Some(wanted) = path
         .file_name()
         .and_then(|name| name.to_str())
         .map(str::to_owned)
     else {
-        return not_found(path);
+        return ReadError::from(FileError::from(InspectError::NotFound { path }));
     };
     let (shown, omitted) = space_lookalikes(&parent, &wanted);
     if shown.is_empty() {
-        return not_found(path);
+        return ReadError::from(FileError::from(InspectError::NotFound { path }));
     }
     ReadError::SpaceLookalike {
         requested: path,
         shown,
         omitted,
     }
-}
-
-/// The plain missing-path error, unchanged by the lookalike scan.
-fn not_found(path: PathBuf) -> ReadError {
-    ReadError::from(FileError::from(InspectError::NotFound { path }))
 }
 
 /// Every whitespace character folded to one plain space for sibling-name

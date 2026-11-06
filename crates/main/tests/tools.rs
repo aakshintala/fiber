@@ -748,9 +748,14 @@ fn deny_listed_lookalike_sibling_is_denied() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     // (`docs/testing.md`, "Event streams"): the turn's kinds as a set with
-    // counts, so a duplicated or missing event fails; one denied call gives
-    // `denied_kinds(1)` (`docs/testing.md`, "What a test asserts": the call
-    // is refused and never starts).
+    // counts, so a duplicated or missing event fails. One denied call gives
+    // `denied_kinds(1)`: the model emitted one call (`docs/events.md`,
+    // "tool_call_requested"), the credential deny refuses it first
+    // (`docs/permissions.md`, "The order a call is judged in") and records
+    // the refusal (`docs/permissions.md`, "What the log records":
+    // `permission_resolved` carries the decision and what decided it), and a
+    // blocked call ends as `tool_call_completed` with `status: denied`
+    // (`docs/permissions.md`, "What the log records").
     assert_eq!(run.kinds(), denied_kinds(1));
     let requested: Vec<_> = run
         .lines
@@ -767,7 +772,10 @@ fn deny_listed_lookalike_sibling_is_denied() {
         .iter()
         .filter(|line| line["kind"] == "tool_call_completed")
         .collect();
-    // One call means one of each line (`docs/testing.md`, "Event streams").
+    // One call means one of each line: one emitted call (`docs/events.md`,
+    // "tool_call_requested"), one recorded refusal (`docs/permissions.md`,
+    // "What the log records"), one denied outcome (`docs/permissions.md`,
+    // "What the log records").
     assert_eq!(requested.len(), 1);
     assert_eq!(resolved.len(), 1);
     assert_eq!(completed.len(), 1);
@@ -780,6 +788,9 @@ fn deny_listed_lookalike_sibling_is_denied() {
     );
     assert_eq!(completed[0]["payload"]["status"], "denied");
     assert_eq!(completed[0]["payload"]["reason"], "credentials");
+    // No `tool_call_started` means the call never ran (`docs/permissions.md`,
+    // "What the log records": `tool_call_requested` with no
+    // `tool_call_started` is provably never run).
     assert!(
         !run.lines
             .iter()
