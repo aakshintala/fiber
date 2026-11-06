@@ -688,6 +688,54 @@ fn pages_on_a_non_pdf_names_the_file() {
     );
 }
 
+#[test]
+fn single_space_lookalike_names_one() {
+    let error = ReadError::SpaceLookalike {
+        requested: PathBuf::from("/w/shot AM.png"),
+        shown: vec![PathBuf::from("/w/shot\u{202f}AM.png")],
+        omitted: 0,
+    };
+    assert_eq!(error.code(), ErrorCode::NotFound);
+    assert_eq!(
+        error.to_string(),
+        "`/w/shot AM.png` does not exist. An entry in the same directory matches it apart from Unicode spaces, so none was opened: `shot\u{202f}AM.png`."
+    );
+}
+
+#[test]
+fn several_space_lookalikes_list_every_name() {
+    let error = ReadError::SpaceLookalike {
+        requested: PathBuf::from("/w/shot AM.png"),
+        shown: vec![
+            PathBuf::from("/w/shot\u{202f}AM.png"),
+            PathBuf::from("/w/shot\u{a0}AM.png"),
+        ],
+        omitted: 0,
+    };
+    assert_eq!(error.code(), ErrorCode::NotFound);
+    assert_eq!(
+        error.to_string(),
+        "`/w/shot AM.png` does not exist. These names match it apart from Unicode spaces, so none was opened: `shot\u{202f}AM.png`, `shot\u{a0}AM.png`."
+    );
+}
+
+#[test]
+fn many_space_lookalikes_show_ten_and_a_count() {
+    let shown: Vec<PathBuf> = (0..10)
+        .map(|n| PathBuf::from(format!("/w/shot{n:02}\u{202f}AM.png")))
+        .collect();
+    let error = ReadError::SpaceLookalike {
+        requested: PathBuf::from("/w/shot AM.png"),
+        shown,
+        omitted: 2,
+    };
+    assert_eq!(error.code(), ErrorCode::NotFound);
+    assert_eq!(
+        error.to_string(),
+        "`/w/shot AM.png` does not exist. These names match it apart from Unicode spaces, so none was opened (showing 10 of 12): `shot00\u{202f}AM.png`, `shot01\u{202f}AM.png`, `shot02\u{202f}AM.png`, `shot03\u{202f}AM.png`, `shot04\u{202f}AM.png`, `shot05\u{202f}AM.png`, `shot06\u{202f}AM.png`, `shot07\u{202f}AM.png`, `shot08\u{202f}AM.png`, `shot09\u{202f}AM.png`, and 2 more are not listed."
+    );
+}
+
 /// The parser's refusal of a URL with a space in its host.
 fn invalid_uri() -> ureq::http::uri::InvalidUri {
     "http://exa mple.com/"
