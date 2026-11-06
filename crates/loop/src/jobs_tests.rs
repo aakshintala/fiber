@@ -1858,7 +1858,7 @@ fn a_notice_while_a_call_runs_is_written_at_the_next_step_boundary() {
     let lines = world.turn_lines();
     assert_eq!(
         kinds(&lines),
-        two_steps_with(&RAN, &(["job_completed"].map(EventKind::from_name)))
+        two_steps_with(&RAN, &[EventKind::JobCompleted])
     );
     assert_notice(&lines[9], JOB);
     assert_eq!(lines[0].payload["input"].as_array().unwrap().len(), 1);
@@ -1957,7 +1957,7 @@ fn a_steer_drop_while_running_finds_the_steer_behind_a_notice() {
     let lines = world.turn_lines();
     assert_eq!(
         kinds(&lines),
-        two_steps_with(&RAN, &(["job_completed"].map(EventKind::from_name)))
+        two_steps_with(&RAN, &[EventKind::JobCompleted])
     );
     assert_notice(&lines[9], JOB);
 }
@@ -2062,7 +2062,7 @@ fn a_notice_during_an_approval_wait_is_written_at_the_next_boundary() {
     ];
     assert_eq!(
         kinds(&lines),
-        two_steps_with(&called, &(["job_completed"].map(EventKind::from_name)))
+        two_steps_with(&called, &[EventKind::JobCompleted])
     );
     assert_notice(&lines[11], JOB);
 }
@@ -3765,7 +3765,11 @@ fn a_batch_while_a_call_runs_is_written_at_the_next_step_boundary() {
         kinds(&lines),
         two_steps_with(
             &RAN,
-            &(["job_line", "steering_applied", "job_completed"].map(EventKind::from_name))
+            &[
+                EventKind::JobLine,
+                EventKind::SteeringApplied,
+                EventKind::JobCompleted
+            ]
         )
     );
     assert_eq!(lines[9].payload["lines"], "ready");
@@ -3919,7 +3923,7 @@ fn a_notice_admitted_during_an_approval_wait_is_claimed_once_at_the_next_boundar
         kinds(&lines),
         two_steps_with(
             &called,
-            &(["delegate_finished", "job_completed"].map(EventKind::from_name))
+            &[EventKind::DelegateFinished, EventKind::JobCompleted]
         )
     );
     let finished = lines

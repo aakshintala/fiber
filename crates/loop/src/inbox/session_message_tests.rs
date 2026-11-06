@@ -2063,12 +2063,12 @@ fn add_directory_while_an_approval_waits_is_written_and_a_later_call_sees_it() {
         Ok(None)
     ));
     // The event reaches the log before the ack runs.
-    let kinds: Vec<String> = log::read(&home.path().join("s_test"))
+    let kinds: Vec<EventKind> = log::read(&home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
-    assert!(kinds.contains(&"directory_added".to_owned()), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::DirectoryAdded), "{kinds:?}");
     // A later call with paths under the added root fast-paths against
     // the loop's folded roots.
     let verdict = crate::permission::judge(

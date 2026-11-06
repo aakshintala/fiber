@@ -691,6 +691,10 @@ fn a_blocking_hook_failure_rejects_the_prompt_and_writes_only_its_notices() {
     );
 }
 
+/// The passing hook's two contexts reach the log as `context_added` after
+/// `turn_started` and before the first step, and the refused message adds
+/// none (`docs/testing.md`, "Event streams": the test holds the turn, so
+/// the held inputs plus the promises below fix the order and the count).
 #[test]
 fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
     let hooks = Arc::new(FakeHooks::new());
@@ -734,6 +738,21 @@ fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
     drop(world.looped.take());
 
     let all = lines(&world);
+    // The complete ordered kinds (`docs/testing.md`, "Event streams"). The
+    // order is promised by: `session_started` is the first line, then
+    // `preamble_built`, then `opening_message`, and the first turn runs
+    // after the opening message and before `turn_started`
+    // (`docs/events.md`, "Session and turn"; `docs/loop.md`, "Starting a
+    // turn"); each context a hook adds is one `context_added` line, and a
+    // refused message is neither logged nor sent, so exactly the two
+    // passed contexts appear here (`docs/extensions.md`, "The hook
+    // points"); `step_started` opens the step before anything else in it
+    // (`docs/loop.md`, "One step"; `docs/events.md`, "Session and turn");
+    // `assistant_message_started` opens the call before the request is
+    // sent, the reply's `text_completed` follows it, one `usage_recorded`
+    // per model call, `assistant_message_completed` closes the reply and
+    // `turn_completed` the turn (`docs/events.md`, "Actions",
+    // "`usage_recorded`").
     assert_eq!(
         kinds(&all),
         [
@@ -756,6 +775,9 @@ fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
         .iter()
         .filter(|line| line.kind() == EventKind::ContextAdded)
         .collect();
+    // Two contexts in, two `context_added` lines out: each is logged as
+    // `context_added`, and the refused message is neither logged nor sent
+    // (`docs/extensions.md`, "The hook points").
     assert_eq!(contexts.len(), 2, "a refused message adds no context");
     assert_eq!(contexts[0].payload["hook"], "before_message");
     assert_eq!(contexts[0].payload["extension"], "fiber.test/first");

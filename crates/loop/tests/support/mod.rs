@@ -2065,25 +2065,27 @@ pub(crate) fn attempt_numbers(lines: &[Envelope]) -> Vec<u32> {
     let mut pending: Option<u32> = None;
     let mut last_started: Option<u32> = None;
     for line in lines {
-        match line.kind().name() {
-            "assistant_message_started" => {
-                let n = pending.map(|p| p + 1).unwrap_or(1);
-                numbers.push(n);
-                last_started = Some(n);
+        // `==` and not `match`: a `_` arm on the enum would trip
+        // `wildcard_enum_match_arm` (`docs/code-quality/lints.md`).
+        let kind = line.kind();
+        if kind == EventKind::AssistantMessageStarted {
+            let n = pending.map(|p| p + 1).unwrap_or(1);
+            numbers.push(n);
+            last_started = Some(n);
+            pending = None;
+        } else if kind == EventKind::AssistantMessageCompleted {
+            let failed = line.payload.get("outcome").and_then(|o| o.as_str()) == Some("failed");
+            if failed {
+                pending = last_started;
+            } else {
                 pending = None;
             }
-            "assistant_message_completed" => {
-                let failed = line.payload.get("outcome").and_then(|o| o.as_str()) == Some("failed");
-                if failed {
-                    pending = last_started;
-                } else {
-                    pending = None;
-                }
-            }
-            "handoff_started" | "handoff_completed" | "step_started" | "turn_started" => {
-                pending = None;
-            }
-            _ => {}
+        } else if kind == EventKind::HandoffStarted
+            || kind == EventKind::HandoffCompleted
+            || kind == EventKind::StepStarted
+            || kind == EventKind::TurnStarted
+        {
+            pending = None;
         }
     }
     numbers

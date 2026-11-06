@@ -119,7 +119,7 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     let turn = lines[3].turn_id.clone().unwrap();
     let action = lines[5].action_id.clone().unwrap();
     for line in &lines[3..] {
-        assert_eq!(line.turn_id.as_ref(), Some(&turn), "{}", line.kind);
+        assert_eq!(line.turn_id.as_ref(), Some(&turn), "{}", line.kind().name());
     }
     let deltas: Vec<_> = lines
         .iter()

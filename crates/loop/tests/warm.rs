@@ -765,10 +765,15 @@ fn a_failed_refresh_after_its_generation_writes_its_usage_then_the_notice() {
         if line.kind() == EventKind::SessionStatus {
             continue;
         }
-        let required = match line.kind().name() {
-            "turn_completed" | "notice" => true,
-            "usage_recorded" => line.payload["generation_id"] == "gen_refresh",
-            _ => false,
+        // `==` and not `match`: a `_` arm on the enum would trip
+        // `wildcard_enum_match_arm` (`docs/code-quality/lints.md`).
+        let kind = line.kind();
+        let required = if kind == EventKind::TurnCompleted || kind == EventKind::Notice {
+            true
+        } else if kind == EventKind::UsageRecorded {
+            line.payload["generation_id"] == "gen_refresh"
+        } else {
+            false
         };
         if required {
             seen.push(line);
