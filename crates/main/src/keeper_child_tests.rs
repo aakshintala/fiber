@@ -159,7 +159,12 @@ struct Keeper {
 }
 
 fn serve_keeper(name: &str, id: SessionId, clock: Arc<fakes::clock::FakeClock>) -> Keeper {
-    let home = fakes::TempDir::new(name);
+    // The takeover binds the session socket under this home: root it under
+    // a short parent so the socket path fits SUN_LEN on macOS
+    // (SOCKET_PATH_MAX is 103 there). A system temp dir such as the macOS
+    // TMPDIR is long enough that only the longest prefix fails, which reads
+    // as a missing bound watcher with a leaked job.
+    let home = fakes::TempDir::under(std::path::Path::new("/tmp"), name);
     let sessions = home.path().join("projects/p/sessions");
     drop(log::Log::create(&sessions, id.clone(), clock.clone()).expect("session log"));
     let (life, lifeline) = std::io::pipe().expect("lifeline");
