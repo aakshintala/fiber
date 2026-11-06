@@ -30,8 +30,9 @@ struct Script {
     unreadable_argv: Vec<Pid>,
     unreadable_current: bool,
     argv_reads: std::cell::RefCell<Vec<Pid>>,
-    /// A staged mid-walk exit, fired once by the read it targets.
-    flip: std::cell::RefCell<Option<MidWalkFlip>>,
+    /// Staged mid-walk exits, each fired once by the read it targets, in
+    /// walk order so consecutive exits re-home the same child twice.
+    flips: std::cell::RefCell<Vec<MidWalkFlip>>,
     /// Pids whose parent was read, in call order.
     parent_reads: std::cell::RefCell<Vec<Pid>>,
     /// The child's parent as the walk sees it after the flip fired: a
@@ -57,25 +58,31 @@ struct MidWalkFlip {
 }
 
 impl Script {
+    /// The child's parent as the walk currently sees it: the re-homed
+    /// view after an earlier flip fired, else the staged tree.
+    fn effective_parent(&self, child: Pid) -> Option<Pid> {
+        if let Some(view) = self.reparented.borrow().get(&child).copied() {
+            return view;
+        }
+        self.parents.get(&child).copied()
+    }
+
     /// Fire the staged exit when this read is the one it targets: the
     /// read that follows the parent read which returned the old parent
     /// for the flip's child. Re-homes the child, drops the exited
-    /// parent's rows, and reports that this read fails. One shot.
+    /// parent's rows, and reports that this read fails. Each staged flip
+    /// fires once, in walk order.
     fn fire_flip(&self, pid: Pid, is_parent_read: bool) -> bool {
-        let fire = self.flip.borrow().as_ref().is_some_and(|flip| {
+        let at = self.flips.borrow().iter().position(|flip| {
             is_parent_read == flip.fail_parent
                 && pid == flip.old_parent
                 && self.parent_reads.borrow().contains(&flip.child)
-                && self.parents.get(&flip.child) == Some(&flip.old_parent)
+                && self.effective_parent(flip.child) == Some(flip.old_parent)
         });
-        if !fire {
+        let Some(at) = at else {
             return false;
-        }
-        let flip = self
-            .flip
-            .borrow_mut()
-            .take()
-            .expect("a staged flip fires once");
+        };
+        let flip = self.flips.borrow_mut().remove(at);
         self.reparented
             .borrow_mut()
             .insert(flip.child, flip.new_parent);
@@ -269,12 +276,12 @@ fn exiting_parent_tree(new_parent: Option<Pid>, fail_parent: bool) -> Script {
         ]
         .into_iter()
         .collect(),
-        flip: std::cell::RefCell::new(Some(MidWalkFlip {
+        flips: std::cell::RefCell::new(vec![MidWalkFlip {
             child: Pid(100),
             old_parent: Pid(50),
             new_parent,
             fail_parent,
-        })),
+        }]),
         ..Script::default()
     }
 }
@@ -363,6 +370,34 @@ fn ancestors_continues_when_the_parent_vanishes_after_its_owner_read() {
                 pid: Pid(60),
                 euid: EffectiveUid(1000),
             },
+            ProcessInfo {
+                pid: Pid(70),
+                euid: EffectiveUid(1000),
+            },
+            ProcessInfo {
+                pid: Pid(1),
+                euid: EffectiveUid(0),
+            },
+        ]
+    );
+}
+
+#[test]
+fn ancestors_continues_through_two_consecutive_parent_exits() {
+    // PID 50 exits after its owner is read, re-homing PID 100 to PID 60,
+    // then PID 60 exits before its own parent is read, re-homing PID 100
+    // to PID 70: the second recovery must re-read PID 100's parent (now
+    // 70), not the vanished PID 50's, so the walk continues through 70.
+    let read = exiting_parent_tree(Some(Pid(60)), true);
+    read.flips.borrow_mut().push(MidWalkFlip {
+        child: Pid(100),
+        old_parent: Pid(60),
+        new_parent: Some(Pid(70)),
+        fail_parent: true,
+    });
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap(),
+        [
             ProcessInfo {
                 pid: Pid(70),
                 euid: EffectiveUid(1000),

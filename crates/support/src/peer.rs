@@ -173,6 +173,11 @@ pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
                 if reread == child {
                     return Err(IncompleteWalk { pid: child });
                 }
+                // The re-read observes `previous`'s current parent, so the
+                // walk continues from there: restore `child` to the
+                // surviving predecessor, or a second exit would re-read
+                // the vanished pid's parent and refuse.
+                child = previous;
                 reread
             }
         };
