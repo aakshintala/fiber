@@ -275,6 +275,35 @@ fn stop_after_the_end_is_false_and_calls_nothing() {
 }
 
 #[test]
+fn stop_after_a_sent_stop_is_false_and_calls_once() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let (fired_tx, fired_rx) = mpsc::channel();
+    let opened = jobs
+        .open(opening(
+            "echo hi",
+            Stop(Box::new(move || fired_tx.send(()).unwrap())),
+        ))
+        .unwrap();
+    let id = opened.started.job_id.clone();
+    assert!(jobs.stop(&id), "a stop of a running job is true");
+    assert!(
+        fired_rx.try_recv().is_ok(),
+        "the first stop called the closure"
+    );
+    (opened.end.0)(completed(&id.0, Outcome::Completed));
+    assert!(
+        jobs.ended(Deadline::after(MUST_SUCCEED_WITHIN)).is_some(),
+        "the reported end is queued for ended()"
+    );
+    assert!(!jobs.stop(&id), "a stop after the reported end is false");
+    assert!(
+        fired_rx.try_recv().is_err(),
+        "a stop after the end called the closure again"
+    );
+}
+
+#[test]
 fn background_asks_each_live_call_and_counts_the_ones_that_move() {
     let dir = fakes_temp();
     let jobs = FakeJobs::new(dir.path());

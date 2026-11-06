@@ -336,7 +336,7 @@ fn stop_and_end(
     id: &contract::JobId,
     marker: &str,
 ) -> contract::events::JobCompleted {
-    assert!(jobs.stop(id), "the stop sent");
+    let _ = jobs.stop(id);
     match jobs.ended(fakes::Deadline::after(STEP)) {
         Some(ended) => ended,
         None => {
