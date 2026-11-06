@@ -159,3 +159,12 @@ crates/fakes-contract/src/rules_tests.rs	fiber-4277	plan	2026-11-06T12:03:22Z	ro
 crates/fakes-contract/src/scripted_provider_tests.rs	fiber-4277	plan	2026-11-06T12:03:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes-contract/src/skills_tests.rs	fiber-4277	plan	2026-11-06T12:03:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes-contract/src/tool_io_tests.rs	fiber-4277	plan	2026-11-06T12:03:22Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/cli/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/doors/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/extensions/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/jobs/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/loop/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/main/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/mcp/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/routing/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
+crates/tools/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
