@@ -242,7 +242,11 @@ impl Attention {
             let Ok(value) = serde_json::from_slice::<Value>(line) else {
                 return false;
             };
-            value.get("kind").and_then(Value::as_str) == Some("turn_completed")
+            value
+                .get("kind")
+                .and_then(Value::as_str)
+                .map(contract::events::EventKind::from_name)
+                == Some(contract::events::EventKind::TurnCompleted)
                 && value.get("ts").and_then(Value::as_u64) == Some(since)
         })
     }

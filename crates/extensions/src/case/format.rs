@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use contract::ErrorCode;
+use contract::events::EventKind;
 use serde_json::{Map, Value};
 
 /// The injected validator for a session case's script bytes.
@@ -128,7 +129,7 @@ pub struct ClockAdvance {
 #[derive(Clone)]
 pub struct Selector {
     /// The event kind to find.
-    pub kind: String,
+    pub kind: EventKind,
     /// The occurrence to find, defaulting to the first.
     pub nth: usize,
 }
@@ -728,7 +729,7 @@ fn parse_selector(value: &Value, field: &str) -> Result<Selector, String> {
         .as_object()
         .ok_or_else(|| format!("{field}: expected an object"))?;
     only(map, &["kind", "nth"], field)?;
-    let kind = string(map, "kind", field)?;
+    let kind = EventKind::from_name(&string(map, "kind", field)?);
     let nth = match map.get("nth") {
         None => 1,
         Some(_) => {

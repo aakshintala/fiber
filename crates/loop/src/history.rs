@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use contract::events::EventKind;
 use contract::events::{
     CallStatus, Control, DecidedBy, Decision, Event, ModelSettings, Outcome, SkillLoad,
 };
@@ -21,34 +22,34 @@ use crate::reviewer::render_reviewed;
 /// The kinds the fold reads a payload of. Every other line's envelope is
 /// read and its payload never parsed, except the three request kinds the
 /// exit's seed reads from the raw payload.
-const FOLDED: &[&str] = &[
-    "session_started",
-    "directory_added",
-    "instruction_file",
-    "tool_call_completed",
-    "usage_recorded",
-    "preamble_built",
-    "model_changed",
-    "permission_resolved",
-    "turn_started",
-    "steering_applied",
-    "text_completed",
-    "assistant_message_completed",
-    "turn_completed",
-    "tool_call_requested",
-    "job_started",
-    "job_completed",
-    "delegate_started",
-    "rewound",
-    "opening_message",
-    "skills_resent",
-    "handoff_completed",
-    "reviewer_kept",
-    "repository_code_offered",
-    "repository_code_resolved",
-    "session_named",
-    "quota_noticed",
-    "quota_rearmed",
+const FOLDED: &[EventKind] = &[
+    EventKind::SessionStarted,
+    EventKind::DirectoryAdded,
+    EventKind::InstructionFile,
+    EventKind::ToolCallCompleted,
+    EventKind::UsageRecorded,
+    EventKind::PreambleBuilt,
+    EventKind::ModelChanged,
+    EventKind::PermissionResolved,
+    EventKind::TurnStarted,
+    EventKind::SteeringApplied,
+    EventKind::TextCompleted,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
+    EventKind::ToolCallRequested,
+    EventKind::JobStarted,
+    EventKind::JobCompleted,
+    EventKind::DelegateStarted,
+    EventKind::Rewound,
+    EventKind::OpeningMessage,
+    EventKind::SkillsResent,
+    EventKind::HandoffCompleted,
+    EventKind::ReviewerKept,
+    EventKind::RepositoryCodeOffered,
+    EventKind::RepositoryCodeResolved,
+    EventKind::SessionNamed,
+    EventKind::QuotaNoticed,
+    EventKind::QuotaRearmed,
 ];
 
 /// Folds `segments`, root first, in one pass, one line at a time, holding
@@ -200,14 +201,17 @@ fn file_seen(details: &Option<Value>) -> Option<(PathBuf, u64)> {
 /// window. The ledger and the reviewer's block count fold only the own
 /// segment.
 fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<(), Error> {
+    let kind = line.kind();
     // The requests an earlier process left open are read from the raw
     // payload: a line outside the handoff window never has to parse for the
     // exit to report them.
     if pass.own_segment
         && line.is_durable()
         && matches!(
-            line.kind.as_str(),
-            "permission_requested" | "interaction_requested" | "interaction_resolved"
+            kind,
+            EventKind::PermissionRequested
+                | EventKind::InteractionRequested
+                | EventKind::InteractionResolved
         )
     {
         resumed.exit.seed_raw(&line.kind, &line.payload);
@@ -215,15 +219,14 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     }
     // Process starts close the reviewer's summary window even though the
     // fold itself does not use them. Leave every other unused payload unread.
-    if !line.is_durable() || !(FOLDED.contains(&line.kind.as_str()) || line.kind == "fiber_started")
-    {
+    if !line.is_durable() || !(FOLDED.contains(&kind) || kind == EventKind::FiberStarted) {
         return Ok(());
     }
     // A load is a Fiber-run completion carrying `control.skill`, whichever
     // tool wrote it (`docs/tools.md`, "What a result carries"): the same
     // `admitted` rule the live render uses, read from the raw payload. No
     // early return: the guard and the typed parse below run unchanged.
-    if line.kind == "tool_call_completed" {
+    if kind == EventKind::ToolCallCompleted {
         let completed = line.payload.get("status").and_then(Value::as_str) == Some("completed");
         if completed
             && let Some(action) = line.action_id.as_ref()
@@ -249,7 +252,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     // affect known hosts or the seen-files fold below: a file tool's
     // details-only completion carries the reserved `file_seen` record, so
     // it folds.
-    if line.kind == "tool_call_completed"
+    if kind == EventKind::ToolCallCompleted
         && !line.payload.contains_key("hosts_surfaced")
         && !line.payload.contains_key("changes")
         && !line.payload.contains_key("details")
@@ -260,7 +263,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
         return Ok(());
     };
     let summary = crate::reviewer::summary_skips(&mut pass.summary, &event);
-    if !FOLDED.contains(&line.kind.as_str()) {
+    if !FOLDED.contains(&kind) {
         return Ok(());
     }
     if !summary {
@@ -512,26 +515,24 @@ pub(crate) fn read_window(
 /// they are shaped like an image: the history replays the call byte for
 /// byte. In memory only; nothing is written or copied.
 fn rewrite_images(line: &mut Envelope, dir: &Path) {
-    match line.kind.as_str() {
-        "turn_started" => {
-            if let Some(items) = line.payload.get_mut("input").and_then(Value::as_array_mut) {
-                for item in items {
-                    if let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) {
-                        rewrite_parts(content, dir);
-                    }
+    let kind = line.kind();
+    if kind == EventKind::TurnStarted {
+        if let Some(items) = line.payload.get_mut("input").and_then(Value::as_array_mut) {
+            for item in items {
+                if let Some(content) = item.get_mut("content").and_then(Value::as_array_mut) {
+                    rewrite_parts(content, dir);
                 }
             }
         }
-        "steering_applied" | "tool_call_completed" => {
-            if let Some(content) = line
-                .payload
-                .get_mut("content")
-                .and_then(Value::as_array_mut)
-            {
-                rewrite_parts(content, dir);
-            }
-        }
-        _ => {}
+    } else if matches!(
+        kind,
+        EventKind::SteeringApplied | EventKind::ToolCallCompleted
+    ) && let Some(content) = line
+        .payload
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+    {
+        rewrite_parts(content, dir);
     }
 }
 

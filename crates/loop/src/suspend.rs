@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use contract::events::EventKind;
 use contract::events::{
     Event, InteractionRequested, PermissionRequested, ToolCallRequested, TurnOutcome,
 };
@@ -47,10 +48,13 @@ pub(crate) fn interaction_pending(
     pending: &RequestId,
 ) -> Result<Option<(InteractionRequested, TurnId, ActionId)>, Error> {
     let mut found = None;
-    let kinds = ["interaction_requested", "interaction_resolved"];
+    let kinds = [
+        EventKind::InteractionRequested,
+        EventKind::InteractionResolved,
+    ];
     for line in lines
         .iter()
-        .filter(|line| line.is_durable() && kinds.contains(&line.kind.as_str()))
+        .filter(|line| line.is_durable() && kinds.contains(&line.kind()))
     {
         match Event::from_envelope(line).map_err(Error::Unreadable)? {
             // A request raised again is logged again: the latest stands.
@@ -76,7 +80,7 @@ pub(crate) fn interaction_pending(
     // must have one (`docs/events.md`, "Resume").
     let started = lines.iter().any(|line| {
         line.is_durable()
-            && line.kind == "tool_call_started"
+            && line.kind() == EventKind::ToolCallStarted
             && line.action_id.as_ref() == Some(action)
     });
     if !started {

@@ -532,7 +532,7 @@ impl App {
             if !matches!(self.on_key(crate::keys::Key::Enter, now), Effect::Send(_)) {
                 return None;
             }
-        } else if self.clear_pending_command_id().is_none()
+        } else if !self.outbox.waiting_any(&crate::app::Waiting::ClearStart)
             && !matches!(self.clear(), Effect::Send(_))
         {
             return None;

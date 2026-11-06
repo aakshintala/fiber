@@ -548,6 +548,60 @@ fn an_answer_for_another_id_changes_nothing() {
     assert_eq!(app.draft(), "fresh");
 }
 
+/// A second fetch while one page is out sends nothing: the outbox tag
+/// is the one-out guard, and it still names the waiting page.
+#[test]
+fn a_second_fetch_while_one_is_out_sends_nothing_and_keeps_the_first_tag() {
+    let mut app = connected();
+    let first = asks(&mut app, Key::Up);
+    answer(
+        &mut app,
+        &first,
+        &[line(S_B, "one"), line(S_B, "two")],
+        Some(7),
+    );
+    assert_eq!(app.draft(), "one");
+    assert!(sent(press(&mut app, Key::Up)).is_empty());
+    // At the end of what is loaded the next page goes out with `before`.
+    let next = asks(&mut app, Key::Up);
+    assert_eq!(next["args"]["before"], 7);
+    let id = next["id"].as_str().unwrap().to_owned();
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::History));
+    // While that page is out, no second fetch goes out and the tag stays.
+    assert!(app.fetch_history(true).is_none());
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::History));
+    assert!(sent(press(&mut app, Key::Up)).is_empty());
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::History));
+}
+
+/// A rejection for an unknown id returns false and keeps the wait: no
+/// notice, and the live tag still guards the next fetch.
+#[test]
+fn a_rejection_for_an_unknown_id_returns_false_and_keeps_the_wait() {
+    let mut app = connected();
+    let request = asks(&mut app, Key::Up);
+    let id = request["id"].as_str().unwrap().to_owned();
+    assert!(!app.history_rejected("c_unknown", contract::ErrorCode::Busy, "other"));
+    assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::History));
+    assert!(sent(press(&mut app, Key::Up)).is_empty());
+}
+
+/// A repeat answer for one id falls through to the generic path: the
+/// tag is gone, so nothing new folds and the draft stays.
+#[test]
+fn a_repeat_answer_for_one_id_falls_through_with_the_tag_gone() {
+    let mut app = connected();
+    let request = asks(&mut app, Key::Up);
+    let id = request["id"].as_str().unwrap().to_owned();
+    answer(&mut app, &request, &[line(S_B, "fresh")], None);
+    assert_eq!(app.outbox.waiting(&id), None);
+    assert_eq!(app.draft(), "fresh");
+    assert!(answer(&mut app, &request, &[line(S_B, "again")], None).is_empty());
+    assert_eq!(app.draft(), "fresh");
+    press(&mut app, Key::Up);
+    assert_eq!(app.draft(), "fresh");
+}
+
 #[test]
 fn with_the_link_not_up_nothing_is_sent() {
     let mut app = app();

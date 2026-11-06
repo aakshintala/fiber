@@ -540,7 +540,12 @@ impl Isolation {
             .iter()
             .find(|user| user.id == self.session)
             .and_then(|creator| log::last_line(&creator.dir))
-            .is_some_and(|line| line.kind == "rewound" || line.kind == "moved")
+            .is_some_and(|line| {
+                matches!(
+                    line.kind(),
+                    contract::events::EventKind::Rewound | contract::events::EventKind::Moved
+                )
+            })
         {
             return;
         }

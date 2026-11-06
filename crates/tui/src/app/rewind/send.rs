@@ -21,12 +21,10 @@ use crate::keys::Key;
 use crate::link::history_answer;
 use crate::swapped::Spot;
 
-/// A `rewind` request waiting for its answer.
+/// A `rewind` request waiting for its answer. The outbox `RewindSend`
+/// tag is the sole record of its command id.
 #[derive(Debug)]
-struct SendPending {
-    /// The command id the answer names.
-    id: String,
-}
+struct SendPending;
 
 /// How the Rewind row draws.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,14 +86,16 @@ impl Send {
         self.summarise = summarise;
     }
 
-    /// Whether `id` is the `rewind` on the wire.
-    pub(super) fn matches(&self, id: &str) -> bool {
-        self.send.as_ref().is_some_and(|send| send.id == id)
+    /// Whether a `rewind` is on the wire. The outbox `RewindSend` tag
+    /// is the sole record of its command id.
+    pub(super) fn matches(&self) -> bool {
+        self.send.is_some()
     }
+    // debt: matches() duplicates is_sending(); PR #4204's merge frees the shrink to is_sending().
 
     /// Notes the `rewind` request on the wire.
-    pub(super) fn begin(&mut self, id: String) {
-        self.send = Some(SendPending { id });
+    pub(super) fn begin(&mut self) {
+        self.send = Some(SendPending);
     }
 
     /// Settles the sent `rewind` as refused with the start's message.
@@ -134,6 +134,11 @@ impl App {
         let Some(session) = self.session().cloned() else {
             return Effect::None;
         };
+        // A reopen orphans the old view's tags: forget them before the
+        // new view registers its own, so a late answer for the old view
+        // folds nowhere and leaves the new wait alone.
+        self.outbox.forget(&Waiting::RewindHistory);
+        self.outbox.forget(&Waiting::RewindSend);
         self.rewind = Rewind::open(session.clone());
         let id = mint();
         let line = session_command(
@@ -143,22 +148,23 @@ impl App {
             Some(history_args(&session, &session, None, None)),
         );
         self.outbox.wait(&id, Waiting::RewindHistory);
-        self.rewind
-            .fold
-            .begin_wait(id.clone(), self.motion().now_instant());
+        self.rewind.fold.begin_wait(self.motion().now_instant());
         Effect::Send(vec![line.to_string()])
     }
 
     /// Folds a `command_accepted` into the open rewind view when it
     /// answers the pending `history`: a late answer, or another view's,
-    /// matches no pending id and folds nowhere. Answers the next page
+    /// names no waiting tag and folds nowhere. Answers the next page
     /// while the chain runs on, so one request stays on the wire.
     pub(crate) fn rewind_answered(
         &mut self,
         envelope: &Envelope,
         accepted: &CommandAccepted,
     ) -> Vec<String> {
-        if !self.rewind.fold.take_wait(&accepted.command_id.0) {
+        if self.outbox.waiting(&accepted.command_id.0) != Some(Waiting::RewindHistory) {
+            return Vec::new();
+        }
+        if !self.rewind.fold.take_wait() {
             return Vec::new();
         }
         self.outbox.settled(&accepted.command_id.0);
@@ -181,9 +187,7 @@ impl App {
         let id = mint();
         let line = session_command(&id, "history", &session, Some(args));
         self.outbox.wait(&id, Waiting::RewindHistory);
-        self.rewind
-            .fold
-            .begin_wait(id.clone(), self.motion().now_instant());
+        self.rewind.fold.begin_wait(self.motion().now_instant());
         vec![line.to_string()]
     }
 
@@ -195,10 +199,11 @@ impl App {
         let Some(id) = rejected.command_id.as_ref() else {
             return;
         };
-        if self.rewind.fold.take_wait(&id.0) {
+        let waiting = self.outbox.waiting(&id.0);
+        if waiting == Some(Waiting::RewindHistory) && self.rewind.fold.take_wait() {
             self.outbox.settled(&id.0);
             self.rewind.fold.fail_walk(rejected.message.clone());
-        } else if self.rewind.send.matches(&id.0) {
+        } else if waiting == Some(Waiting::RewindSend) && self.rewind.send.matches() {
             self.outbox.settled(&id.0);
             self.rewind.send.refuse(
                 rejected.message.clone(),
@@ -226,7 +231,7 @@ impl App {
                 true
             }
             Waiting::RewindSend => {
-                if !self.rewind.send.matches(id) {
+                if !self.rewind.send.matches() {
                     return false;
                 }
                 self.rewind_refused(&CommandRejected {
@@ -288,7 +293,7 @@ impl App {
         match waiting {
             Waiting::Fork => {}
             Waiting::RewindSend => {
-                if !self.rewind.send.matches(&accepted.command_id.0) {
+                if !self.rewind.send.matches() {
                     return None;
                 }
             }
@@ -585,7 +590,7 @@ impl App {
         let id = mint();
         let line = session_command(&id, "rewind", &serving, Some(args));
         self.outbox.wait(&id, Waiting::RewindSend);
-        self.rewind.send.begin(id.clone());
+        self.rewind.send.begin();
         Effect::Send(vec![line.to_string()])
     }
 
