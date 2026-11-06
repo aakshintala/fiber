@@ -50,7 +50,7 @@ such as `config`, which reaches the shared atomic write's failure-injection
 hooks in `support`, and no workflow or script runs one.
 
 cargo-mutants stops each mutant's test run after 120 s, set with `--timeout 120`
-in `.github/workflows/ci.yml` (`mutants`). A mutant stopped there fails CI as a
+in `.github/workflows/mutants-scheduled.yml`. A mutant stopped there fails CI as a
 timeout, not as caught. A mutant can turn a wait that returns
 early into one that runs out its whole bound, as a flipped comparison in a
 `wait_timeout_while` predicate does, so the deadlines one test can run out in
@@ -67,7 +67,7 @@ A pull request whose every changed file is a docs file, as `docs/ci.md`, "Select
 defines it, passes the check with a message saying so: the doc was wrong and
 the code was right, so no test can show the bug.
 
-Diff-scoped mutation testing has two known limits. It cannot see a change in
-one place leaving other code under-tested. A pull request that changes only
-test code runs no mutants, so a rewritten test could lose its teeth unnoticed
-until the next code change in that crate runs mutants against it.
+Nightly whole-workspace mutation testing has one known limit: it cannot see
+a change in one place leaving other code under-tested. The nightly run covers
+every crate whether or not the day's changes touched it, so a rewritten test
+has its teeth checked that night.
