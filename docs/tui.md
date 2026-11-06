@@ -2894,6 +2894,7 @@ the panel's scrolling. So every extension keeps what "History and paging" and
 itself is a separate client of the hub, not a TUI extension.
 
 ### The slots
+Not built yet (replaced input box; home, view, and overlay slots): see #688.
 
 | Slot | What it draws |
 |---|---|
@@ -3105,6 +3106,8 @@ in.
 | `waiting` | How many sessions wait; absent at zero |
 | `quota` | The `quota` answer (`docs/events.md`, "Payload types"): an array ordered by provider name, then credential label, each with `provider`, `credential` and `windows` or `credit` or `unreachable`, plus `notice_at`; absent when the built-in draws no Quota segment |
 
+**Not built yet (extension card replacement): see #688.**
+
 **`card:<name>`** draws one panel card through its slot: `session`,
 `changed_files`, `delegates`, `jobs`, or one an extension adds. A widget's
 narrow row and a running delegate's narrow row draw through the same slot
@@ -3157,10 +3160,14 @@ five-file cut does, and the replacement inherits the cap.
 | `lines` | The widget's lines |
 | `open` | Whether the person opened the widget |
 
+**Not built yet: see #688.**
+
 `layout` places regions and never draws them. It receives the screen's size
 and returns a rectangle for each region it shows. A region it leaves out is not
 shown. A layout does its own narrow layout and shedding. The "Fiber needs
 40×10" floor stays the terminal's.
+
+**Not built yet: see #688.**
 
 The three draw-only slots decide how an approval, a question form or a
 repository's offer looks, never what it sends. An extension may restyle and
@@ -3168,6 +3175,8 @@ reorder their choices. It cannot add, remove or relabel one, and its key
 handler never sees their keys. The choices, their keys and the `reply` they
 send stay the terminal's, so an extension never approves a tool call
 (`docs/extensions.md`, "Host calls").
+
+**Not built yet (slot key handlers and extension slash commands): see #2720.**
 
 A TUI extension also binds keys to its own commands or to built-in actions, and
 adds slash commands, which join the one list ("Slash commands"). A theme stays
@@ -3192,6 +3201,7 @@ line is a list of spans:
 - `link` makes the span a link, opened on click as "Links" says.
 - `click` makes the span's cells a click target with that id ("Input and
   focus").
+Not built yet (click targets): see #2720.
 
 The terminal builds the cells and the plain text from the same spans, so what
 is drawn and what is selected, copied or searched cannot differ. It measures
@@ -3218,6 +3228,9 @@ built-in rather than drawing the row again.
   runs with the `session_id` when the session on screen changes, and
   whole-screen slots (`layout`, `input_box`, keys, slash commands) receive the
   session on screen.
+
+Not built yet (`on_focus`): see #2720.
+
 - **Only for a session that loaded its session half,** at a version inside
   the range the TUI extension declares. For any other session it draws
   nothing and the built-in rendering stands, with one notice naming the
@@ -3282,6 +3295,7 @@ it, every rebuild of the conversation would call Lua for every row. The timings
 do not carry over to Linux; the call counts do.
 
 ### Input and focus
+**Not built yet (focused-slot keys, clicks, focus, and extension slash commands): see #2720.**
 
 One slot has focus at a time: the input box, an open view, or the overlay on
 top. An extension's view or overlay takes focus when it opens.
@@ -3389,11 +3403,17 @@ and a timeout switches the extension off as a still one does.
   until `/reload`; a key handler that passes its timeout switches the
   extension off until `/reload`, with one `extension_failed` notice, as a
   still renderer does.
+
+Not built yet (focused-slot key and click handlers): see #2720.
+
 - **A timeout** switches the extension off in this terminal until `/reload`
   (the terminal command; the `reload` driver command acts on the session
   only), with one notice. Every slot it replaced
   goes back to its built-in, so one freeze of the declared length is the most
   it can cost.
+
+**Not built yet (replaced input box): see #688.**
+
 - **A replaced input box that fails** hands over to the built-in box with the
   draft intact, because the terminal holds the draft.
 
