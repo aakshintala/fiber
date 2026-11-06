@@ -59,13 +59,13 @@ fn scale_1_lines_decode_against_the_contract() {
         let decoded = contract::events::Event::from_envelope(&envelope).unwrap_or_else(|err| {
             panic!(
                 "line {line_number} ({}) does not decode: {err}",
-                envelope.kind
+                envelope.kind().name()
             )
         });
         assert!(
             decoded.is_some(),
             "line {line_number} ({}) is unknown to the contract",
-            envelope.kind
+            envelope.kind().name()
         );
     }
 }

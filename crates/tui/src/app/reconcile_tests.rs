@@ -10,6 +10,8 @@ use super::super::{App, Link};
 use crate::app::testkit::{SESSION as S_A, hello, home_with};
 use crate::home::Launch;
 use crate::link::Line;
+use contract::HubEventKind;
+use contract::events::EventKind;
 
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
 
@@ -32,7 +34,7 @@ fn launch() -> Launch {
 /// A hub answer of `kind` with `payload`.
 fn hub(kind: &str, payload: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: kind.to_owned(),
+        kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().cloned().unwrap_or_default(),
@@ -42,7 +44,7 @@ fn hub(kind: &str, payload: Value) -> Line {
 /// A line from `session` of `kind` with `payload`.
 fn from(session: &str, kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

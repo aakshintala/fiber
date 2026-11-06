@@ -9,8 +9,10 @@ use crate::home::{Launch, Spot};
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Pointer, TargetId};
+use contract::HubEventKind;
 use contract::SessionId;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -55,7 +57,7 @@ fn live(session: &str, name: &str) -> Line {
 /// A live `session_status` at an explicit watermark.
 fn live_since(session: &str, name: &str, since: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -107,7 +109,7 @@ fn recent_only(app: &mut App, session: &str, name: &str) {
 /// A hub `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"session_id": session, "how": how})
@@ -120,7 +122,7 @@ fn left(session: &str, how: &str) -> Line {
 /// A hub `command_accepted` for `id` with `result`.
 fn accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -135,7 +137,7 @@ fn accepted(id: &str, result: Value) -> Line {
 /// A hub `command_rejected` for `id` with `code` and `message`.
 fn rejected(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "code": code, "message": message})
@@ -162,7 +164,7 @@ fn rejected_with_held_value(id: &str, message: &str, held: Value) -> Line {
     .unwrap_or_default();
     payload.insert("held".to_owned(), held);
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload,

@@ -6,6 +6,7 @@ use crate::app::App;
 use crate::home::Launch;
 use crate::link::Line;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use std::path::PathBuf;
@@ -43,7 +44,7 @@ fn app(width: u16, height: u16, on_home: bool) -> App {
 /// One envelope of the attached session.
 fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -65,7 +66,7 @@ fn named(app: &mut App, name: &str) {
 /// A `session_status` line for `session` named `name`.
 fn status(session: &str, name: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

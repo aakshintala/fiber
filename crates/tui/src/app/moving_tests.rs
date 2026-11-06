@@ -5,8 +5,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::HubEventKind;
 use contract::Seq;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use fakes::clock::FakeClock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -123,7 +125,7 @@ fn the_line_shows_only_with_home_a_busy_turn_and_no_wait() {
     );
     running(&mut left, 0);
     left.on_line(Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"session_id": SESSION, "how": "exited"})
@@ -277,7 +279,7 @@ fn elapsed_holds_across_a_page_cut_in_a_long_running_turn() {
 /// One session envelope with its durable sequence number.
 fn seq_line(kind: &str, action: Option<&str>, payload: Value, ts: u64, seq: contract::Seq) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

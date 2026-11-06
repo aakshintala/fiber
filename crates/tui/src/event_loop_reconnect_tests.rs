@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
+use contract::HubEventKind;
 use contract::HubLine;
 use contract::clock::Clock;
 use fakes::Deadline;
@@ -163,7 +164,7 @@ fn run_reconnects_after_a_drop_with_backoff_on_the_fake_clock() {
 /// A hub `command_accepted` for `id` starting `session`, as a line.
 fn started(id: &serde_json::Value, session: &str) -> String {
     let line = HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": id, "result": {"session_id": session}})

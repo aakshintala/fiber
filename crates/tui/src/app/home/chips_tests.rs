@@ -8,6 +8,8 @@ use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
 use crate::model_picker::Mode;
 use crate::mouse::TargetId;
+use contract::HubEventKind;
+use contract::events::EventKind;
 use std::path::PathBuf;
 
 /// Draws the home frame, so the stops match what is on screen.
@@ -241,7 +243,7 @@ fn down_in_a_two_line_draft_moves_the_cursor_first() {
 /// A hub `command_accepted` for `id` with `result`.
 fn accepted(id: &str, result: serde_json::Value) -> crate::link::Line {
     crate::link::Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -442,7 +444,7 @@ fn live(
         payload[key] = value;
     }
     crate::link::Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -458,7 +460,7 @@ fn live(
 /// A hub `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> crate::link::Line {
     crate::link::Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session, "how": how})

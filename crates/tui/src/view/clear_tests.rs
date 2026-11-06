@@ -7,7 +7,9 @@ use crate::home::Launch;
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Pointer, TargetId};
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Modifier;
@@ -35,7 +37,7 @@ fn home(width: u16, height: u16, session: &str) -> App {
     });
     app.set_size(width, height);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -47,7 +49,7 @@ fn home(width: u16, height: u16, session: &str) -> App {
 /// A `session_status` for `session` waiting on an approval.
 fn waiting(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

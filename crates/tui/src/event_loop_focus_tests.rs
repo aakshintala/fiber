@@ -7,13 +7,14 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::mouse::{Target, TargetId};
 use contract::clock::Clock;
+use contract::events::EventKind;
 use ratatui::backend::TestBackend;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 fn session(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

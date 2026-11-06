@@ -1,6 +1,8 @@
 //! Tests for bare URLs (`docs/tui.md`, "Links").
 
 use super::urls;
+use contract::HubEventKind;
+use contract::events::EventKind;
 
 /// The URLs `text` holds, as text.
 fn found(text: &str) -> Vec<String> {
@@ -112,7 +114,7 @@ fn now() -> std::time::Instant {
 /// A session line.
 fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -126,7 +128,7 @@ fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
 /// The hub's `hub_hello`.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

@@ -10,6 +10,7 @@ use crate::home::Launch;
 use crate::link::Line;
 use crate::osc;
 use crate::pty_watch::{watch, watched};
+use contract::events::EventKind;
 use fakes::Deadline;
 use ratatui::backend::TestBackend;
 use std::io::Write;
@@ -52,7 +53,7 @@ fn wide(seam: Arc<Fake>) -> super::Loop<TestBackend> {
 /// A live idle `session_status` for `session`.
 fn live(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

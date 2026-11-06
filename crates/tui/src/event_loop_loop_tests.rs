@@ -10,7 +10,9 @@ use crate::app::App;
 use crate::keys::{Event, Reply};
 use crate::link::Line;
 use contract::ErrorCode;
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use contract::{Envelope, Seq};
 use fakes::{Deadline, MUST_SUCCEED_WITHIN};
 use ratatui::backend::TestBackend;
@@ -37,7 +39,7 @@ const PAGE_DOWN: &[u8] = b"\x1b[6~";
 /// One line of the session.
 fn line(kind: &str, seq: Option<u64>, action: Option<&str>, payload: Value) -> Envelope {
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -142,7 +144,7 @@ fn inline_opened(
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 24);
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -282,7 +284,7 @@ fn letters_under_a_scrolled_image_follow_its_placeholders() {
 /// `command_id`: PNG bytes, as production relays them.
 fn display_answer(command_id: &str) -> Input {
     Input::Hub(Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": command_id,
@@ -951,7 +953,7 @@ fn opened() -> (
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 14);
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1150,7 +1152,7 @@ fn inputs_during_the_wait_are_handled_after_the_frame_in_order() {
         .iter()
         .map(|input| match input {
             Input::Bytes(bytes) => String::from_utf8_lossy(bytes).into_owned(),
-            Input::Hub(Line::Session(line)) => line.kind.clone(),
+            Input::Hub(Line::Session(line)) => line.kind().name().to_owned(),
             Input::Hub(Line::Hub(_))
             | Input::Connected(..)
             | Input::ConnectFailed(_)
@@ -1365,7 +1367,7 @@ fn the_paging_report_counts_the_search_matches_across_the_log() {
             Some("a_r6_0") => Some("shell and shell"),
             _ => None,
         };
-        if let (Some(text), "text_completed") = (text, line.kind.as_str()) {
+        if let (Some(text), EventKind::TextCompleted) = (text, line.kind()) {
             line.payload.insert("text".to_owned(), json!(text));
         }
     }
@@ -1500,7 +1502,7 @@ fn frames_sweep_notices_before_and_after_the_draw() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 12);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1789,7 +1791,7 @@ fn counting() -> (
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 12);
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1989,7 +1991,7 @@ fn a_disconnect_among_lines_ends_the_batch_with_its_own_frame() {
     let (mut lp, flushes, tx, rx) = counting();
     let (ours, _theirs) = UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -2011,7 +2013,7 @@ fn a_disconnect_among_lines_ends_the_batch_with_its_own_frame() {
 /// One finished `attention` line naming `name`.
 fn finished(name: &str) -> Input {
     Input::Hub(Line::Hub(contract::HubLine {
-        kind: "attention".to_owned(),
+        kind: HubEventKind::Attention.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({
@@ -2444,7 +2446,7 @@ fn resume_open_replays_the_log_to_the_tail() {
     // those requests, then hangs up once each has been answered.
     let replay_turns = lines
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind() == EventKind::TurnStarted)
         .count();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let record = Arc::clone(&seen);
@@ -2600,7 +2602,7 @@ fn resume_open_replays_the_log_to_the_tail() {
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -3124,7 +3126,7 @@ fn a_fetch_with_no_stream_is_lost_at_once() {
     let mut hub = Connection::new(super::tests::idle_retry());
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -3455,7 +3457,7 @@ fn a_disconnect_among_full_batches_ends_the_batch_with_its_own_frame() {
 /// A hub line of `kind` for `session`.
 fn hub_for(kind: &str, session: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: kind.to_owned(),
+        kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session})

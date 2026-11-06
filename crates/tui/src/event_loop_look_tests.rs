@@ -16,6 +16,7 @@ use crate::mouse::Target;
 use crate::pty_watch::{watch, watched};
 use crate::screen::Screen;
 use crate::theme::Role;
+use contract::events::EventKind;
 use fakes::Deadline;
 
 /// The look for `setting` on a terminal with `vars` set.
@@ -234,7 +235,7 @@ fn the_rail_and_panel_regions_paint_in_the_panel_tint() {
     // Two live sessions, so the rail draws.
     for session in ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"] {
         app.on_line(crate::link::Line::Session(contract::Envelope {
-            kind: "session_status".to_owned(),
+            kind: EventKind::SessionStatus.name().to_owned(),
             session_id: contract::SessionId(session.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

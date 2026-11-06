@@ -4,6 +4,8 @@
 use super::Input;
 use super::tests::{Sink, feed, new_loop, offering};
 use crate::link::Line;
+use contract::HubEventKind;
+use contract::events::EventKind;
 use fakes::Deadline;
 use ratatui::backend::{Backend, ClearType, CrosstermBackend, TestBackend, WindowSize};
 use ratatui::buffer::Cell;
@@ -49,7 +51,7 @@ fn long_session(turns: usize) -> Vec<Input> {
     let mut seq = 0u64;
     let mut push = |kind: &str, action: Option<String>, payload: serde_json::Value| {
         inputs.push(Input::Hub(Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -174,7 +176,7 @@ fn wheeling_up_pages_history_like_page_up() {
 /// the rail's live rows (`docs/tui.md`, "The rail").
 fn status(session: &str, name: &str) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -227,7 +229,7 @@ fn wide() -> super::Loop<TestBackend> {
             status("s_aaaaaaaaaaaaaaaa", "one"),
             status("s_bbbbbbbbbbbbbbbb", "two"),
             Input::Hub(Line::Session(contract::Envelope {
-                kind: "extension_ui".to_owned(),
+                kind: EventKind::ExtensionUi.name().to_owned(),
                 session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -617,7 +619,7 @@ fn the_wheel_under_the_offer_leaves_the_conversation() {
     feed(
         &mut lp,
         vec![Input::Hub(Line::Session(contract::Envelope {
-            kind: "repository_code_offered".to_owned(),
+            kind: EventKind::RepositoryCodeOffered.name().to_owned(),
             session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -677,7 +679,7 @@ fn a_press_and_release_split_across_reads_still_click() {
 /// One envelope of session `s_aaaaaaaaaaaaaaaa`.
 fn session(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1333,7 +1335,7 @@ fn hover_never_tints_a_turn() {
     app.set_size(60, 12);
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.on_line(Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: EventKind::TurnStarted.name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1347,7 +1349,7 @@ fn hover_never_tints_a_turn() {
         .unwrap_or_default(),
     }));
     app.on_line(Line::Session(contract::Envelope {
-        kind: "assistant_message_delta".to_owned(),
+        kind: EventKind::AssistantMessageDelta.name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1576,7 +1578,7 @@ fn reads(turns: usize) -> Vec<Input> {
     let mut seq = 0u64;
     let mut push = |kind: &str, action: Option<String>, payload: serde_json::Value| {
         inputs.push(Input::Hub(Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -1732,7 +1734,7 @@ fn wheel_over_a_call_view_with_a_missing_page_sends_through_on_mouse() {
     assert!(
         lp.app
             .on_line(Line::Hub(contract::HubLine {
-                kind: "hub_hello".to_owned(),
+                kind: HubEventKind::HubHello.name().to_owned(),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
                 payload: serde_json::Map::new(),
@@ -1748,7 +1750,7 @@ fn wheel_over_a_call_view_with_a_missing_page_sends_through_on_mouse() {
     // calls' own returns.
     fn hub_line(kind: &str, action: Option<&str>, payload: serde_json::Value) -> Line {
         Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

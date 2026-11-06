@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use ratatui::backend::TestBackend;
@@ -30,7 +32,7 @@ fn session_line_for(
     action: Option<&str>,
 ) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -254,7 +256,7 @@ fn a_tick_while_a_frame_waits_for_history_is_acked() {
 /// A hub `hub_hello` this terminal reads.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

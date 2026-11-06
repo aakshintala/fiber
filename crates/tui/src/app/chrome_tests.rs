@@ -7,7 +7,9 @@ use crate::home::Launch;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::mouse::TargetId;
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
@@ -75,7 +77,7 @@ fn plain(width: u16, height: u16) -> App {
 /// One envelope of `session`.
 fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -466,7 +468,7 @@ fn a_crashed_card_only_screen_draws_the_rail() {
     let mut app = attached(160, 40);
     app.on_line(status(SESSION, "one"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": SESSION, "how": "crashed"})

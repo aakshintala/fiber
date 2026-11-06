@@ -8,13 +8,15 @@ use serde_json::{Value, json};
 
 use crate::app::App;
 use crate::link::Line;
+use contract::HubEventKind;
+use contract::events::EventKind;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 
 /// A session line of `kind`.
 fn session_line(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -30,7 +32,7 @@ fn session_line(kind: &str, payload: Value) -> Line {
 fn dropped(width: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

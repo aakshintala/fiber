@@ -3,6 +3,7 @@
 use super::{Mark, Panel, PanelKey, Queue};
 use crate::keys::{Edit, Key};
 use crate::theme::Role;
+use contract::events::EventKind;
 use ratatui::style::{Modifier, Style};
 use std::ops::Range;
 
@@ -19,7 +20,7 @@ fn envelope(
     action: &str,
 ) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1036,14 +1037,16 @@ mod through_the_app {
     use crate::app::{App, Effect};
     use crate::keys::Key;
     use crate::link::Line;
+    use contract::HubEventKind;
     use contract::clock::Clock;
+    use contract::events::EventKind;
     use std::path::PathBuf;
 
     /// An app connected to the hub and attached to `S_A`.
     fn attached() -> App {
         let mut app = App::new(PathBuf::from("/w"));
         let hello = contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: HubEventKind::HubHello.name().to_owned(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -1067,7 +1070,7 @@ mod through_the_app {
         let asked = parse(first);
         assert_eq!(asked["command"], "commands");
         let answer = Line::Session(contract::Envelope {
-            kind: "command_accepted".to_owned(),
+            kind: EventKind::CommandAccepted.name().to_owned(),
             session_id: session,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -1459,7 +1462,7 @@ fn secondary_bold_style() -> Style {
 /// An `interaction_requested` form `id` from `session` with one question.
 fn form_asked(session: &str, id: &str) -> contract::Envelope {
     contract::Envelope {
-        kind: "interaction_requested".to_owned(),
+        kind: EventKind::InteractionRequested.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1478,7 +1481,7 @@ fn form_asked(session: &str, id: &str) -> contract::Envelope {
 /// An `interaction_requested` confirm `id` from `session`.
 fn confirm_asked(session: &str, id: &str) -> contract::Envelope {
     contract::Envelope {
-        kind: "interaction_requested".to_owned(),
+        kind: EventKind::InteractionRequested.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -14,7 +14,9 @@ use crate::completion_rows::Completions;
 use crate::keys::Key;
 use crate::link::Line;
 use crate::theme::Role;
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -24,7 +26,7 @@ fn attached(width: u16, height: u16) -> App {
     app.set_project("-Users-me-work-fiber-.git".to_owned());
     app.set_size(width, height);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -36,7 +38,7 @@ fn attached(width: u16, height: u16) -> App {
 /// A `turn_started` for `S_A` with one driver message.
 fn turn_started(text: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: EventKind::TurnStarted.name().to_owned(),
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -4,6 +4,7 @@
 
 use super::{pages_for_turn, request_turn};
 use crate::window::Pages;
+use contract::events::EventKind;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -77,7 +78,7 @@ fn envelope(
     payload: serde_json::Value,
 ) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: seq.saturating_mul(1_000),
         schema_version: contract::SCHEMA_VERSION,

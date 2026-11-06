@@ -7,6 +7,8 @@ use super::commands_testkit::{
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::slash;
+use contract::HubEventKind;
+use contract::events::EventKind;
 use serde_json::json;
 use std::path::PathBuf;
 
@@ -22,13 +24,13 @@ fn working_home() -> App {
         ..Default::default()
     });
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     }));
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -7,7 +7,9 @@ use crate::OpenAt;
 use crate::app::testkit::{hello, home_with};
 use crate::home::{Level, Spot};
 use crate::link::Line;
+use contract::HubEventKind;
 use contract::SessionId;
+use contract::events::EventKind;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -51,7 +53,7 @@ fn spent(app: &App) -> bool {
 /// A hub `command_accepted` for `id` with `result`.
 fn accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: HubEventKind::CommandAccepted.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -71,7 +73,7 @@ fn refused(id: &str, message: &str) -> Line {
 /// A hub `command_rejected` for `id` with `code` and `message`.
 fn refused_code(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -87,7 +89,7 @@ fn refused_code(id: &str, code: &str, message: &str) -> Line {
 /// A `session_status` for `session`, idle and named.
 fn status(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -327,7 +329,7 @@ fn a_later_recent_page_never_focuses_the_list() {
 /// A session `notice` line, as the hub forwards a refused switch.
 fn notice(session: &str, message: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "notice".to_owned(),
+        kind: EventKind::Notice.name().to_owned(),
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -354,7 +356,7 @@ fn tail_line(
     payload: Value,
 ) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: id("s_aaaaaaaaaaaaaaaa"),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -441,7 +443,7 @@ fn a_history_answer_after_the_last_draw_still_raises_full() {
 /// A session `command_accepted` line for `id`.
 fn session_accepted(session: &str, command: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1086,7 +1088,7 @@ fn an_openings_commands_answer_fills_the_slash_list_while_its_replay_is_gated() 
     assert_eq!(send.len(), 1, "the ack releases commands, got {send:?}");
     assert_eq!(send[0]["command"], "commands");
     let answer = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: id("s_aaaaaaaaaaaaaaaa"),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

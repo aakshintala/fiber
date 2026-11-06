@@ -15,6 +15,7 @@ use crate::keys::Key;
 use crate::link::Line;
 use crate::mouse::TargetId;
 use contract::clock::Clock;
+use contract::events::EventKind;
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 
@@ -96,7 +97,7 @@ fn attached_with(width: u16, height: u16, cards: &[&str]) -> App {
 /// One envelope of `session`.
 fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

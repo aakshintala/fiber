@@ -7,6 +7,7 @@ use super::Input;
 use super::tests::{feed, hello, new_loop};
 use crate::home::Launch;
 use crate::link::Line;
+use contract::events::EventKind;
 use ratatui::backend::TestBackend;
 use std::io::Read;
 use std::os::unix::net::UnixStream;
@@ -28,7 +29,7 @@ fn wheel(col: u16, row: u16) -> Input {
 /// One envelope of `session`.
 fn envelope(session: &str, kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

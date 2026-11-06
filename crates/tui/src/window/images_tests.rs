@@ -1,6 +1,7 @@
 //! Tests for the session's image ids: first sight wins, a refold
 //! keeps them, and `clear` restarts them.
 
+use contract::events::EventKind;
 use contract::{Envelope, SessionId};
 use serde_json::json;
 
@@ -13,7 +14,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 fn envelope(kind: &str, payload: serde_json::Value) -> Envelope {
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -197,7 +198,7 @@ fn called_with(path: &str, mime: &str) -> Vec<Envelope> {
     let mut acted = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
         seq += 1;
         Envelope {
-            kind: kind.to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

@@ -7,6 +7,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::{Motion, SPINNER, STILL};
+use contract::events::EventKind;
 
 /// A motion whose epoch is `origin`: set once, so the frame counts from
 /// it.
@@ -209,7 +210,7 @@ fn waiting_row(since_ms: u64) -> crate::home::Row {
         "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
     });
     crate::home::from_status(&contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId("s_x".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -3,6 +3,7 @@
 //! closing, against the app and the view it draws.
 
 use contract::ErrorCode;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use serde_json::{Value, json};
@@ -18,7 +19,7 @@ use crate::results_support::{SESSION, attached, now, reply};
 /// A line of the session.
 fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -520,7 +521,7 @@ fn numbered(
 ) -> Line {
     *seq += 1;
     let envelope = contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -570,7 +571,7 @@ fn hub_answer(id: &str, log: &[contract::Envelope], from: u64, to: u64) -> Line 
         .cloned()
         .collect();
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -5,6 +5,7 @@ use super::{THUMB, split, text_width, thumb};
 use crate::app::App;
 use crate::link::Line;
 use crate::theme::Role;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -17,7 +18,7 @@ const HEIGHT: u16 = 12;
 /// One session envelope.
 fn session_line(kind: &str, payload: Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

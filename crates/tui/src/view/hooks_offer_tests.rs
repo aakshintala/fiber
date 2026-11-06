@@ -9,6 +9,7 @@ use crate::home::Launch;
 use crate::keys::{Button, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::{Pointer, TargetId};
+use contract::HubEventKind;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -44,7 +45,7 @@ fn home(width: u16, height: u16) -> (App, Arc<Fake>) {
     app.set_size(width, height);
     app.set_configure(Arc::clone(&seam) as Arc<dyn Configure>);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -75,7 +76,7 @@ fn offer(app: &mut App, names: Vec<String>) {
         .cloned()
         .expect("the start waits");
     let refused = Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -193,7 +194,7 @@ fn the_offer_draws_nothing_while_the_query_runs() {
         .cloned()
         .expect("the start waits");
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [

@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use contract::Envelope;
+use contract::HubEventKind;
+use contract::events::EventKind;
 use serde_json::json;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
@@ -13,7 +15,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// One session line of `kind`, serialized as the jig reads it.
 fn event(kind: &str) -> String {
     let envelope = Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -252,7 +254,7 @@ fn measure_open_reports_no_stages_for_an_empty_log_but_still_draws() {
 /// A session line with `seq`, serialized as the jig reads it.
 fn numbered(seq: u64, kind: &str) -> String {
     let envelope = Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -489,7 +491,7 @@ fn a_frame_names_the_range_the_log_does_not_hold() {
         .map(|(at, (kind, action, payload))| {
             let seq = u64::try_from(at).unwrap_or(0).saturating_add(1);
             let envelope = Envelope {
-                kind: kind.to_owned(),
+                kind: EventKind::from_name(kind).name().to_owned(),
                 session_id: contract::SessionId(SESSION.to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -620,7 +622,7 @@ fn the_paging_fake_answers_history_without_from_seq() {
     paging
         .app
         .on_line(crate::link::Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: HubEventKind::HubHello.name().to_owned(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -646,7 +648,7 @@ fn the_paging_fake_answers_history_without_from_seq() {
     paging
         .app
         .on_line(crate::link::Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: HubEventKind::HubHello.name().to_owned(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),

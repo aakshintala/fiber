@@ -4,12 +4,13 @@ use super::super::{App, Effect};
 use crate::keys::Key;
 use crate::link::Line;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use std::path::PathBuf;
 
 /// One session envelope.
 fn session_line(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

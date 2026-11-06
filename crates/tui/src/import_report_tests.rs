@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use ratatui::style::{Modifier, Style};
 
+use contract::events::EventKind;
 use contract::events::{ImportedNames, LeftBehindEntry};
 
 use super::{ImportReport, ImportSource, PREFER, title_for};
@@ -242,7 +243,7 @@ fn home_app() -> App {
 /// One live `session_status` line naming `name`.
 fn status_line(session: &str, name: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -14,6 +14,7 @@ use serde_json::Value;
 use super::tests::{DEADLINE, hello, launch, once, open};
 use crate::catalogue::{Catalogue, ModelEntry, Refresh};
 use crate::configure_fake::Fake;
+use contract::HubEventKind;
 
 /// The hub's global file: the workspace derives from its parent.
 const GLOBAL: &str = "/hub/.fiber/config.json";
@@ -116,7 +117,7 @@ fn serve(hub: UnixStream, lines: mpsc::Sender<Value>) {
             continue;
         };
         let accepted = contract::HubLine {
-            kind: "command_accepted".to_owned(),
+            kind: HubEventKind::CommandAccepted.name().to_owned(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: answer.as_object().cloned().unwrap_or_default(),

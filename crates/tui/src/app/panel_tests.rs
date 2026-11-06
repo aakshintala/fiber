@@ -3,6 +3,8 @@
 use super::super::{App, Effect};
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::link::Line;
+use contract::HubEventKind;
+use contract::events::EventKind;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -25,7 +27,7 @@ fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> Line {
 /// One envelope of `session` at `ts`.
 fn ts_line(session: &str, kind: &str, ts: u64, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,
@@ -691,7 +693,7 @@ fn home() -> App {
 /// A `hub_hello` this terminal reads.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -736,7 +738,7 @@ fn live(session: &str, state: Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -803,7 +805,7 @@ fn session_accepted_with(session: &str, id: &str, result: Value) -> Line {
         payload.insert("result".to_owned(), result);
     }
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -817,7 +819,7 @@ fn session_accepted_with(session: &str, id: &str, result: Value) -> Line {
 /// A hub `command_rejected` for `id`.
 fn refused(id: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -836,7 +838,7 @@ fn refused(id: &str) -> Line {
 /// A session `command_rejected` for `id` from `session`.
 fn session_refused(session: &str, id: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_rejected".to_owned(),
+        kind: EventKind::CommandRejected.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -859,7 +861,7 @@ fn session_refused(session: &str, id: &str) -> Line {
 /// A hub `session_left` for `session`.
 fn left_line(session: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: HubEventKind::SessionLeft.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1948,7 +1950,7 @@ fn hub_branch_refusal_settles_its_tag_after_the_generic_refusal() {
     let id = branch_query(&ack(&mut app, &out));
     assert_eq!(app.outbox.waiting(&id), Some(Waiting::Branch));
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."})

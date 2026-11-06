@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use contract::clock::Clock;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};
@@ -20,7 +21,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// One line of `kind` at `ts` milliseconds.
 fn envelope(kind: &str, action: Option<&str>, ts: u64, payload: Value) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

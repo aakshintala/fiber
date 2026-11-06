@@ -4,6 +4,7 @@
 use std::path::PathBuf;
 
 use contract::clock::Clock;
+use contract::events::EventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
@@ -47,7 +48,7 @@ fn two(width: u16, height: u16) -> App {
 /// A live idle `session_status` for `session` named `name`.
 fn status(session: &str, name: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -10,7 +10,9 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use contract::{ActionId, Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
@@ -56,7 +58,7 @@ impl Stream {
             Seq(self.seq - 1)
         });
         self.lines.push(Envelope {
-            kind: kind.to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: SessionId(SESSION.to_owned()),
             ts,
             schema_version: contract::SCHEMA_VERSION,
@@ -367,7 +369,7 @@ fn pages_are_cut_inside_turns() {
 fn app(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1145,7 +1147,7 @@ fn reloading_keeps_the_live_durations_and_counts() {
     // from the requests: backdate the argument deltas past a duration
     // boundary, where the longer text wraps rows the shorter one does not.
     for line in &mut lines {
-        if line.kind == "tool_call_arguments_delta" {
+        if line.kind() == EventKind::ToolCallArgumentsDelta {
             line.ts = line.ts.saturating_sub(61_000);
         }
     }
@@ -1256,7 +1258,7 @@ fn resident_counts_every_held_page() {
 /// One envelope of `kind` with `payload`, outside any page cut.
 fn envelope(kind: &str, action: Option<&str>, payload: Value) -> Envelope {
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: SessionId(SESSION.to_owned()),
         ts: 1_000,
         schema_version: contract::SCHEMA_VERSION,
@@ -1534,7 +1536,7 @@ fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
     // caches it: the nudge is one line, however long. (A failed MCP
     // server's warning wraps at draw, so it caches nothing.)
     pages.apply(&Envelope {
-        kind: "context_nudged".to_owned(),
+        kind: EventKind::ContextNudged.name().to_owned(),
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4119,13 +4121,13 @@ fn reloading_an_orphan_page_keeps_a_carried_description() {
     let lines = stream.lines;
     let started = lines
         .iter()
-        .find(|line| line.kind == "job_started")
+        .find(|line| line.kind() == EventKind::JobStarted)
         .expect("a start")
         .seq
         .expect("durable");
     let done = lines
         .iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("a completion")
         .seq
         .expect("durable");
@@ -4199,13 +4201,13 @@ fn a_cut_between_the_stop_and_rewound_drops_the_stop_on_reload() {
     let lines = stream.lines;
     let stop = lines
         .iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("a stop")
         .seq
         .expect("durable");
     let wound = lines
         .iter()
-        .find(|line| line.kind == "rewound")
+        .find(|line| line.kind() == EventKind::Rewound)
         .expect("a rewound")
         .seq
         .expect("durable");
@@ -5073,7 +5075,7 @@ fn edge_line(session: &str, seq: u64, kind: &str) -> Envelope {
         json!({})
     };
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: seq,
         schema_version: contract::SCHEMA_VERSION,
