@@ -99,7 +99,7 @@ impl Loop {
                 };
                 self.log.append(
                     &Event::Notice(Notice {
-                        code: ErrorCode::ToolError,
+                        code: ErrorCode::Sandbox,
                         message: message.to_owned(),
                         extension: None,
                     }),

@@ -399,13 +399,6 @@ pub(crate) fn sandbox_settings(
     }
 }
 
-/// Sets the session sandbox's enabled flag, leaving every other setting
-/// alone, so the toggle flips the handle without rebuilding the shell.
-/// The required bool needs no resolution. A poisoned lock is recovered.
-fn set_sandbox_enabled(handle: &SandboxHandle, enabled: bool) {
-    support::lock(handle).enabled = enabled;
-}
-
 /// Builds the session sandbox toggle for the loop from the handle, the
 /// workspace and the shared latch the session assembly holds: flips the
 /// shared setting first, then reports whether the sandbox applies.
@@ -423,7 +416,7 @@ pub(crate) fn sandbox_toggle(
     let sandbox = Arc::clone(sandbox);
     let workspace = workspace.to_path_buf();
     Arc::new(move |enabled| {
-        set_sandbox_enabled(&sandbox, enabled);
+        support::lock(&sandbox).enabled = enabled;
         if !enabled {
             return r#loop::Availability::Available;
         }
