@@ -226,31 +226,21 @@ pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
         .clamp(SHARD_TIMEOUT_BASE_MINUTES, SHARD_TIMEOUT_MAX_MINUTES)
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one per input the Plan step reads"
-)]
-/// `release_paths` is the diff's paths for the release rule, both ends of a
-/// rename, unquoted; read only by `release`.
-pub(crate) fn plan(
-    mode: &str,
-    packages: &[String],
-    event: &str,
-    draft: bool,
-    bug: bool,
-    mutants: bool,
-    mutant_count: u64,
-    release_paths: &[String],
-) -> Plan {
+/// `mode` is the diff's selection mode, `packages` the selected packages,
+/// `event` the GitHub event name, `draft` whether the pull request is a
+/// draft, and `bug` whether an issue the pull request resolves is labelled
+/// `bug`.
+pub(crate) fn plan(mode: &str, packages: &[String], event: &str, draft: bool, bug: bool) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
     let test = !pr || !packages.is_empty();
     // No event shards mutants: the nightly scheduled whole-workspace run
     // covers main instead, and a pull request's diff is judged by its Linux
-    // tests and the head-vs-base break rule (`docs/ci.md`). The flags stay
-    // so the `plan` invocation keeps its shape; nothing reads them.
-    let _ = (mutants, mutant_count, release_paths);
+    // tests and the head-vs-base break rule (`docs/ci.md`).
     let shards = 0;
+    // A draft selects the same jobs as a ready pull request (`docs/ci.md`,
+    // "The merge gate"), so the selection ignores it.
+    let _ = draft;
     let jobs = BTreeMap::from([
         ("lint", !pr || code),
         // The backstop on `main` compiles the whole workspace on every push.
@@ -259,17 +249,15 @@ pub(crate) fn plan(
         ("test_linux", test),
         // Only the backstop runs it now: a pull request runs the Linux leg
         // alone (`docs/ci.md`).
-        ("test", !pr && test && !draft),
+        ("test", !pr && test),
         ("mutants", shards > 0),
         ("bug_red", pr && code && bug),
-        // A draft skips it (`docs/ci.md`). Otherwise the post-merge
-        // backstop stresses what the push touched; pull requests never run
-        // it (`docs/ci.md`).
-        ("stress", !pr && test && !draft),
-        // A draft skips it (`docs/ci.md`). Otherwise the backstop measures
-        // the release build on every push; pull requests never run it
-        // (`docs/ci.md`).
-        ("release", !pr && !draft),
+        // The post-merge backstop stresses what the push touched; pull
+        // requests never run it (`docs/ci.md`).
+        ("stress", !pr && test),
+        // The backstop measures the release build on every push; pull
+        // requests never run it (`docs/ci.md`).
+        ("release", !pr),
     ]);
     Plan { jobs, shards }
 }
@@ -385,13 +373,17 @@ pub(crate) fn parse_base_results(text: &str) -> Result<BTreeMap<String, BaseOutc
 /// `head_failures` holds the exact nextest ids that failed at the head and
 /// `base` what the rerun at the base commit says about them; the Linux leg
 /// consults the new-breaks disposition, so a failed leg fails only on the
-/// tests the head newly broke. Without head failures the leg fails as any
+/// tests the head newly broke. `touched_failed` says the leg's
+/// `touched-retries` step failed: a touched test that passes only on retry
+/// blocks the merge (`docs/testing/running.md`, "Flaky tests"), and break
+/// data never excuses it. Without head failures the leg fails as any
 /// other selected job does.
 pub(crate) fn verdict(
     results: &BTreeMap<String, String>,
     jobs: &BTreeMap<String, bool>,
     head_failures: &[String],
     base: &BaseResults,
+    touched_failed: bool,
 ) -> Vec<String> {
     let select = results.get("select").map_or("missing", String::as_str);
     if select != "success" {
@@ -406,6 +398,9 @@ pub(crate) fn verdict(
             if jobs.get(name) == Some(&true) {
                 for id in &new_breaks(head_failures, base).broken {
                     failures.push(format!("test_linux: newly broken: {id}"));
+                }
+                if touched_failed {
+                    failures.push("test_linux: touched test passed only on retry".to_owned());
                 }
                 continue;
             }

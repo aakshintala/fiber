@@ -207,7 +207,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .collect();
             let draft = flag(rest, "--draft")? == "true";
             let bug = flag(rest, "--bug")? == "true";
-            let mutants = flag(rest, "--mutants")? == "true";
+            let _mutants = flag(rest, "--mutants")? == "true";
             let mutant_count: u64 = flag(rest, "--mutant-count")?
                 .parse()
                 .map_err(|e| format!("--mutant-count: {e}"))?;
@@ -218,9 +218,6 @@ fn run(args: &[String]) -> Result<bool, String> {
                 &flag(rest, "--event")?,
                 draft,
                 bug,
-                mutants,
-                mutant_count,
-                &release_paths,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
@@ -299,7 +296,13 @@ fn run(args: &[String]) -> Result<bool, String> {
                     println!("new-breaks dropped (unrunnable at base): {id}");
                 }
             }
-            let failures = select::verdict(&results, &jobs, &head_failures, &base);
+            // Whether the Linux leg's `touched-retries` step failed: a
+            // touched test that passes only on retry blocks the merge
+            // (`docs/testing/running.md`, "Flaky tests"), and break data
+            // never excuses it. Unset when the leg never ran, so the
+            // verdict falls back to the job results alone.
+            let touched_failed = std::env::var("TOUCHED_FAILED").as_deref() == Ok("true");
+            let failures = select::verdict(&results, &jobs, &head_failures, &base, touched_failed);
             report(
                 "verdict",
                 &failures,

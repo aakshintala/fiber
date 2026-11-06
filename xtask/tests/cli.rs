@@ -2675,3 +2675,26 @@ fn verdict_fails_closed_without_break_data() {
         (1, "verdict: test_linux: selected, but failure\n".to_owned())
     );
 }
+
+#[test]
+fn verdict_keeps_a_touched_retry_failure_with_no_new_breaks() {
+    let dir = TempDir::new("xtask-verdict-touched-retry");
+    dir.write("head-failures.txt", "main::suite old\n");
+    dir.write("base-results.txt", "fail\tmain::suite old\n");
+    let head = dir.path().join("head-failures.txt");
+    let base = dir.path().join("base-results.txt");
+    let needs = r#"{"select":{"result":"success"},"test_linux":{"result":"failure"}}"#;
+    let env = [
+        ("NEEDS", needs),
+        ("JOBS", r#"{"test_linux":true}"#),
+        ("HEAD_FAILURES", head.to_str().unwrap()),
+        ("BASE_RESULTS", base.to_str().unwrap()),
+        ("TOUCHED_FAILED", "true"),
+    ];
+    let (code, out) = xtask(&dir, &["verdict"], &env, "");
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("verdict: test_linux: touched test passed only on retry"),
+        "{out}"
+    );
+}

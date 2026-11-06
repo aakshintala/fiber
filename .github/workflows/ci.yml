@@ -230,6 +230,7 @@ jobs:
     outputs:
       has_flakes: ${{ steps.has_flakes.outputs.has_flakes }}
       collection_complete: ${{ steps.collection.outputs.complete }}
+      touched_failed: ${{ steps.touched_retries.outcome == 'failure' }}
     steps: &test-steps
       - *checkout-full
       - &reclaim-disk
@@ -430,6 +431,7 @@ jobs:
       # changes (docs/ci.md, "On every pull request that changes code").
       # Fail closed on an incomplete collection, before any lookup.
       - name: Fail when a retried test was touched
+        id: touched_retries
         if: always() && github.event_name == 'pull_request'
         env:
           LIST: ${{ runner.temp }}/flaky/flaky-tests-${{ matrix.runner }}.txt
@@ -544,7 +546,7 @@ jobs:
           cd "$BASE_DIR"
           # The base test list: presence here decides PR-added.
           cargo nextest list --message-format json >"$OUT_DIR/base-list.json"
-          jq -r '.["rust-suites"][] | (.testcases // {}) | keys[]' "$OUT_DIR/base-list.json" \
+          jq -r '.["rust-suites"][] | .["binary-id"] as $b | (.testcases // {} | keys[] | "\($b) \(.)")' "$OUT_DIR/base-list.json" \
             | while IFS= read -r name; do
               [ -n "$name" ] || continue
               printf '%s\n' "$name"
@@ -1974,10 +1976,11 @@ jobs:
       - *cache-restore
       # The head-vs-base break data the Linux leg uploads on a pull request
       # whose head run failed (docs/ci.md, "On every pull request that
-      # changes code"): on a push the artifact does not exist, and the
-      # verdict falls back to the job results alone.
+      # changes code"): on a push, and on a pull request that skips the
+      # Linux leg, the artifact does not exist, and the verdict falls back
+      # to the job results alone.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && fromJSON(needs.select.outputs.jobs).test_linux
         with:
           name: new-breaks
           path: ${{ runner.temp }}/new-breaks
@@ -1987,4 +1990,5 @@ jobs:
           JOBS: ${{ needs.select.outputs.jobs }}
           HEAD_FAILURES: ${{ runner.temp }}/new-breaks/head-failures.txt
           BASE_RESULTS: ${{ runner.temp }}/new-breaks/base-results.txt
+          TOUCHED_FAILED: ${{ needs.test_linux.outputs.touched_failed }}
         run: cargo xtask verdict
