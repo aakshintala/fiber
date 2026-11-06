@@ -691,10 +691,10 @@ fn a_blocking_hook_failure_rejects_the_prompt_and_writes_only_its_notices() {
     );
 }
 
-/// The passing hook's two contexts reach the log as `context_added` after
-/// `turn_started` and before the first step, and the refused message adds
-/// none (`docs/testing.md`, "Event streams": the test holds the turn, so
-/// the held inputs plus the promises below fix the order and the count).
+/// The passing hook's two contexts reach the log as `context_added`, and the
+/// refused message adds none (`docs/extensions.md`, "The hook points";
+/// `docs/testing.md`, "Event streams": the kinds are a set with counts,
+/// since no doc promises their positions).
 #[test]
 fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
     let hooks = Arc::new(FakeHooks::new());
@@ -738,39 +738,36 @@ fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
     drop(world.looped.take());
 
     let all = lines(&world);
-    // The complete ordered kinds (`docs/testing.md`, "Event streams"). The
-    // order is promised by: `session_started` is the first line, then
-    // `preamble_built`, then `opening_message`, and the first turn runs
-    // after the opening message and before `turn_started`
-    // (`docs/events.md`, "Session and turn"; `docs/loop.md`, "Starting a
-    // turn"); each context a hook adds is one `context_added` line, and a
-    // refused message is neither logged nor sent, so exactly the two
-    // passed contexts appear here (`docs/extensions.md`, "The hook
-    // points"); `step_started` opens the step before anything else in it
-    // (`docs/loop.md`, "One step"; `docs/events.md`, "Session and turn");
-    // `assistant_message_started` opens the call before the request is
-    // sent, the reply's `text_completed` follows it, one `usage_recorded`
-    // per model call, `assistant_message_completed` closes the reply and
-    // `turn_completed` the turn (`docs/events.md`, "Actions",
-    // "`usage_recorded`").
-    assert_eq!(
-        kinds(&all),
-        [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "context_added",
-            "context_added",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-        ]
-        .map(EventKind::from_name)
-    );
+    // The complete kinds as a set with counts (`docs/testing.md`, "Event
+    // streams"): `session_started` is the first line (`docs/events.md`,
+    // "Session and turn"); the rest has no doc-promised order. Each context
+    // a hook adds is one `context_added` line, and a refused message is
+    // neither logged nor sent, so exactly the two passed contexts appear
+    // here (`docs/extensions.md`, "The hook points").
+    let actual = kinds(&all);
+    assert_eq!(actual[0], EventKind::SessionStarted);
+    let mut rest = actual[1..].to_vec();
+    for kind in [
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "context_added",
+        "context_added",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+    .map(EventKind::from_name)
+    {
+        let Some(pos) = rest.iter().position(|k| *k == kind) else {
+            panic!("missing {kind:?} in {actual:?}");
+        };
+        rest.remove(pos);
+    }
+    assert!(rest.is_empty(), "no extra kinds: {rest:?}");
     let contexts: Vec<&Envelope> = all
         .iter()
         .filter(|line| line.kind() == EventKind::ContextAdded)
@@ -1192,26 +1189,35 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
     let all = streamed(&mut world);
     let notice = line(&all, "notice");
     assert!(notice.turn_id.is_none(), "an idle notice names no turn");
-    // The notice is written at admission, before the turn's preamble.
-    assert_eq!(
-        kinds(&all),
-        [
-            "session_started",
-            "notice",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-        ]
-        .map(EventKind::from_name)
-    );
+    // The complete kinds as a set with counts (`docs/testing.md`, "Event
+    // streams"): `session_started` is the first line (`docs/events.md`,
+    // "Session and turn"); the rest has no doc-promised order. One notice
+    // per code (`docs/errors.md`, "Notices").
+    let actual = kinds(&all);
+    assert_eq!(actual[0], EventKind::SessionStarted);
+    let mut rest = actual[1..].to_vec();
+    for kind in [
+        "notice",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+    .map(EventKind::from_name)
+    {
+        let Some(pos) = rest.iter().position(|k| *k == kind) else {
+            panic!("missing {kind:?} in {actual:?}");
+        };
+        rest.remove(pos);
+    }
+    assert!(rest.is_empty(), "no extra kinds: {rest:?}");
     let input = started_input(&all);
     assert_eq!(input.len(), 1);
     let InputItem::Message { content, .. } = &input[0] else {
@@ -1294,27 +1300,35 @@ fn two_non_blocking_failures_write_one_grouped_notice() {
     let all = streamed(&mut world);
     let notice = grouped_notice(&all);
     assert!(notice.turn_id.is_none(), "an idle notice names no turn");
-    // The grouped notice is written at admission, before the turn's preamble
-    // (`docs/loop.md`, "Starting a turn").
-    assert_eq!(
-        kinds(&all),
-        [
-            "session_started",
-            "notice",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-        ]
-        .map(EventKind::from_name)
-    );
+    // The complete kinds as a set with counts (`docs/testing.md`, "Event
+    // streams"): `session_started` is the first line (`docs/events.md`,
+    // "Session and turn"); the rest has no doc-promised order. One notice
+    // per code (`docs/errors.md`, "Notices").
+    let actual = kinds(&all);
+    assert_eq!(actual[0], EventKind::SessionStarted);
+    let mut rest = actual[1..].to_vec();
+    for kind in [
+        "notice",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+    .map(EventKind::from_name)
+    {
+        let Some(pos) = rest.iter().position(|k| *k == kind) else {
+            panic!("missing {kind:?} in {actual:?}");
+        };
+        rest.remove(pos);
+    }
+    assert!(rest.is_empty(), "no extra kinds: {rest:?}");
 }
 
 #[test]
