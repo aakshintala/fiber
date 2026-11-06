@@ -167,17 +167,23 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     body.insert("messages".into(), Value::Array(messages(endpoint, request)));
     // OpenAI and OpenRouter (which falls back to it for sticky routing)
     // route the cache by this key (`docs/prompt-cache.md`, "Cache markers
-    // and keys"; `research/prompt-cache/README.md`).
-    body.insert("prompt_cache_key".into(), json!(request.cache_key));
+    // and keys"; `research/prompt-cache/README.md`). The Gemini route
+    // rejects it, so a Gemini request carries none.
+    if !compat.gemini {
+        body.insert("prompt_cache_key".into(), json!(request.cache_key));
+    }
     // OpenRouter takes `session_id` as a top-level body field
     // (openrouter.ai/docs/guides/best-practices/prompt-caching).
     if let Some(field) = &compat.cache_key_field {
         body.insert(field.clone(), json!(request.cache_key));
     }
     // OpenAI sends no usage without it (`docs/model-routing.md`,
-    // "openai-completions facts").
+    // "openai-completions facts"). The Gemini route rejects it, so a
+    // Gemini request carries none.
     body.insert("stream".into(), json!(true));
-    body.insert("stream_options".into(), json!({"include_usage": true}));
+    if !compat.gemini {
+        body.insert("stream_options".into(), json!({"include_usage": true}));
+    }
     // OpenAI rejects `tool_choice` without `tools`.
     if !tools.is_empty() {
         body.insert("tools".into(), Value::Array(tools));
@@ -199,6 +205,12 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         body.insert("store".into(), json!(store));
     }
     body.extend(endpoint.extra_body.clone());
+    // Either rejected key may arrive through `extra_body`, past the gating
+    // above, so a Gemini request removes both again after the merge.
+    if compat.gemini {
+        body.remove("prompt_cache_key");
+        body.remove("stream_options");
+    }
     // The model's limit, or the model data's own when that is lower
     // (`docs/errors.md`, "Output tokens").
     let field = if compat.max_tokens {
