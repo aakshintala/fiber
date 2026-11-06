@@ -239,7 +239,7 @@ fn gemini_full_tool_set_body_is_rewritten_without_either_key() {
     }
     assert_eq!(remaining, Vec::<String>::new(), "unrewritten unions");
 
-    // Without the flag the same live set goes over byte-identical to today.
+    // Without the flag the same live set goes over exactly as declared.
     assert!(plain_body.get("prompt_cache_key").is_some(), "{plain_body}");
     assert_eq!(plain_body["stream_options"], json!({"include_usage": true}));
     let plain_tools = plain_body["tools"].as_array().unwrap();

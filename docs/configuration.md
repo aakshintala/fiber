@@ -652,7 +652,7 @@ declares") lists:
   | `max_tokens` | boolean | `openai-completions` | the output limit goes in `max_tokens`; absent, it goes in `max_completion_tokens` |
   | `reasoning_object` | boolean | `openai-completions` | the thinking level goes in `reasoning: {effort}`, as OpenRouter takes it; absent, it goes in `reasoning_effort` |
   | `anthropic` | boolean | `openai-completions` | the model is Anthropic's, behind a gateway such as OpenRouter: requests carry Anthropic's `cache_control` markers on content parts, and Anthropic's strict-tool limits apply |
-  | `gemini` | boolean | `openai-completions` | the model is Gemini's, behind a gateway such as Databricks: requests carry no `stream_options` or `prompt_cache_key`, and nullable `type` arrays are rewritten |
+  | `gemini` | boolean | `openai-completions` | the model is Gemini's, behind a gateway such as Databricks: requests carry no `stream_options` or `prompt_cache_key`, and nullable `type` arrays are rewritten, except inside `enum`, `const`, `default` or `examples` values |
   | `cache_key_field` | string | `openai-completions` | a body field that also carries the cache key, such as OpenRouter's `session_id` |
   | `cache_key_header` | string | `openai-responses`, `openai-completions`, `anthropic-messages`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
   | `thinking_budget` | boolean | `anthropic-messages` | the thinking level goes in `thinking: {type: "enabled", budget_tokens}` (`docs/model-routing.md`, "Thinking"); absent, it goes in `thinking: {type: "adaptive"}` and `output_config: {effort}` |

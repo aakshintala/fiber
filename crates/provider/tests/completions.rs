@@ -1344,10 +1344,7 @@ fn a_declared_cache_key_field_carries_the_cache_key() {
     assert_eq!(sent_body(&server, 1).get("session_id"), None);
 }
 
-/// A Gemini endpoint: the flag as the model's data declares it. The base
-/// `from_data` ignores the unknown key, so this shapes the endpoint both
-/// before and after the flag lands: here the test fails, after the fix it
-/// passes.
+/// A Gemini endpoint: the flag as the model's data declares it.
 fn gemini_endpoint(server: &ProviderServer) -> Endpoint {
     let data = json!({"gemini": true});
     Endpoint {
