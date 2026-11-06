@@ -73,8 +73,8 @@ jobs:
             base=$(git rev-parse HEAD^1)
           else
             # The backstop compares against the last main commit whose
-            # backstop passed. The release job's stored-results lookup (scripts/stored-results) is another Actions API call CI makes to find a run.
-            # The select job's same-head reuse lookup is the third (docs/ci.md, "On every pull request that changes code").
+            # backstop passed. The release job's stored-results lookup (scripts/stored-results) is another Actions API call CI makes to find a run
+            # (docs/ci.md, "On every pull request that changes code").
             base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
               -q '.workflow_runs[0].head_sha // empty')
             if [ -z "$base" ] || ! git merge-base --is-ancestor "$base" HEAD; then
@@ -135,11 +135,6 @@ jobs:
           echo "ticket: ${number:-none}; bug: $bug"
           echo "bug=$bug" >>"$GITHUB_OUTPUT"
 
-      - name: Install cargo-mutants
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-mutants@27.1.0
-
       - name: Plan
         id: plan
         env:
@@ -148,113 +143,21 @@ jobs:
           DRAFT: ${{ github.event.pull_request.draft || 'false' }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
           BASE: ${{ steps.base.outputs.base }}
-          # Mutants run on a ready pull request and on a draft labelled `mutants`,
-          # never on the backstop.
-          MUTANTS: ${{ github.event_name == 'pull_request' && (!github.event.pull_request.draft || contains(github.event.pull_request.labels.*.name, 'mutants')) }}
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          CURRENT_RUN_ID: ${{ github.run_id }}
         run: |
-          # The shard count follows the diff's mutant count (docs/ci.md, "On every pull request that changes code").
-          # Every code pull request lists the diff's mutants, draft or not, so a
-          # lane reads them before CI runs its shards; only `MUTANTS` starts shards.
-          count=0
-          if [ "$GITHUB_EVENT_NAME" = pull_request ] && [ "$MODE" != docs ]; then
-            git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
-            cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list --colors=never >"$RUNNER_TEMP/mutants.txt"
-            {
-              echo "### Mutants in the diff: $(wc -l <"$RUNNER_TEMP/mutants.txt")"
-              echo '```'
-              cat "$RUNNER_TEMP/mutants.txt"
-              echo '```'
-            } >>"$GITHUB_STEP_SUMMARY"
-            # A lane on the command line reads the log: `gh run view` prints no summaries.
-            cat "$RUNNER_TEMP/mutants.txt"
-            listed=$(wc -l <"$RUNNER_TEMP/mutants.txt")
-            if [ "$MUTANTS" = true ]; then
-              count=$listed
-            fi
-          fi
-          if [ "$MUTANTS" != true ] && [ "${listed:-0}" -gt 0 ]; then
-            echo "mutants in the diff: $listed (not run: a draft without the \`mutants\` label)"
-          else
-            echo "mutants in the diff: $count"
-          fi
-          # Same-head reuse (docs/ci.md, "On every pull request that changes code"): a ready run on
-          # a head whose mutants already passed reuses the pass. Every error
-          # below keeps reuse off and starts the shards.
-          reuse=false
-          if [ "$count" -gt 0 ]; then
-            head_sha="$HEAD_SHA"
-            head_ref="$HEAD_REF"
-            pr_number="$PR_NUMBER"
-            # Any lookup failure starts the shards (docs/ci.md, "On every
-            # pull request that changes code"): a failed jobs lookup must
-            # not let a later matching candidate reuse the pass.
-            lookup_failed=false
-            if runs_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&status=completed&branch=$head_ref&per_page=20" 2>/dev/null); then
-              echo "$runs_json" >"$RUNNER_TEMP/runs.json"
-              echo '{}' >"$RUNNER_TEMP/jobs.json"
-              ids=$(echo "$runs_json" | jq -r '.workflow_runs[]?.id' 2>/dev/null || true)
-              for id in $ids; do
-                # `gh api --paginate` prints one JSON object per page, so
-                # slurp every page into one jobs array before `--argjson`
-                # (docs/ci.md, "On every pull request that changes code"):
-                # a same-head pass with more than 30 jobs still reuses.
-                if jobs_pages=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id/jobs" --paginate 2>/dev/null) \
-                  && [ -n "$jobs_pages" ] \
-                  && jobs_json=$(printf '%s' "$jobs_pages" | jq -c -s 'map(.jobs // []) | add // []' 2>/dev/null); then
-                  tmp="$RUNNER_TEMP/jobs-$id.json"
-                  if jq --arg id "$id" --argjson jobs "$jobs_json" '. + {($id): $jobs}' "$RUNNER_TEMP/jobs.json" >"$tmp" 2>/dev/null; then
-                    mv "$tmp" "$RUNNER_TEMP/jobs.json"
-                  else
-                    rm -f "$tmp"
-                    lookup_failed=true
-                  fi
-                else
-                  lookup_failed=true
-                fi
-              done
-              if [ "$lookup_failed" != true ]; then
-                if reuse_out=$(cargo xtask mutants-reuse --pr "$pr_number" --head "$head_sha" --base "$BASE" --mutant-count "$count" --run-id "$CURRENT_RUN_ID" --draft "$DRAFT" --runs "$RUNNER_TEMP/runs.json" --jobs "$RUNNER_TEMP/jobs.json" 2>/dev/null); then
-                  reuse=false
-                  matched_run_id=""
-                  matched_pr_head=""
-                  if [ "$(printf '%s' "$reuse_out" | sed -n '1p')" = "reuse=true" ]; then
-                    matched_run_id=$(printf '%s' "$reuse_out" | sed -n 's/^matched_run_id=//p')
-                    matched_pr_head=$(printf '%s' "$reuse_out" | sed -n 's/^matched_pr_head=//p')
-                    if [ -n "$matched_run_id" ] && [ -n "$matched_pr_head" ]; then
-                      reuse=true
-                    fi
-                  fi
-                fi
-              else
-                echo "mutants reuse: jobs lookup failed; starting shards"
-              fi
-            fi
-          if [ "$reuse" = true ]; then
-            echo "mutants reuse: reuse=$reuse matched_run_id=$matched_run_id matched_pr_head=$matched_pr_head (head $head_sha, base $BASE)"
-          else
-            echo "mutants reuse: reuse=$reuse (head $head_sha, base $BASE)"
-          fi
-          fi
-          mutants="$MUTANTS"
-          if [ "$reuse" = true ]; then
-            mutants=false
-          fi
+          # Mutants run on the nightly scheduled whole-workspace run, never
+          # here: every event plans zero shards (docs/ci.md, "On every pull
+          # request that changes code").
           cargo xtask plan --base "$BASE" --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --draft "$DRAFT" --bug "$BUG" --mutants "$mutants" --mutant-count "$count" | tee -a "$GITHUB_OUTPUT"
+            --draft "$DRAFT" --bug "$BUG" --mutants false --mutant-count 0 | tee -a "$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks
     needs: select
     if: fromJSON(needs.select.outputs.jobs).lint
     runs-on: ubuntu-24.04
-    # Median 55 s, slowest passing run of the last 25 69 s; the two uncached
-    # feature checks below ride alongside scripts/check, so the bound is 10 minutes.
-    timeout-minutes: 10
+    # Median about 6 minutes across the recent pull-request and backstop runs;
+    # twice that, rounded up (docs/ci.md, "Job time limits").
+    timeout-minutes: 12
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps:
@@ -313,9 +216,12 @@ jobs:
         runner: [ubuntu-24.04]
     runs-on: ${{ matrix.runner }}
     # Cold 16m27s with the 1.99.1 toolchain (run 39564649711 on this PR,
-    # which missed every cache); the bound is twice that, rounded up
-    # (docs/ci.md, "Job time limits").
-    timeout-minutes: 35
+    # which missed every cache). The pull-request rerun builds the base
+    # commit cold in a scratch worktree, about the same again, plus the
+    # list and the rerun; the bound is twice that cold total, rounded up
+    # (docs/ci.md, "Job time limits"). Interim until the new steps have
+    # twenty runs of history behind them.
+    timeout-minutes: 80
     env:
       BASE: ${{ needs.select.outputs.base }}
     # Whether the leg's final list is non-empty; flake_decide downloads
@@ -562,6 +468,154 @@ jobs:
           else
             echo "has_flakes=false" >> "$GITHUB_OUTPUT"
           fi
+      # The head-vs-base break rule starts here (docs/ci.md, "On every pull
+      # request that changes code"): the exact nextest ids this run failed,
+      # one per line. The extractor is written once and reused by the hub
+      # step and the base rerun below. A missing or empty JUnit file appends
+      # nothing; a malformed file fails the step, failing closed. Push runs
+      # and the other legs skip these steps: the pull request alone compares
+      # against its base.
+      - name: Extract the check run's failed tests
+        if: always() && github.event_name == 'pull_request'
+        env:
+          JUNIT: target/nextest/ci/junit.xml
+          OUT: ${{ runner.temp }}/new-breaks/head-failures.txt
+        run: |
+          mkdir -p "${{ runner.temp }}/new-breaks"
+          cat >"${{ runner.temp }}/new-breaks/extract.py" <<'PYEOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path, out = sys.argv[1], sys.argv[2]
+          try:
+              with open(path, 'rb') as handle:
+                  data = handle.read()
+          except FileNotFoundError:
+              sys.exit(0)
+          if not data.strip():
+              sys.exit(0)
+          try:
+              root = ET.fromstring(data)
+          except ET.ParseError as err:
+              print(f'new-breaks: {path}: malformed XML: {err}')
+              sys.exit(1)
+          ids = set()
+          for case in root.iter('testcase'):
+              children = {child.tag for child in case}
+              if 'failure' not in children and 'error' not in children:
+                  continue
+              classname = case.get('classname')
+              name = case.get('name')
+              if classname is None or name is None:
+                  continue
+              ids.add(f'{classname} {name}')
+          with open(out, 'a') as handle:
+              for i in sorted(ids):
+                  handle.write(i + '\n')
+          PYEOF
+          python3 "${{ runner.temp }}/new-breaks/extract.py" "$JUNIT" "$OUT"
+      # The hub_service run overwrites the JUnit file the check run wrote, so
+      # its failures append here; the merged list is deduplicated.
+      - name: Extract the hub run's failed tests
+        if: always() && github.event_name == 'pull_request'
+        env:
+          JUNIT: target/nextest/ci/junit.xml
+          OUT: ${{ runner.temp }}/new-breaks/head-failures.txt
+        run: |
+          python3 "${{ runner.temp }}/new-breaks/extract.py" "$JUNIT" "$OUT"
+          sort -u -o "$OUT" "$OUT"
+      # A pull request fails only on the tests it newly broke (docs/ci.md,
+      # "On every pull request that changes code"): rerun exactly the head's
+      # failed tests at the base commit in a scratch worktree, and record
+      # each one's base outcome for the verdict step. The scratch checkout
+      # never touches this job's checkout, target dir or caches.
+      - name: Rerun the head failures at the base commit
+        if: always() && github.event_name == 'pull_request'
+        env:
+          BASE_DIR: ${{ runner.temp }}/base
+          OUT_DIR: ${{ runner.temp }}/new-breaks
+        run: |
+          : >"$OUT_DIR/base-results.txt"
+          if [ ! -s "$OUT_DIR/head-failures.txt" ]; then
+            echo "no head failures: no base rerun"
+            exit 0
+          fi
+          git worktree add --detach "$BASE_DIR" "$BASE"
+          cd "$BASE_DIR"
+          # The base test list: presence here decides PR-added.
+          cargo nextest list --message-format json >"$OUT_DIR/base-list.json"
+          jq -r '.["rust-suites"][] | (.testcases // {}) | keys[]' "$OUT_DIR/base-list.json" \
+            | while IFS= read -r name; do
+              [ -n "$name" ] || continue
+              printf '%s\n' "$name"
+            done | sort -u >"$OUT_DIR/base-ids.txt"
+          names=()
+          while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            names+=("${id##* }")
+          done <"$OUT_DIR/head-failures.txt"
+          # The ci profile retries once and writes the JUnit file, like the
+          # head run: a base pass on retry still counts as a pass, so a
+          # retry never masks a head break. --no-fail-fast runs every id, so
+          # an executed id is decided and only a skipped one is unrunnable.
+          # A failure list past the argument limit fails this step, failing
+          # closed.
+          if NEXTEST_PROFILE=ci cargo nextest run --no-fail-fast --exact "${names[@]}"; then
+            echo "the base rerun passed"
+          else
+            echo "the base rerun failed: the outcomes below decide the break"
+          fi
+          cd "$GITHUB_WORKSPACE"
+          base_junit="$BASE_DIR/target/nextest/ci/junit.xml"
+          [ -s "$base_junit" ] || { echo "new-breaks: no base JUnit: the base does not build"; exit 1; }
+          python3 "$OUT_DIR/extract.py" "$base_junit" "$OUT_DIR/base-failed.txt"
+          python3 - "$base_junit" "$OUT_DIR/base-executed.txt" <<'PYEOF'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          path, out = sys.argv[1], sys.argv[2]
+          with open(path, 'rb') as handle:
+              data = handle.read()
+          try:
+              root = ET.fromstring(data)
+          except ET.ParseError as err:
+              print(f'new-breaks: {path}: malformed XML: {err}')
+              sys.exit(1)
+          with open(out, 'w') as handle:
+              for case in root.iter('testcase'):
+                  classname = case.get('classname')
+                  name = case.get('name')
+                  if classname is None or name is None:
+                      continue
+                  handle.write(f'{classname} {name}\n')
+          PYEOF
+          while IFS= read -r id; do
+            [ -n "$id" ] || continue
+            if ! grep -qFx -- "$id" "$OUT_DIR/base-ids.txt"; then
+              # Absent from the base list: the pull request added the test;
+              # no line, and the verdict reads the absence as PR-added.
+              continue
+            elif grep -qFx -- "$id" "$OUT_DIR/base-failed.txt"; then
+              printf 'fail\t%s\n' "$id"
+            elif grep -qFx -- "$id" "$OUT_DIR/base-executed.txt"; then
+              printf 'pass\t%s\n' "$id"
+            else
+              printf 'unrunnable\t%s\n' "$id"
+            fi
+          done <"$OUT_DIR/head-failures.txt" >"$OUT_DIR/base-results.txt"
+      # Both files travel to the verdict step: the head's failed ids and
+      # each one's base outcome. A missing file fails closed here, never in
+      # the verdict.
+      - name: Upload the head-vs-base break data
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: new-breaks
+          path: |
+            ${{ runner.temp }}/new-breaks/head-failures.txt
+            ${{ runner.temp }}/new-breaks/base-results.txt
+          if-no-files-found: error
+          retention-days: 7
 
   # Linux arm64 and macOS. The plan decides whether it runs: a draft skips
   # it, so a draft runs Linux x86_64 only, and marking it ready runs all
@@ -575,10 +629,9 @@ jobs:
       matrix:
         runner: [ubuntu-24.04-arm, macos-26]
     runs-on: ${{ matrix.runner }}
-    # Cold with the 1.99.1 toolchain (run 39564649711 on this PR, which
-    # missed every cache): Linux arm64 14m46s; macOS 30m38s. Each bound is
-    # twice its cold figure, rounded up (docs/ci.md, "Job time limits").
-    timeout-minutes: ${{ matrix.runner == 'macos-26' && 62 || 30 }}
+    # Backstop medians 21m on arm64 and 36m on macOS over the recent runs;
+    # twice each, rounded up (docs/ci.md, "Job time limits").
+    timeout-minutes: ${{ matrix.runner == 'macos-26' && 72 || 45 }}
     env:
       BASE: ${{ needs.select.outputs.base }}
     steps: *test-steps
@@ -1160,13 +1213,10 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).release
     runs-on: ubuntu-24.04
-    # Cold PR probe 39863819671 missed both the Rust and base-binary caches;
-    # the full Release job, including the debug pass, took 34m01. Warm
-    # baseline run 39805368958 took 22m47. Final timeout validation run
-    # 39871492786 passed with both caches hit and took 31m21. Twice the cold
-    # time is 68m02, rounded up to 69m (docs/ci.md, "Job time limits"). Push
-    # runs keep 60m; the ruling says to report rather than raise it.
-    timeout-minutes: ${{ github.event_name == 'push' && 60 || 69 }}
+    # The release job runs only on the backstop now. Backstop median 24m over
+    # the recent runs; twice that is 48m and the bound stays 60m: the ruling
+    # says to report rather than raise it (docs/ci.md, "Job time limits").
+    timeout-minutes: 60
     # The stored-results lookup lists another run's artifact, which needs
     # `actions: read` beyond the workflow's `contents: read`.
     permissions:
@@ -1923,8 +1973,19 @@ jobs:
           persist-credentials: false
       - *toolchain
       - *cache-restore
+      # The head-vs-base break data the Linux leg uploads on a pull request
+      # whose head run failed (docs/ci.md, "On every pull request that
+      # changes code"): on a push the artifact does not exist, and the
+      # verdict falls back to the job results alone.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: github.event_name == 'pull_request'
+        with:
+          name: new-breaks
+          path: ${{ runner.temp }}/new-breaks
       - name: Every selected job passed and every other job was skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
           JOBS: ${{ needs.select.outputs.jobs }}
+          HEAD_FAILURES: ${{ runner.temp }}/new-breaks/head-failures.txt
+          BASE_RESULTS: ${{ runner.temp }}/new-breaks/base-results.txt
         run: cargo xtask verdict
