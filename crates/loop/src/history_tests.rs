@@ -2872,9 +2872,18 @@ fn person_input_resumed_form_answers_after_resume() {
             .iter()
             .all(|item| !matches!(item.shown, crate::reviewer::Shown::Person(_)))
     );
-    // The staged fields answer with the asked questions as their reply.
+    // The staged fields answer with the asked questions as their reply:
+    // the same request stages again idempotently, then its resolve
+    // repairs the pair.
     let mut asks = folded.seed.pending_asks.clone();
     let mut staged = Vec::new();
+    crate::reviewer::render_reviewed(
+        &mut staged,
+        &person_form_requested("r_ask"),
+        None,
+        Some(Seq(1)),
+        &mut asks,
+    );
     crate::reviewer::render_reviewed(
         &mut staged,
         &person_resolved("r_ask", person_form_answer()),

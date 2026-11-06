@@ -1,11 +1,13 @@
 //! What the reviewer is shown (`docs/permissions.md`, "What it is shown"):
 //! each person's message, each tool call, and the reply each person message
-//! answers, nothing else.
+//! answers, nothing else. A person's answer to a question counts as a
+//! person message, and the question it answers is the reply.
 
 use std::collections::HashMap;
 
 use contract::events::{
-    Event, InputItem, Interaction, KeptMessage, MessageOutcome, Outcome, TurnOutcome, TurnStarted,
+    Answer, Event, FormAnswer, InputItem, Interaction, InteractionRequested, KeptMessage,
+    MessageOutcome, Outcome, ResolvedBy, TurnOutcome, TurnStarted,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin};
@@ -66,6 +68,40 @@ pub(crate) struct StagedAsk {
     action_ids: Option<Vec<ActionId>>,
 }
 
+impl StagedAsk {
+    /// The eliciting content `requested` carries: what it asks, with the
+    /// wire marks that choose how its eliciting context renders.
+    fn of(requested: &InteractionRequested) -> Self {
+        StagedAsk {
+            interaction: requested.interaction.clone(),
+            extension: requested.extension.clone(),
+            action_ids: requested.action_ids.clone(),
+        }
+    }
+}
+
+impl PendingAsks {
+    /// Stages `requested` under its id, overwriting any same-id entry: a
+    /// re-raise writes no new line, so raising again replaces the first
+    /// staging without duplicating it.
+    pub(crate) fn stage(&mut self, requested: &InteractionRequested) {
+        self.staged
+            .insert(requested.request_id.clone(), StagedAsk::of(requested));
+    }
+
+    /// Takes the entry `id` names, once: a second resolve for one id finds
+    /// nothing after the first consumed it.
+    pub(crate) fn take(&mut self, id: &RequestId) -> Option<StagedAsk> {
+        self.staged.remove(id)
+    }
+
+    /// Drops every staged entry: a completed handoff restarts the
+    /// reviewer's input, so no earlier question answers anything after it.
+    pub(crate) fn clear(&mut self) {
+        self.staged.clear();
+    }
+}
+
 /// Whether this turn was requested solely to summarise a rewind.
 pub(crate) fn summary_turn(started: &TurnStarted) -> bool {
     started
@@ -113,7 +149,7 @@ pub fn render_reviewed(
     event: &Event,
     action: Option<&ActionId>,
     seq: Option<Seq>,
-    _asks: &mut PendingAsks,
+    asks: &mut PendingAsks,
 ) {
     match event {
         Event::TurnStarted(started) => {
@@ -211,6 +247,9 @@ pub fn render_reviewed(
             // cancelled handoff leaves the context as it was
             // (`docs/handoff.md`, "Recording").
             if done.outcome == Outcome::Completed {
+                // A completed handoff restarts the reviewer's input: no
+                // earlier staged question answers anything after it.
+                asks.clear();
                 let mut keep = kept_flags(reviewed, |_| true).into_iter();
                 reviewed.retain(|_| keep.next().is_some_and(|stays| stays));
                 reviewed.shrink_to_fit();
@@ -236,9 +275,45 @@ pub fn render_reviewed(
         Event::ToolCallArgumentsDelta(_) | Event::ReasoningStarted(_) => {}
         Event::ReasoningDelta(_) | Event::ReasoningCompleted(_) | Event::ToolCallStarted(_) => {}
         Event::ToolCallDelta(_) | Event::ToolCallCompleted(_) | Event::PermissionRequested(_) => {}
-        Event::PermissionResolved(_)
-        | Event::InteractionRequested(_)
-        | Event::InteractionResolved(_) => {}
+        Event::InteractionRequested(requested) => {
+            // Every request stages, whoever raised it and whatever it
+            // asks: the resolve carries no prompt, so the staged entry is
+            // the only record of what it asked. The eliciting context now
+            // comes from the staged request, so a prior model reply
+            // answers nothing, while an earlier pending question keeps its
+            // own staged reply for its own resolve.
+            asks.stage(requested);
+            clear_model_reply(reviewed);
+            reviewed.push(eliciting_reply(&StagedAsk::of(requested)));
+        }
+        Event::InteractionResolved(resolved) => {
+            // The one rule over the person's input: a person's resolve
+            // renders as a person item holding the answer, with the staged
+            // eliciting content as its reply, for every interaction kind
+            // and every raiser. Nothing else about the request gates the
+            // showing. A fiber resolve is no person's input: it consumes
+            // the staged entry and drops it, as does a resolve with no
+            // line of its own or one no request staged.
+            let staged = asks.take(&resolved.request_id);
+            match (&resolved.by, seq, staged) {
+                (ResolvedBy::Person, Some(seq), Some(staged)) => {
+                    let reply = eliciting_reply(&staged);
+                    // The resolve appends its question reply immediately
+                    // before its person item, so interleaved resolves pair
+                    // exact. When a call cleared the staged reply first,
+                    // the answer still renders, with no reply.
+                    if remove_staged_reply(reviewed, &reply) {
+                        reviewed.push(reply);
+                    }
+                    reviewed.push(person_answer(&resolved.answer, &staged.interaction, seq));
+                }
+                (_, _, Some(staged)) => {
+                    remove_staged_reply(reviewed, &eliciting_reply(&staged));
+                }
+                (_, _, None) => {}
+            }
+        }
+        Event::PermissionResolved(_) => {}
         Event::RepositoryCodeOffered(_) | Event::RepositoryCodeResolved(_) => {}
         Event::UsageRecorded(_)
         | Event::QuotaNoticed(_)
@@ -334,25 +409,230 @@ fn reply(raw: &str) -> String {
 /// applies to the shown body only, never to the stored text, so a later
 /// part never extends a cut body.
 fn reply_item(raw: &str) -> Reviewed {
+    reply_item_as("The agent", raw)
+}
+
+/// Marks a staged eliciting reply's stored text: model-text helpers skip
+/// marked replies, so a pending question's eliciting context survives
+/// later lines until its resolve repairs the pair. The reviewer never
+/// reads the stored text, only the item text built beside it, so the mark
+/// never reaches its prompt.
+const STAGED_MARK: &str = "\0staged\0";
+
+/// Whether stored reply text is a staged eliciting reply.
+fn is_staged_reply(raw: &str) -> bool {
+    raw.starts_with(STAGED_MARK)
+}
+
+/// The reviewer's item for raw eliciting text marked as `who` wrote it:
+/// the agent for its own asked questions, fiber for its own channel
+/// description. The cap applies the same way as for agent replies.
+fn reply_item_as(who: &str, raw: &str) -> Reviewed {
     Reviewed {
         shown: Shown::Reply(raw.to_owned()),
         input: Input::User {
-            text: format!("The agent: {}", reply(raw)),
+            text: format!("{who}: {}", reply(raw)),
             images: Vec::new(),
         },
     }
 }
 
+/// The eliciting context a staged request answers with: the asked
+/// questions as the agent wrote them for an agent-raised form, fiber's
+/// own description of the channel otherwise. A server's or extension's
+/// submitted prompt words never reach the reviewer: repository-produced
+/// text stays out of its prompt (`docs/permissions.md`, "What it is
+/// shown"), so the reviewer learns which channel asked, never the words
+/// it asked with; the extension name renders as data. No arm compares a
+/// tool, extension, or server name.
+fn eliciting_reply(staged: &StagedAsk) -> Reviewed {
+    let (who, body) = match agent_questions(staged) {
+        Some(questions) => ("The agent", questions),
+        None => ("Fiber", channel_sentence(staged)),
+    };
+    Reviewed {
+        shown: Shown::Reply(format!("{STAGED_MARK}{body}")),
+        input: Input::User {
+            text: format!("{who}: {}", reply(&body)),
+            images: Vec::new(),
+        },
+    }
+}
+
+/// The asked questions as the agent wrote them, for the one raiser with
+/// questions of its own on the wire: a form with no extension and a
+/// non-empty raising call list. Any other shape takes fiber's channel
+/// description instead.
+fn agent_questions(staged: &StagedAsk) -> Option<String> {
+    if staged.extension.is_some() {
+        return None;
+    }
+    if !staged
+        .action_ids
+        .as_ref()
+        .is_some_and(|ids| !ids.is_empty())
+    {
+        return None;
+    }
+    match &staged.interaction {
+        Interaction::Form { fields } => Some(
+            fields
+                .iter()
+                .map(form_question)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        Interaction::Confirm { .. }
+        | Interaction::Select { .. }
+        | Interaction::MultiSelect { .. }
+        | Interaction::TextInput { .. } => None,
+    }
+}
+
+/// One asked question with its options, one line each: the question, then
+/// one `- <label>` line per option with ` (<description>)` appended when
+/// present.
+fn form_question(field: &contract::shapes::Question) -> String {
+    let mut lines = vec![field.question.clone()];
+    lines.extend(
+        field
+            .options
+            .iter()
+            .map(|choice| match &choice.description {
+                Some(description) => format!("- {} ({description})", choice.label),
+                None => format!("- {}", choice.label),
+            }),
+    );
+    lines.join("\n")
+}
+
+/// Fiber's own description of the channel that asked: the named extension
+/// channel, a server elicitation, or a question with no recorded asker.
+/// The submitted prompt words stay out in every case.
+fn channel_sentence(staged: &StagedAsk) -> String {
+    if let Some(name) = &staged.extension {
+        format!("A question from the {name} extension. Its words are not shown.")
+    } else if !matches!(staged.interaction, Interaction::Form { .. })
+        && staged
+            .action_ids
+            .as_ref()
+            .is_some_and(|ids| !ids.is_empty())
+    {
+        "A question from a server elicitation. Its words are not shown.".to_owned()
+    } else {
+        "A question with no recorded asker. Its words are not shown.".to_owned()
+    }
+}
+
+/// Removes the staged reply `reply` names from the tail side, once: a
+/// fiber resolve, a resolve with no line of its own, and a completed
+/// answer all leave no staged reply behind. False when a call already
+/// cleared it, so the answer then renders with no reply.
+fn remove_staged_reply(reviewed: &mut Vec<Reviewed>, reply: &Reviewed) -> bool {
+    let Some(at) = reviewed.iter().rposition(|item| item.shown == reply.shown) else {
+        return false;
+    };
+    reviewed.remove(at);
+    true
+}
+
+/// A person's answer as the reviewer reads it, with the resolving line's
+/// identity: the `seq` of the resolving line, item zero.
+fn person_answer(answer: &Answer, staged: &Interaction, seq: Seq) -> Reviewed {
+    Reviewed {
+        shown: Shown::Person(KeptMessage { seq, item: 0 }),
+        input: Input::User {
+            text: format!("The person: {}", answer_body(answer, staged)),
+            images: Vec::new(),
+        },
+    }
+}
+
+/// The answer's body, rendered from the answer's own variant: a form reads
+/// its headers from the staged questions it answers (`docs/tools.md`,
+/// "The result"). A cancelled form is the single line `declined`.
+fn answer_body(answer: &Answer, staged: &Interaction) -> String {
+    match answer {
+        Answer::Declined { .. } => "declined".to_owned(),
+        Answer::Confirmed { confirmed } => {
+            if *confirmed {
+                "yes".to_owned()
+            } else {
+                "no".to_owned()
+            }
+        }
+        Answer::Labels { labels } => labels
+            .iter()
+            .map(|label| escaped(label))
+            .collect::<Vec<_>>()
+            .join(", "),
+        Answer::Text { text } => quoted(text),
+        Answer::Form { answers, note } => {
+            let headers: Vec<String> = match staged {
+                Interaction::Form { fields } => {
+                    fields.iter().map(|field| escaped(&field.header)).collect()
+                }
+                Interaction::Confirm { .. }
+                | Interaction::Select { .. }
+                | Interaction::MultiSelect { .. }
+                | Interaction::TextInput { .. } => Vec::new(),
+            };
+            let mut lines: Vec<String> = answers
+                .iter()
+                .enumerate()
+                .map(|(at, answer)| {
+                    let said = match answer {
+                        FormAnswer::Skipped { .. } => "skipped".to_owned(),
+                        FormAnswer::Answered { labels, text } => {
+                            let mut parts: Vec<String> =
+                                labels.iter().map(|label| escaped(label)).collect();
+                            parts.extend(text.as_deref().map(quoted));
+                            parts.join(", ")
+                        }
+                    };
+                    match headers.get(at) {
+                        Some(header) => format!("{header}: {said}"),
+                        None => said,
+                    }
+                })
+                .collect();
+            lines.extend(
+                note.as_deref()
+                    .map(|note| format!("note: {}", quoted(note))),
+            );
+            lines.join("\n")
+        }
+    }
+}
+
+/// `text` as a JSON string, quotes included.
+fn quoted(text: &str) -> String {
+    Value::String(text.to_owned()).to_string()
+}
+
+/// `text` with JSON's escapes but without the quotes around it.
+fn escaped(text: &str) -> String {
+    let quoted = quoted(text);
+    quoted
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(&quoted)
+        .to_owned()
+}
+
 /// Adds one text part to the held reply at the tail, or starts one. An
 /// empty or whitespace-only part adds nothing; parts join with `\n` in
 /// the raw string the person's next message answers. Only the tail item
-/// is ever extended, so the part already sent stays append-only.
+/// is ever extended, so the part already sent stays append-only. A staged
+/// eliciting reply never extends: later model text starts its own held
+/// reply instead of rewriting a pending question's context.
 fn push_text(reviewed: &mut Vec<Reviewed>, text: &str) {
     if text.trim().is_empty() {
         return;
     }
     if let Some(held) = reviewed.last_mut()
         && let Shown::Reply(raw) = &mut held.shown
+        && !is_staged_reply(raw.as_str())
     {
         raw.push('\n');
         raw.push_str(text);
@@ -376,6 +656,22 @@ fn clear_held_reply(reviewed: &mut Vec<Reviewed>) {
             shown: Shown::Reply(_),
             ..
         })
+    ) {
+        reviewed.pop();
+    }
+}
+
+/// Removes the held model reply at the tail, if any, leaving a staged
+/// eliciting reply for its resolve: a new request never answers with the
+/// model prose before it, while a pending question keeps its context
+/// until its own answer repairs the pair.
+fn clear_model_reply(reviewed: &mut Vec<Reviewed>) {
+    if matches!(
+        reviewed.last(),
+        Some(Reviewed {
+            shown: Shown::Reply(raw),
+            ..
+        }) if !is_staged_reply(raw)
     ) {
         reviewed.pop();
     }
