@@ -131,9 +131,6 @@ crates/tools/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plu
 crates/contract/src/steering_tests.rs	fiber-4277	plan	2026-11-06T12:12:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes/src/process_group_tests.rs	fiber-4201	grant	2026-11-06T12:18:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/debt/4201-poll-drops-listing-error	
 xtask/src/rules_tests.rs	fiber-4277	plan	2026-11-06T12:19:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
-docs/permissions.md	fiber-4292	plan	2026-11-06T12:22:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/support/src/peer.rs	fiber-4292	plan	2026-11-06T12:25:24Z	roundhouse-7010-plus-1:/home/aakshintala/work	
-crates/support/src/peer_tests.rs	fiber-4292	plan	2026-11-06T12:25:24Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 crates/contract/src/diag.rs	fiber-4250	plan	2026-11-06T13:42:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/diag.rs	fiber-4250	plan	2026-11-06T13:42:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/state.md	fiber-4250	plan	2026-11-06T13:42:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
