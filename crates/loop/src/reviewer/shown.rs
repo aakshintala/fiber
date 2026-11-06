@@ -2,12 +2,14 @@
 //! each person's message, each tool call, and the reply each person message
 //! answers, nothing else.
 
+use std::collections::HashMap;
+
 use contract::events::{
-    Event, InputItem, KeptMessage, MessageOutcome, Outcome, TurnOutcome, TurnStarted,
+    Event, InputItem, Interaction, KeptMessage, MessageOutcome, Outcome, TurnOutcome, TurnStarted,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin};
-use contract::{ActionId, Seq};
+use contract::{ActionId, RequestId, Seq};
 use serde_json::Value;
 
 /// What one reviewed item is.
@@ -37,6 +39,31 @@ pub struct Reviewed {
     pub shown: Shown,
     /// The item as the reviewer reads it.
     pub input: Input,
+}
+
+/// The eliciting content a resolved interaction answers, keyed by request
+/// id. A resolve carries no prompt, so the fold stages each request here
+/// and the resolve consumes it; a repeated resolve after consumption
+/// renders nothing.
+///
+/// Public for the integration crates, which thread their own store through
+/// the renderer (`docs/testing.md`, "Jigs").
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PendingAsks {
+    staged: HashMap<RequestId, StagedAsk>,
+}
+
+/// One staged eliciting request: what it asked, with the wire marks that
+/// choose how its eliciting context renders. The marks choose the context
+/// only; they never gate whether a person's answer is shown.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct StagedAsk {
+    /// What it asked.
+    interaction: Interaction,
+    /// The extension that raised it with `host.ask`, if any.
+    extension: Option<String>,
+    /// The tool calls that raised it, if any.
+    action_ids: Option<Vec<ActionId>>,
 }
 
 /// Whether this turn was requested solely to summarise a rewind.
@@ -78,12 +105,15 @@ pub fn summary_skips(inside: &mut bool, event: &Event) -> bool {
 /// input follows the context window, not the transcript.
 ///
 /// Public for the `review` jig's replay, which folds a source log through
-/// the same renderer (`docs/testing.md`, "Jigs").
+/// the same renderer (`docs/testing.md`, "Jigs"). `asks` stages the
+/// eliciting content each request carries, so a later resolve renders the
+/// person's answer with what it answers.
 pub fn render_reviewed(
     reviewed: &mut Vec<Reviewed>,
     event: &Event,
     action: Option<&ActionId>,
     seq: Option<Seq>,
+    _asks: &mut PendingAsks,
 ) {
     match event {
         Event::TurnStarted(started) => {

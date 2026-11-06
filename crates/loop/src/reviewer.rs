@@ -28,7 +28,7 @@ pub(crate) use shown::summary_turn;
 /// (`docs/permissions.md`, "What it is shown"). Public for the `review`
 /// jig's replay, which folds a source log through the same renderer
 /// (`docs/testing.md`, "Jigs").
-pub use shown::{Reviewed, Shown, render_reviewed, summary_skips};
+pub use shown::{PendingAsks, Reviewed, Shown, render_reviewed, summary_skips};
 
 /// What a `no_model` escalation and notice say: nothing chose the
 /// reviewer's model, so every reviewed call goes to a person

@@ -52,6 +52,7 @@ pub(super) const COMPILED_IN: &[(&str, &str)] = &[
     ("crates/loop/prompt/opening.md", "loop"),
     ("crates/loop/prompt/reviewer.md", "loop"),
     ("crates/loop/prompt/system.md", "loop"),
+    ("crates/loop/tests/fixtures/review_person_input/events.jsonl", "loop"),
     ("docs/skills/cache-warming/SKILL.md", "loop"),
     ("docs/skills/using-fiber/SKILL.md", "loop"),
     ("docs/skills/cache-warming/SKILL.md", "main"),
