@@ -750,7 +750,7 @@ fn deny_listed_lookalike_sibling_is_denied() {
     // (`docs/testing.md`, "Event streams"): the turn's kinds as a set with
     // counts, so a duplicated or missing event fails. One denied call gives
     // `denied_kinds(1)`: the model emitted one call (`docs/events.md`,
-    // "tool_call_requested"), the credential deny refuses it first
+    // "`tool_call_requested`"), the credential deny refuses it first
     // (`docs/permissions.md`, "The order a call is judged in") and records
     // the refusal (`docs/permissions.md`, "What the log records":
     // `permission_resolved` carries the decision and what decided it), and a
@@ -773,7 +773,7 @@ fn deny_listed_lookalike_sibling_is_denied() {
         .filter(|line| line["kind"] == "tool_call_completed")
         .collect();
     // One call means one of each line: one emitted call (`docs/events.md`,
-    // "tool_call_requested"), one recorded refusal (`docs/permissions.md`,
+    // "`tool_call_requested`"), one recorded refusal (`docs/permissions.md`,
     // "What the log records"), one denied outcome (`docs/permissions.md`,
     // "What the log records").
     assert_eq!(requested.len(), 1);
