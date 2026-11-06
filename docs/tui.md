@@ -593,6 +593,23 @@ paragraph replaces them on a remote terminal.
 A view whose rows take Enter or a switch marks the focused row with "› " in a
 two-column gutter, as overlay choices do, without the bar.
 
+Every swapped view and overlay keeps the same controls, from the #4280
+design:
+
+- **Esc** is named once. A swapped view names it in its top row, "Esc
+  returns", or "Esc back" on a sub-page, and its footer leaves it out. An
+  overlay has no top row, so its footer ends "Esc close".
+- **The main action** on the focused row is Enter, and Space does the same.
+  Delete removes or resets the row; Backspace is a synonym only where no
+  text field is open.
+- **A footer** names every key the view takes, keys bold and words dim,
+  joined by " · ", on the last row. A view that takes only ↑↓ and Esc has
+  no footer.
+- **An empty state** is one sentence in sentence case with a full stop,
+  followed by how to add the first entry where the view can add one ("No
+  rules yet. Rules appear when you allow a call always.").
+- **A click** on a row does what Enter does on it.
+
 A view swaps into the conversation area and takes all of it. Esc returns to
 the conversation. Its top row, on the `surface` tint, is the view's name
 bold, its command dim ("  /context"), and "Esc returns" dim, right-aligned;
@@ -1020,8 +1037,8 @@ install still running.
     It matches labels and key paths, hides the tab bar and adds each
     match's tab, dim, at the right. Esc clears the search; a second Esc
     returns.
-  - **Footer:** "←→ tab · / search · Enter change · Tab layer · Delete reset
-    · Esc close", with the keys bold. Ctrl+G still opens the file; on a
+  - **Footer:** "←→ tab · / search · Enter change · Tab layer · Delete
+    reset", with the keys bold. Ctrl+G still opens the file; on a
     remote terminal it opens the hub's file instead ("Swapped views").
 
   ```
@@ -2105,7 +2122,7 @@ after it, and the keys dim, alternatives comma-separated and other paths
 after " · ". Each column wraps inside its own width. The first row is
 focused. When rows hide below, a dim ↓ takes the last shown row's gutter; a
 screen too short for them scrolls, and its last line reads "↑ 4 more · ↓ 12
-more" dim. The footer is "↑↓ move · ←→ tabs · Esc closes".
+more" dim. The footer is "↑↓ move · ←→ tabs · Esc close".
 
 Hints that name a key, on home, name the action's
 bound key from this table, leaving the key out when the action is unbound.
