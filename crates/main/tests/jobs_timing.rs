@@ -44,7 +44,13 @@ fn ask_with(setup: &Setup, args: &[&str]) -> Run {
 
 /// Installs provider `name` at `url` with `protocol`, after the pattern in
 /// `provider_diagnostics.rs`, which stays unchanged.
-fn install_url(setup: &Setup, name: &str, url: &str, protocol: &str) {
+fn install_url(
+    setup: &Setup,
+    name: &str,
+    url: &str,
+    protocol: &str,
+    probe: Option<std::sync::mpsc::Sender<()>>,
+) {
     let source = setup.root.path().join(format!("src-{name}"));
     write_json(
         &source.join("extension.json"),
@@ -58,16 +64,14 @@ fn install_url(setup: &Setup, name: &str, url: &str, protocol: &str) {
             "models": [{"id": "m", "protocol": protocol, "base_url": format!("{url}/v1"), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        probe,
+    );
 }
 
 /// Every line of the diagnostic file `name`, parsed.
@@ -182,7 +186,7 @@ fn shell_journey(setup: &Setup, sentinel: &str, extra: &Value) -> Run {
         text_reply("done")
     })
     .unwrap();
-    install_url(setup, "pa", &server.url(), "openai-responses");
+    install_url(setup, "pa", &server.url(), "openai-responses", None);
     let mut config = json!({"model": "pa/m", "reviewer": {"model": "pa/m"}});
     for (key, value) in extra.as_object().into_iter().flatten() {
         config[key] = value.clone();
@@ -224,8 +228,8 @@ fn delegate_journey(
     child: &ProviderServer,
     extra: &Value,
 ) -> Run {
-    install_url(setup, "pa", &parent.url(), "openai-responses");
-    install_url(setup, "pb", &child.url(), "openai-responses");
+    install_url(setup, "pa", &parent.url(), "openai-responses", None);
+    install_url(setup, "pb", &child.url(), "openai-responses", None);
     let mut config = json!({"model": "pa/m", "reviewer": {"model": "pa/m"}});
     for (key, value) in extra.as_object().into_iter().flatten() {
         config[key] = value.clone();
@@ -421,5 +425,105 @@ fn without_debug_no_jobs_start_is_written() {
             "no delegate start at {extra}: {:?}",
             all_starts(&setup)
         );
+    }
+}
+
+#[test]
+fn transient_lock_hold_does_not_fail_install_url() {
+    // A same-home process briefly holds `extensions/.lock` while this test
+    // installs a provider through `install_url`: a session loading its
+    // extensions at startup fails `plan` at once under the fake clock's
+    // instant sleep, so without the shared retry the `plan` unwrap fails
+    // with `Busy`. The hold lasts exactly one observed attempt: the holder
+    // releases when the retry's first `Busy` probe arrives, with no
+    // wall-clock sleep anywhere. One shared release channel carries both
+    // the retry's probe send and the main thread's release send, so the
+    // holder wakes whether the install retried (green path: the probe
+    // arrives) or failed at once (red path: the main thread releases after
+    // catching the panic). The main thread always sends release after the
+    // install attempt, waits for done, drops every sender and joins the
+    // holder before the test ends; the guard below does the same
+    // release-and-join on any unexpected panic in between.
+    let setup = Setup::new();
+    let lock = config::extensions_dir(&setup.home()).join(".lock");
+    std::fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let deadline = setup.deadline;
+    let holder = std::thread::spawn(move || {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&lock)
+            .unwrap();
+        let wait = deadline.start_wait();
+        while file.try_lock().is_err() {
+            if wait.left().is_zero() {
+                panic!("the holder never took the extensions lock");
+            }
+            std::thread::yield_now();
+        }
+        held_tx.send(()).unwrap();
+        deadline.recv_or_fail(&release_rx, "the install to hit the held lock");
+        drop(file);
+        done_tx.send(()).unwrap();
+    });
+    struct ReleaseJoin {
+        release: Option<std::sync::mpsc::Sender<()>>,
+        holder: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for ReleaseJoin {
+        fn drop(&mut self) {
+            if let Some(sender) = self.release.take() {
+                let _ = sender.send(()).ok();
+            }
+            if let Some(holder) = self.holder.take() {
+                match holder.join() {
+                    Ok(()) | Err(_) => {}
+                }
+            }
+        }
+    }
+    let mut guard = ReleaseJoin {
+        release: Some(release_tx.clone()),
+        holder: Some(holder),
+    };
+    setup
+        .deadline
+        .recv_or_fail(&held_rx, "the holder to take the extensions lock");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        install_url(
+            &setup,
+            "pa",
+            "http://127.0.0.1:9",
+            "openai-responses",
+            Some(release_tx.clone()),
+        );
+    }));
+    let _ = release_tx.send(()).ok();
+    setup
+        .deadline
+        .recv_or_fail(&done_rx, "the holder to release the extensions lock");
+    drop(release_tx);
+    let holder = guard.holder.take().unwrap();
+    drop(guard);
+    holder.join().unwrap();
+    match outcome {
+        Ok(()) => assert!(
+            config::extensions_dir(&setup.home()).join("pa").is_dir(),
+            "the install committed pa once the hold lifted"
+        ),
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .unwrap_or("");
+            assert!(
+                message.contains("Busy"),
+                "the red path fails on the Busy plan unwrap, not another panic: {message}"
+            );
+            std::panic::resume_unwind(payload);
+        }
     }
 }
