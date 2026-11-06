@@ -149,3 +149,4 @@ xtask/src/select/reuse.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pr
 xtask/tests/cli.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/cli/src/extension_test_tests.rs	fiber-4201	plan	2026-11-06T06:59:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4287,4285,4283,4259,4218,4213
 crates/main/tests/provider_request_builtin_tools.rs	fiber-4258	grant	2026-11-06T07:45:25Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/providers/4258-gemini-compat	
+docs/testing/mutants.md	fiber-4272	grant	2026-11-06T07:46:12Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
