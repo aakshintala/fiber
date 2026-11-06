@@ -802,7 +802,9 @@ A process owned by another account is never a session process, and its
 arguments are never read; the walk continues through it to PID 1. If the
 kernel will not report PID 1's effective uid, Fiber treats it as root and
 continues the walk. An unreadable effective uid for any other process
-makes the walk incomplete. When the walk is incomplete — a parent pid cannot
+makes the walk incomplete. When a just-read parent exits mid-walk, the walk
+re-reads the child's parent once and continues only from a changed parent,
+which proves the child was reparented. When the walk is incomplete — a parent pid cannot
 be read, an effective uid other than PID 1's cannot be read, or this
 account's process's arguments cannot be read — the refusals above still apply, and the rejection message names the
 unreadable pid. The second refusal still admits
