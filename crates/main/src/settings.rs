@@ -1,7 +1,7 @@
 //! Session settings read from configuration with their documented
 //! defaults (`docs/configuration.md`).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -397,6 +397,65 @@ pub(crate) fn sandbox_settings(
         deny_read,
         fiber_home: fiber_home.to_path_buf(),
     }
+}
+
+/// Builds the session sandbox toggle for the loop from the handle, the
+/// workspace and the shared latch the session assembly holds: flips the
+/// shared setting first, then reports whether the sandbox applies.
+/// Disabling never needs availability. Enabling while unavailable sets
+/// the setting on and accepts with no result; the one notice goes out
+/// only when the latch is unset, and an already-reported unavailability
+/// carries no notice. A concurrent settings replacement between the flip
+/// and the read can only clear the flag, which the next command reports;
+/// the toggle still accepts.
+pub(crate) fn sandbox_toggle(
+    sandbox: &SandboxHandle,
+    workspace: &Path,
+    latch: crate::reload::LatchHandle,
+) -> r#loop::ApplySandbox {
+    let sandbox = Arc::clone(sandbox);
+    let workspace = workspace.to_path_buf();
+    Arc::new(move |enabled| {
+        support::lock(&sandbox).enabled = enabled;
+        if !enabled {
+            return r#loop::Availability::Available;
+        }
+        let settings = support::lock(&sandbox).clone();
+        match tools::sandbox_check_available(&settings, &workspace) {
+            Ok(()) => r#loop::Availability::Available,
+            Err(unavailable) => {
+                let cause = match &unavailable {
+                    tools::SandboxUnavailable::Off => None,
+                    tools::SandboxUnavailable::UnsupportedPlatform => {
+                        Some(r#loop::Cause::UnsupportedPlatform)
+                    }
+                    tools::SandboxUnavailable::AbiBelow2 => Some(r#loop::Cause::AbiBelow2),
+                    tools::SandboxUnavailable::SandboxExecUnavailable { .. } => {
+                        Some(r#loop::Cause::SandboxExecUnavailable)
+                    }
+                    tools::SandboxUnavailable::DenyInsideWrite { .. } => {
+                        Some(r#loop::Cause::DenyInsideWrite)
+                    }
+                    tools::SandboxUnavailable::UnresolvableDeny { .. } => {
+                        Some(r#loop::Cause::UnresolvableDeny)
+                    }
+                    tools::SandboxUnavailable::UnresolvedWrite { .. } => {
+                        Some(r#loop::Cause::UnresolvedWrite)
+                    }
+                };
+                let Some(cause) = cause else {
+                    return r#loop::Availability::Available;
+                };
+                let reported = latch();
+                let notice = (!reported).then(|| Notice {
+                    code: unavailable.code(),
+                    message: format!("sandbox unavailable: {unavailable}"),
+                    extension: None,
+                });
+                r#loop::Availability::Unavailable { cause, notice }
+            }
+        }
+    })
 }
 
 /// Replaces the shared sandbox settings with the checked configuration's

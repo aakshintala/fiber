@@ -293,6 +293,12 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_reload,
     },
     CommandEntry {
+        name: "sandbox",
+        description: "Turns the session sandbox on or off.",
+        hint: Some("[on|off]"),
+        run: run_sandbox,
+    },
+    CommandEntry {
         name: "import",
         description: "Copies another harness's configuration into Fiber home, once.",
         hint: Some("[<source>]"),
@@ -419,6 +425,26 @@ pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
         }
     }
     Some(app.send_command("reload", None).0)
+}
+
+/// `/sandbox on|off`: sends the session sandbox switch, `on` or `off`
+/// case-insensitively. Bare or anything else keeps the draft and shows the
+/// usage, sending nothing (`docs/invocation.md`, "What each command does").
+fn run_sandbox(app: &mut App, rest: &str) -> Option<Effect> {
+    let enabled = if rest.trim().eq_ignore_ascii_case("on") {
+        true
+    } else if rest.trim().eq_ignore_ascii_case("off") {
+        false
+    } else {
+        app.push_notice(ErrorCode::Usage, "/sandbox needs on or off.".to_owned());
+        app.draft.clear();
+        app.draft.paste("/sandbox ");
+        return Some(Effect::None);
+    };
+    Some(
+        app.send_command("sandbox", Some(json!({ "enabled": enabled })))
+            .0,
+    )
 }
 
 fn run_import(app: &mut App, rest: &str) -> Option<Effect> {

@@ -178,6 +178,7 @@ impl Loop {
             | Delivery::McpReconnect(..)
             | Delivery::Name(..)
             | Delivery::AddDirectory(..)
+            | Delivery::Sandbox(..)
             | Delivery::Credential(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)

@@ -380,6 +380,7 @@ impl Loop {
                 now @ (Delivery::Reply(..)
                 | Delivery::Name(..)
                 | Delivery::AddDirectory(..)
+                | Delivery::Sandbox(..)
                 | Delivery::Shell(..)
                 | Delivery::ExtensionExec(_)
                 | Delivery::ExtensionLog(_)

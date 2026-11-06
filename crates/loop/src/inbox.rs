@@ -523,6 +523,7 @@ impl Loop {
             | Delivery::SteerDrop(..)
             | Delivery::Name(..)
             | Delivery::AddDirectory(..)
+            | Delivery::Sandbox(..)
             | Delivery::Message(..)
             | Delivery::Handoff(..)
             | Delivery::Model(..)
@@ -663,6 +664,9 @@ impl Loop {
             // An added folder starts no turn either: resolved, written
             // unless covered and acked at this drain, after `close` too.
             Delivery::AddDirectory(args, ack) => self.take_add_directory(args, ack)?,
+            // The sandbox toggle starts no turn either, but never after
+            // `close`: the setting it flips belongs to this session's run.
+            Delivery::Sandbox(args, ack) => self.take_sandbox(args, ack)?,
             // A sent shell joins the next turn's input: written at this
             // drain, held for the next `turn_started`, starting no turn.
             Delivery::Shell(line, ack) => self.take_shell(line, ack)?,
@@ -877,6 +881,10 @@ impl Loop {
             // An added folder joins the running turn's boundary at once:
             // resolved, written unless covered and acked at this drain.
             Delivery::AddDirectory(args, ack) => self.take_add_directory(args, ack)?,
+            // The sandbox toggle takes at once too: the next call only is
+            // affected, and an in-flight declared-confined call keeps its
+            // declaration.
+            Delivery::Sandbox(args, ack) => self.take_sandbox(args, ack)?,
             // A sent shell joins the next turn's input, never the running
             // turn: written at this drain and held for the next
             // `turn_started`.

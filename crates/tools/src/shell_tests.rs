@@ -1275,6 +1275,55 @@ fn sandbox_handle_for_test() -> (
     (home, handle)
 }
 
+/// The on-state sentence, shown only when the sandbox is enabled and
+/// available; off-state and unavailable-state definitions read
+/// byte-identical (`docs/tools.md`, "Shell").
+#[test]
+fn definition_names_the_session_sandbox_only_when_enabled_and_available() {
+    const SENTENCE: &str = " When the session sandbox is on and available, the call runs confined \
+        with no sockets and writes limited to the workspace, temp and granted paths; \
+        a call with `unconfined: true` or `detach` set runs outside the sandbox \
+        and is reviewed as with the sandbox off.";
+    let dir = fakes::TempDir::new("fiber-shell-definition-sandbox");
+    let workspace = dir.path().to_path_buf();
+    let off = Shell::new(workspace.clone(), FakeClock::new()).definition();
+    assert!(
+        !off.description.ends_with(SENTENCE),
+        "the off-state definition carries no sandbox sentence"
+    );
+    // An unresolvable write grant leaves the sandbox unavailable: the
+    // definition matches the off state byte for byte.
+    let home_root = fakes::TempDir::new("fiber-shell-definition-unavailable");
+    let unavailable_shell = Shell::new(workspace.clone(), FakeClock::new()).with_sandbox(
+        std::sync::Arc::new(std::sync::Mutex::new(crate::shell::sandbox::Settings {
+            enabled: true,
+            allow_write: vec![home_root.path().join("missing-write")],
+            deny_read: Vec::new(),
+            fiber_home: home_root.path().join("fiber-home"),
+        })),
+    );
+    assert_eq!(unavailable_shell.definition(), off);
+    let (_home, sandbox) = sandbox_handle_for_test();
+    let on = Shell::new(workspace, FakeClock::new())
+        .with_sandbox(sandbox)
+        .definition();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        assert!(
+            on.description.ends_with(SENTENCE),
+            "the on-state definition carries the exact sentence: {}",
+            on.description
+        );
+        assert_eq!(
+            on.description.strip_suffix(SENTENCE),
+            Some(off.description.as_str()),
+            "the sentence only appends"
+        );
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    assert_eq!(on, off);
+}
+
 #[test]
 fn effects_sets_confined_for_an_enabled_linux_sandbox() {
     let dir = fakes::TempDir::new("fiber-shell-effects-confined");

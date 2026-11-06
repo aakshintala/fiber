@@ -386,6 +386,7 @@ the lines that carry it.
 | `refused` | model call, turn | the provider declined on policy grounds | — |
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") | event |
 | `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one | event |
+| `sandbox` | notice | `/sandbox` reports the session sandbox switch (`docs/tui.md`, "Slash commands") | event |
 | `session_has_dependents` | exit, hub command, driver command (`rewind`) | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") | — |
 | `session_held` | exit, hub command, notice, driver command (`rewind`, `change_workspace`) | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes"), or the terminal cannot attach: the session runs another Fiber build than this terminal, or its status did not parse | event |
 | `session_not_found` | exit, hub command, notice, driver command (`rewind`) | a resume names no session, or `fiber feedback --session` names no session or names a delegate (`docs/invocation.md`, "Commands and flags"), or a command whose `session_id` names no session, running or exited, or names a delegate that is not running, or a hub command's `session` argument names none, or a `start` `continues` names a session whose worktree is gone (`docs/invocation.md`, "The hub" and "Lifecycle"), or the terminal has no session on screen | event |
@@ -438,6 +439,7 @@ code: its message gives the count and lists each item.
 | `protected_paths_restored` | event | a protected path changed while a confined call ran; startup recovery restored it, and the message names each path |
 | `repository_code_skipped` | event | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `reviewer_selection_failed` | event | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one; the message names the cause |
+| `sandbox` | event | `/sandbox` reports the session sandbox switch (`docs/sandbox.md`, "The rule") |
 | `skill_invalid` | event | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | event | two skills share a name, an MCP server's prompt is named like a skill, an extension's command is named like a skill or prompt template, an MCP server's prompt is named like an extension's command, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | event | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
