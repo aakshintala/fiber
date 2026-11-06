@@ -283,19 +283,23 @@ fn exiting_parent_tree(new_parent: Option<Pid>, fail_parent: bool) -> Script {
 fn ancestors_reparented_mid_walk_continues_from_the_new_parent() {
     let read = exiting_parent_tree(Some(Pid(60)), false);
     let found = super::ancestors(Pid(100), &read).expect("the walk continues from the new parent");
-    assert!(found.contains(&ProcessInfo {
-        pid: Pid(60),
-        euid: EffectiveUid(1000),
-    }));
-    assert!(found.contains(&ProcessInfo {
-        pid: Pid(70),
-        euid: EffectiveUid(1000),
-    }));
-    assert!(found.contains(&ProcessInfo {
-        pid: Pid(1),
-        euid: EffectiveUid(0),
-    }));
-    assert!(!found.iter().any(|ancestor| ancestor.pid == Pid(50)));
+    assert_eq!(
+        found,
+        [
+            ProcessInfo {
+                pid: Pid(60),
+                euid: EffectiveUid(1000),
+            },
+            ProcessInfo {
+                pid: Pid(70),
+                euid: EffectiveUid(1000),
+            },
+            ProcessInfo {
+                pid: Pid(1),
+                euid: EffectiveUid(0),
+            },
+        ]
+    );
 }
 
 #[test]
@@ -325,6 +329,18 @@ fn ancestors_treat_a_re_read_pid_1_as_root() {
 }
 
 #[test]
+fn ancestors_refuse_when_the_re_homed_parent_owner_is_unreadable() {
+    let read = Script {
+        unreadable_euid: vec![Pid(60)],
+        ..exiting_parent_tree(Some(Pid(60)), false)
+    };
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap_err(),
+        IncompleteWalk { pid: Pid(60) }
+    );
+}
+
+#[test]
 fn ancestors_name_the_child_when_the_re_read_parent_fails() {
     let read = exiting_parent_tree(None, false);
     assert_eq!(
@@ -334,13 +350,59 @@ fn ancestors_name_the_child_when_the_re_read_parent_fails() {
 }
 
 #[test]
-fn ancestors_refuse_when_the_parent_vanishes_after_its_owner_read() {
-    // The retry re-reads the vanished parent's own row, which is gone
-    // with it, so the walk ends incomplete naming the child.
+fn ancestors_continues_when_the_parent_vanishes_after_its_owner_read() {
+    // PID 50 exits after its owner is read, re-homing PID 100 to PID 60:
+    // the walk drops PID 50, re-reads PID 100's parent once and continues
+    // from the changed parent, leaving PID 50 off the list so no
+    // same-owner argument read can refuse on it.
     let read = exiting_parent_tree(Some(Pid(60)), true);
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap(),
+        [
+            ProcessInfo {
+                pid: Pid(60),
+                euid: EffectiveUid(1000),
+            },
+            ProcessInfo {
+                pid: Pid(70),
+                euid: EffectiveUid(1000),
+            },
+            ProcessInfo {
+                pid: Pid(1),
+                euid: EffectiveUid(0),
+            },
+        ]
+    );
+}
+
+#[test]
+fn ancestors_refuse_when_the_parent_reread_is_unchanged() {
+    let read = exiting_parent_tree(Some(Pid(50)), true);
     assert_eq!(
         super::ancestors(Pid(100), &read).unwrap_err(),
         IncompleteWalk { pid: Pid(50) }
+    );
+}
+
+#[test]
+fn ancestors_name_the_predecessor_when_the_parent_reread_fails() {
+    let read = exiting_parent_tree(None, true);
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap_err(),
+        IncompleteWalk { pid: Pid(100) }
+    );
+}
+
+#[test]
+fn ancestors_name_the_target_when_its_own_parent_is_unreadable() {
+    let read = Script {
+        parents: [(Pid(100), Pid(50))].into_iter().collect(),
+        unreadable_parent: vec![Pid(100)],
+        ..Script::default()
+    };
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap_err(),
+        IncompleteWalk { pid: Pid(100) }
     );
 }
 
