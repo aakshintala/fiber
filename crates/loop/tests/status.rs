@@ -128,7 +128,7 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
         .into_iter()
         .map(|line| line.kind())
         .collect();
-    assert!(!kinds.iter().any(|k| *k == EventKind::SessionStatus));
+    assert!(!kinds.contains(&EventKind::SessionStatus));
 }
 
 #[test]

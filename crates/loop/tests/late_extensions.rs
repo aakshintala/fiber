@@ -436,9 +436,7 @@ fn a_never_or_skipped_extension_installs_nothing() {
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no preparation");
     assert_eq!(installed.load(Ordering::SeqCst), 0, "no installation");
     assert!(
-        !durable_kinds(&session)
-            .iter()
-            .any(|kind| *kind == EventKind::ExtensionsLoaded),
+        !durable_kinds(&session).contains(&EventKind::ExtensionsLoaded),
         "no late step"
     );
 }
@@ -464,9 +462,7 @@ fn an_approval_answered_obsolete_installs_nothing() {
     assert_eq!(calls.load(Ordering::SeqCst), 0, "no preparation");
     assert_eq!(installed.load(Ordering::SeqCst), 0, "no installation");
     assert!(
-        !durable_kinds(&session)
-            .iter()
-            .any(|kind| *kind == EventKind::ExtensionsLoaded),
+        !durable_kinds(&session).contains(&EventKind::ExtensionsLoaded),
         "no late step"
     );
 }
@@ -487,9 +483,7 @@ fn an_approval_without_a_late_preparer_changes_nothing() {
     close(&session);
     ended(&finished).unwrap();
     assert!(
-        !durable_kinds(&session)
-            .iter()
-            .any(|kind| *kind == EventKind::ExtensionsLoaded),
+        !durable_kinds(&session).contains(&EventKind::ExtensionsLoaded),
         "no late step"
     );
 }

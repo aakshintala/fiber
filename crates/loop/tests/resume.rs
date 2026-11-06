@@ -365,8 +365,7 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
     assert!(
         !history
             .new_kinds()
-            .iter()
-            .any(|k| *k == EventKind::PermissionRequested),
+            .contains(&EventKind::PermissionRequested),
         "{:?}",
         history.new_kinds()
     );
@@ -1682,8 +1681,7 @@ fn no_suspended_on_resumes_as_a_cut_short_turn() {
     assert!(
         !history
             .new_kinds()
-            .iter()
-            .any(|k| *k == EventKind::PermissionRequested)
+            .contains(&EventKind::PermissionRequested)
     );
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
@@ -1720,8 +1718,7 @@ fn a_suspended_on_naming_an_unknown_request_resumes_as_cut_short() {
     assert!(
         !history
             .new_kinds()
-            .iter()
-            .any(|k| *k == EventKind::PermissionRequested)
+            .contains(&EventKind::PermissionRequested)
     );
     assert_eq!(
         history.new_kinds(),
@@ -1777,8 +1774,7 @@ fn a_suspended_on_naming_an_interaction_resumes_as_cut_short() {
     assert!(
         !history
             .new_kinds()
-            .iter()
-            .any(|k| *k == EventKind::PermissionRequested)
+            .contains(&EventKind::PermissionRequested)
     );
 }
 
@@ -1856,8 +1852,7 @@ fn a_line_after_fiber_exited_resumes_as_cut_short() {
     assert!(
         !history
             .new_kinds()
-            .iter()
-            .any(|k| *k == EventKind::PermissionRequested)
+            .contains(&EventKind::PermissionRequested)
     );
     assert_eq!(
         history.new_kinds(),
@@ -1899,8 +1894,7 @@ fn a_completed_turn_resumes_as_cut_short() {
     assert!(
         !history
             .new_kinds()
-            .iter()
-            .any(|k| *k == EventKind::PermissionRequested)
+            .contains(&EventKind::PermissionRequested)
     );
     assert_eq!(
         history.new_kinds(),
@@ -1943,8 +1937,7 @@ fn a_request_outside_the_batch_resumes_as_cut_short() {
     assert!(
         !history
             .new_kinds()
-            .iter()
-            .any(|k| *k == EventKind::PermissionRequested)
+            .contains(&EventKind::PermissionRequested)
     );
     assert_eq!(
         history.new_kinds(),
@@ -2376,10 +2369,7 @@ fn ended_on_the_question(history: &History) {
     );
     assert!(history.provider.requests().is_empty());
     assert!(
-        !history
-            .new_kinds()
-            .iter()
-            .any(|kind| *kind == EventKind::StepStarted),
+        !history.new_kinds().contains(&EventKind::StepStarted),
         "{:?}",
         history.new_kinds()
     );

@@ -867,12 +867,8 @@ fn waiting_on_an_offer_is_idle() {
         .expect("run ended in time");
     run.result.unwrap();
     let kinds = durable_kinds(&session);
-    assert!(
-        !kinds
-            .iter()
-            .any(|k| *k == EventKind::RepositoryCodeResolved)
-    );
-    assert!(!kinds.iter().any(|k| *k == EventKind::PreambleBuilt));
+    assert!(!kinds.contains(&EventKind::RepositoryCodeResolved));
+    assert!(!kinds.contains(&EventKind::PreambleBuilt));
     assert!(
         matches!(
             Deadline::after(DEADLINE).recv(&prompt_answer),

@@ -1558,7 +1558,7 @@ fn a_rewound_session_loads_nothing() {
         .map(|line| line.kind())
         .collect();
     assert!(
-        !kinds.iter().any(|k| *k == EventKind::PreambleBuilt),
+        !kinds.contains(&EventKind::PreambleBuilt),
         "no build in this process: {kinds:?}"
     );
     // The inherited build runs with no new preamble.
@@ -1636,7 +1636,7 @@ fn a_switch_before_the_first_prompt_loads_nothing() {
         .map(|line| line.kind())
         .collect();
     assert!(
-        kinds.iter().any(|k| *k == EventKind::PreambleBuilt),
+        kinds.contains(&EventKind::PreambleBuilt),
         "the switch rebuilds: {kinds:?}"
     );
     assert_eq!(
