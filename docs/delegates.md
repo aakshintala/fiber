@@ -110,7 +110,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 - The model is fixed when the delegate starts and never changes.
 - A reload refreshes the parent's lookup and catalogue, so later spawns
   see the reloaded models; a running delegate keeps the model it
-  started with.
+  started with. A reload measures a cached model list stale when the provider's extension source is newer than the cache; start-time and background refresh still measure age alone, and #4326 makes them one.
 
 ## Talking to a delegate
 
