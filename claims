@@ -216,3 +216,6 @@ docs/configuration.md	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/U
 docs/model-routing.md	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4269,4267,4266,4259,4232,4218,4213,4209
 crates/tui/src/remote/router_tests.rs	fiber-4158	plan	2026-11-06T04:00:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4266,4269,4267,4259,4218,4213
 crates/tui/src/event_loop/hub.rs	fiber-4192	grant	2026-11-06T04:01:05Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4192-exited-prompt-hang	4259
+.github/workflows/ci.yml	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/ci.md	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/workflow.md	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
