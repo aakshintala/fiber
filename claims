@@ -23,8 +23,6 @@ docs/model-routing.md	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/U
 .github/workflows/ci.yml	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/workflow.md	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-.github/workflows/release.yml	fiber-4273	plan	2026-11-06T04:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/releasing.md	fiber-4273	plan	2026-11-06T04:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support/pty.rs:crates/main/tests/terminal.rs:crates/main/tests/main_journeys.rs	tests/4226-pty-helpers	grant	2026-11-06T05:06:47Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4226-pty-helpers	
 crates/log/src/diag.rs	fiber-4276	plan	2026-11-06T05:41:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/diag_tests.rs	fiber-4276	plan	2026-11-06T05:41:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
