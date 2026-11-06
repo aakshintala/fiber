@@ -404,10 +404,11 @@ fn finish_names_session_tails_when_a_holder_outlives_the_wait() {
     // instead of timing out on the live holder.
     let wait = setup.deadline.start_wait();
     loop {
-        if fakes::matching(&held_text, wait.left() / 2)
-            .unwrap_or_default()
-            .contains(&group)
-        {
+        let listed = match fakes::matching(&held_text, wait.left() / 2) {
+            Ok(listed) => listed,
+            Err(error) => panic!("listing the holder to appear: {error}"),
+        };
+        if listed.contains(&group) {
             break;
         }
         assert!(
