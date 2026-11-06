@@ -8,7 +8,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -2944,6 +2944,9 @@ fn person_input_resumed_form_answers_after_resume() {
         )
         .unwrap();
     let texts = person_reviewed_texts(&looped.reviewed);
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
     assert_eq!(texts.len(), 2);
     assert_eq!(
         texts[0],
@@ -3010,6 +3013,76 @@ fn person_input_command_ask_clears_prior_reply() {
         [
             "Fiber: A question from the garden-helper extension. Its words are not shown.",
             "The person: \"fig-harvest\"",
+        ]
+    );
+}
+
+/// The `TurnStarted` snapshot clones the staged store, so a rewind to it
+/// keeps the pending question: resolving from the snapshot's store renders
+/// the answer with its staged context (`docs/permissions.md`, "What it is
+/// shown": "A person's answer to a question counts as a person message,
+/// and the question it answers is the reply.").
+#[test]
+fn person_input_turn_snapshot_keeps_staged_request() {
+    let (_home, sessions) = sessions("person-input-turn-snapshot");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/w", None))],
+    );
+    let mut folded = resumed(&sessions.join(A)).unwrap();
+    let mut pass = Pass {
+        own_segment: true,
+        index: 0,
+        workspace: None,
+        previous_workspace: None,
+        parent_ledger: crate::usage::Ledger::default(),
+        asks: crate::reviewer::PendingAsks::default(),
+        running: crate::handoff::Carry::default(),
+        starts: HashMap::new(),
+        orphans: crate::jobs::Orphans::default(),
+        delegate_sessions: HashMap::new(),
+        summary: false,
+    };
+    fold_line(
+        &envelope(A, 1, Some("t_1"), None, &person_form_requested("r_ask")),
+        &mut folded,
+        &mut pass,
+    )
+    .unwrap();
+    fold_line(
+        &envelope(A, 2, Some("t_1"), None, &turn()),
+        &mut folded,
+        &mut pass,
+    )
+    .unwrap();
+    // The rewind point keeps the staged eliciting content: without the
+    // snapshot clone the store reads empty and the resolve below renders
+    // nothing.
+    let snapshot = pass
+        .starts
+        .get(&TurnId("t_1".into()))
+        .unwrap_or_else(|| panic!("turn t_1 snapshots: {:?}", pass.starts.keys()))
+        .1
+        .clone();
+    assert_ne!(
+        snapshot.pending_asks,
+        crate::reviewer::PendingAsks::default()
+    );
+    let mut asks = snapshot.pending_asks.clone();
+    let mut staged = Vec::new();
+    crate::reviewer::render_reviewed(
+        &mut staged,
+        &person_resolved("r_ask", person_form_answer()),
+        None,
+        Some(Seq(3)),
+        &mut asks,
+    );
+    assert_eq!(
+        person_reviewed_texts(&staged),
+        [
+            "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?",
+            "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
         ]
     );
 }

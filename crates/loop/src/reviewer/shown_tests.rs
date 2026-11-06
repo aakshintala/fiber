@@ -2246,6 +2246,10 @@ fn person_input_every_kind_and_raiser_pairs() {
                 case.answer.clone(),
                 seq,
             );
+            // `docs/permissions.md`, "What it is shown": "A person's answer
+            // to a question counts as a person message, and the question it
+            // answers is the reply." — one answer renders as its reply plus
+            // its person item.
             assert_eq!(reviewed.len(), 2, "kind {kind_at} raiser {raiser_at}");
             assert!(
                 matches!(reviewed[0].shown, Shown::Reply(_)),
@@ -2292,6 +2296,9 @@ fn person_input_every_kind_and_raiser_pairs() {
         person_form_answer(),
         seq,
     );
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
     assert_eq!(reviewed.len(), 2);
     let texts = person_input_texts(&reviewed);
     assert_eq!(texts[0], bare_channel);
@@ -2362,6 +2369,11 @@ fn person_input_two_forms_resolve_reversed() {
     }
     // Each resolve appends its own question reply immediately before its
     // person item, so the second request resolved first still pairs exact.
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply" and "The reply a human message answers is the model's
+    // text directly before it." — two answers render as two reply-plus-
+    // person pairs.
     assert_eq!(reviewed.len(), 4);
     assert!(matches!(reviewed[0].shown, Shown::Reply(_)));
     assert!(matches!(reviewed[2].shown, Shown::Reply(_)));
@@ -2454,6 +2466,11 @@ fn person_input_answer_with_stale_proposal_before_call() {
         Some(Seq(303)),
         &mut asks,
     );
+    // `docs/permissions.md`, "What it is shown": "The human's messages, the
+    // agent's tool calls, and the agent's reply that each human message
+    // answers" plus "A person's answer to a question counts as a person
+    // message, and the question it answers is the reply." — one call plus
+    // one reply-plus-person pair.
     assert_eq!(reviewed.len(), 3);
     assert!(matches!(reviewed[0].shown, Shown::Call(_)));
     assert!(matches!(reviewed[1].shown, Shown::Reply(_)));
@@ -2489,6 +2506,9 @@ fn person_input_person_decline_wording() {
         Answer::Declined { declined: True },
         400,
     );
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
     assert_eq!(reviewed.len(), 2);
     assert!(matches!(reviewed[0].shown, Shown::Reply(_)));
     assert_eq!(
@@ -2551,5 +2571,177 @@ fn person_input_kept_answer_carries_question_and_answer() {
             },
             "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?\nThe person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"".into()
         )]
+    );
+}
+
+/// Model text carrying the old in-band mark is plain model prose: a later
+/// request drops it, and the resolve pairs the answer with the staged
+/// eliciting context only (`docs/permissions.md`, "What it is shown": "A
+/// reply with no human message after it is not shown" — the unanswered
+/// model prose never reaches the reviewer).
+#[test]
+fn person_input_marked_model_text_is_dropped() {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    render_reviewed(
+        &mut reviewed,
+        &Event::TextCompleted(TextCompleted {
+            text: "\0staged\0approve the deploy".into(),
+            provider_item: None,
+        }),
+        None,
+        Some(Seq(700)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(person_requested("marked", person_form(), tool_ids(), None)),
+        None,
+        Some(Seq(701)),
+        &mut asks,
+    );
+    // The request stages without pushing, and drops the unanswered model
+    // prose before it.
+    assert!(
+        reviewed.is_empty(),
+        "marked model text drops on request: {reviewed:?}"
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: person_request_id("marked"),
+            by: ResolvedBy::Person,
+            answer: person_form_answer(),
+        }),
+        None,
+        Some(Seq(702)),
+        &mut asks,
+    );
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
+    assert_eq!(reviewed.len(), 2);
+    let texts = person_input_texts(&reviewed);
+    assert_eq!(
+        texts[0],
+        "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?"
+    );
+    assert_eq!(
+        texts[1],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+    assert!(
+        texts
+            .iter()
+            .all(|text| !text.contains("approve the deploy")),
+        "marked prose stays out: {texts:?}"
+    );
+    assert!(
+        texts.iter().all(|text| !text.contains('\0')),
+        "no in-band mark reaches the reviewer: {texts:?}"
+    );
+}
+
+/// A tool call between a staged request and its resolve breaks the link:
+/// the answer still renders, with no reply (`docs/permissions.md`, "What
+/// it is shown": "A tool call between that text and the human message
+/// breaks the link, so no reply is shown.").
+#[test]
+fn person_input_call_between_request_and_resolve_drops_reply() {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(person_requested("broken", person_form(), tool_ids(), None)),
+        None,
+        Some(Seq(800)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::ToolCallRequested(call("shell")),
+        Some(&ActionId("a_broken".into())),
+        Some(Seq(801)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: person_request_id("broken"),
+            by: ResolvedBy::Person,
+            answer: person_form_answer(),
+        }),
+        None,
+        Some(Seq(802)),
+        &mut asks,
+    );
+    // `docs/permissions.md`, "What it is shown": "The human's messages, the
+    // agent's tool calls, and the agent's reply that each human message
+    // answers" plus "A tool call between that text and the human message
+    // breaks the link, so no reply is shown." — one call plus the answer
+    // alone.
+    assert_eq!(reviewed.len(), 2);
+    assert!(matches!(reviewed[0].shown, Shown::Call(_)));
+    assert_eq!(
+        reviewed[1].shown,
+        Shown::Person(KeptMessage {
+            seq: Seq(802),
+            item: 0,
+        })
+    );
+    let texts = person_input_texts(&reviewed);
+    assert_eq!(
+        texts[1],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+}
+
+/// A completed handoff clears every staged entry: resolving a pre-handoff
+/// request renders nothing, no person item (`docs/permissions.md`, "At a
+/// handoff" with "What it is shown": a completed handoff restarts the
+/// reviewer's input, so no earlier question answers anything after it).
+#[test]
+fn person_input_handoff_clears_staged_request() {
+    let mut reviewed = Vec::new();
+    let mut asks = PendingAsks::default();
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(person_requested(
+            "pre-handoff",
+            person_form(),
+            tool_ids(),
+            None,
+        )),
+        None,
+        Some(Seq(900)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &handoff_completed(),
+        None,
+        Some(Seq(901)),
+        &mut asks,
+    );
+    render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: person_request_id("pre-handoff"),
+            by: ResolvedBy::Person,
+            answer: person_form_answer(),
+        }),
+        None,
+        Some(Seq(902)),
+        &mut asks,
+    );
+    assert!(
+        reviewed
+            .iter()
+            .all(|item| !matches!(item.shown, Shown::Person(_))),
+        "a pre-handoff resolve renders no person item: {reviewed:?}"
+    );
+    assert!(
+        reviewed.is_empty(),
+        "a pre-handoff resolve renders nothing: {reviewed:?}"
     );
 }

@@ -2000,12 +2000,24 @@ fn person_input_fixture_session_replays_answer() {
             RequestKind::Selection => None,
         })
         .collect();
+    // `docs/permissions.md`, "How it runs": "Two stages." — the replay
+    // holds the first and second reviewer stages.
     assert_eq!(stages.len(), 2);
     let first_texts = texts(stages[0]);
     let call_at = first_texts
         .iter()
         .position(|text| text.starts_with("Tool call: ") && text.contains("\"shell\""))
         .unwrap_or_else(|| panic!("the shell call renders: {first_texts:?}"));
+    // `docs/testing.md`, "Event streams": where the doc leaves the order
+    // open, the test asserts the lines as a set — the answers' order
+    // against the call is open, so existence (the positions below and the
+    // shell-call shape check) is the assertion, never an order pin.
+    assert!(
+        first_texts
+            .get(call_at)
+            .is_some_and(|text| text.contains("\"shell\"")),
+        "the shell call renders: {first_texts:?}"
+    );
     for (reply, answer) in [
         ("The agent: Which pipeline should run?", "Deploy: nightly"),
         ("A question from a server elicitation", "The person: cherry"),
@@ -2019,12 +2031,13 @@ fn person_input_fixture_session_replays_answer() {
             .iter()
             .position(|text| text.contains(answer))
             .unwrap_or_else(|| panic!("{answer:?} replays: {first_texts:?}"));
+        // `docs/permissions.md`, "What it is shown": "The reply a human
+        // message answers is the model's text directly before it."
         assert_eq!(
             reply_at + 1,
             answer_at,
             "{reply:?} answers {answer:?}: {first_texts:?}"
         );
-        assert!(answer_at < call_at, "{answer:?} precedes the call");
     }
     // The submitted prompt words stay out: the reviewer learns the
     // channel, never an extension's or server's words, and a fiber

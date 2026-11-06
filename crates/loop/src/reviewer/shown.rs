@@ -3,7 +3,7 @@
 //! answers, nothing else. A person's answer to a question counts as a
 //! person message, and the question it answers is the reply.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use contract::events::{
     Answer, Event, FormAnswer, InputItem, Interaction, InteractionRequested, KeptMessage,
@@ -52,7 +52,7 @@ pub struct Reviewed {
 /// the renderer (`docs/testing.md`, "Jigs").
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PendingAsks {
-    staged: HashMap<RequestId, StagedAsk>,
+    staged: BTreeMap<RequestId, StagedAsk>,
 }
 
 /// One staged eliciting request: what it asked, with the wire marks that
@@ -66,16 +66,23 @@ pub(crate) struct StagedAsk {
     extension: Option<String>,
     /// The tool calls that raised it, if any.
     action_ids: Option<Vec<ActionId>>,
+    /// Whether a tool call landed between the request and its resolve: the
+    /// answer still renders, with no reply (`docs/permissions.md`, "What it
+    /// is shown": "A tool call between that text and the human message
+    /// breaks the link, so no reply is shown.").
+    link_broken: bool,
 }
 
 impl StagedAsk {
     /// The eliciting content `requested` carries: what it asks, with the
-    /// wire marks that choose how its eliciting context renders.
+    /// wire marks that choose how its eliciting context renders. A fresh
+    /// staging links its reply; a tool call afterwards breaks it.
     fn of(requested: &InteractionRequested) -> Self {
         StagedAsk {
             interaction: requested.interaction.clone(),
             extension: requested.extension.clone(),
             action_ids: requested.action_ids.clone(),
+            link_broken: false,
         }
     }
 }
@@ -99,6 +106,17 @@ impl PendingAsks {
     /// reviewer's input, so no earlier question answers anything after it.
     pub(crate) fn clear(&mut self) {
         self.staged.clear();
+    }
+
+    /// Breaks every staged link: a tool call between a request and its
+    /// resolve breaks the link, so the answer renders with no reply
+    /// (`docs/permissions.md`, "What it is shown": "A tool call between
+    /// that text and the human message breaks the link, so no reply is
+    /// shown."). A request staged afterwards links fresh.
+    fn break_links(&mut self) {
+        for staged in self.staged.values_mut() {
+            staged.link_broken = true;
+        }
     }
 }
 
@@ -212,8 +230,11 @@ pub fn render_reviewed(
         Event::ToolCallRequested(call) => {
             // Any tool call between the agent's text and the person's
             // message breaks the link, shown or not: an inner or hosted
-            // call the reviewer never sees still breaks it.
+            // call the reviewer never sees still breaks it. A call between
+            // a staged request and its resolve breaks that link too, so the
+            // answer renders with no reply.
             clear_held_reply(reviewed);
+            asks.break_links();
             if let Some(action) = action {
                 let arguments = match &call.repair {
                     Some(repair) => Value::Object(repair.repaired.clone()),
@@ -278,13 +299,13 @@ pub fn render_reviewed(
         Event::InteractionRequested(requested) => {
             // Every request stages, whoever raised it and whatever it
             // asks: the resolve carries no prompt, so the staged entry is
-            // the only record of what it asked. The eliciting context now
-            // comes from the staged request, so a prior model reply
+            // the only record of what it asked. The eliciting context is
+            // emitted beside the resolved answer, never staged in the
+            // list, so model text is never marked and a prior model reply
             // answers nothing, while an earlier pending question keeps its
-            // own staged reply for its own resolve.
+            // own staged entry for its own resolve.
             asks.stage(requested);
-            clear_model_reply(reviewed);
-            reviewed.push(eliciting_reply(&StagedAsk::of(requested)));
+            clear_held_reply(reviewed);
         }
         Event::InteractionResolved(resolved) => {
             // The one rule over the person's input: a person's resolve
@@ -297,19 +318,16 @@ pub fn render_reviewed(
             let staged = asks.take(&resolved.request_id);
             match (&resolved.by, seq, staged) {
                 (ResolvedBy::Person, Some(seq), Some(staged)) => {
-                    let reply = eliciting_reply(&staged);
-                    // The resolve appends its question reply immediately
+                    // The resolve emits its question reply immediately
                     // before its person item, so interleaved resolves pair
-                    // exact. When a call cleared the staged reply first,
-                    // the answer still renders, with no reply.
-                    if remove_staged_reply(reviewed, &reply) {
-                        reviewed.push(reply);
+                    // exact. When a call broke the link first, the answer
+                    // still renders, with no reply.
+                    if !staged.link_broken {
+                        reviewed.push(eliciting_reply(&staged));
                     }
                     reviewed.push(person_answer(&resolved.answer, &staged.interaction, seq));
                 }
-                (_, _, Some(staged)) => {
-                    remove_staged_reply(reviewed, &eliciting_reply(&staged));
-                }
+                (_, _, Some(_)) => {}
                 (_, _, None) => {}
             }
         }
@@ -412,21 +430,12 @@ fn reply_item(raw: &str) -> Reviewed {
     reply_item_as("The agent", raw)
 }
 
-/// Marks a staged eliciting reply's stored text: model-text helpers skip
-/// marked replies, so a pending question's eliciting context survives
-/// later lines until its resolve repairs the pair. The reviewer never
-/// reads the stored text, only the item text built beside it, so the mark
-/// never reaches its prompt.
-const STAGED_MARK: &str = "\0staged\0";
-
-/// Whether stored reply text is a staged eliciting reply.
-fn is_staged_reply(raw: &str) -> bool {
-    raw.starts_with(STAGED_MARK)
-}
-
 /// The reviewer's item for raw eliciting text marked as `who` wrote it:
 /// the agent for its own asked questions, fiber for its own channel
-/// description. The cap applies the same way as for agent replies.
+/// description. The cap applies the same way as for agent replies. The
+/// stored text is the plain eliciting body: the context is emitted beside
+/// its answer, never staged in the list, so no mark distinguishes it from
+/// model text.
 fn reply_item_as(who: &str, raw: &str) -> Reviewed {
     Reviewed {
         shown: Shown::Reply(raw.to_owned()),
@@ -446,16 +455,9 @@ fn reply_item_as(who: &str, raw: &str) -> Reviewed {
 /// it asked with; the extension name renders as data. No arm compares a
 /// tool, extension, or server name.
 fn eliciting_reply(staged: &StagedAsk) -> Reviewed {
-    let (who, body) = match agent_questions(staged) {
-        Some(questions) => ("The agent", questions),
-        None => ("Fiber", channel_sentence(staged)),
-    };
-    Reviewed {
-        shown: Shown::Reply(format!("{STAGED_MARK}{body}")),
-        input: Input::User {
-            text: format!("{who}: {}", reply(&body)),
-            images: Vec::new(),
-        },
+    match agent_questions(staged) {
+        Some(questions) => reply_item_as("The agent", &questions),
+        None => reply_item_as("Fiber", &channel_sentence(staged)),
     }
 }
 
@@ -522,18 +524,6 @@ fn channel_sentence(staged: &StagedAsk) -> String {
     } else {
         "A question with no recorded asker. Its words are not shown.".to_owned()
     }
-}
-
-/// Removes the staged reply `reply` names from the tail side, once: a
-/// fiber resolve, a resolve with no line of its own, and a completed
-/// answer all leave no staged reply behind. False when a call already
-/// cleared it, so the answer then renders with no reply.
-fn remove_staged_reply(reviewed: &mut Vec<Reviewed>, reply: &Reviewed) -> bool {
-    let Some(at) = reviewed.iter().rposition(|item| item.shown == reply.shown) else {
-        return false;
-    };
-    reviewed.remove(at);
-    true
 }
 
 /// A person's answer as the reviewer reads it, with the resolving line's
@@ -623,16 +613,13 @@ fn escaped(text: &str) -> String {
 /// Adds one text part to the held reply at the tail, or starts one. An
 /// empty or whitespace-only part adds nothing; parts join with `\n` in
 /// the raw string the person's next message answers. Only the tail item
-/// is ever extended, so the part already sent stays append-only. A staged
-/// eliciting reply never extends: later model text starts its own held
-/// reply instead of rewriting a pending question's context.
+/// is ever extended, so the part already sent stays append-only.
 fn push_text(reviewed: &mut Vec<Reviewed>, text: &str) {
     if text.trim().is_empty() {
         return;
     }
     if let Some(held) = reviewed.last_mut()
         && let Shown::Reply(raw) = &mut held.shown
-        && !is_staged_reply(raw.as_str())
     {
         raw.push('\n');
         raw.push_str(text);
@@ -656,22 +643,6 @@ fn clear_held_reply(reviewed: &mut Vec<Reviewed>) {
             shown: Shown::Reply(_),
             ..
         })
-    ) {
-        reviewed.pop();
-    }
-}
-
-/// Removes the held model reply at the tail, if any, leaving a staged
-/// eliciting reply for its resolve: a new request never answers with the
-/// model prose before it, while a pending question keeps its context
-/// until its own answer repairs the pair.
-fn clear_model_reply(reviewed: &mut Vec<Reviewed>) {
-    if matches!(
-        reviewed.last(),
-        Some(Reviewed {
-            shown: Shown::Reply(raw),
-            ..
-        }) if !is_staged_reply(raw)
     ) {
         reviewed.pop();
     }
