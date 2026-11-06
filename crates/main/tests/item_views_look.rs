@@ -138,11 +138,14 @@ fn hold_drop_releases_and_reaps_the_holder() {
     let pattern = setup.workspace().join("hold").to_str().unwrap().to_owned();
     let listed = pattern.clone();
     let wait = setup.deadline.start_wait();
-    fakes::wait_until("the holder to park", setup.deadline, move || {
-        fakes::matching(&listed, wait.left() / 2)
-            .map(|pids| pids.contains(&pid))
-            .unwrap_or(false)
-    });
+    fakes::wait_until(
+        "the holder to park",
+        setup.deadline,
+        move || match fakes::matching(&listed, wait.left() / 2) {
+            Ok(pids) => pids.contains(&pid),
+            Err(error) => panic!("listing the holder to park: {error}"),
+        },
+    );
     drop(hold);
     fakes::try_matching_exits(pattern.as_str(), setup.deadline)
         .unwrap_or_else(|error| panic!("the dropped helper reaps its holder: {error}"));
