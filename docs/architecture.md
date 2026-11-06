@@ -104,10 +104,15 @@ so `hub` and `tui` still do no TLS. `routing` depends on `contract`,
 both `extensions` and `provider`; only `main` depends on it. `main` depends on
 everything, and nothing depends on `main`.
 
-`fakes` holds the shared fakes that tests and jigs run against
-(`docs/testing.md`, "Fakes" and "Jigs"). It is not a module. It depends on
-`contract` and `support`. Any crate may take it as a test-only dependency,
-none takes it as a normal one, and no release binary contains it.
+`fakes` holds the contract-free helpers that tests and jigs run against
+(`docs/testing.md`, "Fakes" and "Jigs"). `fakes` depends only on `support` in the workspace.
+`fakes-contract` holds the contract-dependent fakes and re-exports the free
+helpers. `fakes-contract` depends on `contract`, `support` and `fakes`.
+Neither helper crate is a module. Product crates may take either as a
+test-only dependency, never a normal one; no release binary contains either.
+The normal helper dependency points only from `fakes-contract` to `fakes`.
+Callers needing domain fakes alias package `fakes-contract` under dependency
+key `fakes`.
 
 `bench` holds the benchmark harness behind `docs/performance.md` as its
 `bench` example. It is not a module and nothing ships in it. It takes the
