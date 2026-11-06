@@ -276,7 +276,11 @@ fn a_session_with_no_command_starts_no_keeper() {
         line["kind"] == "turn_completed"
     });
     assert!(live.iter().any(|line| line["kind"] == "turn_completed"));
-    assert!(fakes::matching(&keeper_pattern).unwrap().is_empty());
+    assert!(
+        fakes::matching(&keeper_pattern, setup.deadline.left() / 2)
+            .unwrap()
+            .is_empty()
+    );
     drop(Socket::connect(setup.deadline, &setup.session_socket(id)));
     client.send(r#"{"id":"c_close","command":"close"}"#);
     assert_eq!(

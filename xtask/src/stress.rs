@@ -10,9 +10,9 @@ use proc_macro2::{Delimiter, TokenStream, TokenTree};
 /// Runs of one selected test in the stress job, unless the pull request fixes a flaky test.
 pub(crate) const STRESS_COUNT: u32 = 30;
 /// Runs of one selected test when the pull request fixes a flaky test.
-pub(crate) const TEST_ONLY_COUNT: u32 = 100;
+const TEST_ONLY_COUNT: u32 = 100;
 /// The linked-issue label that marks a pull request as fixing a flaky test.
-pub(crate) const TEST_ONLY_LABEL: &str = "test-only";
+const TEST_ONLY_LABEL: &str = "test-only";
 
 /// How many times the stress job runs each selected test: the flaky-fix
 /// count when a line of the linked issue's labels, trimmed, is exactly the

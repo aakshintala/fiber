@@ -129,7 +129,7 @@ fn the_picker_completes_a_typed_path_and_starts_there() {
     });
     let finished = run.wait();
     assert_eq!(finished.status.code(), Some(0));
-    fakes::kill_matching(&ws).unwrap();
+    fakes::kill_matching(&ws, setup.deadline.left() / 2).unwrap();
     guard.wait_gone();
     // The `start` command's workspace is the completed path, however the
     // platform spells the temporary root.

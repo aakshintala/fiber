@@ -162,7 +162,7 @@ pub(crate) struct LeftOutRow {
 
 /// One left-out group the open picker counts: its provider and
 /// setting, and its count row's text.
-pub(crate) struct ShownGroup {
+struct ShownGroup {
     pub(crate) provider: String,
     pub(crate) setting: String,
     pub(crate) text: String,
@@ -897,7 +897,7 @@ impl ModelPicker {
     /// The left-out groups the open picker counts, with their row
     /// texts: the choosing picker only, one entry per group the
     /// query keeps. The text names the supplied file verbatim.
-    pub(crate) fn shown_left_out(&self, open: &Open) -> Vec<ShownGroup> {
+    fn shown_left_out(&self, open: &Open) -> Vec<ShownGroup> {
         self.catalogue
             .left_out
             .iter()

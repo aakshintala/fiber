@@ -23,9 +23,9 @@ use crate::rows::Join;
 use crate::theme::Role;
 
 /// The narrowest overlay, in columns.
-pub(crate) const MIN_W: u16 = 40;
+const MIN_W: u16 = 40;
 /// The widest overlay, in columns.
-pub(crate) const MAX_W: u16 = 150;
+const MAX_W: u16 = 150;
 /// The blank columns opening and closing every text row.
 const PAD: u16 = 2;
 

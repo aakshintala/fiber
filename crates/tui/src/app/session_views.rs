@@ -871,193 +871,184 @@ impl App {
     ) -> Vec<String> {
         self.session_views.rate.fold(envelope);
         self.session_views.context.fold(envelope);
-        match envelope.kind.as_str() {
-            "turn_started" => {
-                if let Some(turn) = &envelope.turn_id {
-                    self.session_views.usage.turn_started(turn.clone());
-                }
+        let kind = envelope.kind();
+        if kind == contract::events::EventKind::TurnStarted {
+            if let Some(turn) = &envelope.turn_id {
+                self.session_views.usage.turn_started(turn.clone());
             }
-            "job_started" => {
-                if let Some(started) = super::read!(envelope, JobStarted) {
-                    self.session_views
-                        .usage
-                        .job_started(started.job_id, started.description);
-                }
+        } else if kind == contract::events::EventKind::JobStarted {
+            if let Some(started) = super::read!(envelope, JobStarted) {
+                self.session_views
+                    .usage
+                    .job_started(started.job_id, started.description);
             }
-            "delegate_started" => {
-                if let Some(started) = super::read!(envelope, DelegateStarted) {
-                    self.session_views.usage.delegate_started(&started);
-                }
+        } else if kind == contract::events::EventKind::DelegateStarted {
+            if let Some(started) = super::read!(envelope, DelegateStarted) {
+                self.session_views.usage.delegate_started(&started);
             }
-            "usage_recorded" => {
-                if let Some(recorded) = super::read!(envelope, UsageRecorded) {
-                    self.session_views
-                        .usage
-                        .recorded(envelope.turn_id.clone(), recorded);
-                }
+        } else if kind == contract::events::EventKind::UsageRecorded {
+            if let Some(recorded) = super::read!(envelope, UsageRecorded) {
+                self.session_views
+                    .usage
+                    .recorded(envelope.turn_id.clone(), recorded);
             }
-            "command_accepted" => {
-                if let Some(accepted) = super::read!(envelope, CommandAccepted) {
-                    match answer.and_then(|answer| answer.waiting.as_ref()) {
-                        Some(waiting @ (super::Waiting::Fork | super::Waiting::RewindSend)) => {
-                            return self
-                                .rewind_send_accepted(&accepted, waiting)
-                                .unwrap_or_default();
-                        }
-                        Some(super::Waiting::RewindHistory) => {
-                            return self.rewind_answered(envelope, &accepted);
-                        }
-                        Some(super::Waiting::Dismiss(_)) => return Vec::new(),
-                        Some(super::Waiting::ChangeWorkspace(_)) => return Vec::new(),
-                        Some(super::Waiting::ClearStart) => return Vec::new(),
-                        Some(super::Waiting::ClearClose) => return Vec::new(),
-                        Some(super::Waiting::History) => return Vec::new(),
-                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::Sessions) => return Vec::new(),
-                        Some(super::Waiting::Abandoned) => return Vec::new(),
-                        Some(
-                            super::Waiting::Directories
-                            | super::Waiting::Subscribe
-                            | super::Waiting::Stop
-                            | super::Waiting::Delete
-                            | super::Waiting::OfferImport
-                            | super::Waiting::DeleteDiscovery
-                            | super::Waiting::DeleteStop
-                            | super::Waiting::DeleteFinal
-                            | super::Waiting::Feed
-                            | super::Waiting::Recent
-                            | super::Waiting::Close,
-                        ) => return Vec::new(),
-                        Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
-                            self.outbox.settled(accepted.command_id.0.as_str());
-                            self.session_views_answered(&accepted);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::Hooks) => {
-                            self.outbox.settled(accepted.command_id.0.as_str());
-                            self.hooks_answered(&accepted);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::ArtifactPage) => {
-                            self.outbox.settled(accepted.command_id.0.as_str());
-                            return self.call_view_answered(&accepted);
-                        }
-                        Some(
-                            super::Waiting::Branch
-                            | super::Waiting::Quota
-                            | super::Waiting::ConfigAsk
-                            | super::Waiting::Credentials
-                            | super::Waiting::CredentialSwitch
-                            | super::Waiting::ProposeNotes
-                            | super::Waiting::JobStop
-                            | super::Waiting::JobInput,
-                        ) => return Vec::new(),
-                        None => {}
+        } else if kind == contract::events::EventKind::CommandAccepted {
+            if let Some(accepted) = super::read!(envelope, CommandAccepted) {
+                match answer.and_then(|answer| answer.waiting.as_ref()) {
+                    Some(waiting @ (super::Waiting::Fork | super::Waiting::RewindSend)) => {
+                        return self
+                            .rewind_send_accepted(&accepted, waiting)
+                            .unwrap_or_default();
                     }
-                    if matches!(self.session_views.open, Some(Open::Call(_))) {
-                        return self.call_view_answered(&accepted);
+                    Some(super::Waiting::RewindHistory) => {
+                        return self.rewind_answered(envelope, &accepted);
                     }
-                    if matches!(self.session_views.open, Some(Open::Hooks(_))) {
+                    Some(super::Waiting::Dismiss(_)) => return Vec::new(),
+                    Some(super::Waiting::ChangeWorkspace(_)) => return Vec::new(),
+                    Some(super::Waiting::ClearStart) => return Vec::new(),
+                    Some(super::Waiting::ClearClose) => return Vec::new(),
+                    Some(super::Waiting::History) => return Vec::new(),
+                    Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                        return Vec::new();
+                    }
+                    Some(super::Waiting::Sessions) => return Vec::new(),
+                    Some(super::Waiting::Abandoned) => return Vec::new(),
+                    Some(
+                        super::Waiting::Directories
+                        | super::Waiting::Subscribe
+                        | super::Waiting::Stop
+                        | super::Waiting::Delete
+                        | super::Waiting::OfferImport
+                        | super::Waiting::DeleteDiscovery
+                        | super::Waiting::DeleteStop
+                        | super::Waiting::DeleteFinal
+                        | super::Waiting::Feed
+                        | super::Waiting::Recent
+                        | super::Waiting::Close,
+                    ) => return Vec::new(),
+                    Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
+                        self.outbox.settled(accepted.command_id.0.as_str());
+                        self.session_views_answered(&accepted);
+                        return Vec::new();
+                    }
+                    Some(super::Waiting::Hooks) => {
+                        self.outbox.settled(accepted.command_id.0.as_str());
                         self.hooks_answered(&accepted);
                         return Vec::new();
                     }
-                    self.session_views_answered(&accepted);
-                }
-            }
-            "command_rejected" => {
-                if let Some(rejected) = super::read!(envelope, CommandRejected) {
-                    match answer.and_then(|answer| answer.waiting.as_ref()) {
-                        Some(super::Waiting::Fork) => {
-                            self.rewind_fork_refused(&rejected);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::RewindSend) => {
-                            self.rewind_refused(&rejected);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::RewindHistory) => {
-                            self.rewind_refused(&rejected);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::Dismiss(_)) => return Vec::new(),
-                        Some(super::Waiting::ChangeWorkspace(_)) => return Vec::new(),
-                        Some(super::Waiting::ClearStart) => return Vec::new(),
-                        Some(super::Waiting::ClearClose) => return Vec::new(),
-                        Some(super::Waiting::History) => return Vec::new(),
-                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::Sessions) => return Vec::new(),
-                        Some(super::Waiting::Abandoned) => return Vec::new(),
-                        Some(
-                            super::Waiting::Directories
-                            | super::Waiting::Subscribe
-                            | super::Waiting::Stop
-                            | super::Waiting::Delete
-                            | super::Waiting::OfferImport
-                            | super::Waiting::DeleteDiscovery
-                            | super::Waiting::DeleteStop
-                            | super::Waiting::DeleteFinal
-                            | super::Waiting::Feed
-                            | super::Waiting::Recent
-                            | super::Waiting::Close,
-                        ) => return Vec::new(),
-                        Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
-                            let Some(id) = rejected.command_id.as_ref() else {
-                                return Vec::new();
-                            };
-                            self.outbox.settled(id.0.as_str());
-                            self.session_views_rejected(&rejected);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::Hooks) => {
-                            let Some(id) = rejected.command_id.as_ref() else {
-                                return Vec::new();
-                            };
-                            self.outbox.settled(id.0.as_str());
-                            self.hooks_refused(&rejected);
-                            return Vec::new();
-                        }
-                        Some(super::Waiting::ArtifactPage) => {
-                            let Some(id) = rejected.command_id.as_ref() else {
-                                return Vec::new();
-                            };
-                            self.outbox.settled(id.0.as_str());
-                            self.call_view_refused(&rejected);
-                            return Vec::new();
-                        }
-                        Some(
-                            super::Waiting::Branch
-                            | super::Waiting::Quota
-                            | super::Waiting::ConfigAsk
-                            | super::Waiting::Credentials
-                            | super::Waiting::CredentialSwitch
-                            | super::Waiting::ProposeNotes
-                            | super::Waiting::JobStop
-                            | super::Waiting::JobInput,
-                        ) => return Vec::new(),
-                        None => {}
+                    Some(super::Waiting::ArtifactPage) => {
+                        self.outbox.settled(accepted.command_id.0.as_str());
+                        return self.call_view_answered(&accepted);
                     }
-                    if matches!(self.session_views.open, Some(Open::Call(_))) {
-                        self.call_view_refused(&rejected);
-                    } else if matches!(self.session_views.open, Some(Open::Hooks(_))) {
-                        self.hooks_refused(&rejected);
-                    } else {
+                    Some(
+                        super::Waiting::Branch
+                        | super::Waiting::Quota
+                        | super::Waiting::ConfigAsk
+                        | super::Waiting::Credentials
+                        | super::Waiting::CredentialSwitch
+                        | super::Waiting::ProposeNotes
+                        | super::Waiting::JobStop
+                        | super::Waiting::JobInput,
+                    ) => return Vec::new(),
+                    None => {}
+                }
+                if matches!(self.session_views.open, Some(Open::Call(_))) {
+                    return self.call_view_answered(&accepted);
+                }
+                if matches!(self.session_views.open, Some(Open::Hooks(_))) {
+                    self.hooks_answered(&accepted);
+                    return Vec::new();
+                }
+                self.session_views_answered(&accepted);
+            }
+        } else if kind == contract::events::EventKind::CommandRejected {
+            if let Some(rejected) = super::read!(envelope, CommandRejected) {
+                match answer.and_then(|answer| answer.waiting.as_ref()) {
+                    Some(super::Waiting::Fork) => {
+                        self.rewind_fork_refused(&rejected);
+                        return Vec::new();
+                    }
+                    Some(super::Waiting::RewindSend) => {
+                        self.rewind_refused(&rejected);
+                        return Vec::new();
+                    }
+                    Some(super::Waiting::RewindHistory) => {
+                        self.rewind_refused(&rejected);
+                        return Vec::new();
+                    }
+                    Some(super::Waiting::Dismiss(_)) => return Vec::new(),
+                    Some(super::Waiting::ChangeWorkspace(_)) => return Vec::new(),
+                    Some(super::Waiting::ClearStart) => return Vec::new(),
+                    Some(super::Waiting::ClearClose) => return Vec::new(),
+                    Some(super::Waiting::History) => return Vec::new(),
+                    Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                        return Vec::new();
+                    }
+                    Some(super::Waiting::Sessions) => return Vec::new(),
+                    Some(super::Waiting::Abandoned) => return Vec::new(),
+                    Some(
+                        super::Waiting::Directories
+                        | super::Waiting::Subscribe
+                        | super::Waiting::Stop
+                        | super::Waiting::Delete
+                        | super::Waiting::OfferImport
+                        | super::Waiting::DeleteDiscovery
+                        | super::Waiting::DeleteStop
+                        | super::Waiting::DeleteFinal
+                        | super::Waiting::Feed
+                        | super::Waiting::Recent
+                        | super::Waiting::Close,
+                    ) => return Vec::new(),
+                    Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
+                        let Some(id) = rejected.command_id.as_ref() else {
+                            return Vec::new();
+                        };
+                        self.outbox.settled(id.0.as_str());
                         self.session_views_rejected(&rejected);
+                        return Vec::new();
                     }
+                    Some(super::Waiting::Hooks) => {
+                        let Some(id) = rejected.command_id.as_ref() else {
+                            return Vec::new();
+                        };
+                        self.outbox.settled(id.0.as_str());
+                        self.hooks_refused(&rejected);
+                        return Vec::new();
+                    }
+                    Some(super::Waiting::ArtifactPage) => {
+                        let Some(id) = rejected.command_id.as_ref() else {
+                            return Vec::new();
+                        };
+                        self.outbox.settled(id.0.as_str());
+                        self.call_view_refused(&rejected);
+                        return Vec::new();
+                    }
+                    Some(
+                        super::Waiting::Branch
+                        | super::Waiting::Quota
+                        | super::Waiting::ConfigAsk
+                        | super::Waiting::Credentials
+                        | super::Waiting::CredentialSwitch
+                        | super::Waiting::ProposeNotes
+                        | super::Waiting::JobStop
+                        | super::Waiting::JobInput,
+                    ) => return Vec::new(),
+                    None => {}
+                }
+                if matches!(self.session_views.open, Some(Open::Call(_))) {
+                    self.call_view_refused(&rejected);
+                } else if matches!(self.session_views.open, Some(Open::Hooks(_))) {
+                    self.hooks_refused(&rejected);
+                } else {
+                    self.session_views_rejected(&rejected);
                 }
             }
-            "tool_call_completed" => {
-                if let Some(done) = super::read!(envelope, ToolCallCompleted)
-                    && matches!(self.session_views.open, Some(Open::Call(_)))
-                    && let Some(action) = envelope.action_id.as_ref()
-                {
-                    return self.refresh_call_view(&envelope.session_id, &action.0, &done);
-                }
-            }
-            _ => {}
+        } else if kind == contract::events::EventKind::ToolCallCompleted
+            && let Some(done) = super::read!(envelope, ToolCallCompleted)
+            && matches!(self.session_views.open, Some(Open::Call(_)))
+            && let Some(action) = envelope.action_id.as_ref()
+        {
+            return self.refresh_call_view(&envelope.session_id, &action.0, &done);
         }
         Vec::new()
     }
@@ -1226,10 +1217,14 @@ impl App {
     }
 
     /// Moves the open rewind view's list to `at`: the fold's selection.
-    /// A closed or missing view moves nothing.
+    /// A closed or missing view moves nothing. The height is the view's
+    /// own shown height, so a reseat below the window scrolls into view.
     pub(in crate::app) fn rewind_list_to(&mut self, at: usize, rows: usize) {
+        let Some((_, height)) = self.session_view_list_metrics() else {
+            return;
+        };
         if let Some(Open::Rewind(list)) = self.session_views.open.as_mut() {
-            list.select(at, rows, usize::MAX);
+            list.select(at, rows, height);
         }
     }
 

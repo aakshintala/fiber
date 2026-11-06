@@ -556,7 +556,7 @@ pub(crate) fn path_text(path: &Path) -> String {
 }
 
 /// The directory a rule would offer, ending in `/`.
-pub(crate) fn dir_prefix(path: &Path) -> String {
+fn dir_prefix(path: &Path) -> String {
     match path.parent() {
         Some(parent) => {
             let mut text = path_text(parent);

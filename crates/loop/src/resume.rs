@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use contract::events::EventKind;
 use contract::events::{
     DecidedBy, Decision, Event, Grant, JobCompleted, ModelSettings, ToolCallCompleted,
     ToolCallRequested, TurnCompleted, TurnOutcome, UsageRecorded,
@@ -255,10 +256,9 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
             None => return Ok(None),
         },
     };
-    if lines
-        .iter()
-        .any(|l| l.is_durable() && l.kind == "turn_completed" && l.turn_id.as_ref() == Some(&turn))
-    {
+    if lines.iter().any(|l| {
+        l.is_durable() && l.kind() == EventKind::TurnCompleted && l.turn_id.as_ref() == Some(&turn)
+    }) {
         return Ok(None);
     }
     let completed = crate::conversation::completed_actions(lines)?;
@@ -267,12 +267,12 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
     // scan below skips it either way.
     let start = lines
         .iter()
-        .rposition(|l| l.kind == "assistant_message_started")
+        .rposition(|l| l.kind() == EventKind::AssistantMessageStarted)
         .unwrap_or(0);
     let mut batch = Vec::new();
     for line in lines.iter().skip(start) {
         // A call the provider ran is never given a result.
-        if line.kind != "tool_call_requested"
+        if line.kind() != EventKind::ToolCallRequested
             || line.payload.contains_key("provider_item")
             || line.payload.contains_key("ran_by")
         {
@@ -318,7 +318,7 @@ fn started_arguments(
 ) -> Result<Option<crate::before_tool::Started>, Error> {
     let mut started = None;
     for line in lines.iter().filter(|l| l.is_durable()) {
-        if line.kind != "tool_call_started" || line.action_id.as_ref() != Some(action) {
+        if line.kind() != EventKind::ToolCallStarted || line.action_id.as_ref() != Some(action) {
             continue;
         }
         let Some(Event::ToolCallStarted(call)) =
@@ -404,9 +404,9 @@ impl Loop {
         // opening message: one the crash cut off is written at the next turn.
         let mut opened = false;
         for line in &lines {
-            if line.kind == "opening_message" {
+            if line.kind() == EventKind::OpeningMessage {
                 opened = true;
-            } else if line.kind == "handoff_completed"
+            } else if line.kind() == EventKind::HandoffCompleted
                 && line.payload.get("outcome").and_then(|v| v.as_str()) == Some("completed")
             {
                 opened = false;
@@ -417,7 +417,7 @@ impl Loop {
         let context = if opened {
             let start = lines
                 .iter()
-                .rposition(|line| line.kind == "opening_message")
+                .rposition(|line| line.kind() == EventKind::OpeningMessage)
                 .unwrap_or(0);
             Some(lines.split_off(start))
         } else {
@@ -426,7 +426,7 @@ impl Loop {
         // A resumed delegate stays one: the first line's
         // `session_started` names its parent.
         let is_delegate = lines.first().is_some_and(|line| {
-            line.kind == "session_started"
+            line.kind() == EventKind::SessionStarted
                 && line.payload.get("parent").is_some_and(|v| !v.is_null())
         });
         let mut resumed = Self::new(
@@ -514,7 +514,7 @@ impl Loop {
         // line names no originator, so it is never a copy of a delegate's.
         let mut copied: HashMap<GenerationId, usize> = HashMap::new();
         for line in log::read(self.log.dir())? {
-            if line.kind != "usage_recorded" || !line.is_durable() {
+            if line.kind() != EventKind::UsageRecorded || !line.is_durable() {
                 continue;
             }
             // A malformed line fails the history fold before this resume
@@ -554,7 +554,7 @@ impl Loop {
         let mut skipped: HashMap<GenerationId, usize> = HashMap::new();
         let mut missing = Vec::new();
         for line in self.final_usage(&dir)? {
-            if line.kind != "usage_recorded" || !line.is_durable() {
+            if line.kind() != EventKind::UsageRecorded || !line.is_durable() {
                 continue;
             }
             // A malformed line never reaches the loop live, so it never

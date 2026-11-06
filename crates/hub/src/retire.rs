@@ -717,7 +717,7 @@ fn reroute_once(
 /// commands read meanwhile queue on it in order. False when the entry is
 /// gone: the client disconnected, and nothing more is done with the
 /// command.
-pub(crate) fn mark_retiring(relays: &Arc<Mutex<Relays>>, session: &str, epoch: u64) -> bool {
+fn mark_retiring(relays: &Arc<Mutex<Relays>>, session: &str, epoch: u64) -> bool {
     let mut held = lock(relays);
     match relay_slot(&held.entries, session, epoch) {
         Some(at) => {

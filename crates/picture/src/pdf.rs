@@ -13,7 +13,7 @@ const USAGE: i32 = 2;
 /// Exit code: the cut file could not be written.
 const WRITE_FAILED: i32 = 3;
 /// Exit code: the PDF has more pages than asked for.
-pub(crate) const TOO_MANY: i32 = 4;
+const TOO_MANY: i32 = 4;
 
 /// The most bytes one object or cross-reference stream may decompress to
 /// while the PDF loads (`docs/tools.md`, "read"). This is defense in depth

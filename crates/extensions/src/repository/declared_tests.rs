@@ -606,9 +606,11 @@ fn stalled_ls_files_child() {
     /// its own answer.
     #[track_caller]
     fn await_stuck<T: Send>(done: &mpsc::Receiver<T>, stall: &str) -> Option<T> {
-        let bound = Deadline::after(Duration::from_secs(10));
+        // One shared wait for the whole poll: each listing takes half of
+        // what remains, so the listings expire inside the wait.
+        let wait = Deadline::after(Duration::from_secs(10)).start_wait();
         loop {
-            if !fakes::matching(stall).unwrap().is_empty() {
+            if !fakes::matching(stall, wait.left() / 2).unwrap().is_empty() {
                 // Up: still up after a bounded wait means stuck, not
                 // starting; an answer meanwhile ends this at once.
                 match Deadline::after(SIGHT).recv(done) {
@@ -618,11 +620,11 @@ fn stalled_ls_files_child() {
                         panic!("the stalled run returns")
                     }
                 }
-                if !fakes::matching(stall).unwrap().is_empty() {
+                if !fakes::matching(stall, wait.left() / 2).unwrap().is_empty() {
                     return None;
                 }
             }
-            if bound.left().is_zero() {
+            if wait.left().is_zero() {
                 break;
             }
             match Deadline::after(SIGHT).recv(done) {
@@ -728,7 +730,7 @@ fn stalled_ls_files_child() {
             );
             // The run kills what it stopped, so leftovers fail the test without
             // leaking. By pid, never by group: the stall shares this child's group.
-            let leftovers = fakes::matching(&marker).unwrap();
+            let leftovers = fakes::matching(&marker, fakes::MUST_SUCCEED_WITHIN / 2).unwrap();
             for pid in &leftovers {
                 drop(fakes::kill_pid(*pid, "KILL"));
             }

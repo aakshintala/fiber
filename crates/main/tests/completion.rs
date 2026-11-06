@@ -279,7 +279,7 @@ fn run_bounded(what: &str, mut command: Command, tag: &Path) -> Output {
         let tag_killed = within_cleanup(
             &format!("killing processes matching {tag}"),
             Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-            move |_| kill_matching(&tag_for_kill),
+            move |inner| kill_matching(&tag_for_kill, inner.left() / 2),
         );
         let tag_for_wait = tag.clone();
         let group_gone = within_cleanup(

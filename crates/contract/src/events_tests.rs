@@ -181,7 +181,7 @@ fn the_doc_examples_round_trip_through_their_kinds_byte_for_byte() {
     for text in doc_examples() {
         let mut envelope: Envelope = serde_json::from_str(text).unwrap();
         let event = Event::from_envelope(&envelope).unwrap().unwrap();
-        assert_eq!(event.kind(), envelope.kind);
+        assert_eq!(EventKind::from_name(event.kind()), envelope.kind());
         envelope.payload = event.payload().unwrap();
         assert_eq!(serde_json::to_string(&envelope).unwrap(), text);
     }
@@ -224,7 +224,7 @@ fn rejection_example() -> &'static str {
 #[test]
 fn the_same_folder_rejection_reads_as_invalid_arguments() {
     let envelope: Envelope = serde_json::from_str(rejection_example()).unwrap();
-    assert_eq!(envelope.kind, "command_rejected");
+    assert_eq!(envelope.kind(), EventKind::CommandRejected);
     let Some(Event::CommandRejected(rejected)) = Event::from_envelope(&envelope).unwrap() else {
         panic!("not a command_rejected");
     };
@@ -1124,6 +1124,8 @@ fn a_retry_scheduled_without_last_attempt_does_not_read() {
 
 #[test]
 fn stream_reopened_samples_round_trip_as_hub_lines() {
+    use crate::HubEventKind;
+
     // Hub lines have no session envelope and are not session Event kinds.
     let samples = [
         json!({"session_id": "s_0123456789abcdef", "last_seq": 41}),
@@ -1133,7 +1135,7 @@ fn stream_reopened_samples_round_trip_as_hub_lines() {
         let sample = json!({"kind": "stream_reopened", "ts": 1,
             "schema_version": crate::SCHEMA_VERSION, "payload": payload});
         let read: crate::HubLine = serde_json::from_value(sample.clone()).unwrap();
-        assert_eq!(read.kind, "stream_reopened");
+        assert_eq!(read.kind(), HubEventKind::StreamReopened);
         assert_eq!(read.payload, payload.as_object().unwrap().clone());
         assert_eq!(serde_json::to_value(read).unwrap(), sample);
     }

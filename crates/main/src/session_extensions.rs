@@ -24,7 +24,7 @@ impl Current {
     /// live process owner reads the envelope first, then the watcher
     /// fan-out runs. Resolving per event keeps a reload's swap ordered
     /// with no second subscription.
-    pub(crate) fn deliver_event(&self, event: &contract::events::Event, line: &contract::Envelope) {
+    fn deliver_event(&self, event: &contract::events::Event, line: &contract::Envelope) {
         let current = self.get();
         current.deliver_event(event, line);
         current.deliver(event, line.seq);

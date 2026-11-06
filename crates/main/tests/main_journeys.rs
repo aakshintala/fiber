@@ -3070,3 +3070,436 @@ fn replay_empty_failed_tool_result_carries_timeout_text() {
         }),
     );
 }
+
+/// Rows one overlay line wraps to at `room` columns: the
+/// `wrap_joined_runs` rule (`tui/src/view/notice_rows.rs`) — greedy
+/// words, a word wider than the row breaking at the edge, consecutive
+/// spaces reading as one. ASCII-only here, so one char is one column
+/// and no cut splits a char.
+fn wrapped_rows(line: &str, room: usize) -> usize {
+    let room = room.max(1);
+    let mut rows = 1;
+    let mut taken = 0;
+    for word in line.split(' ') {
+        if word.is_empty() {
+            continue;
+        }
+        let mut rest = word;
+        let mut leading = taken > 0;
+        while !rest.is_empty() {
+            let gap = usize::from(leading);
+            if taken + gap + rest.len() <= room {
+                taken += gap + rest.len();
+                break;
+            }
+            if taken > 0 {
+                rows += 1;
+                taken = 0;
+            }
+            let take = rest.len().min(room);
+            rest = &rest[take..];
+            if rest.is_empty() {
+                taken += take;
+            } else {
+                rows += 1;
+            }
+            leading = false;
+        }
+    }
+    rows
+}
+
+/// One shadow pair's overlay paths with the lengths discovery logs:
+/// `/.agents/skills/<name>/SKILL.md` beside the home copy under
+/// `/h/skills/<name>/SKILL.md`, both under the canonical root.
+fn shadowed_paths(name: &str, root_len: usize) -> (String, String) {
+    let root = "r".repeat(root_len);
+    (
+        format!("{root}/.agents/skills/{name}/SKILL.md"),
+        format!("{root}/h/skills/{name}/SKILL.md"),
+    )
+}
+
+/// The grouped journey's overlay text in shape: the lead naming the
+/// first shadow pair, then one `- ` bullet per pair (`group_notices`
+/// with `grouped_lead` in `contract/src/events/context.rs`, shadow
+/// message in `loop/src/skills.rs`). Only word lengths reach the wrap
+/// count, so the stand-in paths carry the logged lengths.
+fn overlay_text(root_len: usize) -> String {
+    let message = |index: usize| {
+        let name = format!("dup{index:02}");
+        let (agents, home) = shadowed_paths(&name, root_len);
+        format!("Skill {name} at {agents} is shadowed by {home}, which is used.")
+    };
+    let bullets: Vec<String> = (0..25)
+        .map(|index| format!("- {}", message(index)))
+        .collect();
+    format!(
+        "25 skills are shadowed: {}\n{}",
+        message(0),
+        bullets.join("\n")
+    )
+}
+
+/// The pty rows a 120-column run needs to show the whole grouped notice:
+/// the overlay keeps the first rows and drops body rows from the bottom
+/// when the stack exceeds the area, so a short pty clips names and the
+/// journey fails. The count replays the overlay's own wrap over the
+/// overlay text, so it holds on any temporary directory: `root_len` is
+/// the canonical fixture root length. `room` stays at the width the old
+/// divisor assumed (the overlay wraps wider): a narrower room only adds
+/// rows, so the count never underfits, and a taller pty changes no wait.
+/// 8 chrome slots hold the frame around the lead and bullets, and 16
+/// slack covers the page chrome.
+fn overlay_rows(root_len: usize) -> u16 {
+    const ROOM: usize = 50;
+    let body: usize = overlay_text(root_len)
+        .split('\n')
+        .map(|line| wrapped_rows(line, ROOM))
+        .sum();
+    u16::try_from(16 + 8 + body).expect("the overlay fits the pty")
+}
+
+/// `wrapped_rows` replays the overlay's wrap: one row for a short
+/// line, consecutive spaces reading as one, a word wider than the
+/// row breaking at the edge.
+#[test]
+fn wrapped_rows_replays_the_overlay_wrap() {
+    assert_eq!(wrapped_rows("ab cd", 50), 1);
+    assert_eq!(wrapped_rows("ab  cd", 50), 1);
+    assert_eq!(wrapped_rows("ab cdefgh", 5), 3);
+}
+
+/// The overlay height fits the wrap it replays: at `root_len` 41 the
+/// lead takes 5 rows and each bullet 5, for 16 + 8 + 130.
+#[test]
+fn overlay_rows_fits_the_replayed_wrap() {
+    assert_eq!(overlay_rows(41), 154);
+}
+
+/// Every reversed cell of `grid`, as (column, row): the focus look's
+/// snapshot, so a step can wait for it to move.
+fn reversed_cells(grid: &Grid) -> Vec<(u16, u16)> {
+    let (cols, height) = grid.size();
+    let mut cells = Vec::new();
+    for y in 0..height {
+        for x in 0..cols {
+            if grid.cell(x, y).inverse {
+                cells.push((x, y));
+            }
+        }
+    }
+    cells
+}
+
+/// The walk's step for a notice row's reversed cells, left to right:
+/// done when the box itself has focus (its run starts the row past the
+/// grip), Up from the dismiss cross's focused cell, Down otherwise. The
+/// cross sits at the conversation column's right edge, not the screen's,
+/// so any focused cell past the box's start means the cross.
+fn notice_step(row: &[bool]) -> Option<&'static [u8]> {
+    if row.get(1).is_some_and(|cell| *cell) {
+        None
+    } else if row.iter().any(|cell| *cell) {
+        Some(b"\x1b[A")
+    } else {
+        Some(b"\x1b[B")
+    }
+}
+
+/// Walks keyboard focus to the notice row carrying `code`
+/// (conversation door): Shift+Tab enters navigate mode, then each step
+/// writes Up from the notice's own dismiss cross and Down otherwise,
+/// waiting for the focus look to move each time. Returns only when the
+/// row carrying `code` has its second cell reversed, so the box spans
+/// the row past the grip and Enter opens it; never writes Enter, so it
+/// never dismisses. Every wait goes through `wait_screen` under the
+/// run's one deadline.
+///
+/// Enter on that focused box opens the overlay exactly as a click does:
+/// `app_focus.rs` `open_focused` runs `on_click_inner` on the focused
+/// id, whose `Notice` arm (`app_mouse.rs`) calls `open_notice`; the
+/// binding table (`bindings.rs` `open_focused`, other path "click it")
+/// binds it to `enter`.
+#[track_caller]
+fn focus_notice(run: &mut Run, code: &str) {
+    run.write(b"\x1b[Z");
+    let mut grid = run.wait_screen("a focused row", |grid| {
+        let (cols, rows) = grid.size();
+        (0..rows).any(|y| (0..cols).any(|x| grid.cell(x, y).inverse))
+    });
+    let (_, rows) = grid.size();
+    for _ in 0..=rows {
+        let (_, y) = grid.text_at(code).expect("the notice row");
+        // Done only on the box, so Enter never dismisses.
+        let (cols, _) = grid.size();
+        let row: Vec<bool> = (0..cols).map(|x| grid.cell(x, y).inverse).collect();
+        let Some(key) = notice_step(&row) else {
+            return;
+        };
+        run.write(key);
+        let before = reversed_cells(&grid);
+        grid = run.wait_screen("the focus moved", |next| reversed_cells(next) != before);
+    }
+    panic!("the focus walk reached no notice row carrying {code}");
+}
+
+/// Sessions under `dir` with an events file: an unreadable directory
+/// counts none, so the `wait_until` poll keeps waiting, as the inline
+/// `is_ok_and` it replaces did.
+fn opened_sessions(dir: &Path) -> usize {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| entry.path().join("events.jsonl").is_file())
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+/// Twenty-five shadowed skills show one grouped row, once per terminal
+/// run: from the lived-in fixture a first session stacks the grouped
+/// row, the overlay lists all 25 names, and a second session in the same
+/// run shows no row. Evidence for #3679, whose parent showed every
+/// shadowed skill on its own row and repeated them across sessions.
+#[test]
+fn lived_home_twenty_five_shadowed_notices_show_once_per_run() {
+    run_journey(
+        "lived_home_twenty_five_shadowed_notices_show_once_per_run",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let server = ProviderServer::start([support::hello(), support::hello()]).unwrap();
+            install_fake_provider_extension(&setup, &server);
+            std::fs::create_dir_all(setup.home().join("credentials/fake")).unwrap();
+            std::fs::write(setup.home().join("credentials/fake/work"), "test-key").unwrap();
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+            );
+            support::lived_home::lived_home(setup.root.path(), 25);
+            let root_len = fs::canonicalize(setup.root.path())
+                .unwrap()
+                .to_string_lossy()
+                .len();
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                overlay_rows(root_len),
+                &bin,
+                &[],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            // Home starts no session: the first prompt opens the run's
+            // first session, whose opening stacks the grouped row.
+            let from = run.output().len();
+            run.write(b"say hi\r");
+            // One grouped row for the run's first session: the count
+            // pins the neither-zero-nor-25 edges, since a repeat or an
+            // ungrouped pass never shows exactly one grouped row.
+            run.wait_screen("the grouped shadow notice", |grid| {
+                grid.rows
+                    .iter()
+                    .filter(|row| row.contains("25 skills are shadowed"))
+                    .count()
+                    == 1
+            });
+            // Enter on the focused box opens its whole text in the
+            // overlay (`docs/tui.md`, "Notices"): a pointer click would
+            // target a row the still-running turn can move, while the
+            // focus walk re-reads the row each step and waits the focus
+            // look per step, so it is readiness-safe. `focus_notice`
+            // returns only on the box, and Enter there opens (see its
+            // doc); Enter on the cross would dismiss instead.
+            focus_notice(&mut run, "skills are shadowed");
+            run.write(b"\r");
+            run.wait_screen("the overlay lists all 25", |grid| {
+                (0..25).all(|index| shows(grid, &format!("dup{index:02}")))
+            });
+            // The open overlay pauses the 10 s expiry, so the slow reply
+            // cannot expire the notice before dismissal; Esc closes the
+            // overlay once the turn finished behind it.
+            run.turn_finished(from);
+            run.write(b"\x1b[27u");
+            run.wait_screen("the closed overlay", |grid| {
+                shows(grid, "25 skills are shadowed") && !shows(grid, "dup01")
+            });
+            // Dismiss the row through keyboard focus on its dismiss
+            // cross, exactly as the terminal test does: dismissal, not
+            // the overlay close, removes the stacked notice, so the
+            // second session's absence is observable without waiting for
+            // the fade.
+            focus_notice(&mut run, "skills are shadowed");
+            run.wait_screen("the notice focused", |grid| {
+                grid.rows
+                    .iter()
+                    .any(|row| row.contains("25 skills are shadowed"))
+            });
+            run.write(b"\x1b[B");
+            // The cross's own look, or the row already gone: the ✕ cell
+            // alone reversed (the box look reverses the whole row, so a
+            // full row never counts). Any other whole-grid move — an
+            // overlay close or a fade paints transient frames — is not
+            // the cross, and Enter on the box would reopen the overlay.
+            // A fading row clears on its own, so only Enter on a focused
+            // cross.
+            let mut cross = false;
+            run.wait_screen("the dismiss cross focused or the row gone", |grid| {
+                if !grid.contents.contains("skills are shadowed") {
+                    return true;
+                }
+                cross = grid
+                    .text_at("25 skills are shadowed")
+                    .is_some_and(|(_, y)| {
+                        let (cols, _) = grid.size();
+                        let mut found = false;
+                        for x in 0..cols {
+                            if grid.cell(x, y).inverse {
+                                if x <= 1 || found {
+                                    return false;
+                                }
+                                found = true;
+                            }
+                        }
+                        found
+                    });
+                cross
+            });
+            if cross {
+                run.write(b"\r");
+            }
+            run.wait_screen("the dismissed row clears", |grid| {
+                !grid.contents.contains("skills are shadowed")
+            });
+            run.write(b"\x1b[27u");
+            run.wait_screen("the input box back", |grid| reversed_cells(grid).is_empty());
+            // `/new` returns home with the cursor in the input box; the
+            // next prompt starts the second session beside the first. Its
+            // identical opening notice shows no row again, since the run
+            // already showed it (`docs/tui.md`, "Notices").
+            run.write(b"/new\r");
+            run.wait_screen("home for the second session", |grid| {
+                grid.contents.contains("Enter starts a session")
+            });
+            run.write(b"say hi\r");
+            run.wait_screen("the second session's reply", |grid| {
+                grid.contents.contains("Hello.")
+            });
+            let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+            fakes::wait_until("the second session", setup.deadline, move || {
+                opened_sessions(&dir) == 2
+            });
+            // settled: the reply painted and the session count beside it
+            // proves the second session ran, so the frame below is final.
+            let grid = run.wait_screen("a settled frame", |grid| grid.contents.contains("›"));
+            // The reply and the count above prove the session ran, so this
+            // settled: absence needs no wait of its own.
+            let repeat = grid.contents.contains("skills are shadowed");
+            assert!(!repeat, "no repeat in a second session");
+            quit_journey(run);
+        }),
+    );
+}
+
+/// Import leaves already-read skills behind: from the same lived-in
+/// fixture with no shadow pairs, `fiber import` copies the source-only
+/// skills, leaves the already-read ones with their reason, and a
+/// follow-up start shows no `skill_shadowed` row. Evidence for #3680,
+/// whose parent copied skills discovery already read elsewhere.
+#[test]
+fn lived_home_import_leaves_already_read_skills() {
+    run_journey(
+        "lived_home_import_leaves_already_read_skills",
+        // As in the earlier journeys: the body borrows the fake server,
+        // so the standard `catch_unwind` wrapper applies.
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let server = ProviderServer::start([support::hello()]).unwrap();
+            install_fake_provider_extension(&setup, &server);
+            std::fs::create_dir_all(setup.home().join("credentials/fake")).unwrap();
+            std::fs::write(setup.home().join("credentials/fake/work"), "test-key").unwrap();
+            support::write_json(
+                &setup.home().join("config.json"),
+                &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+            );
+            support::lived_home::lived_home(setup.root.path(), 0);
+            // Discovery logs the canonical path, which on macOS resolves
+            // the `/var` symlink to `/private/var`: canonicalize the
+            // fixture path before expecting it.
+            let agents_skill =
+                fs::canonicalize(setup.root.path().join(".agents/skills/review/SKILL.md")).unwrap();
+            let mine = format!(
+                "left behind skills/mine/SKILL.md: already read from {}",
+                agents_skill.display()
+            );
+            let review = format!(
+                "left behind skills/review/SKILL.md: already read from {}",
+                agents_skill.display()
+            );
+            let bin = journey_bin();
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &["import", "claude-code"],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            // A logical line longer than 120 columns wraps across grid
+            // rows on long canonical temp paths, so the check joins the
+            // rows instead of matching one row only.
+            run.wait_screen("the import lines", |grid| {
+                let joined = grid.rows.join("");
+                joined.contains("imported skill lint")
+                    && joined.contains(mine.as_str())
+                    && joined.contains(review.as_str())
+            });
+            let exited = run.wait();
+            assert!(exited.status.success(), "import exits 0");
+            assert!(
+                server.requests().is_empty(),
+                "import makes no provider calls"
+            );
+            // Nothing is written to `skills/` in Fiber home but the two
+            // copied skills.
+            assert!(!setup.home().join("skills/review").exists());
+            assert!(!setup.home().join("skills/mine").exists());
+            assert!(setup.home().join("skills/lint/SKILL.md").is_file());
+            assert!(setup.home().join("skills/solo/SKILL.md").is_file());
+            // A follow-up start raises no `skill_shadowed`: the copied
+            // skills stand alone, with no Fiber-home copy to shadow the
+            // agents-side skills. The import wrote the receipt, so no
+            // first-run offer needs dismissing.
+            let mut run = Run::spawn_journey(
+                &setup,
+                120,
+                32,
+                &bin,
+                &[],
+                &[("FIBER_TEST_FAKE_KEY", "sk-test")],
+            );
+            run.ready();
+            run.write(b"say hi\r");
+            run.wait_screen("the follow-up reply", |grid| {
+                grid.contents.contains("Hello.")
+            });
+            let dir = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+            fakes::wait_until("the first session", setup.deadline, move || {
+                opened_sessions(&dir) == 1
+            });
+            // settled: the reply painted and the session count beside it
+            // proves the session ran, so the frame below is final.
+            let grid = run.wait_screen("a settled frame", |grid| grid.contents.contains("›"));
+            // The reply and the count above prove the session ran, so this
+            // settled: absence needs no wait of its own.
+            let shadowed = grid.contents.contains("skill_shadowed");
+            assert!(!shadowed, "no skill_shadowed row after import");
+            quit_journey(run);
+        }),
+    );
+}

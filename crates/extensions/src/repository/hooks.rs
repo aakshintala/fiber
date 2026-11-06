@@ -164,7 +164,7 @@ pub(crate) fn repository_hooks(
 /// Inside to the pinned file, Outside and unmapped to the original string.
 /// The mapping uses the frozen resolutions gathered with the declaration,
 /// never a fresh resolution.
-pub(crate) fn map_entry(item: &RepoItem, copy: &Path) -> Value {
+fn map_entry(item: &RepoItem, copy: &Path) -> Value {
     let Some(declaration) = item.declaration.as_ref() else {
         return Value::Null;
     };
@@ -199,7 +199,7 @@ pub(crate) fn map_entry(item: &RepoItem, copy: &Path) -> Value {
 
 /// One string to what runs: Inside to its pinned file, Outside and unmapped
 /// to the original string, preserving absolute symlink spellings.
-pub(crate) fn map_string(item: &RepoItem, copy: &Path, given: &str) -> String {
+fn map_string(item: &RepoItem, copy: &Path, given: &str) -> String {
     match item.named.get(given) {
         Some(Named::Inside(rel)) => copy.join(rel).display().to_string(),
         Some(Named::Outside(_)) => given.to_owned(),

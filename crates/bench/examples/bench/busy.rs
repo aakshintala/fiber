@@ -144,7 +144,7 @@ pub(crate) fn quiescent_anon_kib(
 }
 
 /// `pid`'s `RssAnon` after the quiescence wait, sleeping on `sleep`.
-pub(crate) fn quiescent_anon_kib_of(pid: u32, sleep: impl FnMut(Duration)) -> Result<u64, String> {
+fn quiescent_anon_kib_of(pid: u32, sleep: impl FnMut(Duration)) -> Result<u64, String> {
     quiescent_anon_kib(
         || {
             let path = Path::new("/proc").join(pid.to_string()).join("status");

@@ -109,7 +109,7 @@ impl SessionlessGuard {
     }
 
     /// Releases the owner without reaping: the caller owns it from here.
-    pub(crate) fn defuse(&mut self) {
+    fn defuse(&mut self) {
         self.owner = None;
     }
 }

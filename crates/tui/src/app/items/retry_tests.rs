@@ -249,6 +249,219 @@ fn open(app: &mut App, job: &str) -> Vec<Value> {
     }
 }
 
+/// Folds one assistant turn saying `text` into the open delegate's view.
+fn delegate_turn(app: &mut App, text: &str) {
+    for (kind, payload) in [
+        ("turn_started", json!({"input": []})),
+        ("assistant_message_started", json!({})),
+        ("text_completed", json!({"text": text})),
+        (
+            "assistant_message_completed",
+            json!({"outcome": "completed"}),
+        ),
+        ("turn_completed", json!({"outcome": "completed"})),
+    ] {
+        app.on_line(crate::app::testkit::session_line(
+            DELEGATE_A,
+            kind,
+            payload,
+            Some("a_1"),
+        ));
+    }
+}
+
+/// Renders `app` whole at 80 by 24: the buffer, for full-view text and
+/// style asserts, so the fallback, the card and the outcome draw
+/// together.
+fn rendered(app: &mut App) -> ratatui::buffer::Buffer {
+    app.set_size(80, 24);
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let _ = crate::view::render(app, area, &mut buf, None);
+    buf
+}
+
+/// Asserts `needle` draws on its own dim row in `buf`, directly under
+/// the path line.
+fn assert_dim_line(buf: &ratatui::buffer::Buffer, needle: &str) {
+    let text = crate::view::text(buf);
+    let rows: Vec<&str> = text.lines().collect();
+    let path = rows
+        .iter()
+        .position(|row| row.contains("Output since this terminal attached"))
+        .unwrap_or_else(|| panic!("a path line"));
+    let line = rows
+        .iter()
+        .position(|row| row.contains(needle))
+        .unwrap_or_else(|| panic!("a row with {needle}"));
+    assert_eq!(line, path + 1, "the fallback sits under the path line");
+    let row = u16::try_from(line).unwrap_or(u16::MAX);
+    for x in 0..buf.area.width {
+        let cell = &buf[(x, row)];
+        if cell.symbol() != " " {
+            assert_eq!(
+                cell.fg,
+                crate::theme::Role::Muted.color(),
+                "dim fallback {x}"
+            );
+        }
+    }
+}
+
+/// Asserts the finished delegate's full view: the fallback, the card
+/// and the outcome.
+fn assert_finished_fallback(view: &str, fallback: &str) {
+    assert!(view.contains(fallback), "the fallback:\n{view}");
+    assert!(view.contains("◆ task j_1"), "the card:\n{view}");
+    assert!(view.contains("completed"), "the outcome:\n{view}");
+}
+
+/// Opens `j_1`, completes it, then refuses the in-flight subscribe: the
+/// terminal post-completion refusal path.
+fn refused_finished(app: &mut App, code: &str) {
+    start_delegate(app, "j_1", DELEGATE_A);
+    let out = open(app, "j_1");
+    let id = subscribes(&out)
+        .into_iter()
+        .next()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("an id"));
+    complete(app, "j_1");
+    app.on_line(session_refused(DELEGATE_A, &id, code));
+}
+
+#[test]
+fn finished_open_refused_draws_one_dim_fallback() {
+    let mut app = home();
+    opened(&mut app);
+    refused_finished(&mut app, "session_not_found");
+    let buf = rendered(&mut app);
+    let view = crate::view::text(&buf);
+    assert_finished_fallback(&view, "No transcript: no such session");
+    assert_dim_line(&buf, "No transcript: no such session");
+}
+
+#[test]
+fn finished_open_refused_log_corrupt_draws_one_dim_fallback() {
+    let mut app = home();
+    opened(&mut app);
+    refused_finished(&mut app, "log_corrupt");
+    let buf = rendered(&mut app);
+    let view = crate::view::text(&buf);
+    assert_finished_fallback(&view, "No transcript: no such session");
+    assert_dim_line(&buf, "No transcript: no such session");
+}
+
+#[test]
+fn a_resume_clears_the_open_refusal() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let out = open(&mut app, "j_1");
+    let id = subscribes(&out)
+        .into_iter()
+        .next()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("an id"));
+    app.on_line(session_refused(DELEGATE_A, &id, "log_corrupt"));
+    let running = crate::view::text(&rendered(&mut app));
+    assert!(
+        running.contains("Could not open"),
+        "the refusal shows while running:\n{running}"
+    );
+    // A resume under the same job id turns the view live again, so the
+    // stale refusal clears with the outcome.
+    app.on_line(session_line(
+        "job_started",
+        json!({"job_id": "j_1", "description": "task j_1",
+            "output_path": "/tmp/out"}),
+    ));
+    let view = crate::view::text(&rendered(&mut app));
+    assert!(
+        !view.contains("Could not open"),
+        "the resume clears it:\n{view}"
+    );
+    assert!(view.contains("■ stop"), "the view runs again:\n{view}");
+}
+
+#[test]
+fn running_open_refused_keeps_live_view() {
+    let mut app = home();
+    opened(&mut app);
+    start_delegate(&mut app, "j_1", DELEGATE_A);
+    let out = open(&mut app, "j_1");
+    let id = subscribes(&out)
+        .into_iter()
+        .next()
+        .and_then(|line| line["id"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("an id"));
+    delegate_turn(&mut app, "live one");
+    app.on_line(session_refused(DELEGATE_A, &id, "log_corrupt"));
+    let buf = rendered(&mut app);
+    let view = crate::view::text(&buf);
+    assert!(
+        view.contains("live one"),
+        "the live transcript stays:\n{view}"
+    );
+    assert!(
+        !view.contains("No transcript"),
+        "no fallback on a running view:\n{view}"
+    );
+}
+
+#[test]
+fn finished_open_refused_after_running_draws_one_dim_fallback() {
+    // The race, not a post-finish open: opened-while-running, refused
+    // subscribe, then `JobCompleted` — with the parent rows present and
+    // with an empty screen.
+    for with_rows in [false, true] {
+        let mut app = home();
+        opened(&mut app);
+        start_delegate(&mut app, "j_1", DELEGATE_A);
+        let out = open(&mut app, "j_1");
+        let id = subscribes(&out)
+            .into_iter()
+            .next()
+            .and_then(|line| line["id"].as_str().map(str::to_owned))
+            .unwrap_or_else(|| panic!("an id"));
+        if with_rows {
+            delegate_turn(&mut app, "live one");
+        }
+        app.on_line(session_refused(DELEGATE_A, &id, "log_corrupt"));
+        complete(&mut app, "j_1");
+        let buf = rendered(&mut app);
+        let view = crate::view::text(&buf);
+        assert_finished_fallback(&view, "No transcript: no such session");
+        assert_dim_line(&buf, "No transcript: no such session");
+    }
+}
+
+#[test]
+fn refused_then_replayed_draws_the_transcript() {
+    let mut app = home();
+    opened(&mut app);
+    refused_finished(&mut app, "session_not_found");
+    let refused = crate::view::text(&rendered(&mut app));
+    assert!(
+        refused.contains("No transcript: no such session"),
+        "the refusal hides the replay first:\n{refused}"
+    );
+    // The hub answers after the refusal: the replay folds into the open
+    // view and clears the stale refusal with it, so the transcript draws.
+    delegate_turn(&mut app, "late replay");
+    let buf = rendered(&mut app);
+    let view = crate::view::text(&buf);
+    assert!(view.contains("late replay"), "the replay draws:\n{view}");
+    assert!(
+        !view.contains("No transcript"),
+        "no stale fallback:\n{view}"
+    );
+    assert!(
+        app.item_view().is_some_and(|item| item.has_transcript),
+        "the gate follows the replay:\n{view}"
+    );
+}
+
 /// Drives the clock: the frame time `now` reads from `clock`.
 fn tick(app: &mut App, clock: &std::sync::Arc<fakes::clock::FakeClock>) {
     app.set_now(clock.now(), contract::clock::wall_ms(clock.wall()));

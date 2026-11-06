@@ -151,7 +151,7 @@ pub(crate) fn serve(
 /// stops a blocked reader and reaps it. Production builds the reader and
 /// the writer from one socket. The caller attribution is walked once here;
 /// the target side is read fresh for every command in [`dispatch`].
-pub(crate) fn serve_connection(
+fn serve_connection(
     stream: support::stoppable::Reader,
     writer: Box<dyn Write + Send>,
     gate: Arc<Gate>,

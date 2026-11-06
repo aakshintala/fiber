@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use contract::commands::RewindArgs;
+use contract::events::EventKind;
 use contract::events::{CommandResult, Event, Rewound};
 use contract::inbox::{Ack, Delivery, Rejection};
 use contract::{ActionId, Envelope, ErrorCode, Seq, SessionId};
@@ -86,7 +87,7 @@ impl Loop {
         let Some(first) = own_lines.first() else {
             return Err(Error::NoSessionStarted);
         };
-        if first.kind != "session_started" {
+        if first.kind() != EventKind::SessionStarted {
             return Err(Error::NoSessionStarted);
         }
         let Some(Event::SessionStarted(started)) =
@@ -278,7 +279,7 @@ pub(crate) fn point_for(
         None => {
             let mut latest = None;
             for line in lines.iter().filter(|line| {
-                line.kind == "turn_started"
+                line.kind() == EventKind::TurnStarted
                     && target
                         .bound
                         .is_none_or(|to| line.seq.is_some_and(|seq| seq.0 <= to))
@@ -334,14 +335,15 @@ fn end_point(lines: &[Envelope]) -> Result<u64, Rejection> {
     };
     let mut completed = HashSet::new();
     for line in lines {
-        if line.kind == "tool_call_completed"
+        if line.kind() == EventKind::ToolCallCompleted
             && let Some(action) = &line.action_id
         {
             completed.insert(action);
         }
     }
     for line in lines {
-        if (line.kind == "tool_call_requested" || line.kind == "tool_call_started")
+        if (line.kind() == EventKind::ToolCallRequested
+            || line.kind() == EventKind::ToolCallStarted)
             && let Some(action) = &line.action_id
             && !completed.contains(action)
         {
@@ -367,21 +369,22 @@ fn boundary(lines: &[Envelope], point: u64) -> Result<u64, Rejection> {
             .find(|line| line.seq.is_some_and(|seq| seq.0 == after))
     });
     match next {
-        Some(line) if line.kind == "turn_started" || line.kind == "step_started" => {}
+        Some(line)
+            if line.kind() == EventKind::TurnStarted || line.kind() == EventKind::StepStarted => {}
         _ => return Err(refused()),
     }
     // When each call was requested: a completion after the point answers
     // a call at or before it only when its request is there too.
     let mut requested_at: HashMap<&ActionId, u64> = HashMap::new();
     for line in lines {
-        if line.kind == "tool_call_requested"
+        if line.kind() == EventKind::ToolCallRequested
             && let (Some(action), Some(seq)) = (&line.action_id, line.seq)
         {
             requested_at.insert(action, seq.0);
         }
     }
     for line in lines {
-        if line.kind == "tool_call_completed"
+        if line.kind() == EventKind::ToolCallCompleted
             && line.seq.is_some_and(|seq| seq.0 > point)
             && let Some(action) = &line.action_id
             && requested_at.get(action).is_some_and(|at| *at <= point)

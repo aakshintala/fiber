@@ -11,7 +11,7 @@ pub(crate) use fakes::write_record;
 
 /// One repository package the tests declare: its dir, its manifest and
 /// its files, each `(path, text)`.
-pub(crate) type RepoPkg<'a> = (&'a str, Value, &'a [(&'a str, &'a str)]);
+type RepoPkg<'a> = (&'a str, Value, &'a [(&'a str, &'a str)]);
 
 /// Inits git in `workspace` and declares these repository extension
 /// packages, so the workspace reads as a project repository shipping

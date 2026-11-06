@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
 
-pub(super) const SCHEMA: u64 = 1;
+const SCHEMA: u64 = 1;
 
 /// The median of exactly `runs` values: the run count a metric declares.
 pub(super) fn median(values: &[f64], runs: usize) -> Result<f64, String> {

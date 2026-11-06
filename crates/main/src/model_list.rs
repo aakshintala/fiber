@@ -281,11 +281,11 @@ fn micros(dollars: f64) -> u64 {
     let micros = (dollars * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64;
     micros
 }
-/// One entry per model of every installed provider, providers sorted by
-/// name, models in list order.
+/// One entry per model of every switched-on provider, providers sorted
+/// by name, models in list order.
 fn entries(providers: &Providers, config: &Config) -> Vec<tui::ModelEntry> {
     let mut entries = Vec::new();
-    for name in providers.names() {
+    for name in providers.switched_on(config) {
         let Some(data) = providers.get(name) else {
             continue;
         };

@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use contract::commands::ChangeWorkspaceArgs;
+use contract::events::EventKind;
 use contract::events::{CommandResult, Event, Moved};
 use contract::inbox::{Ack, Rejection};
 use contract::{CommandId, ErrorCode, Seq, SessionId};
@@ -69,7 +70,7 @@ impl Loop {
         let Some(first) = own_lines.first() else {
             return Err(Error::NoSessionStarted);
         };
-        if first.kind != "session_started" {
+        if first.kind() != EventKind::SessionStarted {
             return Err(Error::NoSessionStarted);
         }
         let Some(Event::SessionStarted(started)) =

@@ -6,7 +6,6 @@
 
 use std::path::Path;
 
-use contract::events::EventKind;
 use contract::{Envelope, SessionId};
 
 use crate::SessionError;
@@ -81,7 +80,7 @@ pub fn watch_after(
         // a new kind stops compiling here: only the session's own last
         // line ends the watch, and a name this build does not know is
         // `Unknown`, always delivered like any other line.
-        let exited = match classify_output(&EventKind::from_name(&envelope.kind)) {
+        let exited = match classify_output(&envelope.kind()) {
             OutputKind::FiberExited => true,
             OutputKind::CommandAccepted
             | OutputKind::CommandRejected

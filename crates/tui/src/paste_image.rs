@@ -38,7 +38,7 @@ pub(crate) const IMAGE_CAP: usize = 256 * 1024 * 1024;
 
 /// How many pixels a pasted image may hold
 /// (`docs/model-routing.md`, "Image limits").
-pub(crate) const MAX_PIXELS: u64 = 50_000_000;
+const MAX_PIXELS: u64 = 50_000_000;
 
 /// The bytes around `osascript`'s hex: `«data PNGf` is 11, `»` is 2, and
 /// the line break is 1, each in UTF-8.

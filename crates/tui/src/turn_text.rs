@@ -49,7 +49,7 @@ pub(crate) fn pages_for_turn(
 }
 
 /// The pages holding turn `turn` whose cards are dropped.
-pub(crate) fn missing_pages(pages: &Pages, turn: usize) -> Vec<usize> {
+fn missing_pages(pages: &Pages, turn: usize) -> Vec<usize> {
     let count = pages.page_count();
     let mut firsts = Vec::with_capacity(count);
     let mut cuts = Vec::with_capacity(count);

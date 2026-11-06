@@ -11,7 +11,7 @@
 
 /// The grid's columns: Fiber sets no window size on the pseudo-terminal,
 /// and programs then assume 80x24.
-pub(crate) const COLUMNS: usize = 80;
+const COLUMNS: usize = 80;
 /// The grid's rows.
 pub(crate) const ROWS: usize = 24;
 /// The most pending sequence bytes held: a longer run drops back to the

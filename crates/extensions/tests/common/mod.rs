@@ -85,9 +85,11 @@ fn wait_parked<T: Send>(
 /// sighting. A stall that answers instead fails on its own answer.
 #[track_caller]
 fn await_stuck<T: Send>(done: &std::sync::mpsc::Receiver<T>, stall: &str) -> Option<T> {
-    let bound = Deadline::after(Duration::from_secs(10));
+    // One shared wait for the whole poll: each listing takes half of what
+    // remains, so the listings expire inside the wait.
+    let wait = Deadline::after(Duration::from_secs(10)).start_wait();
     loop {
-        if !fakes::matching(stall).unwrap().is_empty() {
+        if !fakes::matching(stall, wait.left() / 2).unwrap().is_empty() {
             // Up: still up after a bounded wait means stuck, not starting;
             // an answer meanwhile ends this at once.
             match Deadline::after(ROUND).recv(done) {
@@ -97,11 +99,11 @@ fn await_stuck<T: Send>(done: &std::sync::mpsc::Receiver<T>, stall: &str) -> Opt
                     panic!("the stalled run returns")
                 }
             }
-            if !fakes::matching(stall).unwrap().is_empty() {
+            if !fakes::matching(stall, wait.left() / 2).unwrap().is_empty() {
                 return None;
             }
         }
-        if bound.left().is_zero() {
+        if wait.left().is_zero() {
             break;
         }
         match Deadline::after(ROUND).recv(done) {

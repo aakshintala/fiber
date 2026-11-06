@@ -219,7 +219,13 @@ fn rig(roles: serde_json::Value) -> (extensions::Providers, config::Config) {
 
 #[test]
 fn a_full_reference_resolves_to_its_provider_model_and_level() {
-    let (providers, config) = rig(json!({}));
+    let (root, providers, _) = stored_rig(json!({}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     assert_eq!(
         (resolve.lookup)("fiber:fake/m:high").unwrap(),
@@ -229,14 +235,26 @@ fn a_full_reference_resolves_to_its_provider_model_and_level() {
 
 #[test]
 fn a_reference_without_a_level_resolves_to_its_provider_model() {
-    let (providers, config) = rig(json!({}));
+    let (root, providers, _) = stored_rig(json!({}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     assert_eq!((resolve.lookup)("fiber:fake/m").unwrap(), "fake/m");
 }
 
 #[test]
 fn a_level_the_model_does_not_take_fails_with_the_thinking_message() {
-    let (providers, config) = rig(json!({}));
+    let (root, providers, _) = stored_rig(json!({}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     let Err(reason) = (resolve.lookup)("fiber:fake/plain:high") else {
         panic!("a level the model does not take resolves");
@@ -299,15 +317,29 @@ fn odd_references_list_the_valid_references() {
 
 #[test]
 fn a_role_resolves_to_its_reference_and_level() {
-    let (providers, config) = rig(json!({"deep": "fiber:fake/m:high"}));
+    let (root, providers, _) = stored_rig(json!({"deep": "fiber:fake/m:high"}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     assert_eq!((resolve.lookup)("deep").unwrap(), "fake/m:high");
 }
 
 #[test]
 fn a_role_object_resolves_through_its_model() {
-    let (providers, config) =
-        rig(json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}));
+    let (root, providers, _) = stored_rig(
+        json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}),
+        &["work"],
+    );
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
 }
@@ -334,7 +366,13 @@ fn a_role_to_another_harness_or_unknown_model_is_refused() {
 
 #[test]
 fn a_role_with_a_level_its_model_does_not_take_is_refused() {
-    let (providers, config) = rig(json!({"bad": "fiber:fake/plain:high"}));
+    let (root, providers, _) = stored_rig(json!({"bad": "fiber:fake/plain:high"}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     let reason = (resolve.lookup)("bad").unwrap_err();
     assert!(
@@ -349,7 +387,13 @@ fn a_role_with_a_level_its_model_does_not_take_is_refused() {
 
 #[test]
 fn roles_do_not_chain() {
-    let (providers, config) = rig(json!({"a": "b", "b": "fiber:fake/m"}));
+    let (root, providers, _) = stored_rig(json!({"a": "b", "b": "fiber:fake/m"}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     // `a` maps to `b`, which is resolved as a reference only: no role
     // lookup follows.
@@ -362,11 +406,20 @@ fn roles_do_not_chain() {
 
 #[test]
 fn the_catalogue_lists_roles_then_references_sorted() {
-    let (providers, config) = rig(json!({
-        "gone": "claude:opus",
-        "deep": "fiber:fake/m:high",
-        "fast": {"model": "fiber:fake/plain"},
-    }));
+    let (root, providers, _) = stored_rig(
+        json!({
+            "gone": "claude:opus",
+            "deep": "fiber:fake/m:high",
+            "fast": {"model": "fiber:fake/plain"},
+        }),
+        &["work"],
+    );
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     assert_eq!(
         resolve.catalogue.as_ref(),
@@ -383,11 +436,20 @@ fn an_empty_catalogue_reads_none() {
 
 #[test]
 fn lookup_and_catalogue_agree_for_every_role() {
-    let (providers, config) = rig(json!({
-        "gone": "claude:opus",
-        "deep": "fiber:fake/m:high",
-        "fast": {"model": "fiber:fake/plain"},
-    }));
+    let (root, providers, _) = stored_rig(
+        json!({
+            "gone": "claude:opus",
+            "deep": "fiber:fake/m:high",
+            "fast": {"model": "fiber:fake/plain"},
+        }),
+        &["work"],
+    );
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
     let resolve = resolver(&providers, &config);
     let catalogue = resolve.catalogue.as_ref().to_owned();
     let mut sections = catalogue.split("\nReferences:\n");

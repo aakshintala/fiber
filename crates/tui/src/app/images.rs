@@ -145,6 +145,14 @@ impl App {
     /// conversion, and anything else fails its image with a notice
     /// (`docs/tui.md`, "Images"). True when `id` was ours.
     pub(in crate::app) fn image_answered(&mut self, id: &str, result: Option<&Value>) -> bool {
+        // The tag is the authority: an answer for an id with no image
+        // tag takes the untagged path, even when routing detail lingers.
+        let waiting = self.outbox.waiting(id);
+        if waiting != Some(super::outbox::Waiting::ImageFetch)
+            && waiting != Some(super::outbox::Waiting::ImageDisplay)
+        {
+            return false;
+        }
         let display = self
             .images
             .display
@@ -376,6 +384,14 @@ impl App {
     }
 
     pub(in crate::app) fn image_rejected(&mut self, id: &str, message: &str) -> bool {
+        // The tag is the authority: a rejection for an id with no image
+        // tag takes the untagged path, even when routing detail lingers.
+        let waiting = self.outbox.waiting(id);
+        if waiting != Some(super::outbox::Waiting::ImageFetch)
+            && waiting != Some(super::outbox::Waiting::ImageDisplay)
+        {
+            return false;
+        }
         let failed = self
             .images
             .display

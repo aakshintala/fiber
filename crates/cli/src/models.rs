@@ -46,7 +46,7 @@ fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<std::process:
 /// older than `max_age` (`docs/model-routing.md`, "Model discovery"). A
 /// list exactly `max_age` old is not stale, and one with no cached copy is
 /// not due: it already ran when the lists were read. Runs no command and
-/// loads nothing: the one `has_credential` presence line decides.
+/// loads nothing: the shared switched-on presence gate decides.
 fn stale_lists(
     home: &Path,
     providers: &Providers,
@@ -55,13 +55,12 @@ fn stale_lists(
     now: SystemTime,
 ) -> Vec<String> {
     let mut stale = Vec::new();
-    for name in providers.names() {
-        let Some(lua) = providers.lua(name) else {
+    for name in providers.switched_on(config) {
+        let Some(_lua) = providers.lua(name) else {
             continue;
         };
         if let Ok(Some(age)) = config::model_cache_age(home, name, now)
             && age > max_age
-            && lua.has_credential(config, &providers.data(name))
         {
             stale.push(name.to_owned());
         }
