@@ -1069,7 +1069,7 @@ mod supervised {
     use std::time::Duration;
 
     use contract::emit::Emit;
-    use contract::events::{TurnOutcome, VariablesSource};
+    use contract::events::{EventKind, TurnOutcome, VariablesSource};
     use contract::inbox::{Ack, Delivery, Message};
     use contract::provider::{Delta, Provider, ReplyAction, ToolDefinition};
     use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
@@ -1315,14 +1315,14 @@ mod supervised {
         }
     }
 
-    fn kinds(lines: &[contract::Envelope]) -> Vec<&str> {
-        lines.iter().map(|line| line.kind.as_str()).collect()
+    fn kinds(lines: &[contract::Envelope]) -> Vec<EventKind> {
+        lines.iter().map(|line| line.kind()).collect()
     }
 
     fn resolved(lines: &[contract::Envelope]) -> Vec<&contract::Envelope> {
         lines
             .iter()
-            .filter(|line| line.kind == "permission_resolved")
+            .filter(|line| line.kind() == EventKind::PermissionResolved)
             .collect()
     }
 
@@ -1389,12 +1389,13 @@ mod supervised {
                 "usage_recorded",
                 "assistant_message_completed",
                 "turn_completed",
-            ],
+            ]
+            .map(EventKind::from_name),
             "complete ordered kinds"
         );
         let started = lines
             .iter()
-            .find(|line| line.kind == "session_started")
+            .find(|line| line.kind() == EventKind::SessionStarted)
             .expect("a session_started line");
         // Fixed at start and recorded (`docs/permissions.md`, "Supervised
         // sessions": "`supervised` is fixed at `start`, recorded on
@@ -1406,8 +1407,8 @@ mod supervised {
         // escalation where no answer is possible writes no
         // `permission_requested`, recorded as a `permission_resolved` with
         // `decided_by: reviewer`).
-        assert!(!kinds(&lines).contains(&"permission_requested"));
-        assert!(!kinds(&lines).contains(&"notice"));
+        assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
+        assert!(!kinds(&lines).contains(&EventKind::Notice));
         let denied = resolved(&lines);
         // One judged call, one block (`docs/permissions.md`, "Supervised
         // sessions": "Its own reviewer judges every call. An escalation is
@@ -1420,7 +1421,7 @@ mod supervised {
         // is returned to the model ... The turn continues.").
         let end = lines
             .iter()
-            .find(|line| line.kind == "turn_completed")
+            .find(|line| line.kind() == EventKind::TurnCompleted)
             .expect("a turn_completed line");
         assert_eq!(end.payload["outcome"], json!("completed"));
         // Nothing ran: `tool_call_requested` with no `tool_call_started`
@@ -1523,7 +1524,8 @@ mod supervised {
                 "usage_recorded",
                 "assistant_message_completed",
                 "turn_completed",
-            ],
+            ]
+            .map(EventKind::from_name),
             "complete ordered kinds"
         );
         // The retry is judged again, never answered by the steer itself
@@ -1557,7 +1559,7 @@ mod supervised {
             later.iter().any(reads_grant),
             "the retry's reviews read the grant"
         );
-        assert!(!kinds(&lines).contains(&"permission_requested"));
+        assert!(!kinds(&lines).contains(&EventKind::PermissionRequested));
         let judged = resolved(&lines);
         // Two judged calls: the block, then the allowed retry
         // (`docs/permissions.md`, "Supervised sessions": "Its own reviewer

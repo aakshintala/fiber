@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, mpsc};
 
 use contract::emit::Emit;
-use contract::events::{CallStatus, Control, SkillLoad, ToolCallCompleted, TurnOutcome};
+use contract::events::{CallStatus, Control, EventKind, SkillLoad, ToolCallCompleted, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::{HostedCall, Input, ReplyAction, ToolDefinition};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
@@ -359,10 +359,10 @@ fn loaded_skills_are_sent_again_once_each_in_first_load_order_after_the_note() {
     let all = kinds(&lines);
     let at = all
         .iter()
-        .position(|kind| *kind == "handoff_completed")
+        .position(|kind| *kind == EventKind::HandoffCompleted)
         .unwrap();
-    assert_eq!(all[at + 1], "skills_resent");
-    assert_eq!(all[at + 2], "opening_message");
+    assert_eq!(all[at + 1], EventKind::SkillsResent);
+    assert_eq!(all[at + 2], EventKind::OpeningMessage);
     let resent = of_kind(&lines, "skills_resent");
     assert_eq!(resent.len(), 1);
     assert!(resent[0].is_durable());
@@ -1026,7 +1026,7 @@ fn a_crash_after_handoff_completed_sends_the_skills_with_the_next_opening() {
     let all = kinds(&lines);
     let at = all
         .iter()
-        .position(|kind| *kind == "handoff_completed")
+        .position(|kind| *kind == EventKind::HandoffCompleted)
         .unwrap();
     // The new process rebuilds its preamble before the opening; the resend
     // still immediately precedes the opening.
@@ -1034,9 +1034,9 @@ fn a_crash_after_handoff_completed_sends_the_skills_with_the_next_opening() {
         + 1
         + all[at + 1..]
             .iter()
-            .position(|kind| *kind == "skills_resent")
+            .position(|kind| *kind == EventKind::SkillsResent)
             .unwrap();
-    assert_eq!(all[resent_at + 1], "opening_message");
+    assert_eq!(all[resent_at + 1], EventKind::OpeningMessage);
     assert_eq!(of_kind(&lines, "skills_resent").len(), 1);
     let requests = provider.requests();
     assert_eq!(requests.len(), 1);
@@ -1088,19 +1088,19 @@ fn a_crash_after_skills_resent_writes_only_the_opening() {
     let all = kinds(&lines);
     let at = all
         .iter()
-        .position(|kind| *kind == "skills_resent")
+        .position(|kind| *kind == EventKind::SkillsResent)
         .unwrap();
     // The new process rebuilds its preamble before the opening.
     let opening_at = at
         + 1
         + all[at + 1..]
             .iter()
-            .position(|kind| *kind == "opening_message")
+            .position(|kind| *kind == EventKind::OpeningMessage)
             .unwrap();
     assert!(
         all[at + 1..opening_at]
             .iter()
-            .all(|kind| *kind == "preamble_built")
+            .all(|kind| *kind == EventKind::PreambleBuilt)
     );
     let requests = provider.requests();
     assert_eq!(requests.len(), 1);
@@ -1207,7 +1207,10 @@ fn hosted_skill() -> Scripted {
 /// `kind` line, as a crash there would leave it.
 fn truncate_after(session: &Session, kind: &str) {
     let lines = log::read(&session.dir).unwrap();
-    let at = lines.iter().position(|line| line.kind == kind).unwrap();
+    let at = lines
+        .iter()
+        .position(|line| line.kind() == EventKind::from_name(kind))
+        .unwrap();
     let mut text = String::new();
     for line in &lines[..=at] {
         text.push_str(&serde_json::to_string(line).unwrap());

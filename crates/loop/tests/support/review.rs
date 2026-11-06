@@ -30,7 +30,7 @@ use super::reviewer_eval::{
     reviewed_items, sample, scan_line,
 };
 use contract::events::{
-    AskStep, DecidedBy, Event, HandoffCompleted, Outcome, ReviewedCall, ReviewerUse,
+    AskStep, DecidedBy, Event, EventKind, HandoffCompleted, Outcome, ReviewedCall, ReviewerUse,
     ToolCallRequested, ToolCallStarted,
 };
 use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
@@ -171,7 +171,7 @@ fn load_chain(dir: &Path) -> Result<(String, Vec<Indexed>), String> {
             dir.display()
         ));
     };
-    if first.envelope.kind != "session_started" {
+    if first.envelope.kind() != EventKind::SessionStarted {
         return Err(format!(
             "review: {} holds no session: the log does not begin with session_started",
             first.dir.display()
@@ -637,7 +637,7 @@ impl Driver {
                     "review: {} {}: a {} payload that does not parse: {error}",
                     item.dir.display(),
                     describe(envelope, position),
-                    envelope.kind,
+                    envelope.kind().name(),
                 )
             })?;
             let Some(event) = event else {
@@ -706,7 +706,7 @@ impl Driver {
                     "review: {} {}: a {} payload that does not parse: {error}",
                     item.dir.display(),
                     describe(envelope, position),
-                    envelope.kind,
+                    envelope.kind().name(),
                 )
             })?;
             let Some(event) = event else {
@@ -1352,7 +1352,7 @@ fn emit_sampled(
                 "review: {} {}: a {} payload that does not parse: {error}",
                 item.dir.display(),
                 describe(envelope, position),
-                envelope.kind,
+                envelope.kind().name(),
             )
         })?;
         let Some(event) = event else {

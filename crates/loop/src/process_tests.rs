@@ -11,10 +11,10 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use contract::events::{
-    Answer, AskStep, AssistantMessageCompleted, DecidedBy, Decision, Empty, Event, InputItem,
-    Interaction, InteractionRequested, InteractionResolved, MessageOutcome, PermissionRequested,
-    PermissionResolved, ResolvedBy, RuleScope, StandingRule, TextCompleted, TurnCompleted,
-    TurnOutcome, TurnStarted, UsageRecorded,
+    Answer, AskStep, AssistantMessageCompleted, DecidedBy, Decision, Empty, Event, EventKind,
+    InputItem, Interaction, InteractionRequested, InteractionResolved, MessageOutcome,
+    PermissionRequested, PermissionResolved, ResolvedBy, RuleScope, StandingRule, TextCompleted,
+    TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
 use contract::shapes::{
     ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender, Tokens, True,
@@ -109,7 +109,7 @@ impl Session {
         let exited = fiber_exited(&self.log, &self.summary, ran, one_turn, signal).unwrap();
         let lines = log::read(&self.dir).unwrap();
         let last = lines.last().unwrap();
-        assert_eq!(last.kind, "fiber_exited");
+        assert_eq!(last.kind(), EventKind::FiberExited);
         assert!(last.turn_id.is_none());
         // The returned error is the written one, byte for byte.
         let written = last.payload.get("error").cloned().unwrap_or(Value::Null);
@@ -121,11 +121,11 @@ impl Session {
         (exited.code, Value::Object(last.payload.clone()))
     }
 
-    fn kinds(&self) -> Vec<String> {
+    fn kinds(&self) -> Vec<EventKind> {
         log::read(&self.dir)
             .unwrap()
             .into_iter()
-            .map(|line| line.kind)
+            .map(|line| line.kind())
             .collect()
     }
 
@@ -133,7 +133,7 @@ impl Session {
         log::read(&self.dir)
             .unwrap()
             .into_iter()
-            .filter(|line| line.kind == "interaction_resolved")
+            .filter(|line| line.kind() == EventKind::InteractionResolved)
             .collect()
     }
 }
@@ -201,6 +201,7 @@ fn an_open_extension_ask_is_declined_at_exit() {
             "interaction_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -292,6 +293,7 @@ fn two_open_extension_asks_are_declined_in_log_order() {
             "interaction_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -413,7 +415,10 @@ fn a_log_ending_in_rewound_writes_no_fiber_exited() {
     // Nothing is written: no `fiber_exited`, and the open extension ask is
     // left as it is, not declined.
     assert_eq!(session.kinds(), before);
-    assert_eq!(session.kinds().last().map(String::as_str), Some("rewound"));
+    assert_eq!(
+        session.kinds().last().map(|kind| kind.name()),
+        Some("rewound")
+    );
     assert!(session.resolved().is_empty());
 }
 
@@ -438,7 +443,10 @@ fn a_log_ending_in_rewound_reports_the_loops_error_without_writing() {
     .unwrap();
     assert_eq!(exited.code, 1);
     assert_eq!(exited.error, Some(failure));
-    assert_eq!(session.kinds().last().map(String::as_str), Some("rewound"));
+    assert_eq!(
+        session.kinds().last().map(|kind| kind.name()),
+        Some("rewound")
+    );
 }
 
 fn failure(code: ErrorCode, message: &str) -> Failure {
@@ -744,21 +752,21 @@ fn fiber_exited_after_a_resume_reports_only_the_resumed_process_lines() {
     assert_eq!(code, 0);
     let lines = log::read(&session.dir).unwrap();
     assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
         [
-            "fiber_started",
-            "turn_started",
-            "usage_recorded",
-            "text_completed",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_started",
-            "turn_started",
-            "usage_recorded",
-            "text_completed",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
+            EventKind::FiberStarted,
+            EventKind::TurnStarted,
+            EventKind::UsageRecorded,
+            EventKind::TextCompleted,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
+            EventKind::FiberStarted,
+            EventKind::TurnStarted,
+            EventKind::UsageRecorded,
+            EventKind::TextCompleted,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
+            EventKind::FiberExited,
         ]
     );
     assert_eq!(exited["text"], "Second.");
@@ -817,6 +825,7 @@ fn fiber_exited_names_the_unresolved_request() {
             "interaction_requested",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -838,6 +847,7 @@ fn fiber_exited_has_no_suspended_on_once_the_request_is_resolved() {
             "permission_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -859,6 +869,7 @@ fn fiber_exited_keeps_the_request_that_was_not_resolved() {
             "permission_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 
     let mut later = Session::new();
@@ -877,6 +888,7 @@ fn fiber_exited_keeps_the_request_that_was_not_resolved() {
             "permission_resolved",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -919,6 +931,7 @@ fn fiber_exited_keeps_the_question_that_was_not_resolved() {
                 "interaction_resolved",
                 "fiber_exited",
             ]
+            .map(EventKind::from_name)
         );
     }
 }
@@ -1019,6 +1032,7 @@ fn fiber_exited_ignores_a_request_from_the_previous_process() {
             "fiber_started",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
 }
 
@@ -1070,8 +1084,11 @@ fn a_signalled_exit_over_the_seed_alone_names_the_approval_and_declines_the_ask(
     let exited = fiber_exited(&session.log, &seed, Ok(()), false, Some(143)).unwrap();
     assert_eq!(exited.code, 143);
     let lines = log::read(&session.dir).unwrap();
-    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
-    assert_eq!(kinds, ["interaction_resolved", "fiber_exited"]);
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    assert_eq!(
+        kinds,
+        [EventKind::InteractionResolved, EventKind::FiberExited]
+    );
     assert_eq!(lines[0].payload["request_id"], "r_ask");
     assert_eq!(lines[1].payload["suspended_on"], "r_old");
 }

@@ -16,7 +16,7 @@ mod support;
 
 use std::sync::{Arc, mpsc};
 
-use contract::events::{Control, TurnOutcome};
+use contract::events::{Control, EventKind, TurnOutcome};
 use contract::tool::Tool;
 use contract::{Envelope, ErrorCode};
 use fakes::{Deadline, Scripted};
@@ -96,12 +96,23 @@ fn a_call_naming_the_session_writes_its_name_before_its_completion() {
     expected.extend(step_of(1));
     expected.extend(["tool_call_started", "session_named", "tool_call_completed"]);
     expected.extend(tail());
-    assert_eq!(kinds(&lines), expected);
-    let at = |kind: &str| lines.iter().position(|l| l.kind == kind).unwrap();
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
+    let at = |kind: &str| {
+        lines
+            .iter()
+            .position(|l| l.kind() == EventKind::from_name(kind))
+            .unwrap()
+    };
     let named = &lines[at("session_named")];
     let completed = lines
         .iter()
-        .find(|l| l.kind == "tool_call_completed")
+        .find(|l| l.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert_eq!(named.payload["name"], "Fix the parser");
     assert_eq!(named.payload["by"], "model");
@@ -146,7 +157,13 @@ fn a_naming_call_with_job_lines_writes_its_name_last() {
         "tool_call_completed",
     ]);
     expected.extend(tail());
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -186,20 +203,29 @@ fn two_naming_calls_write_in_request_order() {
         "tool_call_completed",
     ]);
     expected.extend(tail());
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let trace = trace.lock().unwrap().clone();
     assert!(
         trace.iter().position(|t| t == "done second")
             < trace.iter().position(|t| t == "done first"),
         "{trace:?}"
     );
-    let named: Vec<&Envelope> = lines.iter().filter(|l| l.kind == "session_named").collect();
+    let named: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::SessionNamed)
+        .collect();
     assert_eq!(named.len(), 2);
     assert_eq!(named[0].payload["name"], "A");
     assert_eq!(named[1].payload["name"], "B");
     let completed: Vec<&Envelope> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .collect();
     assert_eq!(named[0].action_id, completed[0].action_id);
     assert_eq!(named[1].action_id, completed[1].action_id);
@@ -226,8 +252,17 @@ fn two_steps_name_twice_in_order() {
     expected.extend(step_of(1));
     expected.extend(["tool_call_started", "session_named", "tool_call_completed"]);
     expected.extend(tail());
-    assert_eq!(kinds(&lines), expected);
-    let named: Vec<&Envelope> = lines.iter().filter(|l| l.kind == "session_named").collect();
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
+    let named: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind() == EventKind::SessionNamed)
+        .collect();
     assert_eq!(named.len(), 2);
 }
 
@@ -247,10 +282,16 @@ fn a_failed_call_names_nothing() {
     expected.extend(step_of(1));
     expected.extend(["tool_call_started", "tool_call_completed"]);
     expected.extend(tail());
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let completed = lines
         .iter()
-        .find(|l| l.kind == "tool_call_completed")
+        .find(|l| l.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "tool_error");
@@ -288,10 +329,16 @@ fn a_cancelled_call_names_nothing() {
     let mut expected = head();
     expected.extend(step_of(1));
     expected.extend(["tool_call_started", "tool_call_completed", "turn_completed"]);
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let completed = lines
         .iter()
-        .find(|l| l.kind == "tool_call_completed")
+        .find(|l| l.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert_eq!(completed.payload["status"], "cancelled");
 }
@@ -313,11 +360,17 @@ fn a_handoff_call_names_nothing() {
     expected.extend(["tool_call_started", "tool_call_completed"]);
     expected.extend(["handoff_completed", "opening_message"]);
     expected.extend(tail());
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         lines
             .iter()
-            .find(|l| l.kind == "tool_call_completed")
+            .find(|l| l.kind() == EventKind::ToolCallCompleted)
             .unwrap()
             .payload["control"],
         json!({"handoff": "the note"})
@@ -363,10 +416,16 @@ fn a_person_name_pins_the_session_against_a_naming_call() {
     expected.extend(step_of(1));
     expected.extend(["tool_call_started", "tool_call_completed"]);
     expected.extend(tail());
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let named = lines
         .iter()
-        .find(|line| line.kind == "session_named")
+        .find(|line| line.kind() == EventKind::SessionNamed)
         .unwrap();
     assert_eq!(named.payload["name"], "Mine");
     assert_eq!(named.payload["by"], "person");
@@ -380,7 +439,7 @@ fn a_person_name_pins_the_session_against_a_naming_call() {
     );
     let completed = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "name_pinned");
@@ -422,10 +481,16 @@ fn a_cleared_person_name_lets_a_naming_call_name_the_session() {
     expected.extend(step_of(1));
     expected.extend(["tool_call_started", "session_named", "tool_call_completed"]);
     expected.extend(tail());
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let named: Vec<&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "session_named")
+        .filter(|line| line.kind() == EventKind::SessionNamed)
         .collect();
     assert_eq!(named.len(), 3);
     assert_eq!(named[0].payload["name"], "Mine");
@@ -439,7 +504,7 @@ fn a_cleared_person_name_lets_a_naming_call_name_the_session() {
     assert_eq!(named[2].payload["by"], "model");
     let completed = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert_eq!(completed.payload["status"], "completed");
 }

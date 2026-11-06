@@ -9,7 +9,7 @@
 mod support;
 
 use contract::ErrorCode;
-use contract::events::{CacheLifetime, LoadedExtension, Notice};
+use contract::events::{CacheLifetime, EventKind, LoadedExtension, Notice};
 use contract::inbox::{Ack, Delivery, Rejection};
 use fakes::{Deadline, Scripted};
 use r#loop::{PrepareReload, PromptPatch, ReloadPrepared, ReloadSettings};
@@ -437,8 +437,8 @@ fn reload_before_first_turn_builds_once_without_opening_or_skill_changes() {
         .inbox
         .send(Delivery::Reload(Ack(Box::new(move |answer| {
             assert_eq!(
-                log::read(log.dir()).unwrap().last().unwrap().kind,
-                "reloaded"
+                log::read(log.dir()).unwrap().last().unwrap().kind(),
+                EventKind::Reloaded
             );
             tx.send(answer).unwrap();
         }))))

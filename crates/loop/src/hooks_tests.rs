@@ -13,7 +13,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use contract::emit::Emit;
-use contract::events::{CallStatus, Notice, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
+use contract::events::{
+    CallStatus, EventKind, Notice, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+};
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeMessage, BeforeMessageAnswer,
     BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
@@ -271,7 +273,7 @@ impl Ran {
     fn completed(&self) -> &Envelope {
         self.lines
             .iter()
-            .find(|line| line.kind == "tool_call_completed")
+            .find(|line| line.kind() == EventKind::ToolCallCompleted)
             .expect("a completion")
     }
 
@@ -443,7 +445,7 @@ fn run_in(
         move || {
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
-                let last = line.kind == "turn_completed";
+                let last = line.kind() == EventKind::TurnCompleted;
                 streamed.push(line);
                 if last {
                     break;
@@ -873,7 +875,12 @@ fn the_hooks_notices_carry_no_action_id_and_precede_the_completion() {
         Some(hooks),
         Arc::new(TurnCancel::default()),
     );
-    let at = |kind: &str| ran.streamed.iter().position(|l| l.kind == kind).unwrap();
+    let at = |kind: &str| {
+        ran.streamed
+            .iter()
+            .position(|l| l.kind() == EventKind::from_name(kind))
+            .unwrap()
+    };
     let notice = &ran.streamed[at("notice")];
     assert_eq!(notice.payload["code"], "hook_failed");
     assert_eq!(notice.payload["extension"], "acme");
@@ -1132,7 +1139,7 @@ fn a_hooks_artifact_that_cannot_be_written_fails_the_turn() {
     assert!(
         !ran.lines
             .iter()
-            .any(|line| line.kind == "tool_call_completed")
+            .any(|line| line.kind() == EventKind::ToolCallCompleted)
     );
 }
 
@@ -1160,7 +1167,7 @@ fn a_hooks_artifact_that_cannot_be_written_fails_the_turn_after_a_cut() {
     assert!(
         !ran.lines
             .iter()
-            .any(|line| line.kind == "tool_call_completed")
+            .any(|line| line.kind() == EventKind::ToolCallCompleted)
     );
 }
 
@@ -1201,8 +1208,8 @@ fn extensions_loaded_writes_the_set_then_each_notice() {
             streamed
         },
     );
-    let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
-    assert_eq!(kinds, ["extensions_loaded", "notice"]);
+    let kinds: Vec<EventKind> = streamed.iter().map(|l| l.kind()).collect();
+    assert_eq!(kinds, [EventKind::ExtensionsLoaded, EventKind::Notice]);
     assert_eq!(
         serde_json::to_value(&streamed[0].payload).unwrap(),
         json!({"extensions": [{"name": "acme", "version": "v1.0.0"}]})
@@ -1254,8 +1261,8 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
             streamed
         },
     );
-    let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
-    assert_eq!(kinds, ["mcp_server_failed", "notice"]);
+    let kinds: Vec<EventKind> = streamed.iter().map(|l| l.kind()).collect();
+    assert_eq!(kinds, [EventKind::McpServerFailed, EventKind::Notice]);
     assert_eq!(streamed[0].payload["server"], "fx");
     assert_eq!(streamed[0].payload["reason"], "deadline");
     assert_eq!(
@@ -1321,8 +1328,15 @@ fn extensions_loaded_groups_notices_by_code() {
         )
         .unwrap();
     });
-    let kinds: Vec<&str> = streamed.iter().map(|line| line.kind.as_str()).collect();
-    assert_eq!(kinds, ["extensions_loaded", "notice", "notice"]);
+    let kinds: Vec<EventKind> = streamed.iter().map(|line| line.kind()).collect();
+    assert_eq!(
+        kinds,
+        [
+            EventKind::ExtensionsLoaded,
+            EventKind::Notice,
+            EventKind::Notice
+        ]
+    );
     assert_eq!(streamed[1].payload["code"], "extension_shadowed");
     assert_eq!(streamed[1].payload.get("extension"), None);
     let message = streamed[1].payload["message"].as_str().unwrap();
@@ -1360,8 +1374,8 @@ fn mcp_servers_started_groups_notices_by_code() {
         )
         .unwrap();
     });
-    let kinds: Vec<&str> = streamed.iter().map(|line| line.kind.as_str()).collect();
-    assert_eq!(kinds, ["notice"]);
+    let kinds: Vec<EventKind> = streamed.iter().map(|line| line.kind()).collect();
+    assert_eq!(kinds, [EventKind::Notice]);
     assert_eq!(streamed[0].payload["code"], "repository_code_skipped");
     assert_eq!(streamed[0].payload.get("extension"), None);
     let message = streamed[0].payload["message"].as_str().unwrap();
@@ -1475,35 +1489,40 @@ fn a_naming_call_writes_its_name_after_the_hook_notices() {
         false,
         false,
     );
-    let at = |kind: &str| ran.streamed.iter().position(|l| l.kind == kind).unwrap();
-    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    let at = |kind: &str| {
+        ran.streamed
+            .iter()
+            .position(|l| l.kind() == EventKind::from_name(kind))
+            .unwrap()
+    };
+    let kinds: Vec<EventKind> = ran.streamed.iter().map(|line| line.kind()).collect();
     assert_eq!(
         kinds,
         [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "tool_call_arguments_delta",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "notice",
-            "session_named",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::ToolCallArgumentsDelta,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::Notice,
+            EventKind::SessionNamed,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert!(at("notice") < at("session_named"));
@@ -1527,32 +1546,32 @@ fn a_pinned_call_reaches_the_hook_as_failed_with_the_pin_message() {
         true,
     );
     assert_eq!(hooks.seen()[0].status, CallStatus::Failed);
-    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    let kinds: Vec<EventKind> = ran.streamed.iter().map(|line| line.kind()).collect();
     assert_eq!(
         kinds,
         [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "tool_call_arguments_delta",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::ToolCallArgumentsDelta,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert_eq!(hooks.seen()[0].content, crate::naming::PINNED.to_owned());
@@ -1564,7 +1583,11 @@ fn a_pinned_call_reaches_the_hook_as_failed_with_the_pin_message() {
         completed.payload["content"],
         json!([{"type": "text", "text": "the person named this session"}])
     );
-    assert!(!ran.lines.iter().any(|line| line.kind == "session_named"));
+    assert!(
+        !ran.lines
+            .iter()
+            .any(|line| line.kind() == EventKind::SessionNamed)
+    );
 }
 
 #[test]
@@ -1579,32 +1602,32 @@ fn a_pinned_call_replaced_by_a_hook_keeps_the_pin_error() {
         true,
     );
     let completed = ran.completed();
-    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    let kinds: Vec<EventKind> = ran.streamed.iter().map(|line| line.kind()).collect();
     assert_eq!(
         kinds,
         [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "tool_call_arguments_delta",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::ToolCallArgumentsDelta,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert_eq!(completed.payload["status"], "failed");
@@ -1632,32 +1655,32 @@ fn a_pinned_call_withheld_by_a_hook_keeps_the_pin_error() {
         true,
     );
     let completed = ran.completed();
-    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    let kinds: Vec<EventKind> = ran.streamed.iter().map(|line| line.kind()).collect();
     assert_eq!(
         kinds,
         [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "tool_call_arguments_delta",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::ToolCallArgumentsDelta,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert_eq!(completed.payload["status"], "failed");
@@ -1682,32 +1705,32 @@ fn a_pinned_call_is_cut_to_its_bound() {
         true,
     );
     let completed = ran.completed();
-    let kinds: Vec<&str> = ran.streamed.iter().map(|line| line.kind.as_str()).collect();
+    let kinds: Vec<EventKind> = ran.streamed.iter().map(|line| line.kind()).collect();
     assert_eq!(
         kinds,
         [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "tool_call_arguments_delta",
-            "text_completed",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::SessionStarted,
+            EventKind::PreambleBuilt,
+            EventKind::OpeningMessage,
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::ToolCallArgumentsDelta,
+            EventKind::TextCompleted,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ]
     );
     assert_eq!(completed.payload["status"], "failed");
@@ -2633,12 +2656,12 @@ fn assert_command_hook_failed(ran: &Ran) {
         ran.streamed
             .iter()
             .filter(|line| line.action_id.as_ref() == Some(action))
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind())
             .collect::<Vec<_>>(),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
         ]
     );
 }

@@ -14,7 +14,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::emit::Emit;
-use contract::events::{TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
+use contract::events::{EventKind, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
 use contract::hook::{
     BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall,
     BeforeToolOutcome, CheckAnswer, CheckOutcome, Hooks,
@@ -348,21 +348,27 @@ struct Ran {
 
 impl Ran {
     fn of_kind(&self, kind: &str) -> Vec<&Envelope> {
-        self.lines.iter().filter(|l| l.kind == kind).collect()
+        self.lines
+            .iter()
+            .filter(|l| l.kind() == EventKind::from_name(kind))
+            .collect()
     }
 
     /// The complete, ordered kinds of the durable lines: every event the
     /// turn wrote, so a duplicated, missing or reordered event fails.
-    fn durable_kinds(&self) -> Vec<&str> {
-        self.lines.iter().map(|line| line.kind.as_str()).collect()
+    fn durable_kinds(&self) -> Vec<EventKind> {
+        self.lines.iter().map(|line| line.kind()).collect()
     }
 
     fn streamed_of_kind(&self, kind: &str) -> Vec<&Envelope> {
-        self.streamed.iter().filter(|l| l.kind == kind).collect()
+        self.streamed
+            .iter()
+            .filter(|l| l.kind() == EventKind::from_name(kind))
+            .collect()
     }
 
-    fn kinds(&self) -> Vec<&str> {
-        self.streamed.iter().map(|l| l.kind.as_str()).collect()
+    fn kinds(&self) -> Vec<EventKind> {
+        self.streamed.iter().map(|l| l.kind()).collect()
     }
 }
 
@@ -461,7 +467,7 @@ fn run_with_home(
         move || {
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
-                let last = line.kind == "turn_completed";
+                let last = line.kind() == EventKind::TurnCompleted;
                 streamed.push(line);
                 if last {
                     break;
@@ -495,8 +501,8 @@ fn obj(arguments: Value) -> Map<String, Value> {
 
 /// The complete durable kinds of a turn whose call ran and whose next
 /// step says "Done.".
-fn ran_kinds() -> Vec<&'static str> {
-    vec![
+fn ran_kinds() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -516,26 +522,29 @@ fn ran_kinds() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 /// The complete durable kinds of a turn whose call never started and no
 /// permission line answers: as [`ran_kinds`], without `tool_call_started`.
-fn unstarted_kinds() -> Vec<&'static str> {
+fn unstarted_kinds() -> Vec<EventKind> {
     ran_kinds()
         .into_iter()
-        .filter(|kind| *kind != "tool_call_started")
+        .filter(|kind| *kind != EventKind::ToolCallStarted)
         .collect()
 }
 
 /// The complete durable kinds of a turn whose rewritten call the
 /// credential deny refused: the `permission_resolved` line stands where
 /// `tool_call_started` would.
-fn credential_kinds() -> Vec<&'static str> {
+fn credential_kinds() -> Vec<EventKind> {
     ran_kinds()
         .into_iter()
         .map(|kind| {
-            if kind == "tool_call_started" {
-                "permission_resolved"
+            if kind == EventKind::ToolCallStarted {
+                EventKind::PermissionResolved
             } else {
                 kind
             }
@@ -546,8 +555,8 @@ fn credential_kinds() -> Vec<&'static str> {
 /// The complete durable kinds of a turn that ends with its batch: a
 /// shutdown or a cancel before the start leaves no second step after the
 /// completion.
-fn ended_kinds() -> Vec<&'static str> {
-    vec![
+fn ended_kinds() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -561,6 +570,9 @@ fn ended_kinds() -> Vec<&'static str> {
         "tool_call_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 #[test]
@@ -884,7 +896,7 @@ fn notices_from_both_stages_carry_no_action_id_and_come_first() {
     assert_eq!(notices[0].payload["message"], "stage one");
     assert_eq!(notices[1].payload["message"], "stage two");
     let kinds = ran.kinds();
-    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    let at = |kind: &str| kinds.iter().position(|k| k.name() == kind).unwrap();
     assert!(at("notice") < at("tool_call_started"));
     assert!(ran.of_kind("permission_resolved").is_empty());
     assert_eq!(ran.durable_kinds(), ran_kinds());
@@ -943,7 +955,7 @@ fn two_notices_from_one_stage_group_by_code() {
         "{message}"
     );
     let kinds = ran.kinds();
-    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
+    let at = |kind: &str| kinds.iter().position(|k| k.name() == kind).unwrap();
     assert!(at("notice") < at("tool_call_started"));
 }
 

@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use contract::TurnId;
-use contract::events::{HandoffTrigger, Outcome};
+use contract::events::{EventKind, HandoffTrigger, Outcome};
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
     BeforeHandoffOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
@@ -186,17 +186,17 @@ fn a_shutdown_cancels_a_handoff_before_any_hook_or_note_request() {
             .unwrap();
         assert_eq!(outcome, Outcome::Cancelled, "with_hooks: {with_hooks}");
         let lines = log::read(&home.path().join("s_test")).unwrap();
-        let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
+        let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
         // The preamble build is the test's setup; the handoff writes the
         // last two lines.
         assert_eq!(
             kinds,
             [
-                "session_started",
-                "preamble_built",
-                "opening_message",
-                "handoff_started",
-                "handoff_completed"
+                EventKind::SessionStarted,
+                EventKind::PreambleBuilt,
+                EventKind::OpeningMessage,
+                EventKind::HandoffStarted,
+                EventKind::HandoffCompleted,
             ]
         );
         assert_eq!(

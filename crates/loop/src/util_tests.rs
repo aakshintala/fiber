@@ -13,7 +13,7 @@ use std::time::Duration;
 use contract::commands::Handoff;
 use contract::emit::Emit;
 use contract::events::{
-    CacheLifetime, Event, HandoffCompleted, InputItem, Note, Outcome, ToolCallRequested,
+    CacheLifetime, Event, EventKind, HandoffCompleted, InputItem, Note, Outcome, ToolCallRequested,
     TurnOutcome, TurnStarted, VariablesSource,
 };
 use contract::inbox::{Ack, Delivery, Message};
@@ -226,7 +226,7 @@ impl Driven {
             .unwrap()
             .iter()
             .find(|line| {
-                line.kind == "turn_started"
+                line.kind() == EventKind::TurnStarted
                     && line.payload["input"].as_array().is_some_and(|input| {
                         input.iter().any(|item| {
                             item["content"].as_array().is_some_and(|content| {

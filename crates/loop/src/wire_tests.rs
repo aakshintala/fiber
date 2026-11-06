@@ -17,7 +17,7 @@ use std::time::Duration;
 use contract::clock::Clock as _;
 use contract::diag::Observe;
 use contract::emit::Emit;
-use contract::events::{CacheLifetime, ToolCallRequested, TurnOutcome};
+use contract::events::{CacheLifetime, EventKind, ToolCallRequested, TurnOutcome};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, ModelCall, ModelRequest, Provider};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -346,11 +346,11 @@ fn turn(world: &mut World) -> Option<TurnOutcome> {
     world.looped.turn().unwrap()
 }
 
-fn kinds(world: &World) -> Vec<String> {
+fn kinds(world: &World) -> Vec<EventKind> {
     log::read(&world.home.path().join("s_test"))
         .unwrap()
         .iter()
-        .map(|line| line.kind.clone())
+        .map(|line| line.kind())
         .collect()
 }
 
@@ -388,8 +388,8 @@ fn a_retry_then_a_later_call_records_one_two_then_one() {
     // Session ids are one world apart, so compare kinds only.
     let mut observed_kinds = kinds(&observed);
     let mut plain_kinds = kinds(&plain);
-    observed_kinds.retain(|kind| kind != "session_started");
-    plain_kinds.retain(|kind| kind != "session_started");
+    observed_kinds.retain(|kind| *kind != EventKind::SessionStarted);
+    plain_kinds.retain(|kind| *kind != EventKind::SessionStarted);
     assert_eq!(observed_kinds, plain_kinds);
 }
 

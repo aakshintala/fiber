@@ -19,7 +19,7 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::clock::Wake;
 use contract::events::TurnOutcome;
-use contract::events::{CommandInfo, McpServerFailed, McpServerReady, ServerFailure};
+use contract::events::{CommandInfo, EventKind, McpServerFailed, McpServerReady, ServerFailure};
 use contract::inbox::{Ack, Answer, Delivery};
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Failure};
@@ -38,8 +38,8 @@ fn take(rx: &mpsc::Receiver<Answer>) -> Answer {
     rx.try_recv().expect("the command was answered")
 }
 
-fn plain() -> Vec<&'static str> {
-    vec![
+fn plain() -> Vec<EventKind> {
+    [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -53,6 +53,9 @@ fn plain() -> Vec<&'static str> {
         "assistant_message_completed",
         "turn_completed",
     ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect()
 }
 
 fn row(name: &str, tag: &str) -> CommandInfo {
@@ -276,7 +279,7 @@ fn a_failed_prompt_is_rejected_and_starts_no_turn() {
         )
     );
     assert_eq!(take(&close_answers), accepted());
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
     assert!(
         session.provider.requests().is_empty(),
         "nothing reaches the model"
@@ -295,7 +298,7 @@ fn a_failed_prompt_is_rejected_and_starts_no_turn() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.kind == "turn_started")
+            .filter(|line| line.kind() == EventKind::TurnStarted)
             .count(),
         1
     );
@@ -341,15 +344,18 @@ fn server_lines_from_a_retrieval_are_written_outside_any_turn() {
     session.inbox.send(support::delivery("/greet Ada")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
-    let mut expected = vec![
+    let mut expected: Vec<EventKind> = [
         "session_started",
         "mcp_server_failed",
         "mcp_server_ready",
         "preamble_built",
         "opening_message",
         "turn_started",
-    ];
-    expected.extend(plain()[4..].iter().copied());
+    ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect();
+    expected.extend(plain()[4..].iter().cloned());
     assert_eq!(kinds(&lines), expected);
     assert!(lines[1].turn_id.is_none());
     assert!(lines[2].turn_id.is_none());
@@ -380,7 +386,10 @@ fn server_lines_from_a_retrieval_are_written_outside_any_turn() {
         )
     );
     assert_eq!(take(&close_answers), accepted());
-    assert_eq!(kinds(&lines), ["session_started", "mcp_server_failed"]);
+    assert_eq!(
+        kinds(&lines),
+        ["session_started", "mcp_server_failed"].map(EventKind::from_name)
+    );
 }
 
 #[test]
@@ -565,5 +574,5 @@ fn an_empty_success_has_no_text_to_send() {
         )
     );
     assert_eq!(take(&close_answers), accepted());
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
 }

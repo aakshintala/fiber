@@ -12,7 +12,7 @@ mod support;
 
 use contract::Envelope;
 use contract::emit::Emit;
-use contract::events::{CallStatus, ToolCallCompleted, TurnOutcome};
+use contract::events::{CallStatus, EventKind, ToolCallCompleted, TurnOutcome};
 use contract::provider::{Input, ToolDefinition};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Ask, Cancel, Effects, EffectsError, Output, Tool};
@@ -172,24 +172,30 @@ fn assert_turn_events(lines: &[Envelope], inner: &[&str]) {
         "assistant_message_completed",
         "turn_completed",
     ]);
-    assert_eq!(support::kinds(lines), expected);
+    assert_eq!(
+        support::kinds(lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
 }
 
 fn inner_id(lines: &[Envelope]) -> contract::ActionId {
     lines
         .iter()
-        .find(|l| l.kind == "tool_call_requested" && l.payload.contains_key("ran_by"))
+        .find(|l| l.kind() == EventKind::ToolCallRequested && l.payload.contains_key("ran_by"))
         .unwrap()
         .action_id
         .clone()
         .unwrap()
 }
 
-fn action_kinds<'a>(lines: &'a [Envelope], id: &contract::ActionId) -> Vec<&'a str> {
+fn action_kinds(lines: &[Envelope], id: &contract::ActionId) -> Vec<EventKind> {
     lines
         .iter()
         .filter(|l| l.action_id.as_ref() == Some(id))
-        .map(|l| l.kind.as_str())
+        .map(|l| l.kind())
         .collect()
 }
 
@@ -212,9 +218,9 @@ fn the_inner_result_is_logged_before_the_outer_and_only_the_outer_reaches_the_pr
     assert_eq!(
         action_kinds(&lines, &id),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted
         ]
     );
     let requested = lines
@@ -223,7 +229,7 @@ fn the_inner_result_is_logged_before_the_outer_and_only_the_outer_reaches_the_pr
         .unwrap();
     let outer = lines
         .iter()
-        .find(|l| l.kind == "tool_call_requested" && !l.payload.contains_key("ran_by"))
+        .find(|l| l.kind() == EventKind::ToolCallRequested && !l.payload.contains_key("ran_by"))
         .unwrap();
     assert_ne!(id, outer.action_id.clone().unwrap());
     assert_eq!(requested.turn_id, outer.turn_id);
@@ -233,7 +239,7 @@ fn the_inner_result_is_logged_before_the_outer_and_only_the_outer_reaches_the_pr
     );
     let completions: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .map(|l| l.action_id.as_ref().unwrap())
         .collect();
     assert_eq!(completions, [&id, outer.action_id.as_ref().unwrap()]);
@@ -286,9 +292,9 @@ fn credentials_and_standing_denies_refuse_inner_calls_without_starting_them() {
         assert_eq!(
             action_kinds(&lines, &id),
             [
-                "tool_call_requested",
-                "permission_resolved",
-                "tool_call_completed"
+                EventKind::ToolCallRequested,
+                EventKind::PermissionResolved,
+                EventKind::ToolCallCompleted
             ]
         );
         let reason = if credentials {
@@ -301,7 +307,7 @@ fn credentials_and_standing_denies_refuse_inner_calls_without_starting_them() {
         assert!(inner.ran.lock().unwrap().is_empty());
         let resolved = lines
             .iter()
-            .find(|l| l.kind == "permission_resolved")
+            .find(|l| l.kind() == EventKind::PermissionResolved)
             .unwrap();
         assert_eq!(resolved.payload["decision"], "deny");
         assert_eq!(
@@ -352,14 +358,18 @@ fn standing_asks_executes_and_outer_only_effects_do_not_ask_or_review_inner_call
         assert_eq!(
             action_kinds(&lines, &inner_id(&lines)),
             [
-                "tool_call_requested",
-                "tool_call_started",
-                "tool_call_completed"
+                EventKind::ToolCallRequested,
+                EventKind::ToolCallStarted,
+                EventKind::ToolCallCompleted
             ]
         );
         assert_eq!(outcomes.lock().unwrap()[0].status, CallStatus::Completed);
         assert_eq!(inner.ran.lock().unwrap().len(), 1);
-        assert!(!lines.iter().any(|l| l.kind.starts_with("permission_")));
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.kind().name().starts_with("permission_"))
+        );
     }
 }
 
@@ -405,7 +415,7 @@ fn unknown_schema_nonobject_and_effects_failures_are_ordinary_inner_returns() {
         let lines = session.lines();
         assert_eq!(
             action_kinds(&lines, &inner_id(&lines)),
-            ["tool_call_requested", "tool_call_completed"]
+            [EventKind::ToolCallRequested, EventKind::ToolCallCompleted]
         );
         let outcomes = outcomes.lock().unwrap();
         assert_eq!(outcomes[0].status, CallStatus::Failed);
@@ -452,7 +462,8 @@ fn an_inner_call_matching_one_other_tool_gets_no_suggestion() {
     let done = lines
         .iter()
         .find(|l| {
-            l.kind == "tool_call_completed" && l.action_id.as_ref() == Some(&inner_id(&lines))
+            l.kind() == EventKind::ToolCallCompleted
+                && l.action_id.as_ref() == Some(&inner_id(&lines))
         })
         .unwrap();
     // One line per bad field, in no promised order, and no suggestion line
@@ -623,7 +634,7 @@ fn inner_arguments_are_rewritten_and_results_sanitized_before_return() {
     let id = inner_id(&lines);
     let started = lines
         .iter()
-        .find(|l| l.kind == "tool_call_started" && l.action_id.as_ref() == Some(&id))
+        .find(|l| l.kind() == EventKind::ToolCallStarted && l.action_id.as_ref() == Some(&id))
         .unwrap();
     assert_eq!(started.payload["arguments"], json!({"word":"rewrite"}));
     assert_eq!(started.payload["changed_by"], json!(["guard"]));
@@ -684,7 +695,7 @@ fn before_and_check_refusals_and_hook_failures_never_start_the_inner_tool() {
         let lines = session.lines();
         assert_eq!(
             action_kinds(&lines, &inner_id(&lines)),
-            ["tool_call_requested", "tool_call_completed"]
+            [EventKind::ToolCallRequested, EventKind::ToolCallCompleted]
         );
         assert!(inner.ran.lock().unwrap().is_empty());
         let result = &outcomes.lock().unwrap()[0];
@@ -724,7 +735,7 @@ fn eight_inner_levels_run_and_the_ninth_is_an_error_without_a_line() {
     let lines = session.lines();
     let requested: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_requested")
+        .filter(|l| l.kind() == EventKind::ToolCallRequested)
         .collect();
     assert_eq!(requested.len(), 9);
     for pair in requested.windows(2) {
@@ -737,15 +748,15 @@ fn eight_inner_levels_run_and_the_ninth_is_an_error_without_a_line() {
         assert_eq!(
             action_kinds(&lines, pair[1].action_id.as_ref().unwrap()),
             [
-                "tool_call_requested",
-                "tool_call_started",
-                "tool_call_completed"
+                EventKind::ToolCallRequested,
+                EventKind::ToolCallStarted,
+                EventKind::ToolCallCompleted
             ]
         );
     }
     let completed: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .collect();
     assert_eq!(completed.len(), 9);
     assert_eq!(
@@ -783,13 +794,13 @@ fn a_direct_self_call_is_an_error_without_an_inner_line() {
     assert_eq!(
         lines
             .iter()
-            .filter(|l| l.kind == "tool_call_requested")
+            .filter(|l| l.kind() == EventKind::ToolCallRequested)
             .count(),
         1
     );
     let done = lines
         .iter()
-        .find(|l| l.kind == "tool_call_completed")
+        .find(|l| l.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert!(
         done.payload["content"][0]["text"]
@@ -877,7 +888,7 @@ fn command_request(name: &str, arguments: Value) -> CommandRequest {
 
 fn command_lines(session: &mut Session) -> Vec<Envelope> {
     session.events_until("command completion", |line| {
-        line.kind == "tool_call_completed"
+        line.kind() == EventKind::ToolCallCompleted
     })
 }
 
@@ -931,7 +942,7 @@ fn an_idle_command_runs_turnless_and_answers_with_the_logged_completion() {
             !log::read(&dir)
                 .unwrap()
                 .iter()
-                .any(|line| line.kind == "tool_call_requested")
+                .any(|line| line.kind() == EventKind::ToolCallRequested)
         );
         taken();
     });
@@ -952,6 +963,7 @@ fn an_idle_command_runs_turnless_and_answers_with_the_logged_completion() {
             "tool_call_started",
             "tool_call_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_command_anchor(&lines);
     assert_eq!(
@@ -993,7 +1005,10 @@ fn an_ended_command_or_a_shutdown_drops_the_request_without_taking_or_logging_it
         assert!(request.answer.try_recv().is_err());
         assert!(request.taken.try_recv().is_err());
         let lines = log::read(&session.dir).unwrap();
-        assert_eq!(support::kinds(&lines), ["session_started",]);
+        assert_eq!(
+            support::kinds(&lines),
+            ["session_started"].map(EventKind::from_name)
+        );
     }
 }
 
@@ -1031,6 +1046,7 @@ fn a_command_end_cancels_its_running_inner_call_and_shutdown_runs_no_after_hook(
                 "tool_call_started",
                 "tool_call_completed"
             ]
+            .map(EventKind::from_name)
         );
         if shutdown {
             assert!(completed.content.is_empty());
@@ -1091,7 +1107,7 @@ fn a_command_chain_has_eight_inner_levels_and_turnless_outer_action_anchors() {
         let lines = log::read(&session.dir).unwrap();
         let requested: Vec<_> = lines
             .iter()
-            .filter(|line| line.kind == "tool_call_requested")
+            .filter(|line| line.kind() == EventKind::ToolCallRequested)
             .collect();
         assert_eq!(requested.len(), count);
         assert_command_anchor(&lines);
@@ -1103,7 +1119,7 @@ fn a_command_chain_has_eight_inner_levels_and_turnless_outer_action_anchors() {
         }
         let completions: Vec<_> = lines
             .iter()
-            .filter(|line| line.kind == "tool_call_completed")
+            .filter(|line| line.kind() == EventKind::ToolCallCompleted)
             .map(|line| &line.action_id)
             .collect();
         assert_eq!(
@@ -1120,7 +1136,13 @@ fn a_command_chain_has_eight_inner_levels_and_turnless_outer_action_anchors() {
             expected.extend(["tool_call_requested", "tool_call_started"]);
         }
         expected.extend(std::iter::repeat_n("tool_call_completed", count));
-        assert_eq!(support::kinds(&lines), expected);
+        assert_eq!(
+            support::kinds(&lines),
+            expected
+                .iter()
+                .map(|name| EventKind::from_name(name))
+                .collect::<Vec<_>>()
+        );
     }
 }
 
@@ -1156,6 +1178,7 @@ fn an_ask_in_a_command_chain_is_declined_even_in_an_answerable_session() {
             "interaction_resolved",
             "tool_call_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines[3].payload["declined"], true);
     assert!(lines.iter().all(|line| line.turn_id.is_none()));
@@ -1305,7 +1328,13 @@ fn command_at_step_boundary(hold: StepHold, cancel: bool) {
         expected.extend_from_slice(support::REPLY);
     }
     expected.push("turn_completed");
-    assert_eq!(support::kinds(&lines), expected);
+    assert_eq!(
+        support::kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -1381,7 +1410,13 @@ fn command_inner_calls_keep_credential_and_standing_denies_but_skip_standing_ask
             assert_eq!(tool.ran.lock().unwrap().len(), 1);
         }
         kinds.push("tool_call_completed");
-        assert_eq!(support::kinds(&lines), kinds);
+        assert_eq!(
+            support::kinds(&lines),
+            kinds
+                .iter()
+                .map(|name| EventKind::from_name(name))
+                .collect::<Vec<_>>()
+        );
         assert!(lines.iter().all(|line| line.turn_id.is_none()));
         close_idle(&mut session, &done);
     }
@@ -1424,12 +1459,12 @@ fn a_command_names_the_session_only_when_its_final_completion_succeeds() {
             .recv_or_fail(&request.answer, "command completion");
         assert_eq!(completed.status, status);
         let lines = session.events_until("command completion", |line| {
-            line.kind == "tool_call_completed"
+            line.kind() == EventKind::ToolCallCompleted
         });
         let id = inner_id(&lines);
         let named: Vec<_> = lines
             .iter()
-            .filter(|line| line.kind == "session_named")
+            .filter(|line| line.kind() == EventKind::SessionNamed)
             .collect();
         assert_eq!(named.len(), names);
         if let Some(named) = named.first() {
@@ -1450,7 +1485,13 @@ fn a_command_names_the_session_only_when_its_final_completion_succeeds() {
         ];
         expected.extend(std::iter::repeat_n("session_named", names));
         expected.push("tool_call_completed");
-        assert_eq!(support::kinds(&lines), expected);
+        assert_eq!(
+            support::kinds(&lines),
+            expected
+                .iter()
+                .map(|name| EventKind::from_name(name))
+                .collect::<Vec<_>>()
+        );
         assert!(lines.iter().all(|line| line.turn_id.is_none()));
         session
             .inbox
@@ -1504,7 +1545,7 @@ fn turn_cancellation_and_shutdown_complete_the_inner_before_the_outer() {
         let id = inner_id(&lines);
         let completions: Vec<_> = lines
             .iter()
-            .filter(|l| l.kind == "tool_call_completed")
+            .filter(|l| l.kind() == EventKind::ToolCallCompleted)
             .collect();
         assert_eq!(completions.len(), 2);
         assert_eq!(completions[0].action_id.as_ref(), Some(&id));
@@ -1555,7 +1596,11 @@ fn an_outer_return_cancels_its_inner_and_holds_its_completion_without_cancelling
         "loop waits for the cancelled inner result before completing its outer"
     );
     let durable = log::read(&session.dir).unwrap();
-    assert!(!durable.iter().any(|l| l.kind == "tool_call_completed"));
+    assert!(
+        !durable
+            .iter()
+            .any(|l| l.kind() == EventKind::ToolCallCompleted)
+    );
     release.send(()).unwrap();
     let (looped, outcome) = deadline.recv_or_fail(&done, "outer and inner completion");
     session.looped = Some(looped);
@@ -1570,7 +1615,7 @@ fn an_outer_return_cancels_its_inner_and_holds_its_completion_without_cancelling
     let lines = session.lines();
     let completed: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_completed")
+        .filter(|l| l.kind() == EventKind::ToolCallCompleted)
         .collect();
     assert_eq!(completed.len(), 2);
     assert_eq!(completed[0].action_id.as_ref(), Some(&inner_id(&lines)));
@@ -1603,7 +1648,7 @@ fn a_request_taken_after_turn_cancellation_completes_without_starting() {
     let lines = session.lines();
     assert_eq!(
         action_kinds(&lines, &inner_id(&lines)),
-        ["tool_call_requested", "tool_call_completed"]
+        [EventKind::ToolCallRequested, EventKind::ToolCallCompleted]
     );
     assert_eq!(*results.lock().unwrap(), [CallStatus::Cancelled]);
     assert!(inner.ran.lock().unwrap().is_empty());
@@ -1612,7 +1657,7 @@ fn a_request_taken_after_turn_cancellation_completes_without_starting() {
 #[test]
 fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_action() {
     use contract::clock::Clock;
-    use contract::events::{Event, Progress};
+    use contract::events::{Event, EventKind, Progress};
     let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
     let (release_first, first) = std::sync::mpsc::channel();
     let (release_last, last) = std::sync::mpsc::channel();
@@ -1670,17 +1715,17 @@ fn inner_deltas_are_paced_on_the_injected_clock_and_flushed_under_the_inner_acti
     assert_eq!(
         action_kinds(&lines, &id),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_delta",
-            "tool_call_delta",
-            "tool_call_delta",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallDelta,
+            EventKind::ToolCallDelta,
+            EventKind::ToolCallDelta,
+            EventKind::ToolCallCompleted
         ]
     );
     let deltas: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "tool_call_delta")
+        .filter(|l| l.kind() == EventKind::ToolCallDelta)
         .map(|l| l.payload["text"].as_str().unwrap())
         .collect();
     assert_eq!(deltas, ["a", "b", "final"]);
@@ -1748,13 +1793,13 @@ fn an_inner_ask_is_declined_but_a_model_ask_in_the_same_answerable_session_is_ra
     assert_eq!(
         lines
             .iter()
-            .filter(|l| l.kind == "interaction_requested")
+            .filter(|l| l.kind() == EventKind::InteractionRequested)
             .count(),
         1
     );
     let resolved: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "interaction_resolved")
+        .filter(|l| l.kind() == EventKind::InteractionResolved)
         .collect();
     assert_eq!(resolved.len(), 2);
     assert_eq!(resolved[0].payload["declined"], true);
@@ -1786,15 +1831,18 @@ fn inner_control_names_the_session_but_never_loads_a_model_skill_or_starts_a_han
     assert_eq!(
         action_kinds(&lines, &inner_id(&lines)),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "session_named",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::SessionNamed,
+            EventKind::ToolCallCompleted
         ]
     );
-    let named = lines.iter().find(|l| l.kind == "session_named").unwrap();
+    let named = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::SessionNamed)
+        .unwrap();
     assert_eq!(named.payload["name"], "inner name");
-    assert!(!lines.iter().any(|l| l.kind == "handoff_started"));
+    assert!(!lines.iter().any(|l| l.kind() == EventKind::HandoffStarted));
     assert_eq!(
         outcomes.lock().unwrap()[0]
             .control
@@ -1841,15 +1889,15 @@ fn an_inner_write_tracks_its_instruction_file_and_appends_the_prune_line_before_
     assert_eq!(
         action_kinds(&lines, &id),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_completed",
-            "instruction_file"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::InstructionFile
         ]
     );
     let instruction = lines
         .iter()
-        .find(|l| l.kind == "instruction_file" && l.action_id.as_ref() == Some(&id))
+        .find(|l| l.kind() == EventKind::InstructionFile && l.action_id.as_ref() == Some(&id))
         .unwrap();
     assert_eq!(instruction.payload["reason"], "own_edit");
     assert_eq!(instruction.payload["sent"], "none");
@@ -2026,19 +2074,25 @@ fn an_inner_call_settle_is_written_at_the_inner_finish_under_its_action() {
         "assistant_message_completed",
         "turn_completed",
     ]);
-    assert_eq!(support::kinds(&lines), expected);
+    assert_eq!(
+        support::kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     assert_eq!(
         action_kinds(&lines, &id),
         [
-            "tool_call_requested",
-            "tool_call_started",
-            "job_completed",
-            "tool_call_completed"
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::JobCompleted,
+            EventKind::ToolCallCompleted
         ]
     );
     let completed = lines
         .iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("a settled job_completed");
     assert_eq!(completed.payload["job_id"], job);
     assert_eq!(completed.action_id.as_ref(), Some(&id));
@@ -2065,12 +2119,12 @@ fn an_inner_calls_start_carries_always_reviewed() {
     let id = inner_id(&lines);
     let started = lines
         .iter()
-        .find(|l| l.action_id.as_ref() == Some(&id) && l.kind == "tool_call_started")
+        .find(|l| l.action_id.as_ref() == Some(&id) && l.kind() == EventKind::ToolCallStarted)
         .unwrap();
     assert_eq!(started.payload["always_reviewed"], true);
     let outer_started = lines
         .iter()
-        .find(|l| l.kind == "tool_call_started" && l.action_id.as_ref() != Some(&id))
+        .find(|l| l.kind() == EventKind::ToolCallStarted && l.action_id.as_ref() != Some(&id))
         .unwrap();
     assert_eq!(outer_started.payload.get("always_reviewed"), None);
 }

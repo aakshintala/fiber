@@ -13,10 +13,10 @@ mod support;
 
 use contract::clock::Clock as _;
 use contract::events::{
-    Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, HandoffCompleted,
-    InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome, PermissionRequested,
-    PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef, RuleScope,
-    SessionStarted, StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted,
+    Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, EventKind,
+    HandoffCompleted, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
+    PermissionRequested, PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef,
+    RuleScope, SessionStarted, StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted,
     ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::{Input, ModelRequest};
@@ -871,7 +871,7 @@ fn completed_handoffs(dir: &Path) -> Vec<u64> {
     log::read(dir)
         .unwrap()
         .iter()
-        .filter(|line| line.kind == "handoff_completed")
+        .filter(|line| line.kind() == EventKind::HandoffCompleted)
         .filter(|line| line.payload.get("outcome").and_then(Value::as_str) == Some("completed"))
         .filter_map(|line| line.seq.map(|seq| seq.0))
         .collect()

@@ -19,8 +19,8 @@ use contract::clock::Wake;
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    DecidedBy, Decision, DelegateFinished, DelegateStarted, Grant, JobCompleted, JobStarted,
-    McpServerFailed, McpServerReady, Outcome, RuleOffer, ServerFailure, TextDelta,
+    DecidedBy, Decision, DelegateFinished, DelegateStarted, EventKind, Grant, JobCompleted,
+    JobStarted, McpServerFailed, McpServerReady, Outcome, RuleOffer, ServerFailure, TextDelta,
     ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced, TurnOutcome,
 };
 use contract::inbox::{Ack, Answer, Delivery, Message};
@@ -973,8 +973,8 @@ fn durable(lines: &[Envelope]) -> Vec<&Envelope> {
     lines.iter().filter(|line| line.seq.is_some()).collect()
 }
 
-fn kinds(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 /// `job_started`, `job_completed`, `tool_call_completed` for `id`, consecutive
@@ -983,12 +983,12 @@ fn assert_job_triplet(lines: &[Envelope], id: &str, status: &str) -> ActionId {
     let lines = durable(lines);
     let index = lines
         .iter()
-        .position(|line| line.kind == "job_started" && line.payload["job_id"] == id)
+        .position(|line| line.kind() == EventKind::JobStarted && line.payload["job_id"] == id)
         .unwrap_or_else(|| panic!("no job_started for {id}"));
     let three = &lines[index..index + 3];
-    assert_eq!(three[0].kind, "job_started");
-    assert_eq!(three[1].kind, "job_completed");
-    assert_eq!(three[2].kind, "tool_call_completed");
+    assert_eq!(three[0].kind(), EventKind::JobStarted);
+    assert_eq!(three[1].kind(), EventKind::JobCompleted);
+    assert_eq!(three[2].kind(), EventKind::ToolCallCompleted);
     let action = three[0].action_id.clone().unwrap();
     assert!(action.0.starts_with("a_"), "{}", action.0);
     assert_eq!(three[1].action_id.as_ref(), Some(&action));
@@ -1066,6 +1066,7 @@ fn a_calls_job_lines_are_written_before_its_completion_and_render_nothing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         kinds(&without.lines),
@@ -1089,6 +1090,7 @@ fn a_calls_job_lines_are_written_before_its_completion_and_render_nothing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_job_triplet(&with.lines, id, "completed");
     assert_eq!(with.requests.len(), 2);
@@ -1122,23 +1124,23 @@ fn a_calls_delegate_records_are_written_in_order_under_its_action() {
     let lines = durable(&with.lines);
     let index = lines
         .iter()
-        .position(|line| line.kind == "job_started")
+        .position(|line| line.kind() == EventKind::JobStarted)
         .expect("a job_started line");
     let five = &lines[index..index + 5];
     assert_eq!(
         [
-            five[0].kind.as_str(),
-            five[1].kind.as_str(),
-            five[2].kind.as_str(),
-            five[3].kind.as_str(),
-            five[4].kind.as_str()
+            five[0].kind(),
+            five[1].kind(),
+            five[2].kind(),
+            five[3].kind(),
+            five[4].kind()
         ],
         [
-            "job_started",
-            "delegate_started",
-            "delegate_finished",
-            "job_completed",
-            "tool_call_completed"
+            EventKind::JobStarted,
+            EventKind::DelegateStarted,
+            EventKind::DelegateFinished,
+            EventKind::JobCompleted,
+            EventKind::ToolCallCompleted
         ]
     );
     let action = five[0].action_id.clone().unwrap();
@@ -1208,15 +1210,16 @@ fn two_calls_write_their_job_lines_in_request_order() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let first_at = lines
         .iter()
-        .position(|line| line.kind == "job_started")
+        .position(|line| line.kind() == EventKind::JobStarted)
         .unwrap();
     let second_at = lines
         .iter()
-        .rposition(|line| line.kind == "job_started")
+        .rposition(|line| line.kind() == EventKind::JobStarted)
         .unwrap();
     assert_eq!(lines[first_at].payload["job_id"], first);
     assert_eq!(lines[second_at].payload["job_id"], second);
@@ -1287,6 +1290,7 @@ fn a_cancelled_call_still_writes_its_job_lines() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_job_triplet(&ran.lines, id, "cancelled");
 }
@@ -1375,15 +1379,16 @@ fn a_calls_server_failed_is_written_under_its_action_before_its_completion() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let index = lines
         .iter()
-        .position(|line| line.kind == "mcp_server_failed")
+        .position(|line| line.kind() == EventKind::McpServerFailed)
         .unwrap_or_else(|| panic!("no mcp_server_failed"));
     let pair = &lines[index..index + 2];
-    assert_eq!(pair[0].kind, "mcp_server_failed");
-    assert_eq!(pair[1].kind, "tool_call_completed");
+    assert_eq!(pair[0].kind(), EventKind::McpServerFailed);
+    assert_eq!(pair[1].kind(), EventKind::ToolCallCompleted);
     let action = pair[0].action_id.clone().unwrap();
     assert!(action.0.starts_with("a_"), "{}", action.0);
     assert_eq!(pair[1].action_id.as_ref(), Some(&action));
@@ -1450,22 +1455,20 @@ fn a_calls_server_lines_are_written_in_order_under_its_action() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let index = lines
         .iter()
-        .position(|line| line.kind == "mcp_server_failed")
+        .position(|line| line.kind() == EventKind::McpServerFailed)
         .unwrap_or_else(|| panic!("no mcp_server_failed"));
     let three = &lines[index..index + 3];
     assert_eq!(
-        three
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
+        three.iter().map(|line| line.kind()).collect::<Vec<_>>(),
         [
-            "mcp_server_failed",
-            "mcp_server_ready",
-            "tool_call_completed"
+            EventKind::McpServerFailed,
+            EventKind::McpServerReady,
+            EventKind::ToolCallCompleted,
         ],
     );
     let action = three[0].action_id.clone().unwrap();
@@ -1531,11 +1534,12 @@ fn a_call_that_returns_an_error_after_its_turn_is_cancelled_ends_failed() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let completed = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap_or_else(|| panic!("no tool_call_completed"));
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "mcp_cancel_requested");
@@ -1599,25 +1603,26 @@ fn a_call_settle_is_written_before_its_jobs_under_its_action() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let at = lines
         .iter()
-        .position(|line| line.kind == "tool_call_started")
+        .position(|line| line.kind() == EventKind::ToolCallStarted)
         .expect("a tool_call_started line");
     let four = &lines[at..at + 4];
     assert_eq!(
         [
-            four[0].kind.as_str(),
-            four[1].kind.as_str(),
-            four[2].kind.as_str(),
-            four[3].kind.as_str()
+            four[0].kind(),
+            four[1].kind(),
+            four[2].kind(),
+            four[3].kind()
         ],
         [
-            "tool_call_started",
-            "job_completed",
-            "job_started",
-            "tool_call_completed"
+            EventKind::ToolCallStarted,
+            EventKind::JobCompleted,
+            EventKind::JobStarted,
+            EventKind::ToolCallCompleted
         ]
     );
     let action = four[0].action_id.clone().unwrap();
@@ -1688,11 +1693,12 @@ fn a_call_settle_writes_a_foreign_action_under_that_action_and_its_own_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let at = lines
         .iter()
-        .position(|line| line.kind == "tool_call_started")
+        .position(|line| line.kind() == EventKind::ToolCallStarted)
         .expect("a tool_call_started line");
     let five = &lines[at..at + 5];
     let action = five[0].action_id.clone().unwrap();
@@ -1859,7 +1865,7 @@ fn two_calls_settles_write_under_their_own_actions() {
     let lines = durable(&ran.lines);
     let starts: Vec<&&Envelope> = lines
         .iter()
-        .filter(|line| line.kind == "tool_call_started")
+        .filter(|line| line.kind() == EventKind::ToolCallStarted)
         .collect();
     assert_eq!(starts.len(), 2);
     let first_action = starts[0].action_id.clone().unwrap();
@@ -1867,7 +1873,7 @@ fn two_calls_settles_write_under_their_own_actions() {
     assert_ne!(first_action, second_action);
     let completed = lines
         .iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("a settled job_completed");
     assert_eq!(completed.payload["job_id"], settled);
     assert_eq!(
@@ -1920,6 +1926,7 @@ fn a_call_whose_settle_returns_nothing_writes_only_its_jobs() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_job_triplet(&ran.lines, id, "completed");
 }
@@ -2096,11 +2103,12 @@ fn a_cancelled_call_still_runs_its_settle_before_its_completion() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let lines = durable(&ran.lines);
     let at = lines
         .iter()
-        .position(|line| line.kind == "tool_call_started")
+        .position(|line| line.kind() == EventKind::ToolCallStarted)
         .expect("a tool_call_started line");
     let five = &lines[at..at + 5];
     assert_eq!(five[1].payload["job_id"], settled);
@@ -2166,7 +2174,7 @@ fn searched_completed(ran: &Ran) -> &Envelope {
     ran.lines
         .iter()
         .filter(|line| line.seq.is_some())
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .expect("a tool_call_completed")
 }
 
@@ -2193,7 +2201,7 @@ fn a_completed_call_preserves_its_protected_paths_report() {
     // docs/loop.md, "One step": one call, then a reply without calls ends
     // the turn. Compare kinds with counts, without imposing an order.
     let mut actual = kinds(&ran.lines);
-    let mut expected = vec![
+    let mut expected: Vec<EventKind> = [
         "session_started",
         "preamble_built",
         "opening_message",
@@ -2212,9 +2220,12 @@ fn a_completed_call_preserves_its_protected_paths_report() {
         "usage_recorded",
         "assistant_message_completed",
         "turn_completed",
-    ];
-    actual.sort_unstable();
-    expected.sort_unstable();
+    ]
+    .into_iter()
+    .map(EventKind::from_name)
+    .collect();
+    actual.sort_by(|a, b| a.name().cmp(b.name()));
+    expected.sort_by(|a, b| a.name().cmp(b.name()));
     assert_eq!(actual, expected);
 
     // docs/events.md, "tool_call_completed": the report survives into
@@ -2265,6 +2276,7 @@ fn a_completed_search_carries_its_loaded_names() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let completed = searched_completed(&ran);
     assert_eq!(completed.payload["status"], "completed");
@@ -2359,6 +2371,7 @@ fn a_cancelled_search_completes_with_the_cancel_line() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let completed = searched_completed(&ran);
     assert_eq!(completed.payload["status"], "cancelled");

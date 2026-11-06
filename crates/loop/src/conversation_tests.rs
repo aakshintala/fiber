@@ -2447,7 +2447,7 @@ mod from_log {
     )]
 
     use contract::events::{
-        AssistantMessageCompleted, ContextAdded, Event, InputItem, MessageOutcome,
+        AssistantMessageCompleted, ContextAdded, Event, EventKind, InputItem, MessageOutcome,
         ReasoningCompleted, TextCompleted, ToolCallCompleted, ToolCallRequested, TurnStarted,
     };
     use contract::provider::Input;
@@ -2529,6 +2529,7 @@ mod from_log {
                 "tool_call_started",
                 "tool_call_completed"
             ]
+            .map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2548,7 +2549,10 @@ mod from_log {
         log.append(requested("read", "Paris"), Some("a_1"));
 
         let lines = log.lines();
-        assert_eq!(kinds_of(&lines), ["turn_started", "tool_call_requested"]);
+        assert_eq!(
+            kinds_of(&lines),
+            ["turn_started", "tool_call_requested"].map(EventKind::from_name)
+        );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
         assert_eq!(conversation.len(), 3);
@@ -2568,7 +2572,7 @@ mod from_log {
         let lines = log.lines();
         assert_eq!(
             kinds_of(&lines),
-            ["turn_started", "tool_call_requested", "tool_call_started"]
+            ["turn_started", "tool_call_requested", "tool_call_started"].map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2603,6 +2607,7 @@ mod from_log {
                 "tool_call_completed",
                 "tool_call_started",
             ]
+            .map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2631,7 +2636,7 @@ mod from_log {
         let lines = log.lines();
         assert_eq!(
             kinds_of(&lines),
-            ["turn_started", "tool_call_requested", "turn_started"]
+            ["turn_started", "tool_call_requested", "turn_started"].map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2664,6 +2669,7 @@ mod from_log {
                 "text_completed",
                 "tool_call_started",
             ]
+            .map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2701,6 +2707,7 @@ mod from_log {
                 "text_completed",
                 "tool_call_completed",
             ]
+            .map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2737,6 +2744,7 @@ mod from_log {
                 "turn_started",
                 "tool_call_completed",
             ]
+            .map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2774,6 +2782,7 @@ mod from_log {
                 "text_completed",
                 "tool_call_requested",
             ]
+            .map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2794,7 +2803,7 @@ mod from_log {
         let lines = log.lines();
         assert_eq!(
             kinds_of(&lines),
-            ["turn_started", "tool_call_requested", "steering_applied"]
+            ["turn_started", "tool_call_requested", "steering_applied"].map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2835,6 +2844,7 @@ mod from_log {
                 "steering_applied",
                 "context_added",
             ]
+            .map(EventKind::from_name)
         );
         let rebuilt = crate::conversation::rebuild(&lines, MODEL).unwrap();
         // The same lines through `render`, as the live loop builds them.
@@ -2843,7 +2853,7 @@ mod from_log {
         let mut carry = crate::handoff::Carry::default();
         for line in &lines {
             let Some(event) = Event::from_envelope(line).unwrap() else {
-                panic!("a known kind: {}", line.kind);
+                panic!("a known kind: {}", line.kind().name());
             };
             crate::conversation::render(
                 &mut live,
@@ -2874,7 +2884,7 @@ mod from_log {
         let lines = log.lines();
         assert_eq!(
             kinds_of(&lines),
-            ["turn_started", "tool_call_requested", "context_added"]
+            ["turn_started", "tool_call_requested", "context_added"].map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
         assert_eq!(conversation.len(), 4);
@@ -2905,6 +2915,7 @@ mod from_log {
                 "assistant_message_started",
                 "text_completed",
             ]
+            .map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2925,7 +2936,7 @@ mod from_log {
         let lines = log.lines();
         assert_eq!(
             kinds_of(&lines),
-            ["turn_started", "text_completed", "tool_call_requested"]
+            ["turn_started", "text_completed", "tool_call_requested"].map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -2946,6 +2957,7 @@ mod from_log {
         assert_eq!(
             kinds_of(&lines),
             ["turn_started", "tool_call_requested", "tool_call_completed"]
+                .map(EventKind::from_name)
         );
         let conversation = crate::conversation::rebuild(&lines, MODEL).unwrap();
 
@@ -3594,7 +3606,10 @@ mod from_log {
                 },
             ]
         );
-        let turn = lines.iter().position(|l| l.kind == "turn_started").unwrap();
+        let turn = lines
+            .iter()
+            .position(|l| l.kind() == EventKind::TurnStarted)
+            .unwrap();
         lines[turn].payload.insert("input".into(), json!(3));
         let error = crate::conversation::rebuild(&lines, MODEL).unwrap_err();
         assert_eq!(error.code(), contract::ErrorCode::LogCorrupt);

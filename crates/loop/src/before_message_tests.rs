@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::events::{InputItem, TurnOutcome, TurnStarted};
+use contract::events::{EventKind, InputItem, TurnOutcome, TurnStarted};
 use contract::hook::{
     BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolCall,
     CheckAnswer, CheckOutcome, Context, Hooks, Replaced,
@@ -405,7 +405,7 @@ fn streamed(world: &mut World) -> Vec<Envelope> {
             let mut watcher = watcher;
             let mut streamed = Vec::new();
             while let Ok(Some(line)) = watcher.recv() {
-                let done = line.kind == "turn_completed";
+                let done = line.kind() == EventKind::TurnCompleted;
                 streamed.push(line);
                 if done {
                     break;
@@ -419,12 +419,15 @@ fn streamed(world: &mut World) -> Vec<Envelope> {
 }
 
 /// The complete, ordered kinds of `lines`.
-fn kinds(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 fn line<'a>(lines: &'a [Envelope], kind: &str) -> &'a Envelope {
-    lines.iter().find(|line| line.kind == kind).unwrap()
+    lines
+        .iter()
+        .find(|line| line.kind() == EventKind::from_name(kind))
+        .unwrap()
 }
 
 /// The `turn_started` message items.
@@ -581,7 +584,7 @@ fn a_refused_prompt_alone_starts_no_turn() {
 
     let all = lines(&world);
     assert!(
-        !all.iter().any(|line| line.kind == "turn_started"),
+        !all.iter().any(|line| line.kind() == EventKind::TurnStarted),
         "a refused prompt alone starts no turn"
     );
 }
@@ -683,11 +686,15 @@ fn a_blocking_hook_failure_rejects_the_prompt_and_writes_only_its_notices() {
 
     let all = lines(&world);
     assert!(
-        !all.iter().any(|line| line.kind == "turn_started"),
+        !all.iter().any(|line| line.kind() == EventKind::TurnStarted),
         "a blocked message starts no turn"
     );
 }
 
+/// The passing hook's two contexts reach the log as `context_added`, and the
+/// refused message adds none (`docs/extensions.md`, "The hook points";
+/// `docs/testing.md`, "Event streams": the kinds are a set with counts,
+/// since no doc promises their positions).
 #[test]
 fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
     let hooks = Arc::new(FakeHooks::new());
@@ -731,27 +738,43 @@ fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
     drop(world.looped.take());
 
     let all = lines(&world);
-    assert_eq!(
-        kinds(&all),
-        [
-            "session_started",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "context_added",
-            "context_added",
-            "step_started",
-            "assistant_message_started",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-        ]
-    );
+    // The complete kinds as a set with counts (`docs/testing.md`, "Event
+    // streams"): `session_started` is the first line (`docs/events.md`,
+    // "Session and turn"); the rest has no doc-promised order. Each context
+    // a hook adds is one `context_added` line, and a refused message is
+    // neither logged nor sent, so exactly the two passed contexts appear
+    // here (`docs/extensions.md`, "The hook points").
+    let actual = kinds(&all);
+    assert_eq!(actual[0], EventKind::SessionStarted);
+    let mut rest = actual[1..].to_vec();
+    for kind in [
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "context_added",
+        "context_added",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+    .map(EventKind::from_name)
+    {
+        let Some(pos) = rest.iter().position(|k| *k == kind) else {
+            panic!("missing {kind:?} in {actual:?}");
+        };
+        rest.remove(pos);
+    }
+    assert!(rest.is_empty(), "no extra kinds: {rest:?}");
     let contexts: Vec<&Envelope> = all
         .iter()
-        .filter(|line| line.kind == "context_added")
+        .filter(|line| line.kind() == EventKind::ContextAdded)
         .collect();
+    // Two contexts in, two `context_added` lines out: each is logged as
+    // `context_added`, and the refused message is neither logged nor sent
+    // (`docs/extensions.md`, "The hook points").
     assert_eq!(contexts.len(), 2, "a refused message adds no context");
     assert_eq!(contexts[0].payload["hook"], "before_message");
     assert_eq!(contexts[0].payload["extension"], "fiber.test/first");
@@ -760,7 +783,7 @@ fn passed_context_is_logged_after_turn_started_before_the_acceptance() {
     assert_eq!(contexts[1].payload["text"], "two");
     let last_context = all
         .iter()
-        .rposition(|line| line.kind == "context_added")
+        .rposition(|line| line.kind() == EventKind::ContextAdded)
         .unwrap();
     assert!(
         at_ack > last_context as u64,
@@ -1031,7 +1054,7 @@ fn a_shutdown_inside_the_hook_admits_but_starts_no_turn() {
 
     let all = lines(&world);
     assert!(
-        !all.iter().any(|line| line.kind == "turn_started"),
+        !all.iter().any(|line| line.kind() == EventKind::TurnStarted),
         "no turn starts once a shutdown began"
     );
 }
@@ -1166,25 +1189,35 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
     let all = streamed(&mut world);
     let notice = line(&all, "notice");
     assert!(notice.turn_id.is_none(), "an idle notice names no turn");
-    // The notice is written at admission, before the turn's preamble.
-    assert_eq!(
-        kinds(&all),
-        [
-            "session_started",
-            "notice",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-        ]
-    );
+    // The complete kinds as a set with counts (`docs/testing.md`, "Event
+    // streams"): `session_started` is the first line (`docs/events.md`,
+    // "Session and turn"); the rest has no doc-promised order. One notice
+    // per code (`docs/errors.md`, "Notices").
+    let actual = kinds(&all);
+    assert_eq!(actual[0], EventKind::SessionStarted);
+    let mut rest = actual[1..].to_vec();
+    for kind in [
+        "notice",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+    .map(EventKind::from_name)
+    {
+        let Some(pos) = rest.iter().position(|k| *k == kind) else {
+            panic!("missing {kind:?} in {actual:?}");
+        };
+        rest.remove(pos);
+    }
+    assert!(rest.is_empty(), "no extra kinds: {rest:?}");
     let input = started_input(&all);
     assert_eq!(input.len(), 1);
     let InputItem::Message { content, .. } = &input[0] else {
@@ -1206,7 +1239,10 @@ fn a_non_blocking_failure_writes_a_notice_without_a_turn_and_runs_the_original()
 /// (`docs/errors.md`, "Notices": one notice per code, count and first
 /// item up front, no extension across extensions).
 fn grouped_notice(all: &[Envelope]) -> &Envelope {
-    let notices: Vec<&Envelope> = all.iter().filter(|line| line.kind == "notice").collect();
+    let notices: Vec<&Envelope> = all
+        .iter()
+        .filter(|line| line.kind() == EventKind::Notice)
+        .collect();
     assert_eq!(notices.len(), 1, "{all:?}");
     assert_eq!(notices[0].payload["code"], "hook_failed");
     assert_eq!(
@@ -1234,7 +1270,7 @@ fn grouped_notice(all: &[Envelope]) -> &Envelope {
 fn two_non_blocking_failures_write_one_grouped_notice() {
     // One `before_message` batch reaches the log as one notice: the
     // count and the first item up front, in the admission slot before the
-    // preamble, with no turn (`docs/errors.md`, "Notices": one per code;
+    // preamble, with no turn (`docs/tui.md`, "Notices": one per code;
     // `docs/loop.md`, "Starting a turn": before_message runs before
     // turn_started).
     let hooks = Arc::new(FakeHooks::new());
@@ -1264,26 +1300,35 @@ fn two_non_blocking_failures_write_one_grouped_notice() {
     let all = streamed(&mut world);
     let notice = grouped_notice(&all);
     assert!(notice.turn_id.is_none(), "an idle notice names no turn");
-    // The grouped notice is written at admission, before the turn's preamble
-    // (`docs/loop.md`, "Starting a turn").
-    assert_eq!(
-        kinds(&all),
-        [
-            "session_started",
-            "notice",
-            "preamble_built",
-            "opening_message",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-        ]
-    );
+    // The complete kinds as a set with counts (`docs/testing.md`, "Event
+    // streams"): `session_started` is the first line (`docs/events.md`,
+    // "Session and turn"); the rest has no doc-promised order. One notice
+    // per code (`docs/tui.md`, "Notices").
+    let actual = kinds(&all);
+    assert_eq!(actual[0], EventKind::SessionStarted);
+    let mut rest = actual[1..].to_vec();
+    for kind in [
+        "notice",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+    .map(EventKind::from_name)
+    {
+        let Some(pos) = rest.iter().position(|k| *k == kind) else {
+            panic!("missing {kind:?} in {actual:?}");
+        };
+        rest.remove(pos);
+    }
+    assert!(rest.is_empty(), "no extra kinds: {rest:?}");
 }
 
 #[test]

@@ -13,7 +13,7 @@ mod support;
 use std::sync::mpsc;
 
 use contract::ErrorCode;
-use contract::events::{CommandResult, TurnOutcome};
+use contract::events::{CommandResult, EventKind, TurnOutcome};
 use contract::inbox::{Ack, Answer, Delivery};
 use contract::notes::{AllowsTally, Evidence, NotesAsk, ProposeNotesArgs, Topic};
 use fakes::{Deadline, Scripted};
@@ -101,11 +101,8 @@ fn notes_on_the_inbox_record_usage_before_acknowledging() {
     assert_eq!(proposed[0].text(), "This is ours.");
     assert_eq!(proposed[0].cites(), [0]);
     assert_eq!(
-        at_ack
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["session_started", "usage_recorded"]
+        at_ack.iter().map(|line| line.kind()).collect::<Vec<_>>(),
+        ["session_started", "usage_recorded"].map(EventKind::from_name)
     );
     let usage = &at_ack[1];
     assert!(usage.turn_id.is_none());
@@ -146,8 +143,8 @@ fn run_read_only(session: &mut Session, ask: NotesAsk) -> (Answer, Vec<contract:
     (result, at_ack)
 }
 
-fn kinds(lines: &[contract::Envelope]) -> Vec<&str> {
-    lines.iter().map(|line| line.kind.as_str()).collect()
+fn kinds(lines: &[contract::Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|line| line.kind()).collect()
 }
 
 #[test]
@@ -178,7 +175,10 @@ fn read_only_notes_render_an_eligible_entry_without_a_request_or_usage() {
         "shell.read_only.\"acme-cli query\".flags = [\"--json\"]"
     );
     assert_eq!(proposed[0].cites(), [1]);
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 
@@ -205,7 +205,10 @@ fn read_only_notes_with_an_answer_are_invalid_arguments() {
     assert_eq!(error.code, ErrorCode::InvalidArguments);
     assert_eq!(error.message, "read-only notes take no answer");
     assert_eq!(evidence, vec![files]);
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 
@@ -232,7 +235,10 @@ fn read_only_notes_with_earlier_lines_are_invalid_arguments() {
     assert_eq!(error.code, ErrorCode::InvalidArguments);
     assert_eq!(error.message, "read-only notes take no earlier lines");
     assert_eq!(evidence, vec![files]);
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 
@@ -251,7 +257,10 @@ fn read_only_notes_with_empty_earlier_are_accepted_as_omitted() {
     };
     assert!(error.is_none());
     assert_eq!(proposed.len(), 1);
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 
@@ -278,7 +287,10 @@ fn read_only_notes_withhold_an_ambiguous_tally() {
             "words after the command: an entry would cover other subcommands"
         )]
     );
-    assert_eq!(kinds(&at_ack), ["session_started"]);
+    assert_eq!(
+        kinds(&at_ack),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(session.requests().is_empty());
 }
 

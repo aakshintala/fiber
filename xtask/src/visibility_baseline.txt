@@ -2,11 +2,6 @@ crates/loop/src/timing_tests.rs:arm_preamble_exit_advance
 crates/loop/src/timing_tests.rs:arm_request_send_advance
 crates/loop/src/timing_tests.rs:arm_request_note_advance
 crates/loop/src/timing_tests.rs:arm_cancel_after_subscribe
-crates/loop/src/timing_tests.rs:arm_fail_stream_write
-crates/loop/src/timing_tests.rs:arm_fail_handoff_started
-crates/loop/src/timing_tests.rs:arm_fail_handoff_completed
-crates/loop/src/timing_tests.rs:arm_fail_restarted
-crates/loop/src/tool_timing_tests.rs:arm_fail_decision_write
 crates/loop/src/tool_timing_tests.rs:arm_after_dispatch_advance
 crates/main/src/delegates.rs:inherited_roots_reader
 crates/main/tests/support/mod.rs:read_line_through

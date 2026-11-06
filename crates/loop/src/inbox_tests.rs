@@ -11,8 +11,8 @@ use contract::SessionId;
 use contract::commands::Name;
 use contract::events::UsageRecorded;
 use contract::events::{
-    Answer, CallStatus, Control, ExtensionExec, ExtensionLog, Interaction, InteractionRequested,
-    InteractionResolved, NamedBy, ResolvedBy, ShellCommand,
+    Answer, CallStatus, Control, EventKind, ExtensionExec, ExtensionLog, Interaction,
+    InteractionRequested, InteractionResolved, NamedBy, ResolvedBy, ShellCommand,
 };
 use contract::inbox::{Ack, Delivery};
 use contract::shapes::Process;
@@ -40,11 +40,11 @@ fn diag_text(home: &fakes::TempDir) -> String {
     std::fs::read_to_string(home.path().join("logs").join("session-s_test.log")).unwrap_or_default()
 }
 
-fn saved_kinds(home: &fakes::TempDir) -> Vec<String> {
+fn saved_kinds(home: &fakes::TempDir) -> Vec<EventKind> {
     log::read(&home.path().join("s_test"))
         .unwrap_or_default()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect()
 }
 
@@ -175,7 +175,7 @@ fn running_admission_holds_a_command_request_without_writing_it() {
         looped.deferred.front(),
         Some(Delivery::InnerCall(_))
     ));
-    assert_eq!(saved_kinds(&home), ["session_started"]);
+    assert_eq!(saved_kinds(&home), [EventKind::SessionStarted]);
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
@@ -227,7 +227,7 @@ fn an_alone_request_after_command_end_or_shutdown_writes_nothing_and_never_calls
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!taken.load(std::sync::atomic::Ordering::SeqCst));
         assert!(!answered.load(std::sync::atomic::Ordering::SeqCst));
-        assert_eq!(saved_kinds(&home), ["session_started"]);
+        assert_eq!(saved_kinds(&home), [EventKind::SessionStarted]);
         watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     }
 }
@@ -275,7 +275,7 @@ fn the_drain_runs_commands_in_order_and_preserves_interleaved_model_switches() {
         let lines = log::read(&home.path().join("s_test")).unwrap();
         let requested: Vec<_> = lines
             .iter()
-            .filter(|line| line.kind == "tool_call_requested")
+            .filter(|line| line.kind() == EventKind::ToolCallRequested)
             .map(|line| line.payload["name"].as_str().unwrap())
             .collect();
         let expected: Vec<_> = order
@@ -285,19 +285,16 @@ fn the_drain_runs_commands_in_order_and_preserves_interleaved_model_switches() {
             .collect();
         assert_eq!(requested, expected);
         assert!(lines.iter().all(|line| line.turn_id.is_none()));
-        let mut kinds = vec!["session_started"];
+        let mut kinds = vec![EventKind::SessionStarted];
         for _ in &requested {
             kinds.extend([
-                "tool_call_requested",
-                "tool_call_started",
-                "tool_call_completed",
+                EventKind::ToolCallRequested,
+                EventKind::ToolCallStarted,
+                EventKind::ToolCallCompleted,
             ]);
         }
         assert_eq!(
-            lines
-                .iter()
-                .map(|line| line.kind.as_str())
-                .collect::<Vec<_>>(),
+            lines.iter().map(|line| line.kind()).collect::<Vec<_>>(),
             kinds
         );
         watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
@@ -312,14 +309,14 @@ fn start_records_the_worktree_on_session_started() {
         repository: Some("/r/.git".to_owned()),
     }));
     let lines = log::read(&home.path().join("s_test")).unwrap();
-    assert_eq!(lines[0].kind, "session_started");
+    assert_eq!(lines[0].kind(), EventKind::SessionStarted);
     assert_eq!(
         lines[0].payload["worktree"],
         serde_json::json!({"path": "/w", "branch": "fiber/s_test", "repository": "/r/.git"}),
     );
     let (_looped, _log, _watched, home) = started();
     let lines = log::read(&home.path().join("s_test")).unwrap();
-    assert_eq!(lines[0].kind, "session_started");
+    assert_eq!(lines[0].kind(), EventKind::SessionStarted);
     assert!(!lines[0].payload.contains_key("worktree"));
 }
 
@@ -359,11 +356,8 @@ fn an_extension_job_start_is_written_without_turn_or_action_at_each_drain() {
         }
         let lines = log::read(&home.path().join("s_test")).unwrap();
         assert_eq!(
-            lines
-                .iter()
-                .map(|line| line.kind.as_str())
-                .collect::<Vec<_>>(),
-            ["session_started", "job_started", "delegate_started"]
+            lines.iter().map(|line| line.kind()).collect::<Vec<_>>(),
+            ["session_started", "job_started", "delegate_started"].map(EventKind::from_name)
         );
         assert!(
             lines
@@ -419,7 +413,7 @@ fn an_extension_exec_idle_is_written_once_and_starts_no_turn() {
         .expect("extension_exec arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before extension_exec");
-    assert_eq!(line.kind, "extension_exec");
+    assert_eq!(line.kind(), EventKind::ExtensionExec);
     assert!(line.turn_id.is_none(), "extension_exec carries no turn");
 }
 
@@ -439,7 +433,7 @@ fn an_extension_exec_mid_turn_is_written_once_and_queues_nothing() {
         .expect("extension_exec arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before extension_exec");
-    assert_eq!(line.kind, "extension_exec");
+    assert_eq!(line.kind(), EventKind::ExtensionExec);
     assert!(line.turn_id.is_none(), "extension_exec carries no turn");
 }
 
@@ -456,13 +450,13 @@ fn an_extension_log_idle_is_live_ephemeral_and_diagnostic_and_starts_no_turn() {
         .expect("extension_log arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before extension_log");
-    assert_eq!(line.kind, "extension_log");
+    assert_eq!(line.kind(), EventKind::ExtensionLog);
     assert!(line.turn_id.is_none(), "extension_log carries no turn");
     assert!(line.seq.is_none(), "extension_log is ephemeral");
     assert_eq!(line.payload["extension"], "fiber.test/notes");
     assert_eq!(line.payload["message"], "hello");
     assert!(
-        !saved_kinds(&home).contains(&"extension_log".to_owned()),
+        !saved_kinds(&home).contains(&EventKind::ExtensionLog),
         "extension_log is never saved"
     );
     assert!(
@@ -487,11 +481,11 @@ fn an_extension_log_mid_turn_is_live_ephemeral_and_diagnostic_and_queues_nothing
         .expect("extension_log arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before extension_log");
-    assert_eq!(line.kind, "extension_log");
+    assert_eq!(line.kind(), EventKind::ExtensionLog);
     assert!(line.turn_id.is_none(), "extension_log carries no turn");
     assert!(line.seq.is_none(), "extension_log is ephemeral");
     assert!(
-        !saved_kinds(&home).contains(&"extension_log".to_owned()),
+        !saved_kinds(&home).contains(&EventKind::ExtensionLog),
         "extension_log is never saved"
     );
     assert!(
@@ -540,7 +534,7 @@ fn an_extension_usage_idle_is_written_once_and_starts_no_turn() {
         .expect("extension usage arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before extension usage");
-    assert_eq!(line.kind, "usage_recorded");
+    assert_eq!(line.kind(), EventKind::UsageRecorded);
     assert!(line.turn_id.is_none(), "extension usage carries no turn");
     assert_eq!(line.payload["generation_id"], "g_usage");
     assert_eq!(line.payload["extension"], "fiber.test/notes");
@@ -579,7 +573,7 @@ fn an_interaction_idle_is_written_once_and_starts_no_turn() {
         .expect("interaction_requested arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_requested");
-    assert_eq!(line.kind, "interaction_requested");
+    assert_eq!(line.kind(), EventKind::InteractionRequested);
     assert!(
         line.turn_id.is_none(),
         "interaction_requested carries no turn"
@@ -607,7 +601,7 @@ fn an_interaction_mid_turn_is_written_once_and_queues_nothing() {
         .expect("interaction_requested arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_requested");
-    assert_eq!(line.kind, "interaction_requested");
+    assert_eq!(line.kind(), EventKind::InteractionRequested);
     assert!(
         line.turn_id.is_none(),
         "interaction_requested carries no turn"
@@ -624,7 +618,7 @@ fn a_resolved_idle_is_written_then_acked() {
         let seen = log::read(&dir)
             .unwrap_or_default()
             .into_iter()
-            .map(|line| line.kind)
+            .map(|line| line.kind())
             .collect::<Vec<_>>();
         let _sent = tx.send((answer.is_ok(), seen));
     }));
@@ -635,8 +629,8 @@ fn a_resolved_idle_is_written_then_acked() {
     let (accepted, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(accepted, "resolved accepts its ack");
     assert_eq!(
-        seen.last().map(String::as_str),
-        Some("interaction_resolved"),
+        seen.last().cloned(),
+        Some(EventKind::InteractionResolved),
         "the ack runs only once its line is in the log"
     );
     let line = watched
@@ -644,7 +638,7 @@ fn a_resolved_idle_is_written_then_acked() {
         .expect("interaction_resolved arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_resolved");
-    assert_eq!(line.kind, "interaction_resolved");
+    assert_eq!(line.kind(), EventKind::InteractionResolved);
     assert!(
         line.turn_id.is_none(),
         "interaction_resolved carries no turn"
@@ -661,7 +655,7 @@ fn a_resolved_mid_turn_is_written_then_acked_and_queues_nothing() {
         let seen = log::read(&dir)
             .unwrap_or_default()
             .into_iter()
-            .map(|line| line.kind)
+            .map(|line| line.kind())
             .collect::<Vec<_>>();
         let _sent = tx.send((answer.is_ok(), seen));
     }));
@@ -672,8 +666,8 @@ fn a_resolved_mid_turn_is_written_then_acked_and_queues_nothing() {
     let (accepted, seen) = Deadline::after(DEADLINE).recv(&rx).expect("the ack runs");
     assert!(accepted, "resolved accepts its ack");
     assert_eq!(
-        seen.last().map(String::as_str),
-        Some("interaction_resolved"),
+        seen.last().cloned(),
+        Some(EventKind::InteractionResolved),
         "the ack runs only once its line is in the log"
     );
     let line = watched
@@ -681,7 +675,7 @@ fn a_resolved_mid_turn_is_written_then_acked_and_queues_nothing() {
         .expect("interaction_resolved arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_resolved");
-    assert_eq!(line.kind, "interaction_resolved");
+    assert_eq!(line.kind(), EventKind::InteractionResolved);
 }
 
 #[test]
@@ -713,8 +707,8 @@ fn interaction_lines_while_an_approval_waits_are_written_and_the_wait_goes_on() 
         .expect("interaction_resolved arrives in time")
         .expect("the log outlives the turn")
         .expect("the log ended before interaction_resolved");
-    assert_eq!(first.kind, "interaction_requested");
-    assert_eq!(second.kind, "interaction_resolved");
+    assert_eq!(first.kind(), EventKind::InteractionRequested);
+    assert_eq!(second.kind(), EventKind::InteractionResolved);
 }
 
 fn ignore() -> Ack {
@@ -868,7 +862,7 @@ fn a_person_name_idle_is_written_then_acked_and_pins() {
         let seen = log::read(&dir)
             .unwrap_or_default()
             .into_iter()
-            .map(|line| line.kind)
+            .map(|line| line.kind())
             .collect::<Vec<_>>();
         let _sent = tx.send((answer, seen));
     }));
@@ -891,7 +885,7 @@ fn a_person_name_idle_is_written_then_acked_and_pins() {
     );
     assert_eq!(
         seen,
-        ["session_started", "session_named"],
+        [EventKind::SessionStarted, EventKind::SessionNamed],
         "the ack runs only once its line is in the log"
     );
     let line = watched
@@ -899,7 +893,7 @@ fn a_person_name_idle_is_written_then_acked_and_pins() {
         .expect("session_named arrives in time")
         .expect("the log outlives the drain")
         .expect("the log ended before session_named");
-    assert_eq!(line.kind, "session_named");
+    assert_eq!(line.kind(), EventKind::SessionNamed);
     assert_eq!(line.payload["name"], "Mine");
     assert_eq!(line.payload["by"], "person");
     assert!(
@@ -928,12 +922,16 @@ fn an_empty_person_name_writes_null_and_unpins() {
     looped.admit_idle(name(""), &mut input).unwrap();
     assert_eq!(
         saved_kinds(&home),
-        ["session_started", "session_named", "session_named"],
+        [
+            EventKind::SessionStarted,
+            EventKind::SessionNamed,
+            EventKind::SessionNamed
+        ],
     );
     let lines = log::read(&home.path().join("s_test")).unwrap_or_default();
     let cleared = lines
         .iter()
-        .filter(|line| line.kind == "session_named")
+        .filter(|line| line.kind() == EventKind::SessionNamed)
         .nth(1)
         .expect("the clear writes a second session_named");
     assert!(
@@ -974,7 +972,10 @@ fn a_person_name_after_close_is_accepted() {
         matches!(answered(&rx), Ok(None)),
         "a name after close is accepted"
     );
-    assert_eq!(saved_kinds(&home), ["session_started", "session_named"]);
+    assert_eq!(
+        saved_kinds(&home),
+        [EventKind::SessionStarted, EventKind::SessionNamed]
+    );
     assert!(
         matches!(
             looped
@@ -1015,7 +1016,7 @@ fn a_person_name_mid_turn_is_written_with_no_turn_and_queues_nothing() {
         .expect("session_named arrives in time")
         .expect("the log outlives the drain")
         .expect("the log ended before session_named");
-    assert_eq!(line.kind, "session_named");
+    assert_eq!(line.kind(), EventKind::SessionNamed);
     assert_eq!(line.payload["name"], "Mine");
     assert_eq!(line.payload["by"], "person");
     assert!(
@@ -1024,7 +1025,7 @@ fn a_person_name_mid_turn_is_written_with_no_turn_and_queues_nothing() {
     );
     assert_eq!(
         saved_kinds(&home),
-        ["session_started", "session_named"],
+        [EventKind::SessionStarted, EventKind::SessionNamed],
         "a name writes no steering_queue line"
     );
     assert!(
@@ -1069,10 +1070,13 @@ fn a_person_name_while_an_approval_waits_is_written_and_the_wait_goes_on() {
         .expect("session_named arrives in time")
         .expect("the log outlives the wait")
         .expect("the log ended before session_named");
-    assert_eq!(line.kind, "session_named");
+    assert_eq!(line.kind(), EventKind::SessionNamed);
     assert_eq!(line.payload["name"], "Mine");
     assert_eq!(line.payload["by"], "person");
-    assert_eq!(saved_kinds(&home), ["session_started", "session_named"]);
+    assert_eq!(
+        saved_kinds(&home),
+        [EventKind::SessionStarted, EventKind::SessionNamed]
+    );
 }
 
 #[test]
@@ -1102,7 +1106,7 @@ fn a_person_name_after_rewound_is_refused_and_writes_nothing() {
         }
         Ok(_) => panic!("a name after rewound is refused"),
     }
-    assert_eq!(saved_kinds(&home), ["session_started"]);
+    assert_eq!(saved_kinds(&home), [EventKind::SessionStarted]);
     assert!(
         matches!(
             looped
@@ -1157,7 +1161,7 @@ fn a_sent_shell_idle_is_written_then_acked_and_starts_no_turn() {
         .expect("shell_command arrives in time")
         .expect("the log outlives the drain")
         .expect("the log ended before shell_command");
-    assert_eq!(line.kind, "shell_command");
+    assert_eq!(line.kind(), EventKind::ShellCommand);
     assert_eq!(line.payload["command"], "echo hi");
     assert_eq!(line.payload["output"], "hi\n");
     assert_eq!(line.payload["process"]["exit_code"], 0);
@@ -1169,7 +1173,10 @@ fn a_sent_shell_idle_is_written_then_acked_and_starts_no_turn() {
         line.action_id.is_none(),
         "a sent shell_command carries no action"
     );
-    assert_eq!(saved_kinds(&home), ["session_started", "shell_command"]);
+    assert_eq!(
+        saved_kinds(&home),
+        [EventKind::SessionStarted, EventKind::ShellCommand]
+    );
     assert!(
         looped.conversation.is_empty(),
         "the take renders nothing into the conversation"
@@ -1195,7 +1202,7 @@ fn a_sent_shell_mid_turn_is_written_with_no_turn_and_queues_nothing() {
         .expect("shell_command arrives in time")
         .expect("the log outlives the drain")
         .expect("the log ended before shell_command");
-    assert_eq!(line.kind, "shell_command");
+    assert_eq!(line.kind(), EventKind::ShellCommand);
     assert_eq!(line.payload["command"], "echo hi");
     assert!(
         line.turn_id.is_none(),
@@ -1205,7 +1212,10 @@ fn a_sent_shell_mid_turn_is_written_with_no_turn_and_queues_nothing() {
         looped.conversation.is_empty(),
         "a mid-turn take never enters that turn's conversation"
     );
-    assert_eq!(saved_kinds(&home), ["session_started", "shell_command"]);
+    assert_eq!(
+        saved_kinds(&home),
+        [EventKind::SessionStarted, EventKind::ShellCommand]
+    );
 }
 
 #[test]
@@ -1223,7 +1233,7 @@ fn three_sent_shells_are_written_in_inbox_order() {
     let lines = log::read(&home.path().join("s_test")).unwrap_or_default();
     let commands: Vec<String> = lines
         .iter()
-        .filter(|line| line.kind == "shell_command")
+        .filter(|line| line.kind() == EventKind::ShellCommand)
         .map(|line| line.payload["command"].as_str().unwrap().to_owned())
         .collect();
     assert_eq!(commands, ["a", "b", "c"]);
@@ -1248,9 +1258,12 @@ fn a_sent_shell_while_an_approval_waits_is_written_and_the_wait_goes_on() {
         .expect("shell_command arrives in time")
         .expect("the log outlives the wait")
         .expect("the log ended before shell_command");
-    assert_eq!(line.kind, "shell_command");
+    assert_eq!(line.kind(), EventKind::ShellCommand);
     assert_eq!(line.payload["command"], "echo hi");
-    assert_eq!(saved_kinds(&home), ["session_started", "shell_command"]);
+    assert_eq!(
+        saved_kinds(&home),
+        [EventKind::SessionStarted, EventKind::ShellCommand]
+    );
 }
 
 #[test]
@@ -1269,9 +1282,12 @@ fn a_sent_shell_queued_at_settle_is_written_and_accepted() {
         .expect("shell_command arrives in time")
         .expect("the log outlives the settle")
         .expect("the log ended before shell_command");
-    assert_eq!(line.kind, "shell_command");
+    assert_eq!(line.kind(), EventKind::ShellCommand);
     assert_eq!(line.payload["command"], "echo hi");
-    assert_eq!(saved_kinds(&home), ["session_started", "shell_command"]);
+    assert_eq!(
+        saved_kinds(&home),
+        [EventKind::SessionStarted, EventKind::ShellCommand]
+    );
 }
 
 #[test]
@@ -1288,7 +1304,7 @@ fn a_sent_shell_after_rewound_is_refused_and_writes_nothing() {
         }
         Ok(_) => panic!("a sent shell after rewound is refused"),
     }
-    assert_eq!(saved_kinds(&home), ["session_started"]);
+    assert_eq!(saved_kinds(&home), [EventKind::SessionStarted]);
 }
 
 /// A reader-admitted steer the drain reconciles: the hook, its verdict and
@@ -1512,7 +1528,7 @@ fn steer_rows(watched: &mut log::Watcher, count: usize) -> Vec<Vec<String>> {
             .expect("a line arrives in time")
             .expect("the log outlives the drain")
             .expect("the log ended before the row");
-        if line.kind == "steering_queue" {
+        if line.kind() == EventKind::SteeringQueue {
             rows.push(
                 line.payload["messages"]
                     .as_array()
@@ -1543,7 +1559,7 @@ fn a_reader_admitted_steer_reconciles_through_the_hook_pass_and_queues_once() {
     looped.apply_steering(&turn).unwrap();
     assert_eq!(steer_rows(&mut watched, 1), [Vec::<String>::new()]);
     assert!(
-        saved_kinds(&home).contains(&"steering_applied".to_owned()),
+        saved_kinds(&home).contains(&EventKind::SteeringApplied),
         "the staged steer applies"
     );
 }
@@ -1568,20 +1584,20 @@ fn apply_claims_clears_and_emits_the_queue_before_logging_the_snapshot() {
     // it already acknowledged. One wait, one deadline
     // (`docs/testing.md`, "Waits and timeouts").
     let wait = Deadline::after(DEADLINE);
-    let mut kinds = Vec::new();
-    while !kinds.contains(&"steering_applied".to_owned()) {
+    let mut kinds: Vec<EventKind> = Vec::new();
+    while !kinds.contains(&EventKind::SteeringApplied) {
         let line = watched
             .recv_timeout(wait.left())
             .expect("a line arrives in time")
             .expect("the log outlives the drain")
             .expect("the log ended before the apply");
-        if line.kind == "steering_queue" || line.kind == "steering_applied" {
-            kinds.push(line.kind);
+        if line.kind() == EventKind::SteeringQueue || line.kind() == EventKind::SteeringApplied {
+            kinds.push(line.kind());
         }
     }
     assert_eq!(
         kinds,
-        vec!["steering_queue".to_owned(), "steering_applied".to_owned()],
+        vec![EventKind::SteeringQueue, EventKind::SteeringApplied],
         "the queue clears and emits before the snapshot logs"
     );
 }
@@ -1613,7 +1629,7 @@ fn a_refused_reader_admitted_steer_removes_the_row_writes_the_notice_and_applies
     );
     looped.apply_steering(&turn).unwrap();
     let kinds = saved_kinds(&home);
-    assert!(!kinds.contains(&"steering_applied".to_owned()));
+    assert!(!kinds.contains(&EventKind::SteeringApplied));
     // The notice is ephemeral: it arrives on the watcher, not the file.
     // Its own wait follows the apply, so its own deadline covers the
     // whole scan (`docs/testing.md`, "Waits and timeouts").
@@ -1624,7 +1640,7 @@ fn a_refused_reader_admitted_steer_removes_the_row_writes_the_notice_and_applies
             .expect("a line arrives in time")
             .expect("the log outlives the drain")
             .expect("the log ended before the notice");
-        if line.kind == "notice" {
+        if line.kind() == EventKind::Notice {
             break line;
         }
     };
@@ -1670,7 +1686,7 @@ fn a_replaced_reader_admitted_steer_updates_the_row_and_applies_the_replacement(
     let applied: Vec<_> = log::read(&home.path().join("s_test"))
         .unwrap_or_default()
         .into_iter()
-        .filter(|line| line.kind == "steering_applied")
+        .filter(|line| line.kind() == EventKind::SteeringApplied)
         .collect();
     assert_eq!(applied.len(), 1, "one steering_applied");
     assert_eq!(applied[0].payload["content"][0]["text"], "hooked");
@@ -1702,7 +1718,7 @@ fn a_steer_dropped_before_its_delivery_never_hooks_and_never_applies() {
     assert_eq!(hooks.count(), 0, "a dropped steer never hooks");
     assert!(looped.queued.is_empty(), "nothing queues");
     looped.apply_steering(&turn).unwrap();
-    assert!(!saved_kinds(&home).contains(&"steering_applied".to_owned()));
+    assert!(!saved_kinds(&home).contains(&EventKind::SteeringApplied));
 }
 
 #[test]
@@ -1728,7 +1744,7 @@ fn a_steer_dropped_after_staging_skips_the_apply() {
     assert!(queue.remove(&SteerId("c_1".into()), &*log));
     looped.apply_steering(&turn).unwrap();
     assert_eq!(steer_rows(&mut watched, 1), [Vec::<String>::new()]);
-    assert!(!saved_kinds(&home).contains(&"steering_applied".to_owned()));
+    assert!(!saved_kinds(&home).contains(&EventKind::SteeringApplied));
 }
 
 #[test]
@@ -1758,7 +1774,7 @@ fn a_same_id_session_message_never_rescues_a_dropped_steer() {
     let applied: Vec<_> = log::read(&home.path().join("s_test"))
         .unwrap_or_default()
         .into_iter()
-        .filter(|line| line.kind == "steering_applied")
+        .filter(|line| line.kind() == EventKind::SteeringApplied)
         .collect();
     assert_eq!(applied.len(), 1, "only the session message applies");
     let text = applied[0].payload["content"][0]["text"]
