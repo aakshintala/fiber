@@ -170,3 +170,4 @@ crates/routing/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-p
 crates/tools/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/contract/src/steering_tests.rs	fiber-4277	plan	2026-11-06T12:12:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes/src/process_group_tests.rs	fiber-4201	grant	2026-11-06T12:18:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/debt/4201-poll-drops-listing-error	
+xtask/src/rules_tests.rs	fiber-4277	plan	2026-11-06T12:19:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
