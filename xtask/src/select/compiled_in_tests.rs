@@ -149,6 +149,17 @@ fn listed_files_with_contract(source: &str) -> Vec<RustFile> {
     files
 }
 
+/// `listed_files()` with the `main` source replaced by `source`.
+fn listed_files_with_main(source: &str) -> Vec<RustFile> {
+    let mut files = listed_files();
+    for file in &mut files {
+        if file.krate == "main" {
+            *file = main_src(source);
+        }
+    }
+    files
+}
+
 #[test]
 fn a_listed_include_passes() {
     let files = listed_files();
@@ -370,6 +381,44 @@ fn package_ok_files() -> Vec<RustFile> {
         main_reads_a_package(),
         xtask_reads_a_package(),
     ]
+}
+
+#[test]
+#[test]
+fn a_cross_crate_path_reader_must_be_listed() {
+    // `crates/main/tests/ask.rs` reads the provider test support file
+    // through `#[path]`, so the compiled-in list carries it for `main`.
+    let source = format!(
+        "{}#[path = \"../../provider/tests/support/probes.rs\"]\nmod probes;\n",
+        listed_includes("main")
+    );
+    let files = listed_files_with_main(&source);
+    assert_eq!(
+        compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+    // An in-crate `#[path]` target stays unlisted, like an in-crate include.
+    let in_crate = format!(
+        "{}#[path = \"owned.rs\"]\nmod owned;\n",
+        listed_includes("contract")
+    );
+    let files = listed_files_with_contract(&in_crate);
+    assert_eq!(
+        compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
+        Vec::<String>::new()
+    );
+    // A cross-crate `#[path]` target the list does not name fails the gate.
+    let unlisted = format!(
+        "{}#[path = \"../../provider/tests/support/unlisted.rs\"]\nmod unlisted;\n",
+        listed_includes("main")
+    );
+    let files = listed_files_with_main(&unlisted);
+    assert_eq!(
+        compiled_in_mismatches(&files, &members_with_tools()).unwrap(),
+        [
+            "crates/provider/tests/support/unlisted.rs: main compiles it in, but the compiled-in list does not list it"
+        ]
+    );
 }
 
 #[test]
