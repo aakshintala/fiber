@@ -13,7 +13,7 @@ use super::*;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
 use crate::http_server::{CheckGate, Pause};
-use contract::clock::Wake;
+use support::clock::Wake;
 
 const READ_WITHIN: Duration = crate::MUST_SUCCEED_WITHIN;
 
