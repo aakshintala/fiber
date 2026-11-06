@@ -154,9 +154,11 @@ fn is_test_only(rel: &str) -> bool {
     is_test_file(rel) || rel.split('/').any(|segment| segment == "snapshots")
 }
 
-/// The members that depend on `targets` only through development edges —
-/// an edge in `deps` but not in `normal_deps` — and are not selected yet.
-/// One hop: the reached members fan out no further.
+/// The members that depend on one of `targets` only through a development
+/// edge — an edge in `deps` but not in `normal_deps` — and are not selected
+/// yet. Each target is judged on its own edges: a normal edge into one
+/// target never cancels a development-only edge into another. One hop: the
+/// reached members fan out no further.
 fn dev_only_dependents(
     targets: &BTreeSet<String>,
     selected: &BTreeSet<String>,
@@ -166,8 +168,9 @@ fn dev_only_dependents(
         .iter()
         .filter(|(name, m)| {
             !selected.contains(*name)
-                && m.deps.iter().any(|d| targets.contains(d))
-                && !m.normal_deps.iter().any(|d| targets.contains(d))
+                && m.deps
+                    .iter()
+                    .any(|d| targets.contains(d) && !m.normal_deps.contains(d))
         })
         .map(|(name, _)| name.clone())
         .collect()

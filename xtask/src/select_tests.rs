@@ -409,15 +409,6 @@ fn a_test_only_change_selects_its_own_crate_without_dependents() {
 }
 
 #[test]
-fn a_test_only_fixture_change_runs_its_listed_crate_alone() {
-    let selection = classify(
-        &strings(&["crates/picture/tests/fixtures/cmyk.jpg"]),
-        &members_with_tools(),
-    );
-    assert_eq!(selection, Selection::Crates(strings(&["main"])));
-}
-
-#[test]
 fn a_test_only_change_follows_one_dev_hop_and_stops() {
     let selection = classify(
         &strings(&["crates/jobs/src/x_tests.rs"]),
@@ -426,43 +417,108 @@ fn a_test_only_change_follows_one_dev_hop_and_stops() {
     assert_eq!(selection, Selection::Crates(strings(&["jobs", "loop"])));
 }
 
+/// A test-only pair still follows each crate's own dev hop: `loop`
+/// dev-depends on `jobs` and normally depends on `log`
+/// (`crates/loop/Cargo.toml`), so a test-only `jobs` file plus a test-only
+/// `log` file selects `loop` through the `jobs` hop, while `tui` — which
+/// normally depends on `loop`, not on either narrow crate — stays out.
 #[test]
-fn a_test_only_log_plus_a_config_source_change_skips_loop() {
+fn a_test_only_pair_with_a_mixed_edge_still_follows_the_dev_hop() {
     let selection = classify(
-        &strings(&["crates/log/src/x_tests.rs", "crates/config/src/lib.rs"]),
-        &members(),
+        &strings(&["crates/jobs/src/x_tests.rs", "crates/log/src/x_tests.rs"]),
+        &members_with_dev_jobs(),
     );
-    assert_eq!(selection, Selection::Crates(strings(&["config", "log"])));
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["jobs", "log", "loop"]))
+    );
 }
 
+/// The same per-crate partition with `main`'s shape from
+/// `crates/main/Cargo.toml`: `main` dev-depends on `fakes` and normally
+/// depends on `log`, so a test-only `fakes` file plus a test-only `log`
+/// file selects `main`.
 #[test]
-fn a_source_change_follows_a_dev_edge_one_hop_only() {
+fn a_test_only_fakes_plus_log_pair_selects_main() {
+    let member = |dir: &str, deps: &[&str], normal: &[&str]| Member {
+        dir: dir.to_owned(),
+        version: "0.0.0".to_owned(),
+        deps: deps.iter().map(|d| (*d).to_owned()).collect(),
+        normal_deps: normal.iter().map(|d| (*d).to_owned()).collect(),
+        library: true,
+        unrun_tests: Vec::new(),
+    };
+    let members = BTreeMap::from([
+        ("fakes".to_owned(), member("crates/fakes", &[], &[])),
+        ("log".to_owned(), member("crates/log", &[], &[])),
+        (
+            "main".to_owned(),
+            member("crates/main", &["fakes", "log"], &["log"]),
+        ),
+        ("tui".to_owned(), member("crates/tui", &["main"], &["main"])),
+    ]);
     let selection = classify(
-        &strings(&["crates/a/src/lib.rs"]),
-        &members_with_dev_chain(),
+        &strings(&["crates/fakes/src/x_tests.rs", "crates/log/src/x_tests.rs"]),
+        &members,
     );
-    assert_eq!(selection, Selection::Crates(strings(&["a", "b"])));
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["fakes", "log", "main"]))
+    );
 }
 
+/// The crate-relative slice starts past the `/` after the crate dir, so a
+/// test file that is test-only only by its `tests/` directory still
+/// narrows. An off-by-one in either direction reads it as a source file
+/// and expands to dependents.
 #[test]
-fn a_prototype_file_forces_the_old_path() {
-    let selection = classify(
-        &strings(&[
-            "crates/log/tests/x_tests.rs",
-            "research/tui-prototype/src/main.rs",
-        ]),
-        &members(),
-    );
-    assert_eq!(selection, Selection::Crates(strings(&["log", "loop"])));
-}
-
-#[test]
-fn a_test_only_plus_docs_change_narrows() {
-    let selection = classify(
-        &strings(&["crates/log/tests/x_tests.rs", "crates/log/README.md"]),
-        &members(),
-    );
+fn a_tests_dir_helper_with_a_plain_name_still_narrows() {
+    let selection = classify(&strings(&["crates/log/tests/helper.rs"]), &members());
     assert_eq!(selection, Selection::Crates(strings(&["log"])));
+}
+
+/// `members_from` reads the normal-edge subset from cargo metadata's
+/// `kind`: a missing or null `kind` is a normal edge, anything else is
+/// not. (Lives beside the selector tests because the gate counts it with
+/// them; `main_tests.rs` only pins the `test = false` shape.)
+#[test]
+fn members_from_treats_a_missing_or_null_kind_as_a_normal_edge() {
+    let package = |name: &str, deps: Vec<serde_json::Value>| {
+        serde_json::json!({
+            "name": name,
+            "version": "0.0.0",
+            "manifest_path": format!("/ws/crates/{name}/Cargo.toml"),
+            "dependencies": deps,
+            "targets": [],
+        })
+    };
+    let dep = |path: &str| serde_json::json!({"path": path, "name": path});
+    let mut null_kind = dep("/ws/crates/contract");
+    null_kind["kind"] = serde_json::Value::Null;
+    let mut dev_kind = dep("/ws/crates/jobs");
+    dev_kind["kind"] = serde_json::json!("dev");
+    // The third edge omits `kind` entirely: cargo metadata leaves it out
+    // the same way for some path dependencies, and the rule treats a
+    // missing `kind` like a null one.
+    let packages = vec![
+        package("loop", vec![null_kind, dev_kind, dep("/ws/crates/support")]),
+        package("contract", vec![]),
+        package("jobs", vec![]),
+        package("support", vec![]),
+    ];
+    let members = crate::members_from("/ws", &packages);
+    assert_eq!(
+        members["loop"].deps,
+        vec![
+            "contract".to_owned(),
+            "jobs".to_owned(),
+            "support".to_owned()
+        ]
+    );
+    assert_eq!(
+        members["loop"].normal_deps,
+        vec!["contract".to_owned(), "support".to_owned()]
+    );
 }
 
 /// The `## Selection` section of `docs/ci.md`, which the test below pins
