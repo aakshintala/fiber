@@ -5,7 +5,9 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use serde_json::{Value, json};
 
 use crate::app::App;
@@ -24,7 +26,7 @@ pub(crate) fn now() -> Instant {
 pub(crate) fn attached(width: u16, height: u16) -> App {
     let session = |kind: &str, payload: Value, action: Option<&str>| {
         Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: EventKind::from_name(kind).name().to_owned(),
             session_id: contract::SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -38,7 +40,7 @@ pub(crate) fn attached(width: u16, height: u16) -> App {
     app.set_size(width, height);
     assert!(
         app.on_line(Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: HubEventKind::HubHello.name().to_owned(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -59,7 +61,7 @@ pub(crate) fn attached(width: u16, height: u16) -> App {
 /// replaces its line, otherwise it appends.
 pub(crate) fn reply(app: &mut App, action: &str, text: &str) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: "text_completed".to_owned(),
+        kind: EventKind::TextCompleted.name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

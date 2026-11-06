@@ -4,7 +4,9 @@
 use crate::app::{App, Effect};
 use crate::keys::Key;
 use crate::link::Line;
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -35,7 +37,7 @@ pub(crate) fn painted(
 pub(crate) fn connected() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -89,7 +91,7 @@ pub(crate) fn sent(effect: Effect) -> Vec<Value> {
 /// One session envelope from [`SESSION`].
 pub(crate) fn session_line(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -217,7 +219,7 @@ pub(crate) fn paths(list: &[&str]) -> Result<Vec<String>, String> {
 /// A hub line of `kind` with `payload`.
 pub(crate) fn hub_line(kind: &str, payload: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: kind.to_owned(),
+        kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().cloned().unwrap_or_default(),

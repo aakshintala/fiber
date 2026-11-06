@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use contract::HubEventKind;
+use contract::events::EventKind;
 use contract::{JobId, SessionId};
 use serde_json::{Value, json};
 
@@ -37,7 +39,7 @@ pub(crate) fn home() -> App {
 /// A `hub_hello` this terminal reads.
 pub(crate) fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello.name().to_owned(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -47,7 +49,7 @@ pub(crate) fn hello() -> Line {
 /// One envelope of the attached session.
 pub(crate) fn session_line(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind).name().to_owned(),
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -137,7 +139,7 @@ pub(crate) fn live(session: &str, state: Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -153,7 +155,7 @@ pub(crate) fn session_accepted(session: &str, id: &str) -> Line {
     let mut payload = serde_json::Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.to_owned()));
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: EventKind::CommandAccepted.name().to_owned(),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -229,7 +231,7 @@ pub(crate) fn start_job(app: &mut App, job: &str) {
 /// One `job_started` at `ts` from tool call `action`.
 pub(crate) fn job_started(app: &mut App, job: &str, description: &str, ts: u64, action: &str) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: "job_started".to_owned(),
+        kind: EventKind::JobStarted.name().to_owned(),
         session_id: SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,
