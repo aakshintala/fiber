@@ -496,17 +496,86 @@ fn pid_is_zombie(pid: u32) -> bool {
 
 #[cfg(not(target_os = "linux"))]
 fn pid_is_zombie(pid: u32) -> bool {
-    Command::new("ps")
+    match Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
         .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .any(|state| state.starts_with('Z'))
-        })
-        .unwrap_or(false)
+    {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .any(|state| state.starts_with('Z')),
+        Ok(output) => panic!("ps to read the state of {pid} failed: {}", output.status),
+        Err(error) => panic!("ps to read the state of {pid}: {error}"),
+    }
+}
+
+/// A `ps` that exits non-success is a listing failure, never a kept
+/// wait: the parent shadows `ps` with a stub that exits 1 for the
+/// re-executed child alone, and the child drives the probe against a
+/// live pid and asserts the failure names the `ps` read. The full
+/// `module_path!` pins the rerun: a shortened path matches no test and
+/// the parent would pass without the child ever running.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn ps_failure_in_the_zombie_probe_names_the_ps_read() {
+    const CHILD: &str = "FIBER_EXTENSION_TEST_PS_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        ps_failure_names_the_ps_read();
+        return;
+    }
+    let dir = fakes::TempDir::new("fiber-extension-test-ps-stub");
+    let stub = dir.path().join("ps");
+    fs::write(&stub, "#!/bin/sh\nexit 1\n").unwrap();
+    let status = Command::new("chmod")
+        .arg("+x")
+        .arg(&stub)
+        .status()
+        .expect("chmod runs to mark the stub ps executable");
+    assert!(status.success(), "chmod marks the stub ps executable");
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let test = format!(
+        "{}::ps_failure_in_the_zombie_probe_names_the_ps_read",
+        module_path!()
+    );
+    let output = fakes::rerun_prepared(
+        &test,
+        &[(CHILD, "1"), ("PATH", path.as_str())],
+        Deadline::after(TEST_WAIT),
+        |_| {},
+    );
+    assert!(
+        output.status.success(),
+        "ps-stub child exited {}",
+        output.status
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran exactly the ps-stub test: {stdout}"
+    );
+}
+
+#[cfg(not(target_os = "linux"))]
+fn ps_failure_names_the_ps_read() {
+    // A live pid: nothing about the process is missing, only `ps` fails,
+    // so a non-success status without an error is the case that bites.
+    let pid = std::process::id();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pid_is_zombie(pid)));
+    let failure = outcome.expect_err("the zombie probe fails when ps exits non-success");
+    let message = failure
+        .downcast_ref::<String>()
+        .expect("the failure carries its message");
+    assert!(
+        message.contains("ps to read the state of"),
+        "the failure names the ps read, not the outer wait: {message}"
+    );
+    assert!(
+        message.contains("exit status: 1"),
+        "the failure carries the non-success status: {message}"
+    );
 }
 
 #[test]
