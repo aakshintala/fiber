@@ -529,10 +529,8 @@ fn ps_failure_in_the_zombie_probe_names_the_ps_read() {
         dir.path().display(),
         std::env::var("PATH").unwrap()
     );
-    let test = format!(
-        "{}::ps_failure_in_the_zombie_probe_names_the_ps_read",
-        module_path!()
-    );
+    let name = module_path!().split_once("::").unwrap().1;
+    let test = format!("{name}::ps_failure_in_the_zombie_probe_names_the_ps_read");
     let output = fakes::rerun_prepared(
         &test,
         &[(CHILD, "1"), ("PATH", path.as_str())],
