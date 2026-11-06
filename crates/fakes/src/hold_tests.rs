@@ -7,7 +7,7 @@
     reason = "test code"
 )]
 
-use std::io::{BufRead, BufReader, Write as _};
+use std::io::{self, BufRead, BufReader, Write as _};
 use std::os::unix::fs::FileTypeExt as _;
 use std::os::unix::process::CommandExt as _;
 use std::process::{Command, Stdio};
@@ -146,10 +146,9 @@ fn drop_reaps_a_parked_holder() {
     crate::wait_until(
         "the holder to park",
         Deadline::after(MUST_SUCCEED_WITHIN),
-        move || {
-            crate::matching(&listed, wait.left() / 2)
-                .map(|pids| pids.contains(&pid))
-                .unwrap_or(false)
+        move || match crate::matching(&listed, wait.left() / 2) {
+            Ok(pids) => pids.contains(&pid),
+            Err(error) => panic!("listing the holder to park: {error}"),
         },
     );
     drop(hold);
@@ -332,22 +331,14 @@ fn a_job_command_with_the_search_prelude_shows_its_hold_fragment_only_if_bash_ke
     let form: Form = loop {
         let with = match crate::matching(&fragment, wait.left() / 2) {
             Ok(with) => with,
-            Err(_) => {
-                if deadline.left().is_zero() {
-                    panic!("waited {bound:?} for the prelude job to exec or keep its shell");
-                }
-                thread::yield_now();
-                continue;
+            Err(error) => {
+                panic!("listing the prelude job's shell: {error}");
             }
         };
         let table = match ps_table() {
-            Some(table) => table,
-            None => {
-                if deadline.left().is_zero() {
-                    panic!("waited {bound:?} for the prelude job to exec or keep its shell");
-                }
-                thread::yield_now();
-                continue;
+            Ok(table) => table,
+            Err(error) => {
+                panic!("listing the shell's children with ps: {error}");
             }
         };
         // `heads` holds only children of the shell, so a concurrent
@@ -407,10 +398,11 @@ fn a_job_command_with_the_search_prelude_shows_its_hold_fragment_only_if_bash_ke
     watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
-/// Every process's pid, parent pid and command line, or `None` when `ps`
-/// cannot run: one `ps` call, so the caller treats `None` as "keep
-/// waiting" and the outer deadline still fails naming the wait.
-fn ps_table() -> Option<Vec<(u32, u32, String)>> {
+/// Every process's pid, parent pid and command line, or the `ps` error:
+/// one `ps` call, so the caller fails naming the read instead of
+/// treating a listing failure as "keep waiting". Rows that do not parse
+/// stay dropped: per-row content filtering, not a listing error.
+fn ps_table() -> io::Result<Vec<(u32, u32, String)>> {
     let child = Command::new("ps")
         .args(["ax", "-o", "pid=", "-o", "ppid=", "-o", "args="])
         .stdin(Stdio::null())
@@ -418,20 +410,22 @@ fn ps_table() -> Option<Vec<(u32, u32, String)>> {
         .stderr(Stdio::null())
         .process_group(0)
         .spawn()
-        .ok()?;
+        .map_err(|error| io::Error::other(format!("ps to list the shell's children: {error}")))?;
     let output = crate::wait_output(child, "ps to list the shell's children");
     if !output.status.success() {
-        return None;
+        return Err(io::Error::other(format!(
+            "ps to list the shell's children failed: {}",
+            output.status
+        )));
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    Some(
-        text.lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                let row: u32 = fields.next()?.parse().ok()?;
-                let ppid: u32 = fields.next()?.parse().ok()?;
-                Some((row, ppid, fields.collect::<Vec<_>>().join(" ")))
-            })
-            .collect(),
-    )
+    Ok(text
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let row: u32 = fields.next()?.parse().ok()?;
+            let ppid: u32 = fields.next()?.parse().ok()?;
+            Some((row, ppid, fields.collect::<Vec<_>>().join(" ")))
+        })
+        .collect())
 }
