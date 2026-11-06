@@ -2639,10 +2639,10 @@ fn session_model_changed(setup: &support::Setup) -> String {
 /// says whether the row was never written or the feed never reached
 /// it: the session dir entries prove the row's source on disk, and the
 /// hub socket proves the hub bound its socket (it binds before its
-/// feed starts). The recent names say whether `recent.jsonl`
-/// (`docs/state.md`, "Recently exited sessions") holds the row: only
-/// the `name` field is read, never any prompt text beside it. The hub
-/// log says how far the hub got. Reads under construction are absent,
+/// feed starts). The recent names say whether `recent.jsonl` at the top
+/// of Fiber home (`docs/state.md`) holds the exited row: only the
+/// `name` field is read, never any prompt text beside it. The hub log
+/// says how far the hub got. Reads under construction are absent,
 /// never failures: a missing dir, recent file or log reads as empty.
 fn resume_list_state(setup: &support::Setup) -> String {
     let mut entries: Vec<String> = fs::read_dir(sessions(setup))
