@@ -116,3 +116,9 @@ crates/log/src/alloc_stats.rs	fiber-4276	plan	2026-11-06T05:41:57Z	Amoghs-MacBoo
 crates/log/src/alloc_stats_tests.rs	fiber-4276	plan	2026-11-06T05:41:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/lib.rs	fiber-4276	plan	2026-11-06T05:41:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/architecture.md	fiber-4276	plan	2026-11-06T05:41:57Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/connect_proxy.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/gated_http.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/http_server.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/provider_server.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/temp_dir.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/fakes/src/lib.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
