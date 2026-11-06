@@ -297,10 +297,11 @@ fn space_lookalikes(dir: &Path, wanted: &str) -> (Vec<PathBuf>, usize) {
         let position = kept
             .binary_search(&path)
             .unwrap_or_else(|position| position);
-        if position < MAX_LOOKALIKES {
-            kept.insert(position, path);
-            kept.truncate(MAX_LOOKALIKES);
-        }
+        // Inserting at the end of a full list then truncating drops the
+        // inserted path again, so no guard is needed: the list always holds
+        // at most the 10 smallest sorted matches.
+        kept.insert(position, path);
+        kept.truncate(MAX_LOOKALIKES);
     }
     let omitted = total - kept.len();
     (kept, omitted)
