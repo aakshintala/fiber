@@ -79,16 +79,21 @@ fn bang_marks_shell_mode_until_backspace_clears_it() {
     let mut draft = String::new();
     run.wait_screen("the shell marker", |grid| {
         let rows = grid.rows.clone();
-        let marked = rows.iter().any(|row| row.contains("shell"))
-            && rows.iter().any(|row| row.contains("! !ls"));
-        if marked {
-            let rule = rows.iter().position(|row| is_rule_row(row));
-            if let Some(rule) = rule.filter(|rule| *rule >= 2) {
-                edge = rows[rule - 2].clone();
-                draft = rows[rule - 1].clone();
-            }
+        let Some(rule) = rows.iter().position(|row| is_rule_row(row)) else {
+            return false;
+        };
+        let (Some(edge_row), Some(draft_row)) = (
+            rule.checked_sub(2).and_then(|index| rows.get(index)),
+            rule.checked_sub(1).and_then(|index| rows.get(index)),
+        ) else {
+            return false;
+        };
+        let placed = edge_row.trim_end().ends_with("shell") && draft_row.contains("! !ls");
+        if placed {
+            edge = edge_row.clone();
+            draft = draft_row.clone();
         }
-        marked
+        placed
     });
     assert!(
         edge.trim_end().ends_with("shell"),
@@ -101,10 +106,12 @@ fn bang_marks_shell_mode_until_backspace_clears_it() {
     run.wait_screen("the cleared marker", |grid| {
         let rows = grid.rows.clone();
         let gone = !rows.iter().any(|row| row.contains("shell"));
-        if gone {
+        let prompt_back = rows.iter().any(|row| row.contains("›"));
+        let done = gone && prompt_back;
+        if done {
             plain = rows.join("\n");
         }
-        gone
+        done
     });
     assert!(
         !plain.contains("shell"),
@@ -125,10 +132,20 @@ fn bang_run_draws_the_sent_row() {
     let mut snapshot: Vec<String> = Vec::new();
     run.wait_screen("the sent shell row", |grid| {
         let rows = grid.rows.clone();
-        let done = rows
+        let command = rows.iter().position(|row| row.contains("! echo hi"));
+        let note = rows
             .iter()
-            .any(|row| row.contains("sent with your next prompt"))
-            && rows.iter().any(|row| row.contains("exit 0"));
+            .position(|row| row.contains("sent with your next prompt"));
+        let output = rows.iter().position(|row| row.trim() == "hi");
+        let exit = rows.iter().position(|row| row.contains("exit 0"));
+        let ordered = match (command, note, output, exit) {
+            (Some(command), Some(note), Some(output), Some(exit)) => {
+                command < note && note < output && output < exit
+            }
+            _ => false,
+        };
+        let settled = !rows.iter().any(|row| row.trim_end().ends_with("shell"));
+        let done = ordered && settled;
         if done {
             snapshot = rows;
         }
@@ -164,8 +181,18 @@ fn bang_bang_run_draws_the_show_only_row() {
     let mut snapshot: Vec<String> = Vec::new();
     run.wait_screen("the show-only shell row", |grid| {
         let rows = grid.rows.clone();
-        let done = rows.iter().any(|row| row.contains("only you see this"))
-            && rows.iter().any(|row| row.contains("exit 0"));
+        let command = rows.iter().position(|row| row.contains("! echo hi"));
+        let note = rows
+            .iter()
+            .position(|row| row.contains("only you see this"));
+        let output = rows.iter().position(|row| row.trim() == "hi");
+        let exit = rows.iter().position(|row| row.contains("exit 0"));
+        let done = match (command, note, output, exit) {
+            (Some(command), Some(note), Some(output), Some(exit)) => {
+                command < note && note < output && output < exit
+            }
+            _ => false,
+        };
         if done {
             snapshot = rows;
         }
