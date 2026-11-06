@@ -63,31 +63,8 @@ impl Setup {
         probe: Option<mpsc::Sender<()>>,
     ) {
         let wait = self.deadline.start_wait();
-        loop {
-            let clock = fakes::clock::FakeClock::new();
-            let request = extensions::Request::Path(source.to_path_buf());
-            match extensions::plan(
-                &self.home(),
-                &request,
-                version,
-                &extensions::Origin::github(),
-                &*clock,
-            ) {
-                Err(extensions::Error::Busy) if !wait.left().is_zero() => {
-                    if let Some(probe) = probe.as_ref() {
-                        let _ = probe.send(()).ok();
-                    }
-                    std::thread::yield_now();
-                }
-                Err(extensions::Error::Busy) => {
-                    panic!("waited until the deadline for the extensions lock");
-                }
-                plan => {
-                    plan.unwrap().commit().unwrap();
-                    return;
-                }
-            }
-        }
+        let request = extensions::Request::Path(source.to_path_buf());
+        crate::support::install_with_retry(&self.home(), wait, &request, version, probe);
     }
 
     pub(crate) fn socket(&self, id: &str) -> PathBuf {

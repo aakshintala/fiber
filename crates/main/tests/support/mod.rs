@@ -553,6 +553,48 @@ impl Setup {
     }
 }
 
+/// Plans and commits `request` at `version` against `home`, retrying a
+/// transient [`extensions::Error::Busy`] on the test deadline instead
+/// of failing at once: under the fake clock's instant sleep a
+/// same-home process briefly holding the extensions lock fails `plan`
+/// at once, so the helper yields and retries while `wait` has time
+/// left. Each retried `Busy` sends on `probe` when one is given, so a
+/// test holding the lock knows its hold is what the retry waits out. A
+/// lock held past the deadline still fails naming it, keeping the
+/// helper-unwrap style. An uncontended install never waits.
+pub(crate) fn install_with_retry(
+    home: &Path,
+    wait: Deadline,
+    request: &extensions::Request,
+    version: &str,
+    probe: Option<mpsc::Sender<()>>,
+) {
+    loop {
+        let clock = fakes::clock::FakeClock::new();
+        match extensions::plan(
+            home,
+            request,
+            version,
+            &extensions::Origin::github(),
+            &*clock,
+        ) {
+            Err(extensions::Error::Busy) if !wait.left().is_zero() => {
+                if let Some(probe) = probe.as_ref() {
+                    let _ = probe.send(()).ok();
+                }
+                std::thread::yield_now();
+            }
+            Err(extensions::Error::Busy) => {
+                panic!("waited until the deadline for the extensions lock");
+            }
+            plan => {
+                plan.unwrap().commit().unwrap();
+                return;
+            }
+        }
+    }
+}
+
 /// How the last park inside a wait ended. `NeverParked` means a reread
 /// satisfied `ready` before any park ran.
 // No `#[must_use]`: both existing callers drop this in statement position.
