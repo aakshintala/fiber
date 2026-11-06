@@ -2091,6 +2091,50 @@ fn models_says_quota_loading_while_the_reader_is_held_then_lists_the_label() {
     assert_eq!(models_text(&models), "CAT\nQuota:\np/c: primary 43% used");
 }
 
+#[test]
+fn refreshed_tools_share_one_resolve() {
+    let root = fakes::TempDir::new("fiber-delegate-refresh");
+    let delegates = delegates_for(&root, "s_parent");
+    let resolve = jobs::Resolve {
+        lookup: Arc::new(|argument| {
+            if argument == "fiber:fake/m:high" {
+                Ok("fake/m:high".to_owned())
+            } else {
+                Err(format!("Unknown delegate model {argument:?}."))
+            }
+        }),
+        catalogue: Arc::from("Roles: none\nReferences:\nfiber:fake/m (thinking: high)"),
+        credential: Arc::new(|_| Ok(None)),
+    };
+    delegates.set_resolve(resolve);
+    // The stored snapshot is what the declared tools read: a fresh
+    // spawn tool never meets a stale models text, or the reverse.
+    let snapshot = delegates.resolve_snapshot();
+    let (spawn, models) = delegates.tools_with(&snapshot);
+    assert_eq!(
+        spawn.resolve.catalogue.to_string(),
+        "Roles: none\nReferences:\nfiber:fake/m (thinking: high)"
+    );
+    assert_eq!(
+        models.catalogue.to_string(),
+        spawn.resolve.catalogue.to_string()
+    );
+    assert_eq!(
+        (spawn.resolve.lookup)("fiber:fake/m:high"),
+        Ok("fake/m:high".to_owned())
+    );
+    // The declared tools read the same snapshot: both carry the fresh
+    // catalogue, and neither holds the wired-in stub.
+    assert_eq!(
+        delegates.tool().resolve.catalogue.to_string(),
+        models.catalogue.to_string()
+    );
+    assert_eq!(
+        delegates.models().catalogue.to_string(),
+        models.catalogue.to_string()
+    );
+}
+
 /// A session's delegate service with the jobs rig's long-running child:
 /// the launcher sleeps, the registry delivers to `inbox`, and `resolve`
 /// maps `deep` to the fake model. `launch` is replaced after `new`,

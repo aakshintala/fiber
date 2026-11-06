@@ -120,6 +120,11 @@ struct Fixture {
     commands_synced: Arc<Mutex<r#loop::RunnableCommands>>,
     declared: Arc<Mutex<std::collections::BTreeMap<String, contract::events::ToolInfo>>>,
     delegate: Arc<RecordingDelegate>,
+    /// The session's own delegate service, on the fixture rig: the
+    /// reload install swaps its snapshot, and the tests read it back
+    /// here. Built from the startup snapshot; a test that installs a
+    /// provider rebuilds it so the pre-reload snapshot sees the fake.
+    delegates: Arc<crate::delegates::Delegates>,
     servers: Vec<FakeServer>,
 }
 
@@ -195,12 +200,41 @@ impl Fixture {
         // The startup latch mirrors the startup notice: the sandbox starts
         // off here, so the first reload that breaks it reports once.
         let sandbox_notice_reported = sandbox_notice_reported(&parts.sources, &parts.sandbox);
+        // The session's own delegate service, on the fixture rig: the
+        // held tools below carry the startup-built pair, as the
+        // session's startup tools do.
+        let clock: Arc<dyn contract::clock::Clock> = Arc::clone(&parts.prompt.clock);
+        let delegates = Arc::new(crate::delegates::Delegates::new(
+            rig.home.join("fiber-stub"),
+            rig.home.clone(),
+            contract::SessionId("reload-test".into()),
+            rig.workspace.clone(),
+            rig.home.join("sessions"),
+            jobs::Registry::new(
+                rig.workspace.join("artifacts"),
+                Arc::clone(&clock),
+                Arc::new(fakes::Recorder::default()),
+            ),
+            Arc::clone(&clock),
+            parts.resolve.clone(),
+            parts.sandbox.clone(),
+        ));
+        let tools: Mutex<Vec<(String, Arc<dyn contract::tool::Tool>)>> = Mutex::new(vec![
+            (
+                "builtin".to_owned(),
+                Arc::new(delegates.tool()) as Arc<dyn contract::tool::Tool>,
+            ),
+            (
+                "builtin".to_owned(),
+                Arc::new(delegates.models()) as Arc<dyn contract::tool::Tool>,
+            ),
+        ]);
         let state = Arc::new(State {
             sources: parts.sources,
             template: parts.prompt,
             current: Arc::new(crate::session_extensions::Current::new(parts.extensions)),
             switching: Arc::new(parts.switching),
-            tools: Mutex::new(Vec::new()),
+            tools,
             kept_infos: Mutex::new(Vec::new()),
             prompt_rows: Mutex::new(Vec::new()),
             late: Arc::default(),
@@ -225,6 +259,7 @@ impl Fixture {
             drive: Arc::new(NoDrive),
             model: Arc::new(NoDrive),
             delegate: Arc::clone(&delegate) as Arc<dyn contract::extension::HostDelegate>,
+            delegates: Arc::clone(&delegates),
             attended: Arc::new(|| true),
             answerable: true,
             log,
@@ -246,6 +281,7 @@ impl Fixture {
             commands_synced,
             declared,
             delegate,
+            delegates,
             servers: Vec::new(),
         }
     }
@@ -300,6 +336,67 @@ impl Fixture {
         fixture.state = Arc::new(assemble(&fixture.state, started));
         fixture.servers = fakes;
         fixture
+    }
+
+    /// Installs the fake provider extension with `models` as its data
+    /// file's models, stores the `work` label, and rebuilds the
+    /// fixture's `Delegates` on the fresh snapshot: the startup
+    /// snapshot predates the install, so the pre-reload snapshot must
+    /// see the fake. The global configuration names the stored label,
+    /// so the reloaded configuration reads the same credential.
+    fn install_fake(&mut self, models: serde_json::Value) {
+        crate::test_support::install_extension(
+            &self.rig.home,
+            "extensions/fake",
+            json!({"name":"fake","version":"v0.0.0","fiber":"0.0.0","api":1}),
+            &[(
+                "fake",
+                json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"}, "models": models}),
+            )],
+        );
+        config::store_credential(
+            &self.rig.home,
+            "fake",
+            "work",
+            &config::Secret::new("work-key".to_owned()),
+        )
+        .unwrap();
+        self.rig.write_global(
+            &json!({"model":"scripted/s.json","providers":{"fake":{"credential":"work"}}}),
+        );
+        let config = crate::test_support::load(
+            &self.rig.home,
+            &self.rig.workspace,
+            "test",
+            Vec::<String>::new(),
+        );
+        let (providers, _) = extensions::Providers::load(&self.rig.home).unwrap();
+        // The same object the state holds: the snapshot moves, never
+        // the service, as the install does.
+        self.delegates
+            .set_resolve(crate::delegates::resolver(&providers, &config));
+    }
+
+    /// The fake provider's data file, as `install_fake` lays it out.
+    fn fake_data(&self) -> std::path::PathBuf {
+        self.rig.home.join("extensions/fake/providers/fake.json")
+    }
+
+    /// Rewrites the fake provider's data file with `models`.
+    fn rewrite_fake_models(&self, models: serde_json::Value) {
+        let mut data: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(self.fake_data()).unwrap()).unwrap();
+        data["models"] = models;
+        std::fs::write(self.fake_data(), data.to_string()).unwrap();
+    }
+
+    /// Rewrites a file inside the fake extension's source directory that
+    /// is not the provider data file, moving the source handle a
+    /// staleness check reads.
+    fn touch_fake_source(&self) {
+        let manifest = self.rig.home.join("extensions/fake/extension.json");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, text).unwrap();
     }
 
     /// Runs the reload preparation, dumping the last reached prepare
@@ -442,6 +539,412 @@ fn a_reload_that_keeps_the_extension_swaps_in_the_new_set() {
     assert!(
         !Arc::ptr_eq(&old, &fixture.state.current.get()),
         "the swap installed the reloaded set, not the old one"
+    );
+}
+
+/// The fake provider's models without thinking levels, as installed.
+fn fake_models_without_levels() -> serde_json::Value {
+    json!([
+        {"id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000},
+        {"id": "plain", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}
+    ])
+}
+
+/// The fake provider's models with a thinking level on `m`, as reloaded.
+fn fake_models_with_levels() -> serde_json::Value {
+    json!([
+        {"id": "m", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000, "thinking_levels": ["high"]},
+        {"id": "plain", "protocol": "openai-responses", "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}
+    ])
+}
+
+/// The named tool in the prepared set, as installed.
+fn prepared_tool<'a>(
+    tools: &'a [(String, Arc<dyn contract::tool::Tool>)],
+    name: &str,
+) -> &'a Arc<dyn contract::tool::Tool> {
+    tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == name)
+        .map(|(_, tool)| tool)
+        .unwrap_or_else(|| panic!("prepared tools name {name}"))
+}
+
+/// The text one tool call returns: the refusal or the catalogue.
+fn tool_text(
+    tool: &Arc<dyn contract::tool::Tool>,
+    arguments: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    let output = tool.run(
+        arguments,
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+    );
+    let [contract::shapes::ContentPart::Text { text }] = &output.content[..] else {
+        panic!("one text part: {:?}", output.content);
+    };
+    text.clone()
+}
+
+/// The held `delegate_spawn` and `delegate_models` definitions, as the
+/// pre-reload tools declare them.
+fn held_definitions(fixture: &Fixture) -> Vec<(String, Vec<u8>)> {
+    fixture
+        .state
+        .tools
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, tool)| {
+            let name = tool.definition().name;
+            name == "delegate_spawn" || name == "delegate_models"
+        })
+        .map(|(_, tool)| {
+            let definition = tool.definition();
+            (
+                definition.name.clone(),
+                serde_json::to_vec(&definition).unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn provider_reload_refreshes_the_spawn_catalogue() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // The held definitions before the reload: the swap must not touch
+    // them, or the prompt cache misses.
+    let held = held_definitions(&fixture);
+    fixture.rewrite_fake_models(fake_models_with_levels());
+    fixture.touch_fake_source();
+    let prepared = fixture.prepare();
+    // The install moves `installed` out of the preparation, so the
+    // installed tools are held before it runs.
+    let models = Arc::clone(prepared_tool(&prepared.tools, "delegate_models"));
+    let spawn = Arc::clone(prepared_tool(&prepared.tools, "delegate_spawn"));
+    let installed_tools = prepared.tools.clone();
+    (prepared.installed)();
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!(
+        (snapshot.lookup)("fiber:fake/m:high"),
+        Ok("fake/m:high".to_owned())
+    );
+    // `delegate_models` from the installed set lists the new level.
+    let text = tool_text(&models, &serde_json::Map::new());
+    assert!(text.contains("fiber:fake/m (thinking: high)"), "{text}");
+    // The installed `delegate_spawn`, run with a level `plain` does not
+    // take, fails with the tool's own refusal before any process
+    // starts: the refusal ships the fresh catalogue.
+    let arguments =
+        serde_json::json!({"description": "d", "prompt": "p", "model": "fiber:fake/plain:high"});
+    let text = tool_text(&spawn, arguments.as_object().unwrap());
+    assert!(text.contains("not one model `fake/plain` takes"), "{text}");
+    assert!(text.contains("fiber:fake/m (thinking: high)"), "{text}");
+    // The rebuilt definitions are byte-equal to the pre-reload held
+    // ones: the swap changes no tool definition.
+    for (name, before) in &held {
+        let tool = prepared_tool(&installed_tools, name);
+        assert_eq!(
+            &serde_json::to_vec(&tool.definition()).unwrap(),
+            before,
+            "{name} definition changed"
+        );
+    }
+    // No running delegate stopped: the reloaded set retains, and
+    // nothing cancels. The names as a set: `docs/extensions.md`,
+    // "Host calls" promises only that a reload keeps them running.
+    let retains = fixture.delegate.retains.lock().unwrap().clone();
+    assert!(
+        !retains.is_empty(),
+        "retain never ran with the reloaded set"
+    );
+    let mut names = retains.last().unwrap().clone();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["demo".to_owned(), "fake".to_owned(), "judge".to_owned()],
+        "retain hands the reloaded set's names as a set"
+    );
+}
+
+#[test]
+fn provider_reload_failure_keeps_the_old_catalogue() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    let before = fixture.delegates.resolve_snapshot().catalogue.to_string();
+    // Malformed provider data: the reload-time rebuild cannot read it.
+    std::fs::write(fixture.fake_data(), "{").unwrap();
+    let prepared = fixture.prepare();
+    // The install moves `installed` out of the preparation, so the
+    // installed notices are held before it runs.
+    let models = Arc::clone(prepared_tool(&prepared.tools, "delegate_models"));
+    let notices = prepared.notices.clone();
+    (prepared.installed)();
+    // The stored snapshot still refuses the new level with the
+    // takes-no-level refusal: the old catalogue stayed.
+    let snapshot = fixture.delegates.resolve_snapshot();
+    let Err(reason) = (snapshot.lookup)("fiber:fake/m:high") else {
+        panic!("a level the model does not take resolves");
+    };
+    assert!(reason.contains("takes no thinking level"), "{reason}");
+    assert_eq!(snapshot.catalogue.to_string(), before);
+    // The installed models catalogue is unchanged too.
+    let text = tool_text(&models, &serde_json::Map::new());
+    assert!(!text.contains("fiber:fake/"), "{text}");
+    // The failure reaches the session as a notice naming the extension.
+    assert!(
+        notices.iter().any(|notice| {
+            notice.code == contract::ErrorCode::ExtensionFailed
+                && notice.extension.as_deref() == Some("fake")
+        }),
+        "no extension_failed notice for fake in {:?}",
+        notices
+            .iter()
+            .map(|notice| (&notice.code, &notice.extension, &notice.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Installs the fake extension's manifest (and an empty provider file)
+/// without touching its data: the mapping tests below build their
+/// errors, so only the manifest must read.
+fn unreadable_rig() -> Rig {
+    let rig = Rig::new("fiber-reload-unreadable");
+    crate::test_support::install_extension(
+        &rig.home,
+        "extensions/fake",
+        json!({"name":"fake","version":"v0.0.0","fiber":"0.0.0","api":1}),
+        &[(
+            "fake",
+            json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"}, "models": []}),
+        )],
+    );
+    rig
+}
+
+#[test]
+fn unreadable_provider_reports_the_manifest_name_for_a_provider_file_error() {
+    let rig = unreadable_rig();
+    let file = rig.home.join("extensions/fake/providers/fake.json");
+    let error = extensions::Error::Config(config::ConfigError::Json {
+        file,
+        line: 1,
+        column: 2,
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&error),
+        Some("fake".to_owned())
+    );
+}
+
+#[test]
+fn unreadable_provider_reports_the_manifest_name_for_a_manifest_or_dir_error() {
+    let rig = unreadable_rig();
+    let manifest = extensions::Error::Config(config::ConfigError::Shape {
+        file: rig.home.join("extensions/fake/extension.json"),
+        line: 1,
+        column: 2,
+        expected: "an extension's manifest",
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&manifest),
+        Some("fake".to_owned())
+    );
+    // A directory error starts the ancestor search at itself.
+    let dir = extensions::Error::Config(config::ConfigError::Io {
+        file: rig.home.join("extensions/fake/providers"),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&dir),
+        Some("fake".to_owned())
+    );
+}
+
+#[test]
+fn unreadable_provider_reads_the_source_name_when_it_is_a_path() {
+    let rig = unreadable_rig();
+    let file = rig.home.join("extensions/fake/providers/fake.json");
+    let shaped = extensions::Error::Config(config::ConfigError::WrongType {
+        source_name: file.display().to_string(),
+        key: "name".to_owned(),
+        expected: "the file's own name, without `.json`".to_owned(),
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&shaped),
+        Some("fake".to_owned())
+    );
+    // The manifest's compatibility case appends " (<name>)": the
+    // ancestor search still climbs past it to the manifest.
+    let compat = extensions::Error::Config(config::ConfigError::WrongType {
+        source_name: format!(
+            "{} (fake)",
+            rig.home.join("extensions/fake/extension.json").display()
+        ),
+        key: "tui.session_versions".to_owned(),
+        expected: "an object with a string min and an optional string before".to_owned(),
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&compat),
+        Some("fake".to_owned())
+    );
+    // A relative source (`-c`) is never a file the load read.
+    let relative = extensions::Error::Config(config::ConfigError::WrongType {
+        source_name: "-c".to_owned(),
+        key: "providers".to_owned(),
+        expected: "names that are each one file name in providers/".to_owned(),
+    });
+    assert_eq!(super::unreadable_provider_extension(&relative), None);
+}
+
+#[test]
+fn unreadable_provider_names_the_directory_when_the_manifest_does_not_read() {
+    let rig = unreadable_rig();
+    std::fs::write(rig.home.join("extensions/fake/extension.json"), "{").unwrap();
+    let file = rig.home.join("extensions/fake/providers/fake.json");
+    let error = extensions::Error::Config(config::ConfigError::Json {
+        file,
+        line: 1,
+        column: 2,
+    });
+    assert_eq!(
+        super::unreadable_provider_extension(&error),
+        Some("fake".to_owned())
+    );
+}
+
+#[test]
+fn unreadable_provider_names_none_outside_any_extension() {
+    let rig = unreadable_rig();
+    // A cache file sits under no extension directory.
+    let cache = extensions::Error::Config(config::ConfigError::Io {
+        file: rig.home.join("cache/models/fake.json"),
+        source: std::io::Error::new(std::io::ErrorKind::NotFound, "gone"),
+    });
+    assert_eq!(super::unreadable_provider_extension(&cache), None);
+    // A non-config failure names no file at all.
+    assert_eq!(
+        super::unreadable_provider_extension(&extensions::Error::Busy),
+        None
+    );
+}
+
+#[test]
+fn provider_reload_refreshes_an_old_cached_list() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // A Lua `models()` returning the new levels, plus a pre-written
+    // cache holding the old list aged beyond `refresh_after`: the
+    // pre-fix detached refresh held the lock and the synchronous join
+    // missed, so the catalogue kept the old list.
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() return { {id=\"m\", protocol=\"openai-responses\", base_url=\"http://127.0.0.1:9/v1\", context_window=1000, thinking_levels={\"high\"}}, {id=\"plain\", protocol=\"openai-responses\", base_url=\"http://127.0.0.1:9/v1\", context_window=1000} } end } })",
+    )
+    .unwrap();
+    config::write_model_cache(&fixture.rig.home, "fake", &fake_models_without_levels()).unwrap();
+    // Dated two days before the fake clock's wall
+    // (`support::clock::WALL_EPOCH`), so the list reads older than
+    // `refresh_after` on the reload's clock.
+    std::fs::File::options()
+        .write(true)
+        .open(fixture.rig.home.join("cache/models/fake.json"))
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 - 2 * 86_400),
+        )
+        .unwrap();
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    // The joined refresh publishes the new level despite the old cache.
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!(
+        (snapshot.lookup)("fiber:fake/m:high"),
+        Ok("fake/m:high".to_owned())
+    );
+}
+
+#[test]
+fn provider_reload_models_error_keeps_the_old_catalogue() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // A Lua provider file whose `models()` errors, plus a pre-written
+    // cache holding the old list aged beyond `refresh_after`: the
+    // synchronous join still reports the failure as a notice.
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() error(\"models boom\") end } })",
+    )
+    .unwrap();
+    config::write_model_cache(&fixture.rig.home, "fake", &fake_models_without_levels()).unwrap();
+    // Dated two days before the fake clock's wall
+    // (`support::clock::WALL_EPOCH`), so the list reads older than
+    // `refresh_after` on the reload's clock.
+    std::fs::File::options()
+        .write(true)
+        .open(fixture.rig.home.join("cache/models/fake.json"))
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 - 2 * 86_400),
+        )
+        .unwrap();
+    fixture.rewrite_fake_models(fake_models_with_levels());
+    fixture.touch_fake_source();
+    let prepared = fixture.prepare();
+    // The install moves `installed` out of the preparation, so the
+    // installed notices are held before it runs.
+    let notices = prepared.notices.clone();
+    (prepared.installed)();
+    // The provider keeps its old list: the old reference resolves, and
+    // the new level is refused.
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!((snapshot.lookup)("fiber:fake/m"), Ok("fake/m".to_owned()));
+    let Err(reason) = (snapshot.lookup)("fiber:fake/m:high") else {
+        panic!("a level the model does not take resolves");
+    };
+    assert!(reason.contains("not one model `fake/m` takes"), "{reason}");
+    // The failure reaches the session as a notice naming the extension.
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.extension.as_deref() == Some("fake")),
+        "no models() error notice for fake in {:?}",
+        notices
+            .iter()
+            .map(|notice| (&notice.code, &notice.extension, &notice.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn provider_reload_removal_drops_the_providers_references() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    std::fs::remove_dir_all(fixture.rig.home.join("extensions/fake")).unwrap();
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    // The fresh catalogue no longer lists the removed provider.
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert!(
+        !snapshot.catalogue.contains("fiber:fake/"),
+        "{}",
+        snapshot.catalogue
+    );
+    // The install succeeds: the set retains without the fake. The
+    // names as a set: `docs/extensions.md`, "Host calls" promises only
+    // that a removal cancels them.
+    let retains = fixture.delegate.retains.lock().unwrap().clone();
+    assert!(
+        !retains.is_empty(),
+        "retain never ran without the removed extension"
+    );
+    let mut names = retains.last().unwrap().clone();
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["demo".to_owned(), "judge".to_owned()],
+        "retain hands the set without the removed extension as a set"
     );
 }
 
@@ -1440,6 +1943,7 @@ fn assemble(base: &State, started: mcp::Started) -> State {
         drive: Arc::clone(&base.drive),
         model: Arc::clone(&base.model),
         delegate: Arc::clone(&base.delegate),
+        delegates: Arc::clone(&base.delegates),
         attended: Arc::clone(&base.attended),
         answerable: base.answerable,
         log: Arc::clone(&base.log),
