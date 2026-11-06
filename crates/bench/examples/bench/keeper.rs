@@ -148,7 +148,8 @@ fn keeper_peak(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String
         let measured = (|| {
             busy::until_stdout(ctx, &session, "job_started", busy::READY)?;
             let keeper = poll_keeper(ctx.clock, busy::READY, || {
-                fakes::matching(&pattern).map_err(|err| format!("listing keeper processes: {err}"))
+                fakes::matching(&pattern, busy::READY / 2)
+                    .map_err(|err| format!("listing keeper processes: {err}"))
             })?;
             keeper_rss_kib(
                 ctx.clock,
