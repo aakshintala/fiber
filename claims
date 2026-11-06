@@ -147,3 +147,7 @@ crates/tui/src/context_view_tests.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs
 crates/tui/Cargo.toml	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/code-quality.md	fiber-4276	plan	2026-11-06T06:23:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4285,4284,4283,4259,4218,4213
 docs/testing/fakes.md	fiber-4277	plan	2026-11-06T06:27:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4285,4284,4283,4259,4218,4213
+xtask/src/select/plan.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select/plan_tests.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/select/reuse.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/tests/cli.rs	fiber-4272	plan	2026-11-06T06:32:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
