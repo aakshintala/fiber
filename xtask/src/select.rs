@@ -310,18 +310,19 @@ fn classify_with(
             }
             if let Some(krate) = owner(file, members)
                 && let Some(narrow) = test_only.get_mut(krate)
+                && let Some(member) = members.get(krate)
             {
-                let rel = &file[members[krate].dir.len() + 1..];
+                let rel = file.get(member.dir.len() + 1..).unwrap_or_default();
                 *narrow &= is_test_only(rel);
             }
         }
         let mut narrow = BTreeSet::new();
         let mut wide = BTreeSet::new();
-        for krate in &touched {
-            if test_only[krate.as_str()] {
-                narrow.insert(krate.clone());
+        for (krate, only) in &test_only {
+            if *only {
+                narrow.insert((*krate).to_owned());
             } else {
-                wide.insert(krate.clone());
+                wide.insert((*krate).to_owned());
             }
         }
         let mut selected = dependents(wide, members);

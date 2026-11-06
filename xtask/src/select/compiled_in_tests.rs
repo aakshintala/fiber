@@ -384,7 +384,6 @@ fn package_ok_files() -> Vec<RustFile> {
 }
 
 #[test]
-#[test]
 fn a_cross_crate_path_reader_must_be_listed() {
     // `crates/main/tests/ask.rs` reads the provider test support file
     // through `#[path]`, so the compiled-in list carries it for `main`.
