@@ -436,7 +436,7 @@ fn space_lookalike_fold_keeps_zero_width_space() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn space_lookalike_replacement_char_matches_nothing_undecodable() {
     use std::os::unix::ffi::OsStrExt;
     let dir = TempDir::new("fiber-lookalike-undecodable");
