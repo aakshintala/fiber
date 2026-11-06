@@ -221,3 +221,10 @@ docs/ci.md	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshi
 docs/workflow.md	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/release.yml	fiber-4273	plan	2026-11-06T04:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/releasing.md	fiber-4273	plan	2026-11-06T04:07:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/read.rs:96-205	fiber-4249	plan	2026-11-06T04:55:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/error/file_tools.rs:6-40	fiber-4249	plan	2026-11-06T04:55:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/error/file_tools.rs:130-144	fiber-4249	plan	2026-11-06T04:55:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/read_tests.rs	fiber-4249	plan	2026-11-06T04:55:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/error_tests.rs	fiber-4249	plan	2026-11-06T04:55:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+docs/tools.md:271-338	fiber-4249	plan	2026-11-06T04:55:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/tools.rs	fiber-4249	plan	2026-11-06T04:55:32Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
