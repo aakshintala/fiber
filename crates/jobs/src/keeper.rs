@@ -25,8 +25,6 @@ pub enum Step {
     },
     /// Append a held job's bound ending while holding the log.
     WriteKeeperTimeout {
-        /// The hosted call.
-        id: String,
         /// The durable job.
         job_id: JobId,
         /// The reaped ending, carried through so observed process details survive.
@@ -182,11 +180,7 @@ impl Supervisor {
             }
             Phase::Holding => {
                 let write = if process.expired {
-                    Step::WriteKeeperTimeout {
-                        id: id.to_owned(),
-                        job_id,
-                        exit,
-                    }
+                    Step::WriteKeeperTimeout { job_id, exit }
                 } else {
                     Step::WriteJobCompleted {
                         id: id.to_owned(),

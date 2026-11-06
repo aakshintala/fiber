@@ -140,7 +140,6 @@ fn bound_stops_every_live_process_and_marks_held_jobs() {
     let steps = sup.exited("job", signal_end());
     assert_eq!(steps.len(), 2);
     assert!(steps.contains(&Step::WriteKeeperTimeout {
-        id: "job".into(),
         job_id: JobId("j_one".into()),
         exit: signal_end(),
     }));
@@ -170,7 +169,6 @@ fn reap_after_bound_writes_keeper_timeout_once_per_job() {
     assert_eq!(
         sup.exited("first", signal_end()),
         vec![Step::WriteKeeperTimeout {
-            id: "first".into(),
             job_id: JobId("j_first".into()),
             exit: signal_end(),
         }]
@@ -180,7 +178,6 @@ fn reap_after_bound_writes_keeper_timeout_once_per_job() {
     let steps = sup.exited("second", end());
     assert_eq!(steps.len(), 2);
     assert!(steps.contains(&Step::WriteKeeperTimeout {
-        id: "second".into(),
         job_id: JobId("j_second".into()),
         exit: end(),
     }));
@@ -226,7 +223,6 @@ fn bound_twice_stops_again_but_writes_once() {
     let steps = sup.exited("job", signal_end());
     assert_eq!(steps.len(), 2);
     assert!(steps.contains(&Step::WriteKeeperTimeout {
-        id: "job".into(),
         job_id: JobId("j_one".into()),
         exit: signal_end(),
     }));
@@ -312,7 +308,6 @@ fn takeover_write_then_bound_write_gives_each_job_one_ending() {
     let steps = sup.exited("late", signal_end());
     assert_eq!(steps.len(), 2);
     assert!(steps.contains(&Step::WriteKeeperTimeout {
-        id: "late".into(),
         job_id: JobId("j_late".into()),
         exit: signal_end(),
     }));

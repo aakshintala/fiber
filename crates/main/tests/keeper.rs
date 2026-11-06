@@ -11,6 +11,7 @@ mod support;
 
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::Child;
 use std::sync::mpsc;
 use std::thread;
@@ -73,6 +74,80 @@ fn reap(mut child: Child, deadline: Deadline) -> std::process::ExitStatus {
         Ok(()) | Err(_) => {}
     });
     deadline.start_wait().recv(&result).unwrap().unwrap()
+}
+
+/// A crashed session whose keeper holds one background job: the seeded id,
+/// both fifos, the `echo $$` / `cat` command and the two-call script the
+/// keeper-bound tests share.
+struct BoundFixture {
+    setup: Setup,
+    id: String,
+    keeper_pattern: String,
+    keeper_watchdog: Watchdog,
+    marker: String,
+    job_watchdog: Watchdog,
+    ready: fakes::children::Ready,
+    gate: PathBuf,
+}
+
+fn bound_fixture() -> BoundFixture {
+    let setup = configured();
+    // Seed the id before the command so its keeper watchdog is armed first.
+    let seed = run(&setup, &["ask", "seed"]);
+    assert!(
+        seed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seed.stderr)
+    );
+    let seed = complete_lines(&String::from_utf8(seed.stdout).unwrap());
+    let id = seed[0]["session_id"].as_str().unwrap().to_owned();
+    let keeper_pattern = format!("keeper --id {id}");
+    let keeper_watchdog = Watchdog::matching(&keeper_pattern);
+    let marker = format!(
+        "keeper-job-{}",
+        setup.root.path().file_name().unwrap().to_str().unwrap()
+    );
+    let job_watchdog = Watchdog::matching(&marker);
+    let ready = fakes::children::Ready::new(&setup.workspace());
+    let gate = setup.workspace().join("release.fifo");
+    let hold = setup.workspace().join("hold-session.fifo");
+    fakes::fifo(&gate);
+    fakes::fifo(&hold);
+    let command = format!(
+        "sh -c 'echo $$ > {}; cat {}; echo done-{marker}' {marker}",
+        ready.path().display(),
+        gate.display()
+    );
+    // The second foreground call holds the session open without a timing
+    // sleep. Its start also fences the first call's completed adoption.
+    let foreground = format!("sh -c 'cat {}' {marker}-tool", hold.display());
+    script(
+        &setup,
+        "job.json",
+        json!([
+            {"tool_calls":[{"name":"shell","arguments":{"command":command,"run_in_background":true}}]},
+            {"tool_calls":[{"name":"shell","arguments":{"command":foreground}}]}
+        ]),
+    );
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            json!({"decision":"allow","tool":"shell","prefix":command}),
+            json!({"decision":"allow","tool":"shell","prefix":foreground})
+        ),
+    )
+    .unwrap();
+    BoundFixture {
+        setup,
+        id,
+        keeper_pattern,
+        keeper_watchdog,
+        marker,
+        job_watchdog,
+        ready,
+        gate,
+    }
 }
 
 #[test]
@@ -247,53 +322,17 @@ fn a_crash_leaves_the_job_to_the_keeper_and_the_resume_delivers_it() {
 
 #[test]
 fn keeper_bound_timeout_resume_delivers_keeper_timeout() {
-    let setup = configured();
-    // Seed the id before the command so its keeper watchdog is armed first.
-    let seed = run(&setup, &["ask", "seed"]);
-    assert!(
-        seed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&seed.stderr)
-    );
-    let seed = complete_lines(&String::from_utf8(seed.stdout).unwrap());
-    let id = seed[0]["session_id"].as_str().unwrap();
-    let keeper_pattern = format!("keeper --id {id}");
-    let keeper_watchdog = Watchdog::matching(&keeper_pattern);
-    let marker = format!(
-        "keeper-job-{}",
-        setup.root.path().file_name().unwrap().to_str().unwrap()
-    );
-    let job_watchdog = Watchdog::matching(&marker);
-    let ready = fakes::children::Ready::new(&setup.workspace());
-    let gate = setup.workspace().join("release.fifo");
-    let hold = setup.workspace().join("hold-session.fifo");
-    fakes::fifo(&gate);
-    fakes::fifo(&hold);
-    let command = format!(
-        "sh -c 'echo $$ > {}; cat {}; echo done-{marker}' {marker}",
-        ready.path().display(),
-        gate.display()
-    );
-    // The second foreground call holds the session open without a timing
-    // sleep. Its start also fences the first call's completed adoption.
-    let foreground = format!("sh -c 'cat {}' {marker}-tool", hold.display());
-    script(
-        &setup,
-        "job.json",
-        json!([
-            {"tool_calls":[{"name":"shell","arguments":{"command":command,"run_in_background":true}}]},
-            {"tool_calls":[{"name":"shell","arguments":{"command":foreground}}]}
-        ]),
-    );
-    fs::write(
-        setup.home().join("rules"),
-        format!(
-            "{}\n{}\n",
-            json!({"decision":"allow","tool":"shell","prefix":command}),
-            json!({"decision":"allow","tool":"shell","prefix":foreground})
-        ),
-    )
-    .unwrap();
+    let BoundFixture {
+        setup,
+        id: id_owned,
+        keeper_pattern,
+        keeper_watchdog,
+        marker,
+        job_watchdog,
+        ready,
+        gate: _,
+    } = bound_fixture();
+    let id = id_owned.as_str();
     // Shorten the keeper's post-crash bound for this test alone: the hook is
     // per-command environment, so nothing leaks into other tests. The keeper
     // inherits it because the session spawn sets only `FIBER_HOME`.
@@ -414,53 +453,17 @@ fn keeper_bound_timeout_resume_delivers_keeper_timeout() {
 
 #[test]
 fn keeper_bound_holds_job_in_bound_without_resume() {
-    let setup = configured();
-    // Seed the id before the command so its keeper watchdog is armed first.
-    let seed = run(&setup, &["ask", "seed"]);
-    assert!(
-        seed.status.success(),
-        "{}",
-        String::from_utf8_lossy(&seed.stderr)
-    );
-    let seed = complete_lines(&String::from_utf8(seed.stdout).unwrap());
-    let id = seed[0]["session_id"].as_str().unwrap();
-    let keeper_pattern = format!("keeper --id {id}");
-    let keeper_watchdog = Watchdog::matching(&keeper_pattern);
-    let marker = format!(
-        "keeper-job-{}",
-        setup.root.path().file_name().unwrap().to_str().unwrap()
-    );
-    let job_watchdog = Watchdog::matching(&marker);
-    let ready = fakes::children::Ready::new(&setup.workspace());
-    let gate = setup.workspace().join("release.fifo");
-    let hold = setup.workspace().join("hold-session.fifo");
-    fakes::fifo(&gate);
-    fakes::fifo(&hold);
-    let command = format!(
-        "sh -c 'echo $$ > {}; cat {}; echo done-{marker}' {marker}",
-        ready.path().display(),
-        gate.display()
-    );
-    // The second foreground call holds the session open without a timing
-    // sleep. Its start also fences the first call's completed adoption.
-    let foreground = format!("sh -c 'cat {}' {marker}-tool", hold.display());
-    script(
-        &setup,
-        "job.json",
-        json!([
-            {"tool_calls":[{"name":"shell","arguments":{"command":command,"run_in_background":true}}]},
-            {"tool_calls":[{"name":"shell","arguments":{"command":foreground}}]}
-        ]),
-    );
-    fs::write(
-        setup.home().join("rules"),
-        format!(
-            "{}\n{}\n",
-            json!({"decision":"allow","tool":"shell","prefix":command}),
-            json!({"decision":"allow","tool":"shell","prefix":foreground})
-        ),
-    )
-    .unwrap();
+    let BoundFixture {
+        setup,
+        id: id_owned,
+        keeper_pattern,
+        keeper_watchdog,
+        marker,
+        job_watchdog,
+        ready,
+        gate,
+    } = bound_fixture();
+    let id = id_owned.as_str();
     // A long bound for this test alone: the in-bound observation lands well
     // before it. Per-command environment, so nothing leaks into other tests.
     let mut ask = setup.fiber(&[
