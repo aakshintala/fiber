@@ -135,3 +135,13 @@ crates/main/tests/doctor.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-
 crates/main/tests/hub_version.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/release_pack.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/update.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/timing.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/format.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/usage_view.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/context_view.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/session_views.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/timing_tests.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop_tests.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/context_view_tests.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/Cargo.toml	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
