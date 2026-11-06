@@ -2639,9 +2639,11 @@ fn session_model_changed(setup: &support::Setup) -> String {
 /// says whether the row was never written or the feed never reached
 /// it: the session dir entries prove the row's source on disk, and the
 /// hub socket proves the hub bound its socket (it binds before its
-/// feed starts). The hub log says how far the hub got. Reads under
-/// construction are absent, never failures: a missing dir or log reads
-/// as empty.
+/// feed starts). The recent names say whether `recent.jsonl`
+/// (`docs/state.md`, "Recently exited sessions") holds the row: only
+/// the `name` field is read, never any prompt text beside it. The hub
+/// log says how far the hub got. Reads under construction are absent,
+/// never failures: a missing dir, recent file or log reads as empty.
 fn resume_list_state(setup: &support::Setup) -> String {
     let mut entries: Vec<String> = fs::read_dir(sessions(setup))
         .map(|dirs| {
@@ -2651,11 +2653,63 @@ fn resume_list_state(setup: &support::Setup) -> String {
         })
         .unwrap_or_default();
     entries.sort();
+    let recent = match fs::read_to_string(setup.home().join("recent.jsonl")) {
+        Err(_) => "absent (no recent.jsonl)".to_owned(),
+        Ok(text) => {
+            let mut names: Vec<String> = text
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|row| row.get("name")?.as_str().map(str::to_owned))
+                .filter(|name| !name.is_empty())
+                .collect();
+            names.sort();
+            if names.is_empty() {
+                "absent (no name in recent.jsonl)".to_owned()
+            } else {
+                format!("{names:?}")
+            }
+        }
+    };
     format!(
-        "hub socket present: {}; sessions: {entries:?}; hub log:\n{}",
+        "hub socket present: {}; sessions: {entries:?}; recent names: {recent}; hub log:\n{}",
         setup.hub_socket().exists(),
         setup.hub_log(),
     )
+}
+
+#[test]
+fn resume_list_state_reports_recent_names() {
+    let setup = support::Setup::new();
+    fs::write(
+        setup.home().join("recent.jsonl"),
+        "{\"session_id\":\"s1\",\"name\":\"first\",\"content\":\"secret-prompt-text\"}\n",
+    )
+    .unwrap();
+    let report = resume_list_state(&setup);
+    assert!(
+        report.contains("first"),
+        "the report names the recent row: {report}"
+    );
+    assert!(
+        !report.contains("secret-prompt-text"),
+        "the report reads only the name field: {report}"
+    );
+}
+
+#[test]
+fn resume_list_state_reports_absent_recent() {
+    let setup = support::Setup::new();
+    let report = resume_list_state(&setup);
+    assert!(
+        report.contains("no recent.jsonl"),
+        "the report says the file is absent: {report}"
+    );
+    fs::write(setup.home().join("recent.jsonl"), "{}\n").unwrap();
+    let report = resume_list_state(&setup);
+    assert!(
+        report.contains("no name"),
+        "the report says no name is present: {report}"
+    );
 }
 
 /// The Session card keeps the old chips through the send: some row still
