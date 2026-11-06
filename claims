@@ -106,11 +106,6 @@ crates/main/src/session_command.rs	fiber-4256	plan	2026-11-06T15:17:54Z	Amoghs-M
 crates/main/src/reload_tests.rs	fiber-4256	grant	2026-11-06T15:28:28Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/delegates/4256-reload-refreshes-spawn-catalogue	
 crates/main/src/delegates_tests.rs	fiber-4256	grant	2026-11-06T15:28:28Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/delegates/4256-reload-refreshes-spawn-catalogue	
 docs/delegates.md	fiber-4256	grant	2026-11-06T15:28:28Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/delegates/4256-reload-refreshes-spawn-catalogue	
-crates/loop/src/history.rs	fiber-4255	plan	2026-11-06T15:30:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/conversation.rs	fiber-4255	plan	2026-11-06T15:30:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/handoff/carry.rs	fiber-4255	plan	2026-11-06T15:30:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/tests/fork.rs	fiber-4255	plan	2026-11-06T15:30:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/loop/src/history_tests.rs	fiber-4255	plan	2026-11-06T15:30:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/agents/triage-labels.md	docs/4271-needs-plan-label	grant	2026-11-06T17:36:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/docs/4271-needs-plan-label	
 docs/workflow.md	docs/4271-needs-plan-label	grant	2026-11-06T17:37:10Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/docs/4271-needs-plan-label	
 crates/main/tests/terminal.rs	fiber-4318	plan	2026-11-06T18:39:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
