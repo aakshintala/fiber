@@ -21,6 +21,10 @@
 //!   `BASE_EXECUTED` files set, a failed `test_linux` leg fails only on the
 //!   tests the head newly broke against the base commit
 //!   (`docs/ci.md`, "On every pull request that changes code").
+//! - `mutants-reuse --pr N --head H --base B --mutant-count C --run-id R --draft true|false --runs FILE --jobs FILE`:
+//!   prints `reuse=true` plus the matched run id and PR-entry head sha when
+//!   an earlier completed run on the same pull request, head and base passed
+//!   every mutants shard, else `reuse=false`
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
 //! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
@@ -208,7 +212,7 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .collect();
             let draft = flag(rest, "--draft")? == "true";
             let bug = flag(rest, "--bug")? == "true";
-            let _mutants = flag(rest, "--mutants")? == "true";
+            let mutants = flag(rest, "--mutants")? == "true";
             let mutant_count: u64 = flag(rest, "--mutant-count")?
                 .parse()
                 .map_err(|e| format!("--mutant-count: {e}"))?;
@@ -219,6 +223,8 @@ fn run(args: &[String]) -> Result<bool, String> {
                 &flag(rest, "--event")?,
                 draft,
                 bug,
+                mutants,
+                mutant_count,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
@@ -247,6 +253,20 @@ fn run(args: &[String]) -> Result<bool, String> {
                 "base_skip={}",
                 select::base_rows_skipped(&flag(rest, "--event")?, &release_paths).join(",")
             );
+            Ok(true)
+        }
+        "mutants-reuse" => {
+            let current = reuse_current(rest)?;
+            let runs = read(&flag(rest, "--runs")?)?;
+            let jobs = read(&flag(rest, "--jobs")?)?;
+            match select::matched_reuse(&current, &runs, &jobs) {
+                Some(matched) => {
+                    println!("reuse=true");
+                    println!("matched_run_id={}", matched.run_id);
+                    println!("matched_pr_head={}", matched.pr_head.0);
+                }
+                None => println!("reuse=false"),
+            }
             Ok(true)
         }
         "verdict" => {
@@ -804,6 +824,28 @@ fn env_object(name: &str) -> Result<serde_json::Map<String, Value>, String> {
 
 fn read(path: &str) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The reuse decision's scalar flags for `mutants-reuse`.
+fn reuse_current(args: &[String]) -> Result<select::ReuseCurrent, String> {
+    Ok(select::ReuseCurrent {
+        pr: select::ReusePullRequestNumber(
+            flag(args, "--pr")?
+                .parse()
+                .map_err(|e| format!("--pr: {e}"))?,
+        ),
+        head: select::ReuseCommitSha(flag(args, "--head")?),
+        base: select::ReuseCommitSha(flag(args, "--base")?),
+        mutant_count: flag(args, "--mutant-count")?
+            .parse()
+            .map_err(|e| format!("--mutant-count: {e}"))?,
+        run_id: select::ReuseRunId(
+            flag(args, "--run-id")?
+                .parse()
+                .map_err(|e| format!("--run-id: {e}"))?,
+        ),
+        draft: flag(args, "--draft")? == "true",
+    })
 }
 
 /// The contents of the file the `name` environment variable points at: `None`

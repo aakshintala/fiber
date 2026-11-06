@@ -6,13 +6,20 @@ How a test is shown to fail when the behaviour it guards breaks. It is part of `
 
 
 A test that passes with its feature removed proves nothing. CI checks this on
-the nightly scheduled whole-workspace run (`mutants-scheduled.yml`):
-`cargo-mutants` makes small breaking edits to the code, such as replacing a
-function body with a default or flipping a comparison, and runs the mutated
-crate's tests against each one. An edit that no test notices fails the run.
-Only the mutated crate's own tests run, so a test in another crate, the
-binary's included, kills none of its mutants: each behaviour a crate exposes
-is tested in that crate.
+every pull request with mutation testing: `cargo-mutants --in-diff` makes small
+breaking edits to the code the diff changed, such as replacing a function body
+with a default or flipping a comparison, and runs the mutated crate's tests
+against each one. An edit that no test notices fails CI. Only the mutated
+crate's own tests run, so a test in another crate, the binary's included,
+kills none of its mutants: each behaviour a crate exposes is tested in
+that crate. Selection writes the
+diff's full mutant list to its job summary on every pull request event, drafts
+included, and prints it to the job's log
+(readable as soon as Selection finishes, before the run ends):
+`gh api --allow-escape-sequences repos/aakshintala/fiber/actions/jobs/<id>/logs`,
+with the id from `gh run view <run> -R aakshintala/fiber --json jobs`
+(`gh run view --log` waits for the whole run; the run's summary page shows the
+list in a browser), so a lane maps each mutant to a test before CI runs the shards.
 
 A function is extracted and tested alone only where a surviving mutant would
 signal the wrong process or lose data, such as the `kill(-1)` refusal
@@ -50,7 +57,7 @@ such as `config`, which reaches the shared atomic write's failure-injection
 hooks in `support`, and no workflow or script runs one.
 
 cargo-mutants stops each mutant's test run after 120 s, set with `--timeout 120`
-in `.github/workflows/mutants-scheduled.yml`. A mutant stopped there fails CI as a
+in `.github/workflows/ci.yml` (`mutants`). A mutant stopped there fails CI as a
 timeout, not as caught. A mutant can turn a wait that returns
 early into one that runs out its whole bound, as a flipped comparison in a
 `wait_timeout_while` predicate does, so the deadlines one test can run out in
@@ -67,7 +74,7 @@ A pull request whose every changed file is a docs file, as `docs/ci.md`, "Select
 defines it, passes the check with a message saying so: the doc was wrong and
 the code was right, so no test can show the bug.
 
-Nightly whole-workspace mutation testing has one known limit: it cannot see
-a change in one place leaving other code under-tested. The nightly run covers
-every crate whether or not the day's changes touched it, so a rewritten test
-has its teeth checked that night.
+Diff-scoped mutation testing has two known limits. It cannot see a change in
+one place leaving other code under-tested. A pull request that changes only
+test code runs no mutants, so a rewritten test could lose its teeth unnoticed
+until the next code change in that crate runs mutants against it.

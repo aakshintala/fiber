@@ -77,7 +77,8 @@ nothing: the run in flight finishes, then the new event's run, which waited,
 runs the whole selection again at the same head. At most one run waits, and
 a newer event replaces it before it starts. Rerunning everything keeps the
 `CI` check, which is the latest run's, from hiding a failure in the earlier
-run. Pushes
+run. A ready run still reuses a same-head mutants pass instead of rerunning
+those shards ("On every pull request that changes code"). Pushes
 to `main` share one group that cancels nothing: the running backstop finishes
 and a newer push waits, replacing any older one that waits ("The backstop on
 `main`").
@@ -361,9 +362,43 @@ On Linux x86_64 alone:
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
-- mutation testing runs only on the nightly scheduled whole-workspace run,
-  never on a pull request and never on the backstop. The selection plans zero
-  shards on every event.
+- mutation testing: `cargo-mutants --in-diff`, split across runners. It runs
+  on a ready pull request and on a draft pull request
+  that carries the label `mutants`, never on a push to `main`; an unlabelled draft skips it, and adding
+  the label starts a run. A ready run whose pull request number and head sha
+  match an earlier completed run on the same head, and whose every mutants
+  shard in that run names the current merge parent in its job name and
+  succeeded with the same shard count, reuses the pass instead of starting
+  shards; `cargo xtask mutants-reuse` decides from the current run's pull
+  request number, head, base, and mutant count. Any lookup failure, head or
+  pull request mismatch, a shard naming a different base, partial, cancelled,
+  or failed shards, count mismatch, or self-match starts the shards. A reused
+  run still lists the diff's mutants in the selection
+  summary, and the label rule above is unchanged. Shards start once the Linux x86_64 test job, its own
+  job `test_linux` (a job can wait for another job, not one platform's leg of
+  it), passes on the head; the arm64 and macOS legs, the `test` job, run in
+  parallel and still gate `CI`. Each shard runs `cargo mutants --baseline=skip
+  --timeout 120`, since the tests it would rerun as a baseline just passed on
+  this head. A systemd user scope caps the run at 12 GiB, leaving 4 GiB of the
+  runner's 16 GiB for the host. `OOMPolicy=kill` kills the whole scope on an
+  out-of-memory event, so the shard fails instead of counting a killed test as
+  a caught mutant. If the run exits non-zero, the step prints the mutant in the
+  newest scenario log under `mutants.out/log/`. Each shard prints its mutant
+  list before the run and uploads `mutants.out` as a shard-named artifact, even
+  if the run fails.
+  Selection lists the diff's mutants (`cargo mutants --in-diff --list`) to its
+  job summary on every code pull request event, draft or not, whether or not
+  shards will run. A run whose Linux x86_64 tests fail starts none, and a run that selects no tests
+  runs no mutants. The selection counts the diff's mutants
+  (`cargo mutants --list`) and plans one shard per 15 of them, rounded up, at
+  most 16; a diff with no mutants starts none. Recent runs (#1461, #1395)
+  tested a mutant in 13 to 27 seconds on a runner and the unmutated baseline
+  took 1 to 3.5 minutes, so 15 mutants keep a shard near 10 minutes; a
+  `crates/main` mutant takes 50 to 74 seconds. Shards split the list
+  round-robin, so every shard holds the same mix of crates and
+  the count alone sets its size. Past 240 mutants the cap makes shards larger,
+  and their time limit grows with them ("Job time limits"). Two pull requests at the cap
+  leave 8 of the 40 jobs for everything else.
   Mutants run under nextest's `mutants` profile (`.cargo/mutants.toml`),
   which stops every running test at the first failure. A mutant that makes
   one test hang until its deadline is then caught by a faster test, not
@@ -512,9 +547,9 @@ replaced, because it diffs from the last passing commit. A replaced commit
 stores no release binary; a pull request based on one compares against the
 nearest ancestor that has one ("On every pull request that changes code").
 
-The backstop runs no mutants. Mutation testing runs on the nightly
-scheduled whole-workspace run, which covers `main` ("On every pull request
-that changes code").
+The backstop runs no mutants. Each pull request already tests its own diff
+("On every pull request that changes code"), and a second run on `main` would
+repeat that cost.
 
 When lint, the tests or the release job fail, the backstop opens an issue, or
 comments on the open one. It
@@ -670,8 +705,13 @@ the pull request waiting out GitHub's 6-hour default.
 
 A bound is about twice the job's median duration over its last 20 runs, rounded
 up to a round number, and never under 5 minutes, because runner start-up
-varies. A job with too little history gets a generous bound. Mutants run only
-on the nightly scheduled whole-workspace run, which bounds its own shards. A job that builds the workspace is bounded at
+varies. A job with too little history gets a generous bound. The one exception
+is a mutants shard: a shard of `crates/main` mutants, whose tests drive the
+binary, takes about 20 minutes (run 38420177975), so its bound is twice that
+slow group, not twice the median. A shard of up to 15 mutants gets 40 minutes.
+A larger shard, which only the cap makes, gets 40 minutes per 15 of its
+mutants, rounded up, at most 360 minutes, GitHub's limit for a job. The selection
+computes it (`cargo xtask plan`). A job that builds the workspace is bounded at
 twice its cold-cache duration, since a pull request's first run after a cache
 eviction or a `Cargo.lock` change builds cold. The median behind each bound is a comment beside its
 `timeout-minutes` line. A job that gains work past its bound has the bound

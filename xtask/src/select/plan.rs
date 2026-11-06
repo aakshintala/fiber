@@ -228,16 +228,28 @@ pub(crate) fn shard_timeout_minutes(count: u64) -> u64 {
 
 /// `mode` is the diff's selection mode, `packages` the selected packages,
 /// `event` the GitHub event name, `draft` whether the pull request is a
-/// draft, and `bug` whether an issue the pull request resolves is labelled
-/// `bug`.
-pub(crate) fn plan(mode: &str, packages: &[String], event: &str, draft: bool, bug: bool) -> Plan {
+/// draft, `bug` whether an issue the pull request resolves is labelled
+/// `bug`, `mutants` whether the pull request runs its mutants and
+/// `mutant_count` how many mutants its diff holds.
+pub(crate) fn plan(
+    mode: &str,
+    packages: &[String],
+    event: &str,
+    draft: bool,
+    bug: bool,
+    mutants: bool,
+    mutant_count: u64,
+) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
     let test = !pr || !packages.is_empty();
-    // No event shards mutants: the nightly scheduled whole-workspace run
-    // covers main instead, and a pull request's diff is judged by its Linux
-    // tests and the head-vs-base break rule (`docs/ci.md`).
-    let shards = 0;
+    // The backstop runs no mutants: each pull request tested its own diff.
+    // A run that selects no tests runs no mutants either.
+    let shards = if pr && mutants && test {
+        mutant_shards(mutant_count)
+    } else {
+        0
+    };
     // A draft selects the same jobs as a ready pull request (`docs/ci.md`,
     // "The merge gate"), so the selection ignores it.
     let _ = draft;
