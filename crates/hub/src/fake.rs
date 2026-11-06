@@ -421,7 +421,7 @@ impl Starter for FakeStarter {
 }
 
 /// What `exited` returns. The listener lives in the accept loop's thread.
-pub(crate) struct FakeStarted {
+struct FakeStarted {
     exited: Option<Failure>,
     id: SessionId,
     killed: Arc<Mutex<Vec<SessionId>>>,

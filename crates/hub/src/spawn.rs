@@ -381,7 +381,9 @@ fn drain(child: &Arc<Mutex<Child>>, shared: &Arc<(Mutex<State>, Condvar)>) {
 /// The `code` and `message` of a `fiber_exited` line's `payload.error`.
 fn fiber_exited_error(line: &str) -> Option<Failure> {
     let line: Value = serde_json::from_str(line).ok()?;
-    if line.get("kind")?.as_str()? != "fiber_exited" {
+    if contract::events::EventKind::from_name(line.get("kind")?.as_str()?)
+        != contract::events::EventKind::FiberExited
+    {
         return None;
     }
     let error = line.get("payload")?.get("error")?;

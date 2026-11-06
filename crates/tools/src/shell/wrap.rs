@@ -10,7 +10,7 @@ use super::syntax::Word;
 /// The names an assignment may carry without making the call `executes`:
 /// the fixed list `docs/tools.md` writes. Any other name, such as `PATH`,
 /// `LD_PRELOAD`, `PAGER` or a `GIT_CONFIG_*` variable, is refused.
-pub(super) const ASSIGNABLE: [&str; 7] = [
+const ASSIGNABLE: [&str; 7] = [
     "RUST_BACKTRACE",
     "LANG",
     "LC_ALL",

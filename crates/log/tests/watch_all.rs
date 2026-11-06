@@ -21,6 +21,7 @@ use std::time::Duration;
 use common::*;
 use contract::Envelope;
 use contract::emit::Emit;
+use contract::events::EventKind;
 use fakes::Deadline;
 use log::{Log, Watcher, WeakEmit};
 use serde_json::{Map, Value};
@@ -111,7 +112,7 @@ fn an_injected_line_arrives_in_push_order_and_is_dropped_when_lagged() {
     let wait = Deadline::after(DEADLINE);
     loop {
         let line = next(&rx, &wait).unwrap();
-        if line.kind == "notice" {
+        if line.kind() == EventKind::Notice {
             saw_notice = true;
         }
         if line.seq == sentinel.seq {
@@ -131,10 +132,14 @@ fn a_kept_line_keeps_its_place_among_ordinary_lines() {
     injector.push(marked("after"));
     let rx = relay(watcher);
     let wait = Deadline::after(DEADLINE);
-    let kinds: Vec<String> = (0..3).map(|_| next(&rx, &wait).unwrap().kind).collect();
+    let kinds: Vec<EventKind> = (0..3).map(|_| next(&rx, &wait).unwrap().kind()).collect();
     assert_eq!(
         kinds,
-        vec!["before".to_owned(), "kept".to_owned(), "after".to_owned()],
+        vec![
+            EventKind::Unknown("before".into()),
+            EventKind::Unknown("kept".into()),
+            EventKind::Unknown("after".into()),
+        ],
         "a kept line stays in push order among ordinary lines"
     );
 }
@@ -160,12 +165,14 @@ fn a_kept_line_pushed_before_a_lag_is_returned_before_catch_up() {
         }
     }
     assert!(
-        !lines.iter().any(|line| line.kind == "after"),
+        !lines
+            .iter()
+            .any(|line| line.kind() == EventKind::Unknown("after".into())),
         "a lagged watcher drops an ordinary line pushed after the kept one"
     );
     assert_eq!(
-        lines.first().map(|line| line.kind.as_str()),
-        Some("kept"),
+        lines.first().map(|line| line.kind()),
+        Some(EventKind::Unknown("kept".into())),
         "a kept line pushed before a flood is returned before catch-up"
     );
 }
@@ -195,7 +202,7 @@ fn emit_sends_an_ephemeral_line_to_every_watcher_and_refuses_a_durable_one() {
     assert_eq!(fs::read_to_string(&path).unwrap(), "");
     for rx in [&one, &two] {
         let line = next(rx, &Deadline::after(DEADLINE)).unwrap();
-        assert_eq!(line.kind, "assistant_message_delta");
+        assert_eq!(line.kind(), EventKind::AssistantMessageDelta);
         assert!(line.seq.is_none());
         let payload: Value = serde_json::Value::Object(line.payload);
         assert_eq!(payload["text"], "e");
@@ -359,8 +366,15 @@ fn watch_all_seeded_over_lines_larger_than_a_page_yields_the_log_then_seeds_then
     for line in &written {
         assert_eq!(next(&rx, &wait).as_ref(), Some(line));
     }
-    let seeds: Vec<String> = (0..3).map(|_| next(&rx, &wait).unwrap().kind).collect();
-    assert_eq!(seeds, ["session_status", "steering_queue", "extension_ui"]);
+    let seeds: Vec<EventKind> = (0..3).map(|_| next(&rx, &wait).unwrap().kind()).collect();
+    assert_eq!(
+        seeds,
+        [
+            EventKind::SessionStatus,
+            EventKind::SteeringQueue,
+            EventKind::ExtensionUi
+        ]
+    );
     assert_eq!(next(&rx, &wait), Some(live));
 }
 
@@ -375,7 +389,7 @@ fn a_weak_emit_emits_while_the_log_lives_and_never_keeps_it() {
     let rx = relay(log.watch());
     emit.emit(&delta("e"));
     let line = next(&rx, &Deadline::after(MUST_SUCCEED_WITHIN)).unwrap();
-    assert_eq!(line.kind, "assistant_message_delta");
+    assert_eq!(line.kind(), EventKind::AssistantMessageDelta);
     drop(log);
     assert!(
         weak.upgrade().is_none(),

@@ -865,7 +865,7 @@ fn sigterm_on_a_session_pending_on_a_form_exits_143_suspended_and_a_reply_throug
     // carry the bare path, so matching the flag names the session
     // alone. The hub itself carries neither.
     let session_match = format!("--workspace={}", hubbed.workspace);
-    let pids = fakes::matching(&session_match).unwrap();
+    let pids = fakes::matching(&session_match, hubbed.setup.deadline.left() / 2).unwrap();
     assert_eq!(pids.len(), 1, "one session process, not {pids:?}");
     assert!(fakes::kill_pid(pids[0], "TERM").unwrap());
     let exited = until(&hubbed.a, "fiber_exited", |line| {

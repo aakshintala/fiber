@@ -284,26 +284,22 @@ impl Lines<'_, '_> {
         let Some(seq) = line.seq else {
             return;
         };
-        let kind = line.kind.as_str();
+        let kind = line.kind();
         let payload = &line.payload;
-        match kind {
-            "session_named" => {
-                self.named = payload
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-            }
-            "turn_started" if self.first_prompt.is_none() => {
-                self.first_prompt = Some(first_prompt(payload));
-            }
-            _ => {}
+        if kind == contract::events::EventKind::SessionNamed {
+            self.named = payload
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+        } else if kind == contract::events::EventKind::TurnStarted && self.first_prompt.is_none() {
+            self.first_prompt = Some(first_prompt(payload));
         }
         // A search never returns `session_search`'s own calls or their
         // results (`docs/tools.md`, "Searching past sessions"): a request
         // for the tool itself marks its call, and no line of a marked call
         // gives a hit or names an artifact. A completed line never precedes
         // its request, so one pass in file order marks every call in time.
-        if fields::self_request(kind, payload) {
+        if fields::self_request(kind.name(), payload) {
             if let Some(id) = &line.action_id {
                 self.excluded.insert(id.0.clone());
             }
@@ -318,7 +314,7 @@ impl Lines<'_, '_> {
         }
         // One hit per label: the first of its strings that holds the query.
         let mut snippets = Snippets::default();
-        for (label, text) in fields::labelled(kind, payload) {
+        for (label, text) in fields::labelled(kind.name(), payload) {
             let slot = snippets.slot(label);
             if slot.is_none()
                 && let Some((start, _)) = self.text.find(text)
@@ -327,7 +323,8 @@ impl Lines<'_, '_> {
             }
         }
         let mut artifact = None;
-        if let Some(named) = fields::names(kind, payload).and_then(|n| n.strip_prefix("artifacts/"))
+        if let Some(named) =
+            fields::names(kind.name(), payload).and_then(|n| n.strip_prefix("artifacts/"))
             && let Some(found) = self
                 .matched
                 .iter_mut()

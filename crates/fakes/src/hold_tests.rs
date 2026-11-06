@@ -142,11 +142,12 @@ fn drop_reaps_a_parked_holder() {
     assert!(crate::pid_alive(pid), "the holder lives before the drop");
     let pattern = path.to_str().unwrap().to_owned();
     let listed = pattern.clone();
+    let wait = Deadline::after(MUST_SUCCEED_WITHIN).start_wait();
     crate::wait_until(
         "the holder to park",
         Deadline::after(MUST_SUCCEED_WITHIN),
         move || {
-            crate::matching(&listed)
+            crate::matching(&listed, wait.left() / 2)
                 .map(|pids| pids.contains(&pid))
                 .unwrap_or(false)
         },
@@ -316,10 +317,12 @@ fn a_job_command_with_the_search_prelude_shows_its_hold_fragment_only_if_bash_ke
         Retained,
     }
     // The classification poll runs on the test thread, not in `wait_until`:
-    // each poll makes at most two listing calls (`matching`'s pgrep and
-    // `ps_table`'s ps, each bounded by MUST_SUCCEED_WITHIN), and a blocking
-    // predicate would outlive `wait_until`'s outer wait (`wait_until.rs`).
+    // each poll makes at most two listing calls (`matching`'s pgrep, bounded
+    // by half the shared started wait's remaining, and `ps_table`'s ps,
+    // bounded by MUST_SUCCEED_WITHIN), and a blocking predicate would
+    // outlive `wait_until`'s outer wait (`wait_until.rs`).
     let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+    let wait = deadline.start_wait();
     let bound = deadline.left();
     // `ps_table` rebuilds each line with `split_whitespace` and `join`,
     // which drops the fragment's trailing space; the rebuilt comparison
@@ -327,7 +330,7 @@ fn a_job_command_with_the_search_prelude_shows_its_hold_fragment_only_if_bash_ke
     // sees the argv unmodified.
     let bare = fragment.trim_end();
     let form: Form = loop {
-        let with = match crate::matching(&fragment) {
+        let with = match crate::matching(&fragment, wait.left() / 2) {
             Ok(with) => with,
             Err(_) => {
                 if deadline.left().is_zero() {

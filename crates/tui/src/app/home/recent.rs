@@ -202,7 +202,7 @@ impl Recent {
     /// unscoped page passes the projects already on home and fans out only
     /// for a project first appearing there, so a refill never retries an
     /// already-seen project without a new trigger.
-    pub(super) fn fan_out_scoped(
+    fn fan_out_scoped(
         &mut self,
         before: &BTreeSet<String>,
         sessions: &mut Sessions,
@@ -250,7 +250,7 @@ impl Recent {
 
     /// Clears a dirty marker and sends exactly one follow-up after a valid
     /// scoped answer.
-    pub(super) fn follow_up_scoped(
+    fn follow_up_scoped(
         &mut self,
         project: &str,
         sessions: &mut Sessions,

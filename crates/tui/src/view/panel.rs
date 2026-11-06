@@ -854,7 +854,7 @@ pub(super) fn ask_countdown(app: &App) {
 /// none once expired (`docs/tui.md`, "The panel"; WAKE-RULED). The
 /// one-millisecond step lands past the boundary the floor keeps, so
 /// the woken frame always reads a new text.
-pub(crate) fn countdown_due_wall(expiry_ms: u64, now_ms: u64) -> Option<u64> {
+fn countdown_due_wall(expiry_ms: u64, now_ms: u64) -> Option<u64> {
     let remaining = expiry_ms.checked_sub(now_ms)?;
     if remaining == 0 {
         return None;
@@ -996,7 +996,7 @@ fn jobs_rows(app: &App) -> Vec<Row> {
 /// The card text's width: the rect less the slab offset and one margin
 /// column each side, two narrower where a box takes the sides
 /// (`docs/tui.md`, "Look").
-pub(super) fn card_text_width(width: u16) -> usize {
+fn card_text_width(width: u16) -> usize {
     if surface::box_fit(width) {
         text_width(width).saturating_sub(2)
     } else {

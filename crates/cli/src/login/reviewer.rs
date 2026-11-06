@@ -41,7 +41,7 @@ pub struct ReviewerModels {
 
 /// `providers."<name>".reviewer_model`, with a name holding a dot quoted:
 /// the one key login writes, each provider keeping its own pick.
-pub(crate) fn reviewer_key(name: &str) -> String {
+fn reviewer_key(name: &str) -> String {
     if name.contains('.') {
         format!("providers.\"{name}\".reviewer_model")
     } else {

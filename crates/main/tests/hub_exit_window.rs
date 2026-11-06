@@ -124,7 +124,11 @@ impl World {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        fakes::matching(&format!("--workspace={workspace}")).unwrap()
+        fakes::matching(
+            &format!("--workspace={workspace}"),
+            self.setup.deadline.left() / 2,
+        )
+        .unwrap()
     }
 
     /// Waits for `pids` to exit. Not every process in the workspace: the

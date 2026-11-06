@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// The baseline file's format version. The format is private Fiber state,
 /// never a wire format.
-pub(crate) const BASELINE_VERSION: u32 = 1;
+const BASELINE_VERSION: u32 = 1;
 
 /// The project's identity: git's shared directory inside a repository,
 /// else the launch directory itself, symlinks resolved (`docs/state.md`,
@@ -20,7 +20,7 @@ pub(crate) struct Identity {
     /// The identity path.
     pub(crate) path: PathBuf,
     /// Whether `git rev-parse` found a repository.
-    pub(crate) in_repository: bool,
+    in_repository: bool,
 }
 
 /// Resolves the identity of `workspace` with one `git rev-parse`, through
@@ -410,7 +410,7 @@ pub(crate) fn canonical(path: &Path) -> Option<PathBuf> {
 
 /// The Unix permission bits of file metadata.
 #[cfg(unix)]
-pub(crate) fn unix_mode(meta: &std::fs::Metadata) -> u32 {
+fn unix_mode(meta: &std::fs::Metadata) -> u32 {
     use std::os::unix::fs::PermissionsExt as _;
     meta.permissions().mode()
 }
@@ -419,7 +419,7 @@ pub(crate) fn unix_mode(meta: &std::fs::Metadata) -> u32 {
 // Mutants run on Linux, where this definition is not compiled.
 #[cfg_attr(false, mutants::skip)]
 #[cfg(not(unix))]
-pub(crate) fn unix_mode(_meta: &std::fs::Metadata) -> u32 {
+fn unix_mode(_meta: &std::fs::Metadata) -> u32 {
     0
 }
 

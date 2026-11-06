@@ -169,7 +169,7 @@ pub(crate) fn peak_rss_kib(pid: u32) -> Result<u64, String> {
 }
 
 /// `RssAnon` and `RssFile` in KiB, or why the status does not report them.
-pub(crate) type RssSplit = Result<(u64, u64), String>;
+type RssSplit = Result<(u64, u64), String>;
 
 /// `pid`'s peak RSS in KiB and its anon/file split, from one read of its
 /// status, so the peak and the split describe the same moment. A missing

@@ -1486,7 +1486,9 @@ impl Run {
         // sessions watchdog would, and stand it down only once no process
         // holds the workspace path. On a miss it stays armed.
         if let Some((sessions, workspace)) = self.sessions.take() {
-            if let Err(err) = fakes::kill_matching(&workspace) {
+            if let Err(err) =
+                fakes::kill_matching(&workspace, self.deadline.cleanup_phase().left() / 2)
+            {
                 panic!("killing the sessions in the workspace: {err}");
             }
             wait_for_workspace_holders(

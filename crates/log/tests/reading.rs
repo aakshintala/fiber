@@ -20,11 +20,12 @@ use std::time::Duration;
 
 use common::*;
 use contract::Envelope;
+use contract::events::EventKind;
 use fakes::Deadline;
 use log::{Log, Watcher, complete_len_of, lines, read};
 
-fn kinds(lines: &[Envelope]) -> Vec<&str> {
-    lines.iter().map(|l| l.kind.as_str()).collect()
+fn kinds(lines: &[Envelope]) -> Vec<EventKind> {
+    lines.iter().map(|l| l.kind()).collect()
 }
 
 /// How long a test waits for a watcher to receive a line.
@@ -305,7 +306,7 @@ fn a_dropped_watcher_does_not_stop_the_log() {
     assert_eq!(next(&rx, &Deadline::after(DEADLINE)), Some(line));
     assert_eq!(
         kinds(&read(&tmp.session(&id("s_1"))).unwrap()),
-        ["session_started"]
+        [EventKind::SessionStarted]
     );
 }
 

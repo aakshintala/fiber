@@ -1689,6 +1689,100 @@ fn the_signal_check_passes_a_signal_in_the_allowlist() {
 }
 
 #[test]
+fn the_visibility_check_fails_a_pub_crate_fn_used_only_in_its_own_module() {
+    let dir = workspace();
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (0, "visibility: ok\n".to_owned())
+    );
+    // The qualifier is built from parts so this file holds no declaration
+    // the repo scan could trip on; only the fixture carries one.
+    let vis = ["pub", "(crate)"].concat();
+    let decl = format!("{vis} fn helper() -> u32 {{ 1 }}\n");
+    dir.write(
+        "crates/b/src/only.rs",
+        &format!("//! only\n//! fixture\n{decl}"),
+    );
+    let expected_check_docs = format!(
+        "check-docs: crates/b/src/only.rs:3: helper is {vis} but no other file in b names it\n"
+    );
+    let expected_visibility = format!(
+        "visibility: crates/b/src/only.rs:3: helper is {vis} but no other file in b names it\n"
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (1, expected_check_docs.clone())
+    );
+    let standalone = xtask(&dir, &["visibility"], &[], "");
+    assert_eq!(standalone, (1, expected_visibility));
+    assert_eq!(
+        standalone.1.replace("visibility: ", ""),
+        expected_check_docs.replace("check-docs: ", "")
+    );
+    dir.write("crates/b/src/lib.rs", "//! b\nlet _ = helper();\n");
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (0, "visibility: ok\n".to_owned())
+    );
+}
+
+#[test]
+fn the_visibility_baseline_skips_listed_sites_and_flags_stale_entries() {
+    let dir = workspace();
+    // The qualifier is built from parts so this file holds no declaration
+    // the repo scan could trip on; only the fixture carries one.
+    let vis = ["pub", "(crate)"].concat();
+    let decl = format!("{vis} fn helper() -> u32 {{ 1 }}\n");
+    dir.write(
+        "crates/b/src/only.rs",
+        &format!("//! only\n//! fixture\n{decl}"),
+    );
+    let flagged =
+        format!("crates/b/src/only.rs:3: helper is {vis} but no other file in b names it\n");
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (1, format!("visibility: {flagged}"))
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (1, format!("check-docs: {flagged}"))
+    );
+    // A baseline listing the site passes both arms.
+    dir.write(
+        "xtask/src/visibility_baseline.txt",
+        "crates/b/src/only.rs:helper\n",
+    );
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (0, "visibility: ok\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (0, "check-docs: ok\n".to_owned())
+    );
+    // Naming the site elsewhere turns its baseline line stale on both arms.
+    dir.write("crates/b/src/lib.rs", "//! b\nfn run() { helper(); }\n");
+    let stale =
+        "crates/b/src/only.rs:helper is in the visibility baseline but matches no flagged site\n";
+    assert_eq!(
+        xtask(&dir, &["visibility"], &[], ""),
+        (1, format!("visibility: {stale}"))
+    );
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (1, format!("check-docs: {stale}"))
+    );
+}
+
+#[test]
 fn the_must_succeed_check_passes_a_clean_workspace_and_fails_a_short_bound() {
     let dir = workspace();
     assert_eq!(

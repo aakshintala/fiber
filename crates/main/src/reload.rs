@@ -44,7 +44,7 @@ pub(crate) struct Late {
     infos: std::collections::BTreeMap<String, contract::events::ToolInfo>,
 }
 
-pub(crate) fn record_declarations(
+fn record_declarations(
     declare: doors::Declare,
     late: Arc<std::sync::Mutex<Late>>,
 ) -> doors::Declare {
@@ -64,7 +64,7 @@ pub(crate) fn record_declarations(
     })
 }
 
-pub(crate) fn record_load(
+fn record_load(
     load: r#loop::LoadApproved,
     late: Arc<std::sync::Mutex<Late>>,
     repository: Arc<std::sync::Mutex<crate::session_extensions::RepositoryScope>>,

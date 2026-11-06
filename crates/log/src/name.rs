@@ -31,7 +31,9 @@ pub fn session_name(home: &Path, id: &SessionId) -> Option<String> {
         }
         if let found @ Some(_) = crate::scan::last_line_where(&dir, |line| {
             let event: Value = serde_json::from_slice(line).ok()?;
-            if event.get("kind")?.as_str()? != "session_named" {
+            if contract::events::EventKind::from_name(event.get("kind")?.as_str()?)
+                != contract::events::EventKind::SessionNamed
+            {
                 return None;
             }
             match event.get("payload")?.get("name") {

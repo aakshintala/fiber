@@ -498,7 +498,7 @@ fn pattern_refuses_an_empty_match() {
 
 #[test]
 fn matching_refuses_an_empty_match() {
-    assert!(panic::catch_unwind(|| matching("")).is_err());
+    assert!(panic::catch_unwind(|| matching("", MUST_SUCCEED_WITHIN)).is_err());
 }
 
 #[test]
@@ -533,14 +533,14 @@ fn listings_do_not_list_the_listing_pgrep() {
     let out = marked_shell.stdout.take().unwrap();
     Piped::new(out).forked("the marked shell to fork");
     // The listing names the match, never the holder.
-    let found = matching(&text).unwrap();
+    let found = matching(&text, MUST_SUCCEED_WITHIN).unwrap();
     assert!(found.contains(&marked_pid), "{found:?}");
     assert!(
         !found.contains(&holder_pid),
         "a listing pgrep must not list itself: {found:?}"
     );
     // A sweep kills the match and spares the holder.
-    kill_matching(&text).unwrap();
+    kill_matching(&text, MUST_SUCCEED_WITHIN / 2).unwrap();
     assert!(alive(holder_pid), "the sweep killed the listing holder");
     // Release and reap both.
     hidden.write_all(b"\n").unwrap();
@@ -560,13 +560,17 @@ fn matching_finds_a_process_by_its_command_line() {
     let guard = KillOnDrop(pid);
     // The shell's forked `sleep` may briefly carry the same command line,
     // so the shell's pid is asserted present, not alone.
-    assert!(matching(&marker).unwrap().contains(&pid));
+    assert!(
+        matching(&marker, MUST_SUCCEED_WITHIN)
+            .unwrap()
+            .contains(&pid)
+    );
     // The dot is literal: a near miss matches nothing.
     let near = marker.replace("a.b", "axb");
-    assert!(matching(&near).unwrap().is_empty());
+    assert!(matching(&near, MUST_SUCCEED_WITHIN).unwrap().is_empty());
     drop(guard);
     reaped(child, "the marked shell");
-    assert!(matching(&marker).unwrap().is_empty());
+    assert!(matching(&marker, MUST_SUCCEED_WITHIN).unwrap().is_empty());
 }
 
 /// Kills a process group on drop, so a failed assertion leaves nothing
@@ -602,9 +606,151 @@ fn kill_matching_kills_each_match_and_its_group() {
     let out = child.stdout.take().unwrap();
     let piped = Piped::new(out);
     piped.forked("the sleep to fork");
-    kill_matching(&marker).unwrap();
+    kill_matching(&marker, MUST_SUCCEED_WITHIN / 2).unwrap();
     assert_eq!(reaped(child, "the killed shell").signal(), Some(9));
     piped.closed("the shell's group to empty");
+}
+
+/// Present in a re-executed child, absent in the parent: the child drives
+/// production `matching` into a stalled `pgrep` under a derived bound.
+const STALLED_PGREP_CHILD: &str = "FIBER_TEST_STALLED_PGREP_CHILD";
+
+/// The stalled `pgrep`'s marker, set by the parent for the child alone.
+const STALLED_PGREP_MARKER: &str = "FIBER_TEST_STALLED_PGREP_MARKER";
+
+/// The outer bound in milliseconds, set by the parent for the child alone.
+const STALLED_PGREP_BOUND_MS: &str = "FIBER_TEST_STALLED_PGREP_BOUND_MS";
+
+/// Production `matching` with a caller-supplied bound expires inside that
+/// bound naming the `pgrep` step: the child reads a 400 ms outer bound
+/// from its environment, derives a 400 ms within on an injected clock,
+/// halves it for the 200 ms listing, and drives the stalled `pgrep`
+/// shadow into it. The parent re-executes this test under a 30 s wall
+/// deadline with a `PATH`-shadowed `pgrep` that blocks on a FIFO only
+/// for the run's unique marker and execs the real `pgrep` otherwise
+/// (per-test processes, so no other test's listing can block on this
+/// FIFO), guards the stall by pid, and asserts the child's success before
+/// releasing the FIFO; the expiry already killed and reaped the shadow
+/// through production.
+#[test]
+fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
+    if std::env::var_os(STALLED_PGREP_CHILD).is_some() {
+        stalled_pgrep_child();
+        return;
+    }
+    // debt: this stalled-pgrep parent harness duplicates support's
+    // stalled-listing parent harness (two copies): FIFO creation, PATH
+    // setup, guarded rerun and cleanup stay duplicated; share them on the
+    // third: sharing needs a public fakes helper used only by tests,
+    // widening the surface this ticket narrows.
+    let dir = crate::TempDir::new("fiber-stalled-pgrep");
+    // Unique to the run: the shadow stalls only this marker, and the
+    // watchdog guards only it, so no other test's process can match.
+    let marker = format!("stall-pgrep-{}", std::process::id());
+    let fifo = dir.path().join("fifo");
+    crate::fifo(&fifo);
+    // Resolved before shadowing: the shadow falls through to it for every
+    // listing that is not this run's stall.
+    let real = Command::new("sh")
+        .args(["-c", "command -v pgrep"])
+        .output()
+        .unwrap()
+        .stdout;
+    let real = String::from_utf8_lossy(&real).trim().to_owned();
+    assert!(!real.is_empty(), "a real pgrep resolves before shadowing");
+    // The production call passes the pattern form, so the shadow matches
+    // the pattern literally: the raw marker never appears contiguously.
+    // debt: this stall shadow duplicates support's stalled-listing shadow
+    // (two copies), share them on the third: sharing needs a public fakes
+    // helper used only by tests, widening the surface this ticket narrows.
+    let body = format!(
+        "for arg in \"$@\"; do\n  case \"$arg\" in\n    *'{}'*)\n      read line < '{}'\n      exit 0\n      ;;\n  esac\ndone\nexec '{}' \"$@\"\n",
+        pattern(&marker),
+        fifo.display(),
+        real,
+    );
+    crate::script(dir.path(), "pgrep", &body);
+    // Held open read+write across the rerun, so the shadow's open succeeds
+    // and its read parks: the stall holds reliably past child startup, and
+    // the 200 ms wall expiry fires at least 29,800 ms before the 30 s exit
+    // cap can release it, with a 120 ms floor over the slowest healthy
+    // `pgrep` spawn. Dropping it releases a shadow the expiry left behind,
+    // which then exits at once.
+    let held = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&fifo)
+        .unwrap();
+    // The guard kills this stall alone by its argv if the child hangs and
+    // the expiry below never runs: never this test's own group.
+    let stall_guard = crate::Watchdog::matching(&marker);
+    let path = format!(
+        "{}:{}",
+        dir.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let output = crate::rerun_within(
+        "process_group::tests::a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound",
+        &[
+            (STALLED_PGREP_CHILD, "1"),
+            ("PATH", path.as_str()),
+            (STALLED_PGREP_MARKER, marker.as_str()),
+            (STALLED_PGREP_BOUND_MS, "400"),
+        ],
+        // A 30 s wall bound: the re-executed child's expected ≈2-4 s wall
+        // (boot plus setup plus the 200 ms stall) fits inside the exit wait
+        // with margin — the 200 ms bound fires at least 29,800 ms before
+        // the exit cap can release the stall — and a production body
+        // discarding the derived bound still expires inside it, with group
+        // cleanup inside a second 30 s.
+        Deadline::after(Duration::from_secs(30)),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "the stalled-pgrep child proves the derived bound:\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran exactly the stalled-pgrep test: {stdout}"
+    );
+    drop(held);
+    stall_guard.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+/// The re-executed child: a 400 ms env-fed outer within on an injected
+/// clock halves to the exact nonzero 200 ms listing bound production must
+/// expire inside of.
+#[track_caller]
+fn stalled_pgrep_child() {
+    let marker = std::env::var(STALLED_PGREP_MARKER).expect("the parent sets the stall marker");
+    let outer_ms: u64 = std::env::var(STALLED_PGREP_BOUND_MS)
+        .expect("the parent sets the outer bound")
+        .parse()
+        .expect("the outer bound is milliseconds");
+    let clock: &'static std::sync::Arc<crate::clock::FakeClock> =
+        Box::leak(Box::new(crate::clock::FakeClock::new()));
+    let wait = Deadline::on(&**clock).within(Duration::from_millis(outer_ms));
+    // The inner step is half the enclosing wait, nonzero and exact: a
+    // production body discarding `bound` cannot show this budget.
+    let bound = wait.left() / 2;
+    assert_eq!(
+        bound,
+        Duration::from_millis(200),
+        "the listing step halves the enclosing wait"
+    );
+    let error = matching(&marker, bound).expect_err("the stalled pgrep outlives the derived bound");
+    assert_eq!(
+        error.kind(),
+        io::ErrorKind::TimedOut,
+        "the expiry is a timeout, not a pgrep failure"
+    );
+    assert_eq!(
+        error.to_string(),
+        "pgrep did not exit within 200ms",
+        "the expiry names the pgrep step with the derived bound"
+    );
 }
 
 #[test]

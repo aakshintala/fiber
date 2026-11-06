@@ -22,7 +22,7 @@ use super::syntax::Join;
 
 /// The most distinct directories one element may run in; more means the
 /// path is lost and every later element is `executes`.
-pub(super) const MAX_DIRECTORIES: usize = 32;
+const MAX_DIRECTORIES: usize = 32;
 
 /// The `(succeeded, directory)` states of one call.
 pub(super) struct Cwd {

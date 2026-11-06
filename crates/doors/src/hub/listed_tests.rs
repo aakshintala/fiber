@@ -1,6 +1,6 @@
 use super::*;
 use config::{Config, ProjectKey, Sources};
-use contract::{ErrorCode, HubLine};
+use contract::{ErrorCode, HubEventKind, HubLine};
 use fakes::MUST_SUCCEED_WITHIN;
 use fakes::{Deadline, clock::FakeClock};
 use serde_json::json;
@@ -258,7 +258,7 @@ fn listed_unix_connect_reads_hello_and_never_starts_a_hub() {
     let (_, hello) = deadline
         .recv_or_fail(&done_rx, "the forwarded hub hello")
         .unwrap();
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     deadline.recv_or_fail(&served_rx, "the listener answered");
     std::fs::remove_file(&path).unwrap();
     let target = Target::Listed {
@@ -324,7 +324,7 @@ fn unpaired_connect_reads_only_the_hello() {
     let (_, hello) = deadline
         .recv_or_fail(&done_rx, "the unpaired hello without authentication")
         .unwrap();
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     drop(release);
     deadline.recv_or_fail(&served_rx, "the unpaired listener ends");
 }

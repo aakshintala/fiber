@@ -23,7 +23,7 @@ use serde_json::Value;
 pub(crate) const LIST_DEADLINE: Duration = Duration::from_secs(2);
 pub(crate) const CLEANUP_MARGIN: Duration = Duration::from_millis(50);
 pub(crate) const MAX_LINE: usize = 1024 * 1024;
-pub(crate) const READ_CHUNK: usize = 65_536;
+const READ_CHUNK: usize = 65_536;
 
 /// The session ids with a socket entry under `home`'s `run/`, sorted,
 /// with no connect: the stop path lists them to decide whether a hub is

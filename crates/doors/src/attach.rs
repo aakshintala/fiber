@@ -90,7 +90,7 @@ pub fn attach(
             // The kind is parsed once; the match names every outcome, so
             // a new kind stops compiling here until its wait behavior is
             // decided. Anything but this switch's own answers is ignored.
-            match classify_output(&EventKind::from_name(&envelope.kind)) {
+            match classify_output(&envelope.kind()) {
                 OutputKind::CommandRejected if answers_command(&envelope, &switch) => {
                     return Err(rejection(&envelope.payload));
                 }
@@ -123,7 +123,7 @@ pub fn attach(
         // new kind stops compiling here until its print behavior is
         // decided. A name this build does not know is `Unknown`, an
         // `Other` like any other line outside the turn's boundaries.
-        match classify_output(&EventKind::from_name(&envelope.kind)) {
+        match classify_output(&envelope.kind()) {
             OutputKind::CommandRejected if answers_command(&envelope, &command) => {
                 // The prompt's own rejection, read from its payload so
                 // its code and message match the handshake's.

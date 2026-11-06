@@ -365,8 +365,11 @@ impl FakeHub {
                         (Some(want), Some(got)) => {
                             want == got
                                 && matches!(
-                                    answer_kind(&answer).as_deref(),
-                                    Some("command_accepted" | "command_rejected")
+                                    answer_kind(&answer),
+                                    Some(
+                                        HubEventKind::CommandAccepted
+                                            | HubEventKind::CommandRejected
+                                    )
                                 )
                         }
                         _ => true,
@@ -435,10 +438,15 @@ fn answer_command_id(answer: &str) -> Option<String> {
 }
 
 /// The `kind` of a queued answer line, when it parses.
-fn answer_kind(answer: &str) -> Option<String> {
+fn answer_kind(answer: &str) -> Option<HubEventKind> {
     serde_json::from_str::<Value>(answer)
         .ok()
-        .and_then(|answer| answer.get("kind")?.as_str().map(str::to_owned))
+        .and_then(|answer| {
+            answer
+                .get("kind")?
+                .as_str()
+                .map(|kind| HubEventKind::from(kind.to_owned()))
+        })
 }
 
 fn accepted() -> Value {

@@ -290,22 +290,9 @@ const PGREP_WITHIN: Duration = Duration::from_millis(LISTING_WITHIN.as_secs() * 
 )]
 pub(crate) const WATCHDOG_LOOKUP_WITHIN: Duration = Duration::from_secs(3);
 
-/// The pids of the processes whose command line contains `text`.
-///
-/// # Errors
-///
-/// When `pgrep` cannot be run or fails, or has not exited within
-/// [`MUST_SUCCEED_WITHIN`] (`TimedOut`; the `pgrep` is killed).
-///
-/// # Panics
-///
-/// When `text` is empty, before running anything.
-pub fn matching(text: &str) -> io::Result<Vec<u32>> {
-    matching_within(text, MUST_SUCCEED_WITHIN)
-}
-
-/// [`matching`] with the caller's own `pgrep` budget, so a listing nested
-/// in a deadlined wait expires inside it and the failure names the step.
+/// The pids of the processes whose command line contains `text`, with the
+/// caller's own `pgrep` budget, so a listing nested in a deadlined wait
+/// expires inside it and the failure names the step.
 ///
 /// # Errors
 ///
@@ -315,7 +302,7 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
 /// # Panics
 ///
 /// When `text` is empty, before running anything.
-fn matching_within(text: &str, bound: Duration) -> io::Result<Vec<u32>> {
+pub fn matching(text: &str, bound: Duration) -> io::Result<Vec<u32>> {
     let pattern = pattern(text);
     // Checked again on the result: an empty pattern matches every process.
     assert!(
@@ -414,8 +401,8 @@ fn bounded(mut child: Child, what: &str, deadline: Duration) -> io::Result<Finis
 ///
 /// When `text` is empty, before running anything, or when a match is pid 1
 /// or less ([`kill_group`], [`kill_pid`]).
-pub fn kill_matching(text: &str) -> io::Result<()> {
-    for pid in matching(text)? {
+pub fn kill_matching(text: &str, bound: Duration) -> io::Result<()> {
+    for pid in matching(text, bound)? {
         kill_group(pid, "KILL")?;
         kill_pid(pid, "KILL")?;
     }
@@ -688,7 +675,7 @@ fn listed_exit(
 pub fn try_matching_exits(text: &str, deadline: Deadline) -> io::Result<()> {
     let within = deadline.left();
     let text = text.to_owned();
-    listed_exit(move || matching_within(&text, PGREP_WITHIN), within)
+    listed_exit(move || matching(&text, PGREP_WITHIN), within)
 }
 
 /// [`try_matching_exits`] as a boolean: `false` on any failure path.

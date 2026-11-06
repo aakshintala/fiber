@@ -12,7 +12,7 @@ mod common;
 
 use common::*;
 use contract::Seq;
-use contract::events::Event;
+use contract::events::{Event, EventKind};
 use serde_json::json;
 
 fn turn_started() -> Event {
@@ -54,19 +54,15 @@ fn two_logs_written_by_log_chain_root_first() {
     assert_eq!(segments[0].to, Some(Seq(1)));
     assert_eq!(segments[1].session_id, id("s_bbbbbbbbbbbbbbbb"));
     assert_eq!(segments[1].to, None);
-    let root_kinds: Vec<String> = segments[0]
+    let root_kinds: Vec<EventKind> = segments[0]
         .lines(0)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
     assert_eq!(
         root_kinds,
-        ["session_started", "turn_started", "turn_completed"]
-            .into_iter()
-            .take(2)
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
+        [EventKind::SessionStarted, EventKind::TurnStarted]
     );
     let folded = log::history_to(&tmp.session(&id("s_bbbbbbbbbbbbbbbb")), Seq(2)).unwrap();
     assert_eq!(folded[1].to, Some(Seq(2)));
@@ -81,7 +77,7 @@ fn the_last_line_is_the_logs_last_complete_line() {
     log.append(&turn_started(), None, None).unwrap();
     drop(log);
     let found = log::last_line(&tmp.session(&id("s_aaaaaaaaaaaaaaaa"))).unwrap();
-    assert_eq!(found.kind, "turn_started");
+    assert_eq!(found.kind(), EventKind::TurnStarted);
     assert_eq!(found.seq.unwrap(), Seq(1));
 }
 
@@ -159,7 +155,7 @@ fn a_moved_chain_links_projects_with_exact_ancestry() {
     // The parent's own `moved` ending stays intact: the walk reads first
     // lines only.
     let tail = log::last_line(&parent.dir).unwrap();
-    assert_eq!(tail.kind, "moved");
+    assert_eq!(tail.kind(), EventKind::Moved);
 }
 
 #[test]
@@ -218,13 +214,16 @@ fn alternating_project_hops_resolve_each_parent_where_recorded() {
     assert_eq!(segments[2].to, None);
     // The middle segment reads its own project's log, bounded by its
     // own point.
-    let middle_kinds: Vec<String> = segments[1]
+    let middle_kinds: Vec<EventKind> = segments[1]
         .lines(0)
         .unwrap()
         .into_iter()
-        .map(|line| line.kind)
+        .map(|line| line.kind())
         .collect();
-    assert_eq!(middle_kinds, ["session_started", "turn_started"]);
+    assert_eq!(
+        middle_kinds,
+        [EventKind::SessionStarted, EventKind::TurnStarted]
+    );
 }
 
 #[test]

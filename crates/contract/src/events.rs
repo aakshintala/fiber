@@ -135,9 +135,9 @@ macro_rules! kinds {
             /// `Ok(None)`, for the reader to skip; keys it does not know are
             /// ignored (`docs/events.md`, "Versioning").
             pub fn from_envelope(line: &Envelope) -> Result<Option<Self>, serde_json::Error> {
-                Ok(Some(match line.kind.as_str() {
-                    $($name => Self::$variant(<$payload>::deserialize(&line.payload)?),)+
-                    _ => return Ok(None),
+                Ok(Some(match line.kind() {
+                    $(EventKind::$variant => Self::$variant(<$payload>::deserialize(&line.payload)?),)+
+                    EventKind::Unknown(_) => return Ok(None),
                 }))
             }
         }

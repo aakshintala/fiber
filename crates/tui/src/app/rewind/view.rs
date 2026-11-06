@@ -294,7 +294,7 @@ impl Cursor {
     }
 
     /// The cursor's row among the visible rows.
-    pub(super) fn selected_index(&self, turns: &[TurnRow], show_choices: bool) -> usize {
+    fn selected_index(&self, turns: &[TurnRow], show_choices: bool) -> usize {
         self.visible(turns, show_choices)
             .iter()
             .position(|row| self.matches_selected(row, turns))

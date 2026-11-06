@@ -1038,7 +1038,7 @@ impl MarkerWatch {
     /// The recorded first line or pre-EOF bytes, lossy and capped.
     // mutants run on Linux, where this is not compiled.
     #[cfg_attr(false, mutants::skip)]
-    pub(crate) fn head_text(&self) -> String {
+    fn head_text(&self) -> String {
         let head = support::lock(&self.head);
         let mut text = String::from_utf8_lossy(&head).into_owned();
         text.truncate(4096);

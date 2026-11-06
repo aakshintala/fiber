@@ -166,7 +166,10 @@ fn a_command_past_its_deadline_errs_and_leaves_nothing_in_its_group() {
         err.starts_with("timed out waiting for the sleeper"),
         "{err}"
     );
-    assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
+    assert_eq!(
+        fakes::matching(&marker, MUST_SUCCEED_WITHIN / 2).unwrap(),
+        Vec::<u32>::new()
+    );
     watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 
@@ -287,7 +290,7 @@ fn output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging() {
     })
     .unwrap_err();
     assert_eq!(err, "the output of the holder stayed open");
-    fakes::kill_matching(&marker).unwrap();
+    fakes::kill_matching(&marker, MUST_SUCCEED_WITHIN / 2).unwrap();
     assert!(fakes::matching_exits(
         &marker,
         fakes::Deadline::after(MUST_SUCCEED_WITHIN)
@@ -369,7 +372,7 @@ fn timed_output_held_open_by_a_process_outside_the_group_errs_instead_of_hanging
     })
     .unwrap_err();
     assert!(err.starts_with("timed out waiting for the holder"), "{err}");
-    fakes::kill_matching(&marker).unwrap();
+    fakes::kill_matching(&marker, MUST_SUCCEED_WITHIN / 2).unwrap();
     assert!(fakes::matching_exits(
         &marker,
         fakes::Deadline::after(MUST_SUCCEED_WITHIN)
@@ -549,7 +552,10 @@ fn a_timed_run_past_its_deadline_errs_and_leaves_nothing_behind() {
     )
     .unwrap_err();
     assert_eq!(err, "timed out waiting for the sleeper");
-    assert_eq!(fakes::matching(&marker).unwrap(), Vec::<u32>::new());
+    assert_eq!(
+        fakes::matching(&marker, MUST_SUCCEED_WITHIN / 2).unwrap(),
+        Vec::<u32>::new()
+    );
     watchdog.stand_down(fakes::Deadline::after(MUST_SUCCEED_WITHIN));
 }
 

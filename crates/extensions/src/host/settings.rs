@@ -14,7 +14,7 @@ use super::{failure, to_json, to_lua};
 /// keys a repository may set, and its own clone of the session's
 /// configuration, so a `set` is visible to its own later `get` at once.
 #[derive(Clone)]
-pub(crate) struct Settings {
+struct Settings {
     pub extension: String,
     pub repo_settings: Vec<String>,
     pub config: Rc<RefCell<Config>>,

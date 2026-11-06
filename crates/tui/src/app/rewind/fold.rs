@@ -20,11 +20,10 @@ use crate::app::read;
 /// lost connection (`docs/tui.md`, "History and paging").
 const HISTORY_WAIT: Duration = Duration::from_secs(10);
 
-/// A `history` request waiting for its answer.
+/// A `history` request waiting for its answer. The outbox
+/// `RewindHistory` tag is the sole record of its command id.
 #[derive(Debug)]
 struct Pending {
-    /// The command id the answer names.
-    id: String,
     /// When the request went out on the frame's clock; none before the
     /// first frame time, and then the wait carries no deadline.
     sent_at: Option<Instant>,
@@ -151,23 +150,15 @@ impl Fold {
         }
     }
 
-    /// Takes the pending `history` request for `id`, dropping its wait.
-    pub(super) fn take_wait(&mut self, id: &str) -> bool {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.id == id)
-        {
-            self.pending = None;
-            true
-        } else {
-            false
-        }
+    /// Takes the pending `history` request, dropping its wait. The
+    /// caller validates the arriving id against the outbox tag first.
+    pub(super) fn take_wait(&mut self) -> bool {
+        self.pending.take().is_some()
     }
 
     /// Notes the `history` request on the wire.
-    pub(super) fn begin_wait(&mut self, id: String, sent_at: Option<Instant>) {
-        self.pending = Some(Pending { id, sent_at });
+    pub(super) fn begin_wait(&mut self, sent_at: Option<Instant>) {
+        self.pending = Some(Pending { sent_at });
     }
 
     /// Drops the `history` request: its late answer folds nowhere.

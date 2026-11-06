@@ -403,7 +403,7 @@ impl App {
     /// through the existing close path, then deletes the confirmed set
     /// once each one reports its exit. With the link down nothing goes
     /// out and the question stays.
-    pub(super) fn delete_command_confirm(&mut self) -> Effect {
+    fn delete_command_confirm(&mut self) -> Effect {
         if !self.command_owns_prompt() {
             return Effect::None;
         }

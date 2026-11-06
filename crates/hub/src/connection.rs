@@ -45,7 +45,7 @@ use crate::tick::Tick;
 /// fails. The move-time `reach` never consults the flag.
 pub(crate) struct StartSlot {
     pub(crate) guard: Arc<Mutex<()>>,
-    pub(crate) retry_claimed: bool,
+    retry_claimed: bool,
 }
 
 impl StartSlot {

@@ -14,7 +14,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 
 use crate::app::testkit::{hello, now};
-use crate::app::{App, Effect, Kind, NoticeLine, Phase, Surface};
+use crate::app::{App, Effect, Kind, NoticeLine, Phase, Surface, Waiting};
 use crate::configure::{Configure, ConfigureError};
 use crate::configure_fake::Fake;
 use crate::home::Launch;
@@ -446,7 +446,7 @@ fn clear_staged_decline_stays_attached_and_sends_no_close() {
         Some(session)
     );
     assert!(
-        app.clear_pending_command_id().is_none(),
+        !app.outbox.waiting_any(&Waiting::ClearStart),
         "the clear settles"
     );
 }
@@ -689,9 +689,11 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
     app.on_line(status(old_session));
     app.clear();
     let staged = app
-        .clear_pending_command_id()
-        .expect("the clear staged a start")
-        .to_owned();
+        .outbox
+        .pending
+        .iter()
+        .find_map(|(id, (kind, _))| matches!(kind, Kind::Start).then(|| id.clone()))
+        .expect("the clear staged a start");
     let staged_line = app
         .outbox
         .start_line(&staged)
@@ -728,8 +730,8 @@ fn clear_staged_accept_closes_the_old_session_with_its_credential() {
         .expect("the retry has an id")
         .to_owned();
     assert_eq!(
-        app.clear_pending_command_id(),
-        Some(new.as_str()),
+        app.outbox.waiting(&new),
+        Some(Waiting::ClearStart),
         "the clear follows the retry"
     );
     assert!(
@@ -1117,7 +1119,7 @@ fn clear_staged_install_failure_settles_the_clear() {
     app.on_line(status(session));
     let old = refuse_start(&mut app, "");
     assert!(
-        app.clear_pending_command_id().is_some(),
+        app.outbox.waiting_any(&Waiting::ClearStart),
         "the clear staged a start"
     );
     let ticket = match app.take_hooks_job().expect("the query waits") {
@@ -1154,7 +1156,7 @@ fn clear_staged_install_failure_settles_the_clear() {
         Some(session)
     );
     assert!(
-        app.clear_pending_command_id().is_none(),
+        !app.outbox.waiting_any(&Waiting::ClearStart),
         "the clear settles"
     );
     assert!(!app.outbox.pending.contains_key(&old));
@@ -1169,7 +1171,7 @@ fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
     app.on_line(status(session));
     let old = refuse_start(&mut app, "");
     assert!(
-        app.clear_pending_command_id().is_some(),
+        app.outbox.waiting_any(&Waiting::ClearStart),
         "the clear staged a start"
     );
     assert!(app.take_hooks_job().is_some(), "the query runs");
@@ -1187,7 +1189,7 @@ fn disconnect_during_the_names_query_settles_a_clear_staged_start() {
         )]
     );
     assert!(
-        app.clear_pending_command_id().is_none(),
+        !app.outbox.waiting_any(&Waiting::ClearStart),
         "the clear settles"
     );
     assert!(!app.outbox.pending.contains_key(&old));

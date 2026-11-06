@@ -21,8 +21,8 @@ use std::time::Duration;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{
-    CommandAccepted, Empty, Event, ExtensionsLoaded, FiberExited, LoadedExtension, Notice,
-    SessionState, SessionStatus, ToolState,
+    CommandAccepted, Empty, Event, EventKind, ExtensionsLoaded, FiberExited, LoadedExtension,
+    Notice, SessionState, SessionStatus, ToolState,
 };
 use contract::inbox::Delivery;
 use contract::provider::ToolDefinition;
@@ -1842,8 +1842,8 @@ fn close_after_resume_keeps_a_session_that_has_turns() {
 
     let lines = log::read(&dir).unwrap();
     assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        ["turn_started"]
+        lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        [EventKind::TurnStarted]
     );
 }
 
@@ -2982,7 +2982,7 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
                 let line = wait
                     .recv(&lines)
                     .expect("the joining client's clients line arrives");
-                if line.kind == "clients" {
+                if line.kind() == EventKind::Clients {
                     break;
                 }
             }
@@ -3011,8 +3011,12 @@ fn after_quiesce_a_client_leaving_writes_no_clients_line() {
         let wait = Deadline::after(DEADLINE);
         loop {
             let line = wait.recv(&lines).expect("the notice arrives");
-            assert_ne!(line.kind, "clients", "a clients line followed quiesce");
-            if line.kind == "notice" {
+            assert_ne!(
+                line.kind(),
+                EventKind::Clients,
+                "a clients line followed quiesce"
+            );
+            if line.kind() == EventKind::Notice {
                 break;
             }
         }
@@ -6649,7 +6653,7 @@ fn a_client_hanging_up_after_the_stop_ends_its_writer_and_the_close_still_comple
     let (hung_tx, hung) = mpsc::channel();
     thread::spawn(move || {
         while let Ok(Some(line)) = hung_watcher.recv() {
-            if line.kind == "clients"
+            if line.kind() == EventKind::Clients
                 && line.payload.get("count").and_then(Value::as_u64) == Some(0)
             {
                 if let Ok(()) = hung_tx.send(()) {}
