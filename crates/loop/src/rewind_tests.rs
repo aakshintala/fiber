@@ -1050,10 +1050,21 @@ fn folded_at(sessions: &Path, at: u64) -> (crate::resume::Resumed, Vec<contract:
     (folded, conversation)
 }
 
+/// The session log a continuing chain's seed names: the own session's
+/// `events.jsonl`, built the one way the log crate allows (`SessionDir`),
+/// never a hardcoded string.
+fn own_log(sessions: &Path, session: &str) -> String {
+    log::SessionDir::new(sessions, &SessionId(session.to_owned()))
+        .events()
+        .display()
+        .to_string()
+}
+
 /// The seed a resume window starts from when the parent segments held the
 /// person's messages `texts`, each the first line of its segment: the
-/// reviewer's index of them, and nothing else.
-fn seeded(texts: &[&str]) -> Carry {
+/// reviewer's index of them, the continuing chain's own session log pinned,
+/// and nothing else.
+fn seeded(texts: &[&str], session_log: &str) -> Carry {
     Carry {
         reviewed: texts
             .iter()
@@ -1068,6 +1079,8 @@ fn seeded(texts: &[&str]) -> Carry {
                 }
             })
             .collect(),
+        session_log: session_log.to_owned(),
+        session_log_pinned: true,
         ..Carry::default()
     }
 }
@@ -1089,7 +1102,7 @@ fn a_handoff_before_the_point_applies_to_the_fork() {
     // The window is turn 2's `turn_started` in the parent segment, and no
     // job or session log preceded it, so the seed is the default.
     assert_eq!(folded.window, (0, 3));
-    assert_eq!(folded.seed, seeded(&["one"]));
+    assert_eq!(folded.seed, seeded(&["one"], &own_log(&sessions, HB)));
     // The carried input, then the note, under the new opening message.
     assert_eq!(conversation.len(), 3);
     assert!(
@@ -1112,7 +1125,14 @@ fn a_handoff_after_the_point_does_not_apply_to_the_fork() {
     // after the point, so the fork keeps the earlier context.
     let (folded, conversation) = folded_at(&sessions, 2);
     assert_eq!(folded.window, (0, 0));
-    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(
+        folded.seed,
+        Carry {
+            session_log: own_log(&sessions, HB),
+            session_log_pinned: true,
+            ..Carry::default()
+        }
+    );
     // The conversation the same lines render with the handoff lines past
     // the point deleted: turn 1's input alone, with no note anywhere.
     let kept: Vec<Envelope> = handoff_log()
@@ -1134,7 +1154,7 @@ fn a_point_on_the_handoffs_completion_applies_it() {
     // itself, the handoff applies.
     let (folded, conversation) = folded_at(&sessions, 6);
     assert_eq!(folded.window, (0, 3));
-    assert_eq!(folded.seed, seeded(&["one"]));
+    assert_eq!(folded.seed, seeded(&["one"], &own_log(&sessions, HB)));
     // The carried input and the note, with no opening message: that line
     // is past the point.
     // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
@@ -1150,7 +1170,14 @@ fn a_point_on_the_handoffs_completion_applies_it() {
     // start and the note line is truncated back off it.
     let (earlier, before) = folded_at(&sessions, 5);
     assert_eq!(earlier.window, (0, 0));
-    assert_eq!(earlier.seed, Carry::default());
+    assert_eq!(
+        earlier.seed,
+        Carry {
+            session_log: own_log(&sessions, HB),
+            session_log_pinned: true,
+            ..Carry::default()
+        }
+    );
     assert_eq!(before, [user_input("one"), user_input("two")]);
 }
 
@@ -1226,7 +1253,14 @@ fn a_handoff_started_with_no_completion_does_not_apply() {
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
     assert_eq!(folded.window, (0, 0));
-    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(
+        folded.seed,
+        Carry {
+            session_log: own_log(&sessions, HB),
+            session_log_pinned: true,
+            ..Carry::default()
+        }
+    );
     let log = log::Log::open(
         &sessions,
         SessionId(HB.to_owned()),
@@ -1289,7 +1323,14 @@ fn a_handoff_with_another_outcome_does_not_apply() {
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
     assert_eq!(folded.window, (0, 0));
-    assert_eq!(folded.seed, Carry::default());
+    assert_eq!(
+        folded.seed,
+        Carry {
+            session_log: own_log(&sessions, HB),
+            session_log_pinned: true,
+            ..Carry::default()
+        }
+    );
     let log = log::Log::open(
         &sessions,
         SessionId(HB.to_owned()),
@@ -1384,7 +1425,10 @@ fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
     // handoff turn's start there.
     let (folded, conversation) = folded_chain(&sessions, 8);
     assert_eq!(folded.window, (1, 3));
-    assert_eq!(folded.seed, seeded(&["a-one", "b-one"]));
+    assert_eq!(
+        folded.seed,
+        seeded(&["a-one", "b-one"], &own_log(&sessions, HC))
+    );
     assert_eq!(conversation.len(), 3);
     assert!(
         matches!(&conversation[0], contract::provider::Input::User { text, .. } if text.starts_with("This message is from Fiber")),
@@ -1400,7 +1444,14 @@ fn a_handoff_in_a_middle_segment_applies_to_the_grandchild() {
     // point, so the window stays at the chain's start.
     let (earlier, before) = folded_chain(&sessions, 2);
     assert_eq!(earlier.window, (0, 0));
-    assert_eq!(earlier.seed, Carry::default());
+    assert_eq!(
+        earlier.seed,
+        Carry {
+            session_log: own_log(&sessions, HC),
+            session_log_pinned: true,
+            ..Carry::default()
+        }
+    );
     assert_eq!(before, [user_input("a-one"), user_input("b-one")]);
 }
 
@@ -1469,7 +1520,7 @@ fn of_two_handoffs_only_the_one_at_or_before_the_point_applies() {
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
     assert_eq!(folded.window, (0, 3));
-    assert_eq!(folded.seed, seeded(&["one"]));
+    assert_eq!(folded.seed, seeded(&["one"], &own_log(&sessions, HB)));
     let log = log::Log::open(
         &sessions,
         SessionId(HB.to_owned()),
@@ -1551,7 +1602,7 @@ fn folded_hook_context(sessions: &Path, at: u64) -> Vec<contract::provider::Inpu
     );
     let folded = crate::history::forked(&sessions.join(HB), Seq(0)).unwrap();
     assert_eq!(folded.window, (0, 3));
-    assert_eq!(folded.seed, seeded(&["one"]));
+    assert_eq!(folded.seed, seeded(&["one"], &own_log(sessions, HB)));
     let log = log::Log::open(
         sessions,
         SessionId(HB.to_owned()),
