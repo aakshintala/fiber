@@ -61,8 +61,6 @@ crates/loop/src/usage_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBo
 crates/loop/src/util_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/warm_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/wire_tests.rs	fiber-4157	plan	2026-11-05T10:21:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop/attach_tests.rs	fiber-4192	grant	2026-11-05T19:22:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4192-exited-prompt-hang	
-crates/tui/src/app/commands_tests.rs	fiber-4192	grant	2026-11-05T19:22:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4192-exited-prompt-hang	
 crates/main/src/keeper_child_tests.rs	fiber-3891	plan	2026-11-05T22:22:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3891-keeper-timeout	4213
 crates/jobs/src/keeper_tests.rs	fiber-3891	plan	2026-11-05T22:22:48Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3891-keeper-timeout	4213
 crates/main/src/keeper_child.rs	fiber-3891	plan	2026-11-05T22:22:48Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/keeper/3891-keeper-timeout	4213
@@ -87,7 +85,6 @@ providers/databricks/providers/databricks.lua	fiber-4258	plan	2026-11-06T03:52:0
 providers/databricks/tests	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4269,4267,4266,4259,4232,4218,4213,4209
 docs/configuration.md	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4269,4267,4266,4259,4232,4218,4213,4209
 docs/model-routing.md	fiber-4258	plan	2026-11-06T03:52:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4269,4267,4266,4259,4232,4218,4213,4209
-crates/tui/src/event_loop/hub.rs	fiber-4192	grant	2026-11-06T04:01:05Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4192-exited-prompt-hang	4259
 .github/workflows/ci.yml	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/workflow.md	fiber-4272	plan	2026-11-06T04:05:16Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
