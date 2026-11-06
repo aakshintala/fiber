@@ -652,15 +652,19 @@ fn provider_reload_refreshes_the_spawn_catalogue() {
         );
     }
     // No running delegate stopped: the reloaded set retains, and
-    // nothing cancels.
+    // nothing cancels. The names as a set: `docs/extensions.md`,
+    // "Host calls" promises only that a reload keeps them running.
+    let retains = fixture.delegate.retains.lock().unwrap().clone();
+    assert!(
+        !retains.is_empty(),
+        "retain never ran with the reloaded set"
+    );
+    let mut names = retains.last().unwrap().clone();
+    names.sort();
     assert_eq!(
-        fixture.delegate.retains.lock().unwrap().clone(),
-        vec![vec![
-            "demo".to_owned(),
-            "fake".to_owned(),
-            "judge".to_owned()
-        ]],
-        "retain runs once with the reloaded set's names"
+        names,
+        vec!["demo".to_owned(), "fake".to_owned(), "judge".to_owned()],
+        "retain hands the reloaded set's names as a set"
     );
 }
 
@@ -703,17 +707,64 @@ fn provider_reload_failure_keeps_the_old_catalogue() {
 }
 
 #[test]
+fn provider_reload_refreshes_an_old_cached_list() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    // A Lua `models()` returning the new levels, plus a pre-written
+    // cache holding the old list aged beyond `refresh_after`: the
+    // pre-fix detached refresh held the lock and the synchronous join
+    // missed, so the catalogue kept the old list.
+    std::fs::write(
+        fixture.rig.home.join("extensions/fake/providers/fake.lua"),
+        "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() return { {id=\"m\", protocol=\"openai-responses\", base_url=\"http://127.0.0.1:9/v1\", context_window=1000, thinking_levels={\"high\"}}, {id=\"plain\", protocol=\"openai-responses\", base_url=\"http://127.0.0.1:9/v1\", context_window=1000} } end } })",
+    )
+    .unwrap();
+    config::write_model_cache(&fixture.rig.home, "fake", &fake_models_without_levels()).unwrap();
+    // Dated two days before the fake clock's wall
+    // (`support::clock::WALL_EPOCH`), so the list reads older than
+    // `refresh_after` on the reload's clock.
+    std::fs::File::options()
+        .write(true)
+        .open(fixture.rig.home.join("cache/models/fake.json"))
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 - 2 * 86_400),
+        )
+        .unwrap();
+    let prepared = fixture.prepare();
+    (prepared.installed)();
+    // The joined refresh publishes the new level despite the old cache.
+    let snapshot = fixture.delegates.resolve_snapshot();
+    assert_eq!(
+        (snapshot.lookup)("fiber:fake/m:high"),
+        Ok("fake/m:high".to_owned())
+    );
+}
+
+#[test]
 fn provider_reload_models_error_keeps_the_old_catalogue() {
     let mut fixture = Fixture::new();
     fixture.install_fake(fake_models_without_levels());
     // A Lua provider file whose `models()` errors, plus a pre-written
-    // cache holding the old list.
+    // cache holding the old list aged beyond `refresh_after`: the
+    // synchronous join still reports the failure as a notice.
     std::fs::write(
         fixture.rig.home.join("extensions/fake/providers/fake.lua"),
         "fiber.provider(\"fake\", { models = { timeout = 5000, run = function() error(\"models boom\") end } })",
     )
     .unwrap();
     config::write_model_cache(&fixture.rig.home, "fake", &fake_models_without_levels()).unwrap();
+    // Dated two days before the fake clock's wall
+    // (`support::clock::WALL_EPOCH`), so the list reads older than
+    // `refresh_after` on the reload's clock.
+    std::fs::File::options()
+        .write(true)
+        .open(fixture.rig.home.join("cache/models/fake.json"))
+        .unwrap()
+        .set_modified(
+            std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000 - 2 * 86_400),
+        )
+        .unwrap();
     fixture.rewrite_fake_models(fake_models_with_levels());
     fixture.touch_fake_source();
     let prepared = fixture.prepare();
@@ -756,11 +807,20 @@ fn provider_reload_removal_drops_the_providers_references() {
         "{}",
         snapshot.catalogue
     );
-    // The install succeeds: the set retains without the fake.
+    // The install succeeds: the set retains without the fake. The
+    // names as a set: `docs/extensions.md`, "Host calls" promises only
+    // that a removal cancels them.
+    let retains = fixture.delegate.retains.lock().unwrap().clone();
+    assert!(
+        !retains.is_empty(),
+        "retain never ran without the removed extension"
+    );
+    let mut names = retains.last().unwrap().clone();
+    names.sort();
     assert_eq!(
-        fixture.delegate.retains.lock().unwrap().clone(),
-        vec![vec!["demo".to_owned(), "judge".to_owned()]],
-        "retain runs once without the removed extension"
+        names,
+        vec!["demo".to_owned(), "judge".to_owned()],
+        "retain hands the set without the removed extension as a set"
     );
 }
 

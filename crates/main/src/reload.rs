@@ -527,12 +527,17 @@ impl State {
             reads.credential(command, timeout, &*clock)
         };
         let lookup = crate::placeholders::lookup(&self.sources.home, &providers, clock.as_ref());
-        match crate::lua_providers::add_lua(extensions, &mut providers, config, &run, &lookup) {
-            Ok((_naming, lua_notices)) => notices.extend(lua_notices),
-            Err(failure) => {
+        // The reload joins its own discovery before the catalogue is
+        // built: no detached `refresh_lists` here, or its lock would
+        // make the synchronous join below miss and the catalogue would
+        // keep the old list for a cache older than `refresh_after`.
+        notices.extend(providers.add_session(extensions, config, &run, &lookup));
+        match providers.fill_placeholders(config, &lookup) {
+            Ok(fill_notices) => notices.extend(fill_notices),
+            Err(error) => {
                 notices.push(contract::events::Notice {
                     code: contract::ErrorCode::ExtensionFailed,
-                    message: failure.message.clone(),
+                    message: error.to_string(),
                     extension: None,
                 });
                 return (None, notices);
