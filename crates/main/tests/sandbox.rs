@@ -2025,6 +2025,7 @@ impl Live {
     }
 
     /// Waits for a socket line matching `done`, keeping every line.
+    #[cfg(target_os = "linux")]
     fn wait_for(&mut self, what: &str, mut done: impl FnMut(&serde_json::Value) -> bool) {
         let lines = until_session(&self.client, what, &mut done);
         self.taken.extend(lines);
