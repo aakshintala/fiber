@@ -102,9 +102,10 @@ query, so they can answer for a previously queued model switch. Label
 enumeration is on demand; no picker or additional reader thread runs in a
 headless session.
 
-The keeper ceiling is TBD of peak RSS with one running job. CI medians on
-main run TBD KiB, of which TBD KiB is RssAnon and the rest file-backed code
-pages (run TBD).
+The keeper ceiling is 13,760 KiB of peak RSS with one running job. The
+benchmark has never run on main, so the figure is the median of its five
+runs on the pull request that added it, 6,880 KiB, doubled per Basis below
+(run 42137584416, which failed elsewhere with its benchmark job green).
 
 Basis says where a number came from:
 
