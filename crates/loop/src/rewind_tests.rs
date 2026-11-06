@@ -1100,7 +1100,7 @@ fn a_handoff_before_the_point_applies_to_the_fork() {
     // before the point, so the fork inherits it.
     let (folded, conversation) = folded_at(&sessions, 8);
     // The window is turn 2's `turn_started` in the parent segment, and no
-    // job or session log preceded it, so the seed is the default.
+    // job preceded it, so the seed names the pinned own log.
     assert_eq!(folded.window, (0, 3));
     assert_eq!(folded.seed, seeded(&["one"], &own_log(&sessions, HB)));
     // The carried input, then the note, under the new opening message.

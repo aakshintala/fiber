@@ -173,10 +173,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     // opening on. A plain resume keeps whatever its latest opening left.
     if pass.continues {
         if resumed.seed.session_log.is_empty() {
-            let Some(own_segment) = segments.get(own) else {
-                return Err(Error::NoSessionStarted);
-            };
-            resumed.seed.session_log = own_session_log(own_segment);
+            resumed.seed.session_log = own_session_log(last)?;
         }
         resumed.seed.session_log_pinned = true;
     }
@@ -191,16 +188,12 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
 /// The continuing chain's own session log: `events.jsonl` in the
 /// `sessions/` directory holding the own segment, built the one way the log
 /// crate allows (`SessionDir`), never a bare join.
-// The parentless fallback is unreachable through any real chain — a segment
-// directory is always `sessions/<id>` — so no test covers it: exempt from
-// mutation testing (docs/testing/mutants.md).
-#[cfg_attr(false, mutants::skip)]
-fn own_session_log(own: &Segment) -> String {
-    let sessions = own.dir.parent().unwrap_or(own.dir.as_path());
-    log::SessionDir::new(sessions, &own.session_id)
+fn own_session_log(own: &Segment) -> Result<String, Error> {
+    let sessions = own.dir.parent().ok_or(Error::NoSessionStarted)?;
+    Ok(log::SessionDir::new(sessions, &own.session_id)
         .events()
         .display()
-        .to_string()
+        .to_string())
 }
 
 /// What [`fold_line`] carries through the pass besides the [`Resumed`] it
