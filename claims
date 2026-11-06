@@ -146,3 +146,4 @@ crates/tui/src/event_loop_tests.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-M
 crates/tui/src/context_view_tests.rs	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/Cargo.toml	fiber-4276	plan	2026-11-06T06:18:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/code-quality.md	fiber-4276	plan	2026-11-06T06:23:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4285,4284,4283,4259,4218,4213
+docs/testing/fakes.md	fiber-4277	plan	2026-11-06T06:27:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4285,4284,4283,4259,4218,4213
