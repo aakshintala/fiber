@@ -259,6 +259,7 @@ impl Fixture {
             drive: Arc::new(NoDrive),
             model: Arc::new(NoDrive),
             delegate: Arc::clone(&delegate) as Arc<dyn contract::extension::HostDelegate>,
+            delegates: Arc::clone(&delegates),
             attended: Arc::new(|| true),
             answerable: true,
             log,
@@ -370,23 +371,10 @@ impl Fixture {
             Vec::<String>::new(),
         );
         let (providers, _) = extensions::Providers::load(&self.rig.home).unwrap();
-        let resolve = crate::delegates::resolver(&providers, &config);
-        let clock: Arc<dyn contract::clock::Clock> = Arc::clone(&self.state.template.clock);
-        self.delegates = Arc::new(crate::delegates::Delegates::new(
-            self.rig.home.join("fiber-stub"),
-            self.rig.home.clone(),
-            contract::SessionId("reload-test".into()),
-            self.rig.workspace.clone(),
-            self.rig.home.join("sessions"),
-            jobs::Registry::new(
-                self.rig.workspace.join("artifacts"),
-                Arc::clone(&clock),
-                Arc::new(fakes::Recorder::default()),
-            ),
-            Arc::clone(&clock),
-            resolve,
-            self.state.sandbox.clone(),
-        ));
+        // The same object the state holds: the snapshot moves, never
+        // the service, as the install does.
+        self.delegates
+            .set_resolve(crate::delegates::resolver(&providers, &config));
     }
 
     /// The fake provider's data file, as `install_fake` lays it out.
@@ -1771,6 +1759,7 @@ fn assemble(base: &State, started: mcp::Started) -> State {
         drive: Arc::clone(&base.drive),
         model: Arc::clone(&base.model),
         delegate: Arc::clone(&base.delegate),
+        delegates: Arc::clone(&base.delegates),
         attended: Arc::clone(&base.attended),
         answerable: base.answerable,
         log: Arc::clone(&base.log),

@@ -108,6 +108,9 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   AGENTS.md name roles, so they survive a model being withdrawn and work on any
   machine. Remapping a role changes nothing the model sees.
 - The model is fixed when the delegate starts and never changes.
+- A reload refreshes the parent's lookup and catalogue, so later spawns
+  see the reloaded models; a running delegate keeps the model it
+  started with.
 
 ## Talking to a delegate
 

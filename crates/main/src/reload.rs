@@ -189,6 +189,10 @@ pub(crate) struct State {
     pub(crate) drive: Arc<dyn contract::extension::Drive>,
     pub(crate) model: Arc<dyn contract::model::HostModel>,
     pub(crate) delegate: Arc<dyn contract::extension::HostDelegate>,
+    /// The session's delegate service: the install swaps its resolver
+    /// snapshot to the rebuilt one, so the installed tools and the
+    /// stored snapshot never disagree.
+    pub(crate) delegates: Arc<crate::delegates::Delegates>,
     pub(crate) attended: Arc<dyn Fn() -> bool + Send + Sync>,
     pub(crate) answerable: bool,
     pub(crate) log: Arc<log::Log>,
@@ -236,6 +240,99 @@ fn sandbox_notice_reported(
     std::sync::atomic::AtomicBool::new(reported)
 }
 
+/// Whether the delegate catalogue may keep `name`'s cached model list:
+/// a cached list is stale when the provider's extension source is newer
+/// than the cached copy. A provider with no cached copy needs no join:
+/// the load stands in nothing, and the add above already ran discovery
+/// for it. A source that cannot be read counts as newer: one discovery
+/// call, which the cache doc licenses as always safe
+/// (`crates/config/src/cache.rs`). Credential presence still gates the
+/// refresh itself, so a source-changed provider with no credential
+/// stays cache-only and takes no network call here.
+fn delegate_cache_fresh(
+    home: &std::path::Path,
+    providers: &extensions::Providers,
+    extension: &str,
+    lua: &extensions::LuaProvider,
+    wall: std::time::SystemTime,
+) -> bool {
+    let name = lua.name();
+    let Ok(Some(cached)) = config::model_cache_age(home, name, wall) else {
+        return true;
+    };
+    let Some(dir) = providers
+        .provider_source_dir(name)
+        .or_else(|| providers.extension_source_dir(extension))
+    else {
+        return false;
+    };
+    let Ok(newest) = source_newest_mtime(&dir) else {
+        return false;
+    };
+    // Fresh when the source is at least as old as the cache: an equal
+    // age reads as fresh, as a cache that expires exactly on time does.
+    match wall.duration_since(newest) {
+        Ok(source_age) => source_age >= cached,
+        Err(_) => false,
+    }
+}
+
+/// The newest modification time under `dir`, read recursively: the
+/// directory's own time does not move on an in-place rewrite of a file
+/// inside it, so the walk must reach the files.
+fn source_newest_mtime(dir: &std::path::Path) -> std::io::Result<std::time::SystemTime> {
+    let mut newest = std::fs::metadata(dir)?.modified()?;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let metadata = entry.metadata()?;
+            let modified = metadata.modified()?;
+            if modified > newest {
+                newest = modified;
+            }
+            if metadata.is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    Ok(newest)
+}
+
+/// The installed extension whose provider data cannot be read, if one
+/// of Fiber home's installed extensions is the culprit: the reload
+/// keeps the old catalogue and names the extension, as the install's
+/// damaged-directory notices do.
+fn unreadable_provider_extension(home: &std::path::Path) -> Option<String> {
+    let entries = std::fs::read_dir(home.join("extensions")).ok()?;
+    let mut culprits = Vec::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        if config::read_providers(&dir).is_err() {
+            culprits.push(
+                installed_extension_name(&dir)
+                    .unwrap_or_else(|| entry.file_name().to_string_lossy().into_owned()),
+            );
+        }
+    }
+    culprits.sort();
+    culprits.into_iter().next()
+}
+
+/// The name the installed extension at `dir` declares, if its manifest
+/// still reads.
+fn installed_extension_name(dir: &std::path::Path) -> Option<String> {
+    let manifest = std::fs::read_to_string(dir.join("extension.json")).ok()?;
+    serde_json::from_str::<serde_json::Value>(&manifest)
+        .ok()?
+        .get("name")?
+        .as_str()
+        .map(str::to_owned)
+}
+
 /// The late preparation skips the sync: no grouping, records,
 /// failures or carried prompt sources.
 fn empty_sync() -> r#loop::ServerSync {
@@ -266,6 +363,7 @@ impl State {
         session: &doors::Session,
         model: Arc<dyn contract::model::HostModel>,
         delegate: Arc<dyn contract::extension::HostDelegate>,
+        delegates: Arc<crate::delegates::Delegates>,
         servers: crate::mcp_servers::SessionServers,
         answerable: bool,
         log: Arc<log::Log>,
@@ -320,6 +418,7 @@ impl State {
             drive: session.driver(),
             model,
             delegate,
+            delegates,
             attended: session.attended(),
             answerable,
             log,
@@ -378,6 +477,116 @@ impl State {
         (reload, late)
     }
 
+    /// Rebuilds the delegate catalogue from the reloaded extensions:
+    /// providers re-read, Lua providers added, the scripted provider
+    /// prepared, and source-changed providers refreshed synchronously,
+    /// as one snapshot. Returns the fresh snapshot, or `None` when the
+    /// rebuild cannot be read: the caller keeps the old tools, and the
+    /// notices say so. A provider whose discovery fails keeps its old
+    /// list, and the failure reaches the session as a notice does today.
+    fn rebuild_delegate_resolve(
+        &self,
+        extensions: &extensions::SessionExtensions,
+        config: &config::Config,
+        route: &r#loop::ReloadRoute,
+        loaded: Result<(extensions::Providers, Vec<contract::events::Notice>), extensions::Error>,
+    ) -> (Option<jobs::Resolve>, Vec<contract::events::Notice>) {
+        let (mut providers, mut notices) = match loaded {
+            Ok((providers, notices)) => (providers, notices),
+            Err(error) => {
+                return (
+                    None,
+                    vec![contract::events::Notice {
+                        code: contract::ErrorCode::ExtensionFailed,
+                        message: error.to_string(),
+                        extension: unreadable_provider_extension(&self.sources.home),
+                    }],
+                );
+            }
+        };
+        // The pre-rebuild models per provider: a discovery that fails
+        // restores them, so the provider keeps its old list.
+        let before: std::collections::BTreeMap<String, Vec<config::ModelData>> = providers
+            .names()
+            .map(|name| {
+                (
+                    name.to_owned(),
+                    providers
+                        .get(name)
+                        .map(|data| data.models.clone())
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        // One runner for the Lua discovery and refresh gate, as the
+        // startup entry reads it: the session's reads, so one cancel
+        // reaches them all.
+        let reads = self.switching.reads();
+        let clock = self.switching.reloadable().loader.clock.clone();
+        let run = |command: &mut std::process::Command, timeout: std::time::Duration| {
+            reads.credential(command, timeout, &*clock)
+        };
+        let lookup = crate::placeholders::lookup(&self.sources.home, &providers, clock.as_ref());
+        match crate::lua_providers::add_lua(extensions, &mut providers, config, &run, &lookup) {
+            Ok((_naming, lua_notices)) => notices.extend(lua_notices),
+            Err(failure) => {
+                notices.push(contract::events::Notice {
+                    code: contract::ErrorCode::ExtensionFailed,
+                    message: failure.message.clone(),
+                    extension: None,
+                });
+                return (None, notices);
+            }
+        }
+        crate::scripted::prepare(&mut providers, config, Some(route.model.as_str()));
+        // A cached model list is stale when the provider's extension
+        // source is newer than the cached copy: those providers refresh
+        // synchronously, and the catalogue below reads what the refresh
+        // joined. A detached refresh does not satisfy the spawn check,
+        // which reads the catalogue this reload publishes.
+        let stale: Vec<std::sync::Arc<extensions::LuaProvider>> = extensions
+            .lua_providers()
+            .iter()
+            .filter(|(extension, lua)| {
+                !delegate_cache_fresh(&self.sources.home, &providers, extension, lua, clock.wall())
+            })
+            .map(|(_, lua)| std::sync::Arc::clone(lua))
+            .collect();
+        for (name, handle) in
+            extensions::refresh_lists(&stale, &providers, config, None, &run, &lookup)
+        {
+            match handle.join() {
+                Ok(Ok(models)) => {
+                    notices.extend(providers.set_models(&name, models));
+                }
+                Ok(Err(error)) => {
+                    if let Some(old) = before.get(&name) {
+                        notices.extend(providers.set_models(&name, old.clone()));
+                    }
+                    notices.push(contract::events::Notice {
+                        code: error.code(),
+                        message: error.to_string(),
+                        extension: providers.extension_of(&name).map(str::to_owned),
+                    });
+                }
+                Err(_) => {
+                    if let Some(old) = before.get(&name) {
+                        notices.extend(providers.set_models(&name, old.clone()));
+                    }
+                    notices.push(contract::events::Notice {
+                        code: contract::ErrorCode::ExtensionFailed,
+                        message: format!("reloading `{name}` models did not finish"),
+                        extension: providers.extension_of(&name).map(str::to_owned),
+                    });
+                }
+            }
+        }
+        (
+            Some(crate::delegates::resolver(&providers, config)),
+            notices,
+        )
+    }
+
     fn prepare_inner(
         self: &Arc<Self>,
         route: &r#loop::ReloadRoute,
@@ -420,6 +629,12 @@ impl State {
                 .debugging()
                 .then(|| self.diag.clone() as Arc<dyn contract::diag::DebugLog>),
         );
+        // The delegate catalogue's provider load, from the same
+        // repository set the extensions reload below consumes: the
+        // reload swaps the catalogue the delegate tools check against,
+        // so a reload that cannot read its providers keeps the old one.
+        let delegate_loaded =
+            extensions::Providers::load_repository(&self.sources.home, &config, &set);
         let mut extensions = self.current.get().reload_repository(
             &self.sources.home,
             &config,
@@ -458,6 +673,13 @@ impl State {
                 self.diag.clone() as Arc<dyn contract::diag::DebugLog>,
             );
         }
+        // The delegate catalogue's rebuild, from the reloaded
+        // extensions before the handles below are retained away: one
+        // fresh snapshot feeds the stored tools and both rebuilt tools.
+        // A rebuild that cannot be read keeps the old pair, and the
+        // notices say so.
+        let (delegate_resolve, delegate_notices) =
+            self.rebuild_delegate_resolve(&extensions, &config, route, delegate_loaded);
         let owners = extensions
             .lua_providers()
             .iter()
@@ -472,6 +694,7 @@ impl State {
         }
         let mut notices = config.notices().to_vec();
         notices.extend(extensions.notices().iter().cloned());
+        notices.extend(delegate_notices);
         let (patch, settings) = crate::parts::reload_inputs(
             &config,
             &self.sources.home,
@@ -682,6 +905,29 @@ impl State {
             );
             infos.extend(synced.tools.iter().map(|(_, _, info)| info.clone()));
         }
+        // The reloaded delegate tools, swapped in as one pair: the
+        // spawn check and the models text never disagree. A rebuild
+        // that failed keeps the old entries, and the notices above say
+        // so. The swap runs before the stored set below is taken, so
+        // the install publishes the fresh pair.
+        if let Some(resolve) = &delegate_resolve {
+            let (spawn, models) = self.delegates.tools_with(resolve);
+            let mut spawn = Some(spawn);
+            let mut models = Some(models);
+            for (_, tool) in tools.iter_mut() {
+                let name = tool.definition().name;
+                if name == "delegate_spawn"
+                    && let Some(fresh) = spawn.take()
+                {
+                    *tool = Arc::new(fresh);
+                }
+                if name == "delegate_models"
+                    && let Some(fresh) = models.take()
+                {
+                    *tool = Arc::new(fresh);
+                }
+            }
+        }
         // The session-held MCP set the install below publishes: the
         // next preparation rebuilds from it, so a late approval after a
         // replacing reload keeps the replacement's tools. The
@@ -777,6 +1023,12 @@ impl State {
         // to its own servers nor suppresses the needed one.
         let declares_resources = infos.iter().any(|info| info.name == mcp::RESOURCES_TOOL);
         let installed = Box::new(move || {
+            // The stored snapshot moves first: any tool built after
+            // this install and every installed tool share the fresh
+            // snapshot. A dropped preparation reaches neither.
+            if let Some(resolve) = delegate_resolve {
+                shared.delegates.set_resolve(resolve);
+            }
             // The staged sync applies here, before any declaration:
             // nothing fallible runs after the shadows become live.
             if let Some(staged) = staged {
