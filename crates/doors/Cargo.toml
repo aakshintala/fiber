@@ -19,7 +19,7 @@ support = { path = "../support" }
 worktree = { path = "../worktree" }
 
 [dev-dependencies]
-fakes = { path = "../fakes" }
+fakes = { package = "fakes-contract", path = "../fakes-contract" }
 
 # The jig (docs/testing.md, "Jigs"); its tests run the built binary from `tests/connect_jig.rs`.
 [[example]]

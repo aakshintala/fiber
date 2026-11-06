@@ -24,7 +24,7 @@ support = { path = "../support" }
 ureq.workspace = true
 
 [dev-dependencies]
-fakes = { path = "../fakes" }
+fakes = { package = "fakes-contract", path = "../fakes-contract" }
 
 [lints]
 workspace = true
