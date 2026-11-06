@@ -3661,7 +3661,7 @@ fn held_wait_outer_bound_is_three_inner_budgets() {
     assert_eq!(OUTER_BUDGET_FACTOR, 3);
 }
 
-/// Runs a held-then-released wait once, for the five tests on the
+/// Runs a held-then-released wait once, for the six tests on the
 /// entered/release skeleton: the waiter signals `entered`, the test runs
 /// `release`, and the released wait's
 /// report arrives first, under `inner * OUTER_BUDGET_FACTOR`, so a stall
@@ -3672,7 +3672,7 @@ fn held_wait_outer_bound_is_three_inner_budgets() {
 /// after its report arrived, so no join is unbounded (`docs/testing.md`,
 /// "Waits and timeouts").
 #[track_caller]
-fn held_wait_passes_after_release<R: Send + 'static>(
+pub(crate) fn held_wait_passes_after_release<R: Send + 'static>(
     what: &str,
     inner: Duration,
     waiter: impl FnOnce(Deadline) -> R + Send + 'static,
