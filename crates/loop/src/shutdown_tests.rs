@@ -2205,7 +2205,7 @@ fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
     let mut world = World::new(Arc::clone(&jobs) as Arc<dyn Jobs>).hooked(Arc::clone(&hooks));
     world
         .looped
-        .mark_orphans(vec![JobCompleted {
+        .mark_orphans(vec![crate::jobs::OrphanEnd::Orphaned(JobCompleted {
             job_id: JobId("j_1".into()),
             status: Outcome::Failed,
             error: None,
@@ -2215,7 +2215,7 @@ fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
             notice: None,
             changed_by: None,
             protected_paths: None,
-        }])
+        })])
         .unwrap();
     assert_eq!(hooks.calls(), 0);
     let lines = held_of(&world);

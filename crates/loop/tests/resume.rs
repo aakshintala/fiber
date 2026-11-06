@@ -5678,8 +5678,14 @@ fn an_orphan_on_another_harness_copies_nothing() {
 /// A delegate log's clean exit, as the writer left it: the exit code with
 /// the final message the parent delivers.
 fn exited_with_message(text: &str) -> Event {
+    settle_exit(0, Some(text), None)
+}
+
+/// A delegate log's exit line: the code, the final message when one was
+/// left, and the failure when the process reported one.
+fn settle_exit(code: i32, text: Option<&str>, error: Option<contract::shapes::Failure>) -> Event {
     Event::FiberExited(contract::events::FiberExited {
-        exit_code: 0,
+        exit_code: code,
         usage: contract::shapes::Usage {
             tokens: Tokens {
                 input: 0,
@@ -5690,11 +5696,11 @@ fn exited_with_message(text: &str) -> Event {
             cost: Some(0.0),
             subscription_cost: 0.0,
         },
-        final_message: Some(contract::events::FinalMessage {
+        final_message: text.map(|text| contract::events::FinalMessage {
             final_action_id: ActionId("a_9".into()),
             text: text.into(),
         }),
-        error: None,
+        error,
         suspended_on: None,
         questions: None,
     })
@@ -5773,6 +5779,167 @@ fn a_resumed_parent_orphans_a_delegate() {
         marked.payload["error"]["message"],
         "The process that ran this job died; it may still be running."
     );
+}
+
+#[test]
+fn a_settle_skips_a_missing_delegate_log() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_9"), None);
+    history.write(delegate_started("j_9", "s_gone", "fiber"), None);
+    // No delegate directory was staged: the log is gone with its writer,
+    // so the settle skips it and the orphan marking stands.
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
+    let lines = history.new_lines();
+    let marked = lines
+        .iter()
+        .find(|line| line.payload["job_id"] == "j_9")
+        .unwrap();
+    assert_eq!(marked.payload["status"], "failed");
+    assert_eq!(marked.payload["error"]["code"], "orphaned");
+}
+
+#[test]
+fn a_settled_large_message_cuts_text_and_records_artifact() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_big"), None);
+    history.write(delegate_started("j_big", "s_big", "fiber"), None);
+    let delegate = stage_delegate(&history, "s_big");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    // Over the 16 KiB bound, so the settle cuts it as the live path does.
+    let full = "x".repeat(17_000);
+    delegate
+        .append(&settle_exit(0, Some(&full), None), None, None)
+        .unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(
+        history.new_kinds(),
+        [EventKind::DelegateFinished, EventKind::JobCompleted]
+    );
+    let lines = history.new_lines();
+    assert_eq!(lines[0].payload["job_id"], "j_big");
+    let text = lines[0].payload["text"].as_str().unwrap();
+    assert!(text.len() < full.len(), "the text is cut: {}", text.len());
+    assert!(text.starts_with(&"x".repeat(16_384)));
+    assert!(text.contains("bytes cut"), "{text}");
+    assert_eq!(lines[0].payload["artifact"], "artifacts/j_big.txt");
+    assert_eq!(lines[1].payload["status"], "completed");
+    // The full text survives in the parent's artifacts.
+    let saved = std::fs::read(history.dir.join("artifacts").join("j_big.txt")).unwrap();
+    assert_eq!(saved, full.as_bytes());
+}
+
+#[test]
+fn a_stale_exit_from_an_earlier_run_keeps_the_orphan_standing() {
+    let mut history = History::new(Vec::new());
+    history.write(job_started("j_stale"), None);
+    history.write(delegate_started("j_stale", "s_stale", "fiber"), None);
+    let delegate = stage_delegate(&history, "s_stale");
+    delegate.append(&fiber_started(), None, None).unwrap();
+    delegate
+        .append(&settle_exit(0, Some("stale"), None), None, None)
+        .unwrap();
+    // A later run started and never exited: the earlier exit is stale, so
+    // no exit settles the job even though the log holds one.
+    delegate.append(&fiber_started(), None, None).unwrap();
+    drop(delegate);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    assert_eq!(history.new_kinds(), [EventKind::JobCompleted]);
+    let lines = history.new_lines();
+    assert_eq!(lines[0].payload["job_id"], "j_stale");
+    assert_eq!(lines[0].payload["status"], "failed");
+    assert_eq!(lines[0].payload["error"]["code"], "orphaned");
+}
+
+#[test]
+fn a_settled_completion_carries_the_logged_exit_code() {
+    let mut history = History::new(Vec::new());
+    for (job, session) in [
+        ("j_zero", "s_zero"),
+        ("j_nonzero", "s_nonzero"),
+        ("j_error", "s_error"),
+    ] {
+        history.write(job_started(job), None);
+        history.write(delegate_started(job, session, "fiber"), None);
+    }
+    let zero = stage_delegate(&history, "s_zero");
+    zero.append(&fiber_started(), None, None).unwrap();
+    zero.append(&settle_exit(0, Some("done"), None), None, None)
+        .unwrap();
+    drop(zero);
+    let nonzero = stage_delegate(&history, "s_nonzero");
+    nonzero.append(&fiber_started(), None, None).unwrap();
+    nonzero
+        .append(&settle_exit(3, None, None), None, None)
+        .unwrap();
+    drop(nonzero);
+    let error = stage_delegate(&history, "s_error");
+    error.append(&fiber_started(), None, None).unwrap();
+    error
+        .append(
+            &settle_exit(
+                3,
+                Some("almost"),
+                Some(contract::shapes::Failure {
+                    code: ErrorCode::InvalidArguments,
+                    message: "Bad model.".into(),
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+            ),
+            None,
+            None,
+        )
+        .unwrap();
+    drop(error);
+    history.freeze();
+
+    drop(resume_for_backfill(&mut history));
+    // One settled pair per orphan, in start order.
+    assert_eq!(
+        history.new_kinds(),
+        [
+            EventKind::DelegateFinished,
+            EventKind::JobCompleted,
+            EventKind::DelegateFinished,
+            EventKind::JobCompleted,
+            EventKind::DelegateFinished,
+            EventKind::JobCompleted,
+        ]
+    );
+    let lines = history.new_lines();
+    // Exit 0 completes; the process carries the logged code, no signal,
+    // and no timeout.
+    assert_eq!(lines[1].payload["job_id"], "j_zero");
+    assert_eq!(lines[1].payload["status"], "completed");
+    assert!(lines[1].payload.get("error").is_none());
+    assert_eq!(lines[1].payload["process"]["exit_code"], 0);
+    assert!(lines[1].payload["process"].get("signal").is_none());
+    assert_eq!(lines[1].payload["process"]["timed_out"], false);
+    // A bare nonzero code fails `nonzero_exit` with the live message.
+    assert_eq!(lines[3].payload["job_id"], "j_nonzero");
+    assert_eq!(lines[3].payload["status"], "failed");
+    assert_eq!(lines[3].payload["error"]["code"], "nonzero_exit");
+    assert_eq!(lines[3].payload["error"]["message"], "Exit code 3.");
+    assert_eq!(lines[3].payload["process"]["exit_code"], 3);
+    assert!(lines[3].payload["process"].get("signal").is_none());
+    assert_eq!(lines[3].payload["process"]["timed_out"], false);
+    // The logged error wins over the code.
+    assert_eq!(lines[5].payload["job_id"], "j_error");
+    assert_eq!(lines[5].payload["status"], "failed");
+    assert_eq!(lines[5].payload["error"]["code"], "invalid_arguments");
+    assert_eq!(lines[5].payload["error"]["message"], "Bad model.");
+    // The finishes carry the final messages, empty when absent.
+    assert_eq!(lines[0].payload["text"], "done");
+    assert_eq!(lines[2].payload["text"], "");
+    assert_eq!(lines[4].payload["text"], "almost");
 }
 
 /// Resumes on a thread for the writer-coordination waits: the old writer

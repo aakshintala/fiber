@@ -12,16 +12,18 @@ use std::time::Duration;
 
 use contract::events::EventKind;
 use contract::events::{
-    DecidedBy, Decision, Event, Grant, JobCompleted, ModelSettings, ToolCallCompleted,
-    ToolCallRequested, TurnCompleted, TurnOutcome, UsageRecorded,
+    DecidedBy, Decision, Event, FiberExited, Grant, JobCompleted, ModelSettings, Outcome,
+    ToolCallCompleted, ToolCallRequested, TurnCompleted, TurnOutcome, UsageRecorded,
 };
 use contract::inbox::Delivery;
-use contract::{ActionId, Envelope, GenerationId, JobId, SessionId, TurnId};
+use contract::shapes::{Failure, Process};
+use contract::{ActionId, Envelope, ErrorCode, GenerationId, JobId, SessionId, TurnId};
 
 use crate::calls::{self, Asked, Decided};
 use crate::cancel::Commit;
 use crate::completion::resolved;
 use crate::handoff::Carry;
+use crate::jobs::OrphanEnd;
 use crate::reviewer::Reviewed;
 use crate::suspend::Pending;
 use crate::{Error, Loop, Session, Step};
@@ -340,8 +342,10 @@ impl Loop {
     /// one, and the folds a new loop builds from nothing are restored. The
     /// window is the only part of the log read here, up to the line count
     /// the pass saw, so lines written since (`fiber_started` and the
-    /// like) are not in it. The only lines written are one `job_completed`
-    /// per job a crash left running, marked `orphaned`; `session_started`
+    /// like) are not in it. The only lines written settle each job a crash
+    /// left running: one `job_completed` marked `orphaned`, or the settled
+    /// `delegate_finished` and `job_completed` pair for a delegate whose
+    /// own log holds its exit. `session_started`
     /// is the first line's, and `seq` carries on. Everything a new loop
     /// runs on rides [`crate::Session`].
     pub fn resume(session: Session, resumed: Resumed) -> Result<Self, Error> {
@@ -463,7 +467,11 @@ impl Loop {
         )?;
         resumed.kept = kept;
         let backfill = resumed.prepare_backfill(&delegate_sessions, &orphans)?;
-        resumed.mark_orphans(orphans)?;
+        // Each orphan settled from its delegate's own log, before any
+        // line this resume writes; what the settle cannot match keeps the
+        // orphaned completion.
+        let settled = resumed.settle_orphans(&delegate_sessions, &orphans)?;
+        resumed.mark_orphans(settled)?;
         // The backfill's missing copies, after the orphaned `job_completed`
         // lines and before `resumed_label` or any new turn write.
         for (session, lines) in backfill {
@@ -620,6 +628,105 @@ impl Loop {
                 }
             }
         }
+    }
+
+    /// Settles each orphan from its delegate's own log (`docs/delegates.md`,
+    /// "Lifetime"): in orphan order, one [`OrphanEnd`] per orphan. An orphan
+    /// with no `delegate_sessions` entry, a missing delegate directory, or
+    /// no `fiber_exited` for the run the job started keeps its orphaned
+    /// completion; any other shape resolves from the exit line, as a live
+    /// finish would. Shell jobs are unchanged: with no mapping they keep
+    /// the orphaned completion.
+    fn settle_orphans(
+        &self,
+        sessions: &HashMap<JobId, SessionId>,
+        orphans: &[JobCompleted],
+    ) -> Result<Vec<OrphanEnd>, Error> {
+        let mut settled = Vec::with_capacity(orphans.len());
+        for orphan in orphans {
+            let Some(session) = sessions.get(&orphan.job_id) else {
+                settled.push(OrphanEnd::Orphaned(orphan.clone()));
+                continue;
+            };
+            let Some(home) = self.log.dir().parent() else {
+                settled.push(OrphanEnd::Orphaned(orphan.clone()));
+                continue;
+            };
+            let dir = home.join(&session.0);
+            if !log::dir_exists(&dir) {
+                settled.push(OrphanEnd::Orphaned(orphan.clone()));
+                continue;
+            }
+            let Some(exited) = self.settle_exit(&dir)? else {
+                settled.push(OrphanEnd::Orphaned(orphan.clone()));
+                continue;
+            };
+            // debt: worktree is None on a settled finish; the live path sets it (run.rs:653). Fix is tracked in #4313: settle builds EndWorktree { path, branch, base: None, remove: false } from session_started.worktree and calls the injected FinishWorktree outside the pure fold. Keep remove: false: a resumed run reports only; its session process owns removal (crates/doors/src/isolation.rs:190).
+            let finished =
+                crate::delegated::bounded(&self.log, exited.delegate_finished(&orphan.job_id));
+            settled.push(OrphanEnd::Settled(
+                finished,
+                Box::new(settle_completed(orphan, &exited)),
+            ));
+        }
+        Ok(settled)
+    }
+
+    /// The delegate log's latest run's exit: the `fiber_exited` after its
+    /// last `fiber_started`, or `None` when the latest run wrote none. The
+    /// match is by run, never by file position: an exit from an earlier run
+    /// never settles the job, while a log with no `fiber_started` reads as
+    /// one run throughout. A torn tail reads as its good prefix, as
+    /// [`final_usage`] does, so an exit before the tear still settles.
+    fn settle_exit(&self, dir: &Path) -> Result<Option<FiberExited>, Error> {
+        let mut exit = None;
+        for line in self.final_usage(dir)? {
+            let Ok(Some(event)) = Event::from_envelope(&line) else {
+                continue;
+            };
+            if matches!(event, Event::FiberStarted(_)) {
+                exit = None;
+            } else if let Event::FiberExited(exited) = event {
+                exit = Some(exited);
+            }
+        }
+        Ok(exit)
+    }
+}
+
+/// The settled orphan's completion from the exit line it settled from: the
+/// logged error wins over the code, exit code 0 completes, and any other
+/// bare code fails `nonzero_exit` — the live fold's mapping, without an
+/// `ExitStatus` the resume never saw. `process` always carries the logged
+/// code: no signal was observed and no timeout elapsed.
+fn settle_completed(orphan: &JobCompleted, exited: &FiberExited) -> JobCompleted {
+    let process = Process {
+        exit_code: Some(exited.exit_code),
+        signal: None,
+        timed_out: false,
+    };
+    let (status, error) = match exited.error.clone() {
+        Some(error) => (Outcome::Failed, Some(error)),
+        None if exited.exit_code == 0 => (Outcome::Completed, None),
+        None => (
+            Outcome::Failed,
+            Some(Failure {
+                code: ErrorCode::NonzeroExit,
+                message: format!("Exit code {}.", exited.exit_code),
+                retry_after_ms: None,
+                provider: None,
+            }),
+        ),
+    };
+    JobCompleted {
+        job_id: orphan.job_id.clone(),
+        status,
+        error,
+        process: Some(process),
+        output_tail: None,
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
     }
 }
 
