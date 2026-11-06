@@ -308,6 +308,43 @@ fn ancestors_refuse_when_the_re_read_parent_is_unchanged() {
 }
 
 #[test]
+fn ancestors_treat_a_re_read_pid_1_as_root() {
+    // A re-homed child of PID 1 walks from PID 1, where the root
+    // exemption still applies to an unreadable owner.
+    let read = Script {
+        unreadable_euid: vec![Pid(1)],
+        ..exiting_parent_tree(Some(Pid(1)), false)
+    };
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap(),
+        [ProcessInfo {
+            pid: Pid(1),
+            euid: EffectiveUid(0),
+        }]
+    );
+}
+
+#[test]
+fn ancestors_name_the_child_when_the_re_read_parent_fails() {
+    let read = exiting_parent_tree(None, false);
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap_err(),
+        IncompleteWalk { pid: Pid(100) }
+    );
+}
+
+#[test]
+fn ancestors_refuse_when_the_parent_vanishes_after_its_owner_read() {
+    // The retry re-reads the vanished parent's own row, which is gone
+    // with it, so the walk ends incomplete naming the child.
+    let read = exiting_parent_tree(Some(Pid(60)), true);
+    assert_eq!(
+        super::ancestors(Pid(100), &read).unwrap_err(),
+        IncompleteWalk { pid: Pid(50) }
+    );
+}
+
+#[test]
 fn ancestors_name_a_repeated_pid() {
     let read = Script {
         parents: [(Pid(100), Pid(50)), (Pid(50), Pid(100))]

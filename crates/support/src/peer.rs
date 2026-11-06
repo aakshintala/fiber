@@ -148,9 +148,14 @@ pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
     seen.insert(pid);
     let mut child = pid;
     loop {
-        let parent = read
-            .parent(child)
-            .map_err(|_| IncompleteWalk { pid: child })?;
+        let mut parent = match read.parent(child) {
+            Ok(parent) => parent,
+            // The child's parent row vanished mid-walk: read it once
+            // more before calling the walk incomplete.
+            Err(_) => read
+                .parent(child)
+                .map_err(|_| IncompleteWalk { pid: child })?,
+        };
         if parent == Pid(0) {
             return Ok(ancestors);
         }
@@ -160,7 +165,29 @@ pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
         let euid = match read.euid(parent) {
             Ok(euid) => euid,
             Err(_) if parent == Pid(1) => EffectiveUid(0),
-            Err(_) => return Err(IncompleteWalk { pid: parent }),
+            Err(_) => {
+                // The just-read parent exited mid-walk: re-read the
+                // child's parent once and continue only from a changed
+                // parent, which proves the child was reparented.
+                let reread = read
+                    .parent(child)
+                    .map_err(|_| IncompleteWalk { pid: child })?;
+                if reread == parent {
+                    return Err(IncompleteWalk { pid: parent });
+                }
+                parent = reread;
+                if parent == Pid(0) {
+                    return Ok(ancestors);
+                }
+                if !seen.insert(parent) {
+                    return Err(IncompleteWalk { pid: parent });
+                }
+                match read.euid(parent) {
+                    Ok(euid) => euid,
+                    Err(_) if parent == Pid(1) => EffectiveUid(0),
+                    Err(_) => return Err(IncompleteWalk { pid: parent }),
+                }
+            }
         };
         if parent == Pid(1) {
             ancestors.push(ProcessInfo { pid: parent, euid });
