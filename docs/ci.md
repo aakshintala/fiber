@@ -119,7 +119,18 @@ A pull request runs only what its diff can affect.
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).
   Binary-level tests depend on every crate that ships, so any change to one
   runs them. `xtask` ships in no binary, so a change to it alone runs its
-  own tests.
+  own tests. A changed file that is documentation, under `providers/` or
+  `extensions/`, or a file a crate compiles in is not a candidate — docs
+  files do not own a crate, and listed files run their crate without
+  dependents. For each crate the diff touches, when every candidate file in
+  that crate is a test file — under `tests/`, named `tests.rs` or ending
+  `_tests.rs`, or under a `snapshots/` directory — the diff runs that crate
+  without the crates that depend on it, except the crates that depend on it
+  only through a development-dependency, which run one hop with no further
+  fan-out; a crate with any other candidate file runs with its dependents,
+  where development-edges propagate one hop and normal edges transitively.
+  Run-everything paths and diffs touching the prototype directory keep their
+  rules above and below.
 - On a ready pull request, every diff that runs the binary-level tests also
   runs the release-profile job, `release` ("On every pull request that changes
   code"), and `fiber extension test` for every first-party package that has
