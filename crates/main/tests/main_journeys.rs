@@ -433,11 +433,11 @@ struct JourneyNightlies {
     next: String,
 }
 
-/// The version token of the binary under test: the word after `fiber` in
-/// its `--version` line (`fiber 0.0.1-nightly.20261031 (24a32fb)`). An
-/// execution failure or a line without one fails naming what it saw, so
-/// the failure tells whether the binary or its output broke the read.
-fn journey_version(bin: &Path) -> String {
+/// The trimmed `--version` stdout line of the binary under test
+/// (`fiber 0.0.1-nightly.20261031 (24a32fb)`). An execution failure
+/// fails naming what it saw, so the failure tells whether the binary
+/// or its output broke the read.
+fn journey_version_line(bin: &Path) -> String {
     let output = std::process::Command::new(bin)
         .arg("--version")
         .output()
@@ -447,7 +447,15 @@ fn journey_version(bin: &Path) -> String {
                 bin.display()
             )
         });
-    let line = String::from_utf8_lossy(&output.stdout);
+    String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_owned()
+}
+
+/// The version token of the binary under test: the word after `fiber` in
+/// its `--version` line. A line without one fails naming what it saw.
+fn journey_version(bin: &Path) -> String {
+    let line = journey_version_line(bin);
     line.split_whitespace()
         .nth(1)
         .unwrap_or_else(|| panic!("FIBER_JOURNEY_BIN --version printed no version: {line}"))
@@ -650,6 +658,32 @@ fn update_to_nightly_from_local_stub_feed() {
             let server = serve_nightly_feed(&nightlies);
             let github = JourneyGithub::new(&setup, &nightlies);
             install_nightly_extension(&setup, &nightlies);
+            // The pre-update binary is a real fiber, so its `--version`
+            // line is `fiber <version>`: the bare version alone, or with
+            // the short commit the build recorded in parentheses.
+            let version_line = journey_version_line(&journey_bin());
+            let version = journey_version(&journey_bin());
+            let bare = format!("fiber {version}");
+            let parenthetical = version_line.strip_prefix(bare.as_str()).unwrap_or_else(|| {
+                panic!("pre-update --version line is not `fiber <version>`: saw {version_line:?}")
+            });
+            if !parenthetical.is_empty() {
+                let commit = parenthetical
+                    .strip_prefix(" (")
+                    .and_then(|rest| rest.strip_suffix(')'))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "pre-update --version line has no commit parenthetical: saw {version_line:?}"
+                        )
+                    });
+                assert!(
+                    commit.len() == 7
+                        && commit
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+                    "pre-update --version commit is not 7 lowercase hex chars: saw {version_line:?}"
+                );
+            }
             // A copy of the release binary the update renames over, so
             // the shared binary stays untouched.
             let copy = setup.root.path().join("fiber-copy");
@@ -687,6 +721,17 @@ fn update_to_nightly_from_local_stub_feed() {
             let exited = run.wait();
             assert!(exited.status.success(), "nightly update exits 0");
             assert_eq!(std::fs::read(&copy).unwrap(), JOURNEY_MARKER);
+            // The announcement names the installed extension in full on
+            // its own line: the PTY folds `\n` to `\r\n`, which lines
+            // strips, so the match is on the whole line, not the prefix.
+            // `wait` owns the run, so the transcript is the complete
+            // bytes it returns, sliced from the approval prompt.
+            let transcript = String::from_utf8_lossy(&exited.terminal[at..]);
+            let expected = "fiber: updated github.com/aakshintala/fiber/providers/anthropic";
+            assert!(
+                transcript.lines().any(|line| line == expected),
+                "nightly update announces the installed extension: saw {transcript:?}"
+            );
         }),
     );
 }
