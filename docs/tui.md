@@ -2271,6 +2271,7 @@ later release still applies.
 | `/login` | Logs in ("Logging in"). |
 | `/logout` | Logs out ("Logging out"). |
 | `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"), and re-enables a TUI extension a timeout switched off ("When an extension fails"). |
+| `/sandbox [on|off]` | Turns the session sandbox on or off (`docs/sandbox.md`, "The rule"): `on` confines the session's shell calls until `/reload`, `off` leaves them reviewed as with the sandbox off. |
 | `/import` | Copies another harness's configuration into Fiber home, once (`docs/configuration.md`, "Importing"). |
 | `/clear` | Starts a fresh session in place, closing the session on screen ("Clearing"). |
 | `/close [all]`, `/stop [all]` | Stops the session on screen ("Quit"). `/close all` stops every live top-level session on this hub after one question ("Quit"): with no live session it says "No sessions to close", and Enter closes exactly the sessions the question counted. |

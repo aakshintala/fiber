@@ -160,6 +160,36 @@ fn reload_sends_reload_without_args() {
 }
 
 #[test]
+fn sandbox_sends_its_enabled_bool() {
+    for (text, enabled) in [
+        ("/sandbox on", true),
+        ("/sandbox ON", true),
+        ("/sandbox  on ", true),
+        ("/sandbox off", false),
+        ("/sandbox Off", false),
+    ] {
+        let mut app = attached();
+        let lines = sent(enter(&mut app, text));
+        assert_eq!(lines.len(), 1, "{text}");
+        assert_eq!(lines[0]["command"], "sandbox");
+        assert_eq!(lines[0]["session_id"], SESSION);
+        assert_eq!(lines[0]["args"], json!({"enabled": enabled}), "{text}");
+        assert_eq!(app.draft(), "");
+    }
+}
+
+#[test]
+fn sandbox_without_on_or_off_shows_its_usage() {
+    for text in ["/sandbox", "/sandbox ", "/sandbox maybe"] {
+        let mut app = attached();
+        let lines = sent(enter(&mut app, text));
+        assert!(lines.is_empty(), "{text}");
+        assert_eq!(app.draft(), "/sandbox ");
+        assert_eq!(app.notice(), Some("/sandbox needs on or off."));
+    }
+}
+
+#[test]
 fn import_sends_import_without_args_when_bare() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/import"));

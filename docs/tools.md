@@ -578,6 +578,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   start marker before the user program runs; the call fails instead of
   ending normally when the marker never arrives. Each call starts fresh: a
   `cd` does not carry over to the next call.
+- When the session sandbox is on and available, the `shell` definition
+  carries one more sentence: the call runs confined with no sockets and
+  writes limited to the workspace, temp and granted paths, and a call with
+  `unconfined: true` or `detach` set runs outside the sandbox and is
+  reviewed as with the sandbox off.
 - Its optional arguments are typed nullable and listed in `required`. The
   `minimum` limits put its schema outside the strict subset, so it is sent
   with `strict: false`.

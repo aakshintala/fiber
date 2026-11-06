@@ -79,6 +79,7 @@ mod resume;
 mod retry;
 mod reviewer;
 mod rewind;
+mod sandbox;
 mod schema;
 mod shutdown;
 mod skill_header;
@@ -129,6 +130,7 @@ pub use rewind::{
     Continuation, Rewound, fork_task, fork_workspace, latest_name, rewind_note,
     rewind_note_with_jobs, rewound_from,
 };
+pub use sandbox::{ApplySandbox, Availability, Cause};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
 pub use skills::personal_source_paths;
@@ -414,6 +416,8 @@ pub struct Loop {
     switcher: Option<(Prepare, Switchable)>,
     /// Prepares a replacement configuration without changing the route.
     reloader: Option<PrepareReload>,
+    /// Flips the session sandbox on or off; without it the toggle is refused.
+    sandbox_apply: Option<ApplySandbox>,
     /// Restarts one failed MCP server; absent this, reconnect is unsupported.
     reconnector: Option<ReconnectServer>,
     /// A reload built before the process's post-offer load was due.
@@ -823,6 +827,7 @@ impl Loop {
             warming: warm::Warming::default(),
             switcher: None,
             reloader: None,
+            sandbox_apply: None,
             reconnector: None,
             load_after_reload: false,
             pending: Vec::new(),

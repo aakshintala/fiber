@@ -98,6 +98,8 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "offered_file", "args": {"request_id": "r", "path": "tools/db.sh"}}),
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
+        json!({"id": "c_2", "command": "sandbox", "args": {"enabled": true}}),
+        json!({"id": "c_3", "command": "sandbox", "args": {"enabled": false}}),
         json!({"id": "c", "command": "tools"}),
         json!({"id": "c", "command": "hooks"}),
         json!({"id": "c", "command": "mcp_servers"}),
@@ -805,6 +807,36 @@ fn declined_and_skipped_are_only_ever_true() {
         parse(r#"{"id":"c","command":"reply","args":{"request_id":"r","answers":[{"skipped":false}]}}"#)
             .is_err()
     );
+}
+
+/// `sandbox` takes a required `enabled`: no absent-means-toggle form.
+/// A missing, null or wrong-typed `enabled`, or an unknown key, is refused.
+#[test]
+fn sandbox_needs_its_enabled_bool() {
+    let line = parse(r#"{"id":"c_2","command":"sandbox","args":{"enabled":true}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::Sandbox(SandboxArgs { enabled: true })
+    );
+    let line = parse(r#"{"id":"c_3","command":"sandbox","args":{"enabled":false}}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::Sandbox(SandboxArgs { enabled: false })
+    );
+    for args in [
+        json!({}),
+        json!({"enabled": null}),
+        json!({"enabled": "on"}),
+        json!({"enabled": 1}),
+        json!({"enabled": true, "future": 1}),
+    ] {
+        let line = json!({"id": "c", "command": "sandbox", "args": args});
+        assert!(parse(&line.to_string()).is_err(), "{line}");
+        assert!(
+            serde_json::from_value::<SandboxArgs>(args.clone()).is_err(),
+            "{line}"
+        );
+    }
 }
 
 #[test]

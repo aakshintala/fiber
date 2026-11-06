@@ -347,11 +347,29 @@ impl State {
     /// The reload preparer and the late preparer: the late one prepares
     /// the same set, but drops every notice the startup already wrote,
     /// so an approval installs the new lines only.
+    /// The pre-toggle shape, kept for the existing preparation tests.
+    #[cfg(test)]
     pub(crate) fn preparers(
         self,
         written: Vec<contract::events::Notice>,
     ) -> (r#loop::PrepareReload, r#loop::PrepareReload) {
+        self.preparers_with_sandbox(written).0
+    }
+
+    /// `preparers` plus the session sandbox toggle: the toggle's closure
+    /// shares this state's latch through the `Arc`, so a repeated
+    /// unavailable enable, a startup-unavailable session that is then
+    /// enabled, and an enable followed by a reload each say the line once
+    /// per session. The reload path below is unchanged.
+    pub(crate) fn preparers_with_sandbox(
+        self,
+        written: Vec<contract::events::Notice>,
+    ) -> (
+        (r#loop::PrepareReload, r#loop::PrepareReload),
+        r#loop::ApplySandbox,
+    ) {
         let state = Arc::new(self);
+        let sandbox_apply = State::sandbox_apply(&state);
         let reload = {
             let state = state.clone();
             let reads = state.switching.reads();
@@ -375,7 +393,62 @@ impl State {
                 move |purpose, work| reads.run(purpose, work),
             )
         };
-        (reload, late)
+        ((reload, late), sandbox_apply)
+    }
+
+    /// The session sandbox toggle for the loop: flips the shared setting
+    /// first, then reports whether the sandbox applies. Disabling never
+    /// needs availability. Enabling while unavailable sets the setting on
+    /// and accepts with no result; the one notice goes out only when the
+    /// shared latch is unset, and an already-reported unavailability
+    /// carries no notice. A concurrent settings replacement between the
+    /// flip and the read can only clear the flag, which the next command
+    /// reports; the toggle still accepts.
+    pub(crate) fn sandbox_apply(self: &Arc<Self>) -> r#loop::ApplySandbox {
+        let state = Arc::clone(self);
+        Arc::new(move |enabled| {
+            crate::settings::set_sandbox_enabled(&state.sandbox, enabled);
+            if !enabled {
+                return r#loop::Availability::Available;
+            }
+            let settings = support::lock(&state.sandbox).clone();
+            match tools::sandbox_check_available(&settings, &state.sources.workspace) {
+                Ok(()) => r#loop::Availability::Available,
+                Err(unavailable) => {
+                    let cause = match &unavailable {
+                        tools::SandboxUnavailable::Off => None,
+                        tools::SandboxUnavailable::UnsupportedPlatform => {
+                            Some(r#loop::Cause::UnsupportedPlatform)
+                        }
+                        tools::SandboxUnavailable::AbiBelow2 => Some(r#loop::Cause::AbiBelow2),
+                        tools::SandboxUnavailable::SandboxExecUnavailable { .. } => {
+                            Some(r#loop::Cause::SandboxExecUnavailable)
+                        }
+                        tools::SandboxUnavailable::DenyInsideWrite { .. } => {
+                            Some(r#loop::Cause::DenyInsideWrite)
+                        }
+                        tools::SandboxUnavailable::UnresolvableDeny { .. } => {
+                            Some(r#loop::Cause::UnresolvableDeny)
+                        }
+                        tools::SandboxUnavailable::UnresolvedWrite { .. } => {
+                            Some(r#loop::Cause::UnresolvedWrite)
+                        }
+                    };
+                    let Some(cause) = cause else {
+                        return r#loop::Availability::Available;
+                    };
+                    let reported = state
+                        .sandbox_notice_reported
+                        .swap(true, std::sync::atomic::Ordering::SeqCst);
+                    let notice = (!reported).then(|| contract::events::Notice {
+                        code: unavailable.code(),
+                        message: format!("sandbox unavailable: {unavailable}"),
+                        extension: None,
+                    });
+                    r#loop::Availability::Unavailable { cause, notice }
+                }
+            }
+        })
     }
 
     fn prepare_inner(

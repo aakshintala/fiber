@@ -4,6 +4,7 @@
 //! per-protocol total may not pass `BUDGET`. Raising `BUDGET` is an explicit
 //! change in the same pull request that grows a definition.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use config::{Protocol, ProviderData};
@@ -17,7 +18,7 @@ use serde_json::{Map, Value, json};
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes: `builtin()`'s definitions, `mcp_resources` and `tool_search`,
 /// with no headroom.
-const BUDGET: usize = 16644;
+const BUDGET: usize = 16903;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
@@ -80,6 +81,51 @@ fn builtin_definitions() -> Vec<ToolDefinition> {
     // `tool_search` is declared natively whenever a deferred tool is
     // sent, so its definition counts toward the budget.
     definitions.push(tools::ToolSearch::new(Vec::new(), Vec::new()).definition());
+    definitions
+}
+
+/// The built-in definitions with the session sandbox on and available: the
+/// `/sandbox` toggle appends the confinement sentence to the `shell`
+/// definition, so this is the largest set the toggle produces. Only the
+/// `shell` definition changes, so measuring this set beside the off-state
+/// set covers the toggle's whole range in every protocol shape
+/// (`docs/tools.md`, "Size budget in CI").
+/// The on-state `shell` definition: the confinement sentence the `/sandbox`
+/// toggle appends when the sandbox is enabled and available. Rooted beside
+/// its Fiber home under the owner's home: the sandbox grants temp writable,
+/// so a Fiber home beneath temp would overlap a write grant and report
+/// unavailable instead of available.
+fn sandbox_on_definition() -> ToolDefinition {
+    let home_base = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from);
+    let root = fakes::TempDir::under(&home_base, "fiber-tool-budget-toggled");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let sandbox = std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {
+        enabled: true,
+        allow_write: Vec::new(),
+        deny_read: Vec::new(),
+        fiber_home: root.path().join("fiber-home"),
+    }));
+    tools::Shell::new(workspace, Arc::clone(&clock))
+        .with_sandbox(sandbox)
+        .definition()
+}
+
+/// `definitions` with the session sandbox on: the `/sandbox` toggle appends
+/// the confinement sentence to the `shell` definition, so this is the
+/// largest set the toggle produces from that base. Only the `shell`
+/// definition changes, so measuring the on-state set beside the off-state
+/// set covers the toggle's whole range in every protocol shape
+/// (`docs/tools.md`, "Size budget in CI").
+fn toggled_definitions(definitions: Vec<ToolDefinition>) -> Vec<ToolDefinition> {
+    let mut definitions = definitions;
+    let on = sandbox_on_definition();
+    let position = definitions
+        .iter()
+        .position(|definition| definition.name == "shell")
+        .expect("builtin registered the shell tool");
+    definitions[position] = on;
     definitions
 }
 
@@ -354,10 +400,28 @@ fn a_definition_pushed_over_the_budget_fails_the_check() {
 fn the_built_in_definitions_fit_their_budget() {
     let hosted = measure(&builtin_definitions());
     let backend = measure(&backend_definitions());
+    // The ceiling is the maximum over the toggle's states in every
+    // protocol shape: the on-state set from each search flavor.
+    let toggled = measure(&toggled_definitions(builtin_definitions()));
+    let toggled_backend = measure(&toggled_definitions(backend_definitions()));
 
     eprintln!("{}", report(&hosted, BUDGET));
     eprintln!("{}", report(&backend, BUDGET));
-    if let Err(error) = check_both(&hosted, &backend, BUDGET) {
-        panic!("{error}");
+    eprintln!("{}", report(&toggled, BUDGET));
+    eprintln!("{}", report(&toggled_backend, BUDGET));
+    for measured in [&hosted, &backend, &toggled, &toggled_backend] {
+        if let Err(error) = check(measured, BUDGET) {
+            panic!("{error}");
+        }
     }
+    let largest = [&hosted, &backend, &toggled, &toggled_backend]
+        .iter()
+        .map(|measured| {
+            largest(&measured.sizes)
+                .expect("a protocol was measured")
+                .total
+        })
+        .max()
+        .expect("a set was measured");
+    eprintln!("largest over both toggle states {largest}");
 }

@@ -399,6 +399,13 @@ pub(crate) fn sandbox_settings(
     }
 }
 
+/// Sets the session sandbox's enabled flag, leaving every other setting
+/// alone, so the toggle flips the handle without rebuilding the shell.
+/// The required bool needs no resolution. A poisoned lock is recovered.
+pub(crate) fn set_sandbox_enabled(handle: &SandboxHandle, enabled: bool) {
+    support::lock(handle).enabled = enabled;
+}
+
 /// Replaces the shared sandbox settings with the checked configuration's
 /// entries, so a reload applies the fresh settings without rebuilding the
 /// shell. Fiber home never changes mid-session, so the refresh keeps the

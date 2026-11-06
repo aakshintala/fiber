@@ -85,6 +85,7 @@ const DRAWN_ORDER: &[&str] = &[
     "login",
     "logout",
     "reload",
+    "sandbox",
     "import",
     "clear",
     "close",

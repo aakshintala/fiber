@@ -795,6 +795,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             Delivery::SteerDrop(..)
             | Delivery::Name(..)
             | Delivery::AddDirectory(..)
+            | Delivery::Sandbox(..)
             | Delivery::Message(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)

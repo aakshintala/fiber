@@ -220,6 +220,10 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("add_directory {:?}", args.path)
         }
+        Delivery::Sandbox(args, ack) => {
+            ack.0(Ok(None));
+            format!("sandbox {:?}", args.enabled)
+        }
         Delivery::Close(ack) => {
             ack.0(Ok(None));
             "close".to_owned()
@@ -1683,6 +1687,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
@@ -1729,6 +1734,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
@@ -1827,6 +1833,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
@@ -1959,6 +1966,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
@@ -2016,6 +2024,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
                 | Delivery::Name(..)
+                | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Model(..)
@@ -6298,7 +6307,9 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 Delivery::Prompt(..)
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
+
                 | Delivery::Name(..)
+                | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
@@ -6352,7 +6363,9 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 Delivery::Prompt(..)
                 | Delivery::Steer(..)
                 | Delivery::SteerDrop(..)
+
                 | Delivery::Name(..)
+                | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
                 | Delivery::Handoff(..)
                 | Delivery::Credential(..)
@@ -6586,6 +6599,7 @@ fn ro_evidence(socket: &Path, inbox: &Receiver<Delivery>) -> Vec<contract::notes
         | Delivery::Reload(_)
         | Delivery::McpReconnect(..)
         | Delivery::Name(..)
+        | Delivery::Sandbox(..)
         | Delivery::AddDirectory(..)
         | Delivery::Rewind(..)
         | Delivery::ChangeWorkspace(..)
