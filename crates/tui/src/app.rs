@@ -1790,7 +1790,12 @@ impl App {
     /// read as sending. `None` once every run settles.
     pub(crate) fn shell_running_send(&self) -> Option<bool> {
         let mut running = None;
-        for (kind, draft) in self.outbox.pending.values() {
+        let mut ids: Vec<&String> = self.outbox.pending.keys().collect();
+        ids.sort();
+        for id in ids {
+            let Some((kind, draft)) = self.outbox.pending.get(id) else {
+                continue;
+            };
             if *kind == Kind::Shell
                 && let Some((_, send)) = shell::parse(&draft.expand())
             {
