@@ -433,11 +433,11 @@ struct JourneyNightlies {
     next: String,
 }
 
-/// The version token of the binary under test: the word after `fiber` in
-/// its `--version` line (`fiber 0.0.1-nightly.20261031 (24a32fb)`). An
-/// execution failure or a line without one fails naming what it saw, so
-/// the failure tells whether the binary or its output broke the read.
-fn journey_version(bin: &Path) -> String {
+/// The trimmed `--version` stdout line of the binary under test
+/// (`fiber 0.0.1-nightly.20261031 (24a32fb)`). An execution failure
+/// fails naming what it saw, so the failure tells whether the binary
+/// or its output broke the read.
+fn journey_version_line(bin: &Path) -> String {
     let output = std::process::Command::new(bin)
         .arg("--version")
         .output()
@@ -447,7 +447,15 @@ fn journey_version(bin: &Path) -> String {
                 bin.display()
             )
         });
-    let line = String::from_utf8_lossy(&output.stdout);
+    String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_owned()
+}
+
+/// The version token of the binary under test: the word after `fiber` in
+/// its `--version` line. A line without one fails naming what it saw.
+fn journey_version(bin: &Path) -> String {
+    let line = journey_version_line(bin);
     line.split_whitespace()
         .nth(1)
         .unwrap_or_else(|| panic!("FIBER_JOURNEY_BIN --version printed no version: {line}"))
@@ -650,6 +658,28 @@ fn update_to_nightly_from_local_stub_feed() {
             let server = serve_nightly_feed(&nightlies);
             let github = JourneyGithub::new(&setup, &nightlies);
             install_nightly_extension(&setup, &nightlies);
+            // The pre-update binary is the journey suite's release binary,
+            // built with git history, so its `--version` line is
+            // `fiber <version> (<7 lowercase hex chars>)`: a bare version
+            // means the binary was built without git history.
+            let version_line = journey_version_line(&journey_bin());
+            let version = journey_version(&journey_bin());
+            let prefix = format!("fiber {version} (");
+            let commit = version_line
+                .strip_prefix(prefix.as_str())
+                .and_then(|rest| rest.strip_suffix(')'))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "pre-update --version line is not `fiber <version> (<7 lowercase hex chars>)`: saw {version_line:?}; a bare version means the binary was built without git history"
+                    )
+                });
+            assert!(
+                commit.len() == 7
+                    && commit
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()),
+                "pre-update --version commit is not 7 lowercase hex chars: saw {version_line:?}"
+            );
             // A copy of the release binary the update renames over, so
             // the shared binary stays untouched.
             let copy = setup.root.path().join("fiber-copy");
