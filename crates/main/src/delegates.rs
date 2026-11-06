@@ -782,7 +782,7 @@ fn steerer(home: &Path) -> jobs::Steer {
 /// launches, so an addition between wiring and launch is captured. A
 /// fold that cannot be read yields no roots: fewer roots only ever deny,
 /// so an unreadable parent log cannot widen the child.
-pub(crate) fn inherited_roots_reader(sessions: &Path, parent: &SessionId) -> jobs::InheritedRoots {
+fn inherited_roots_reader(sessions: &Path, parent: &SessionId) -> jobs::InheritedRoots {
     let sessions = sessions.to_owned();
     let parent = parent.clone();
     Arc::new(move || {
