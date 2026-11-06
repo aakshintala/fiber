@@ -2716,6 +2716,12 @@ fn person_input_handoff_clears_staged_request() {
         Some(Seq(900)),
         &mut asks,
     );
+    assert!(
+        asks.clone()
+            .take(&person_request_id("pre-handoff"))
+            .is_some(),
+        "the request stages for its resolve: {asks:?}"
+    );
     render_reviewed(
         &mut reviewed,
         &handoff_completed(),
