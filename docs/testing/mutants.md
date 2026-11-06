@@ -6,20 +6,13 @@ How a test is shown to fail when the behaviour it guards breaks. It is part of `
 
 
 A test that passes with its feature removed proves nothing. CI checks this on
-every pull request with mutation testing: `cargo-mutants --in-diff` makes small
-breaking edits to the code the diff changed, such as replacing a function body
-with a default or flipping a comparison, and runs the mutated crate's tests
-against each one. An edit that no test notices fails CI. Only the mutated
-crate's own tests run, so a test in another crate, the binary's included,
-kills none of its mutants: each behaviour a crate exposes is tested in
-that crate. Selection writes the
-diff's full mutant list to its job summary on every pull request event, drafts
-included, and prints it to the job's log
-(readable as soon as Selection finishes, before the run ends):
-`gh api --allow-escape-sequences repos/aakshintala/fiber/actions/jobs/<id>/logs`,
-with the id from `gh run view <run> -R aakshintala/fiber --json jobs`
-(`gh run view --log` waits for the whole run; the run's summary page shows the
-list in a browser), so a lane maps each mutant to a test before CI runs the shards.
+the nightly scheduled whole-workspace run (`mutants-scheduled.yml`):
+`cargo-mutants` makes small breaking edits to the code, such as replacing a
+function body with a default or flipping a comparison, and runs the mutated
+crate's tests against each one. An edit that no test notices fails the run.
+Only the mutated crate's own tests run, so a test in another crate, the
+binary's included, kills none of its mutants: each behaviour a crate exposes
+is tested in that crate.
 
 A function is extracted and tested alone only where a surviving mutant would
 signal the wrong process or lose data, such as the `kill(-1)` refusal
