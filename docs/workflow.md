@@ -11,6 +11,12 @@ blocking links, and carries the `ready-for-agent` label. Turning a design
 into tickets is not part of it. What must pass to merge is set in `docs/ci.md`,
 `docs/testing.md`, `docs/code-quality.md` and `docs/dependencies.md`.
 
+A ticket that leaves design choices open swaps out of `ready-for-agent`
+for `needs-plan` first; see `docs/agents/triage-labels.md`. Only needs-plan
+tickets get a Verifier-checked plan (aakshintala/switchyard#1262): that rule
+is decided harness-side, so fiber documents it here and builds no enforcement
+for it.
+
 No harness is assumed. Any agent harness can fill any role below.
 
 ## Roles
