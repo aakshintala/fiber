@@ -5,6 +5,8 @@ use crate::app::testkit::{SESSION as S_A, sent, session_line};
 use crate::keys::{Edit, Key, Parser};
 use crate::link::Line;
 use contract::clock::Clock;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -1677,10 +1679,13 @@ fn a_show_only_result_is_one_item() {
     let result = serde_json::json!({"output": "clean\n",
         "process": {"exit_code": 0, "timed_out": false}});
     app.on_line(accepted(&id, Some(result.clone())));
-    assert_eq!(texts(&app), vec!["! git status", "clean"]);
+    assert_eq!(
+        texts(&app),
+        vec!["! git status", "only you see this", "clean", "exit 0"]
+    );
     // A repeat of the answer shows nothing more.
     app.on_line(accepted(&id, Some(result)));
-    assert_eq!(app.lines().len(), 2);
+    assert_eq!(app.lines().len(), 4);
 }
 
 #[test]
@@ -1703,7 +1708,10 @@ fn a_sent_command_shows_once_from_its_event() {
             "process": {"exit_code": 2, "timed_out": false}}),
         None,
     ));
-    assert_eq!(texts(&app), vec!["! ls", "a", "exit 2"]);
+    assert_eq!(
+        texts(&app),
+        vec!["! ls", "sent with your next prompt", "a", "exit 2"]
+    );
 }
 
 #[test]
@@ -1737,6 +1745,178 @@ fn a_rejected_bang_command_returns_to_an_empty_draft() {
     ));
     assert_eq!(app.notice(), Some("no"));
     assert_eq!(app.draft(), "!!ls");
+}
+
+/// The box's top-edge row and first draft row in a whole rendered
+/// screen, found from the rule between the draft and the chrome.
+fn shell_box_rows(shown: &str) -> (String, String) {
+    let rule = shown
+        .lines()
+        .position(|row| {
+            let trimmed: String = row
+                .chars()
+                .filter(|cell| !matches!(cell, ' ' | '▌' | '│'))
+                .collect();
+            !trimmed.is_empty() && trimmed.chars().all(|cell| cell == '─')
+        })
+        .expect("a rule row");
+    let edge = shown
+        .lines()
+        .nth(rule - 2)
+        .expect("a top-edge row")
+        .to_owned();
+    let draft = shown
+        .lines()
+        .nth(rule - 1)
+        .expect("a first draft row")
+        .to_owned();
+    (edge, draft)
+}
+
+/// Renders `app` whole on an 80 by 12 screen as text.
+fn shell_screen(app: &App) -> String {
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
+}
+
+#[test]
+fn shell_row_rejection_draws_the_error_row() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_rejected",
+        serde_json::json!({"command_id": id, "code": "busy", "message": "no"}),
+        None,
+    ));
+    assert_eq!(app.notice(), Some("no"));
+    assert_eq!(app.draft(), "!!ls");
+    assert_eq!(texts(&app), vec!["! ls", "busy: no"]);
+}
+
+#[test]
+fn shell_row_non_shell_pending_draws_no_row() {
+    // The error row needs a shell run: any other pending kind keeps
+    // the notice and the draft alone, even with a shell-shaped draft.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let mut draft = crate::input::Draft::default();
+    draft.set("!ls");
+    app.outbox
+        .pending
+        .insert("c_test".to_owned(), (crate::app::Kind::Prompt, draft));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "command_rejected",
+        serde_json::json!({"command_id": "c_test", "code": "busy", "message": "no"}),
+        None,
+    ));
+    assert_eq!(app.notice(), Some("no"));
+    assert!(app.lines().is_empty());
+}
+
+#[test]
+fn shell_row_running_chrome_settles_into_the_noted_row() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(80, 12);
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let id = id_of(&one_line(send(&mut app, "!echo hi", now)));
+    // While the run flies the box carries the sent label, and the
+    // draft prompt stays plain: the run, not the empty draft, marks.
+    assert_eq!(app.shell_running_send(), Some(true));
+    let (edge, draft) = shell_box_rows(&shell_screen(&app));
+    assert!(edge.ends_with("shell"), "running label, got {edge:?}");
+    assert!(
+        draft.starts_with("▌ › "),
+        "plain prompt while running, got {draft:?}"
+    );
+    // The answer settles the run before its event draws the row.
+    app.on_line(accepted(
+        &id,
+        Some(serde_json::json!({"output": "hi\n",
+            "process": {"exit_code": 0, "timed_out": false}})),
+    ));
+    assert_eq!(app.shell_running_send(), None);
+    assert!(
+        !shell_screen(&app).contains("shell"),
+        "label settles with the run"
+    );
+    assert!(app.lines().is_empty());
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "shell_command",
+        serde_json::json!({"command": "echo hi", "output": "hi\n",
+            "process": {"exit_code": 0, "timed_out": false}}),
+        None,
+    ));
+    assert_eq!(
+        texts(&app),
+        vec!["! echo hi", "sent with your next prompt", "hi", "exit 0"]
+    );
+}
+
+#[test]
+fn shell_row_mixed_pending_runs_read_as_sending() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    app.set_size(80, 12);
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    let _ = one_line(send(&mut app, "!!a", now));
+    let _ = one_line(send(&mut app, "!b", now));
+    assert_eq!(app.shell_running_send(), Some(true));
+    let (edge, _) = shell_box_rows(&shell_screen(&app));
+    assert!(edge.ends_with("shell"), "sending wins, got {edge:?}");
+}
+
+/// A hub `command_rejected` naming `session`.
+fn hub_refused(id: &str, session: Option<&str>) -> Line {
+    let mut payload = serde_json::json!({"command_id": id, "code": "busy", "message": "no"});
+    if let Some(session) = session {
+        payload
+            .as_object_mut()
+            .expect("an object payload")
+            .insert("session_id".to_owned(), serde_json::json!(session));
+    }
+    Line::Hub(contract::HubLine {
+        kind: "command_rejected".to_owned(),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    })
+}
+
+#[test]
+fn shell_row_hub_rejection_after_a_switch_lands_on_attached() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, S_A);
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
+    app.on_line(hub_refused(&id, Some(S_A)));
+    assert_eq!(app.notice(), Some("no"));
+    assert_eq!(app.draft(), "!!ls");
+    // The row lands on the attached screen, beside its notice,
+    // exactly once...
+    assert_eq!(texts(&app), vec!["! ls", "busy: no"]);
+    // ...and switching back stores nothing more for the old session.
+    app.attach(contract::SessionId(S_A.to_owned()));
+    assert_eq!(texts(&app), vec!["! ls", "busy: no"]);
+}
+
+#[test]
+fn shell_row_hub_rejection_without_a_session_lands_attached() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, S_A);
+    let id = id_of(&one_line(send(&mut app, "!!ls", now)));
+    app.on_line(hub_refused(&id, None));
+    assert_eq!(texts(&app), vec!["! ls", "busy: no"]);
 }
 
 #[test]

@@ -187,8 +187,19 @@ pub(super) fn draw(
     // right-aligned: `shell` for a sent run, `shell · not sent` for a
     // show-only one. The label is chrome: cut short, it sheds with the
     // rule and the status row, while the `! ` prompt stays on the draft.
+    // The draft's own marker wins: under a fresh draft a run in flight
+    // still shows, on the run's own label.
     if chrome && top_edge {
-        if let Some(label) = shell_marker(app) {
+        let running = || {
+            app.shell_running_send().map(|send| {
+                if send {
+                    SHELL_SENT_LABEL
+                } else {
+                    SHELL_HELD_LABEL
+                }
+            })
+        };
+        if let Some(label) = shell_marker(app).or_else(running) {
             put_shell_label(buf, area, box_top, label);
         }
     }

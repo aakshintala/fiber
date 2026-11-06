@@ -1723,7 +1723,11 @@ impl App {
                         None => {}
                     }
                     self.offer.file_refused(id, &code, &message);
-                    self.rejected(id, code, message);
+                    // The refusal carries its session in the payload,
+                    // as a closed stream does; without one the row lands
+                    // on the attached session.
+                    let session = hub_string(&hub.payload, "session_id").map(SessionId);
+                    self.rejected_session(id, code, message, session);
                     // The panel's refusal clears its query next, so the
                     // generic refusal still seeing it proves it settled
                     // first.
@@ -1780,10 +1784,42 @@ impl App {
         ]
     }
 
+    /// A transcript-visible shell run in flight, and whether it sends:
+    /// a pending `Kind::Shell` entry with a parseable draft is a run the
+    /// person typed, answered only when the command ends. Mixed sends
+    /// read as sending. `None` once every run settles.
+    pub(crate) fn shell_running_send(&self) -> Option<bool> {
+        let mut running = None;
+        for (kind, draft) in self.outbox.pending.values() {
+            if *kind == Kind::Shell
+                && let Some((_, send)) = shell::parse(&draft.expand())
+            {
+                running = Some(running.unwrap_or(false) || send);
+            }
+        }
+        running
+    }
+
     /// A command the terminal sent was rejected: a notice, and its draft
     /// back in the box when the box is empty. A rejected `cancel`
     /// shows nothing; after a rejected `start` the next Enter tries again.
+    /// A session link's refusal lands on the attached session; the hub
+    /// arm names its session outright.
     fn rejected(&mut self, id: &str, code: ErrorCode, message: String) {
+        let session = self.session().cloned();
+        self.rejected_session(id, code, message, session);
+    }
+
+    /// A command the terminal sent was refused for `session`: the
+    /// notice, the refused shell run's error row on that session's
+    /// pages, and the draft back in the box when the box is empty.
+    fn rejected_session(
+        &mut self,
+        id: &str,
+        code: ErrorCode,
+        message: String,
+        session: Option<SessionId>,
+    ) {
         // Order seam: the panel's refusal clears `asked` next, so the
         // generic refusal still seeing it proves it settled first.
         #[cfg(test)]
@@ -1800,17 +1836,33 @@ impl App {
                 self.outbox.pending.remove(id);
             }
             Some((
-                Kind::Start
+                kind @ (Kind::Start
                 | Kind::Prompt
                 | Kind::Steer
                 | Kind::Reply
                 | Kind::Shell
                 | Kind::Command
-                | Kind::Import(_),
-                _,
+                | Kind::Import(_)),
+                draft,
             )) => {
+                // A refused shell run shows its error on a transcript
+                // row: the command with `<code>: <message>` as it
+                // arrived. Any other refusal keeps the notice and the
+                // draft alone.
+                let row = if *kind == Kind::Shell {
+                    shell::parse(&draft.expand())
+                        .map(|(command, _)| shell::error_row(command, code.name(), &message))
+                } else {
+                    None
+                };
                 self.notices.push(code, message);
                 self.fail(id);
+                if let Some(row) = row {
+                    let session = session.or_else(|| self.session().cloned());
+                    if let Some(session) = session {
+                        self.fold_pages(&session).add_shell(Some(row));
+                    }
+                }
             }
         }
         // A refusal settles the command: its kept line goes out no more.
