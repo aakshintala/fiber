@@ -156,3 +156,6 @@ crates/log/src/diag/memory.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z
 crates/log/src/diag/memory_tests.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
 crates/log/src/old_diagnostics_tests.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
 crates/main/tests/keeper.rs	fiber-3891	plan	2026-11-06T07:51:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4213
+xtask/src/select/reuse_tests.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
+xtask/src/select.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
+xtask/src/main.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
