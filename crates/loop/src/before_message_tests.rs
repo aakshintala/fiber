@@ -1270,7 +1270,7 @@ fn grouped_notice(all: &[Envelope]) -> &Envelope {
 fn two_non_blocking_failures_write_one_grouped_notice() {
     // One `before_message` batch reaches the log as one notice: the
     // count and the first item up front, in the admission slot before the
-    // preamble, with no turn (`docs/errors.md`, "Notices": one per code;
+    // preamble, with no turn (`docs/tui.md`, "Notices": one per code;
     // `docs/loop.md`, "Starting a turn": before_message runs before
     // turn_started).
     let hooks = Arc::new(FakeHooks::new());
@@ -1303,7 +1303,7 @@ fn two_non_blocking_failures_write_one_grouped_notice() {
     // The complete kinds as a set with counts (`docs/testing.md`, "Event
     // streams"): `session_started` is the first line (`docs/events.md`,
     // "Session and turn"); the rest has no doc-promised order. One notice
-    // per code (`docs/errors.md`, "Notices").
+    // per code (`docs/tui.md`, "Notices").
     let actual = kinds(&all);
     assert_eq!(actual[0], EventKind::SessionStarted);
     let mut rest = actual[1..].to_vec();
