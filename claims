@@ -113,3 +113,15 @@ crates/loop/src/conversation_tests.rs	fiber-4250	plan	2026-11-06T20:02:23Z	Amogh
 crates/loop/src/shutdown_tests.rs	fiber-4250	plan	2026-11-06T20:02:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/delegates.md	fiber-4250	plan	2026-11-06T20:02:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/events.md	fiber-4250	plan	2026-11-06T20:02:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/events/delegate_finished.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/contract/src/events/delegate_finished_tests.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/contract/src/events.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/jobs/src/delegate/outcome.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/loop/src/resume.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/loop/src/jobs.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/loop/src/jobs_tests.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/loop/tests/resume.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/loop/src/conversation_tests.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+crates/loop/src/shutdown_tests.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+docs/delegates.md	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
+docs/events.md	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
