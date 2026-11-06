@@ -9,27 +9,25 @@ use crate::home::Level;
 use crate::input::Draft;
 
 /// A `/clear` start waiting for its answer: the cleared session, the
-/// start's id, the credential its args named, and whether its close goes
-/// with `now`.
+/// credential its args named, and whether its close goes with `now`.
+/// The outbox `ClearStart` tag is the sole record of the start's id.
 #[derive(Debug, Clone)]
 struct ClearPending {
     /// The session to close after the start is accepted.
     old: SessionId,
-    /// The id of the pending start.
-    command_id: String,
     /// The credential state the start carries.
     credential: Option<Option<String>>,
     /// Whether the close drops a wait.
     now: bool,
 }
 
-/// The `/clear` start and close correlations.
+/// The `/clear` start and close correlations. The outbox tags are the
+/// sole record of the waiting ids: `ClearStart` for the start,
+/// `ClearClose` for the close.
 #[derive(Debug, Default)]
 pub(super) struct Clear {
     /// The start awaiting its answer.
     pending: Option<ClearPending>,
-    /// The close awaiting its answer.
-    close: Option<String>,
 }
 
 impl App {
@@ -125,25 +123,10 @@ impl App {
         self.outbox.wait(&id, super::outbox::Waiting::ClearStart);
         self.clear.pending = Some(ClearPending {
             old,
-            command_id: id,
             credential,
             now,
         });
         effect
-    }
-
-    /// The id of `/clear`'s start waiting for its answer.
-    pub(super) fn clear_pending_command_id(&self) -> Option<&str> {
-        self.clear
-            .pending
-            .as_ref()
-            .map(|pending| pending.command_id.as_str())
-    }
-
-    /// The clear close id, for asserting its answer correlation.
-    #[cfg(test)]
-    pub(super) fn clear_close_id(&self) -> Option<&str> {
-        self.clear.close.as_deref()
     }
 
     /// Accepts the matching clear start and sends its follow-up commands.
@@ -153,10 +136,11 @@ impl App {
         id: &str,
         session: SessionId,
     ) -> Option<Vec<String>> {
+        let waiting = self.outbox.waiting(id);
         let pending = self
             .clear
             .pending
-            .take_if(|pending| pending.command_id == id)?;
+            .take_if(|_| waiting == Some(super::outbox::Waiting::ClearStart))?;
         self.outbox.settled(id);
         Some(self.clear_started(pending, session))
     }
@@ -184,7 +168,6 @@ impl App {
         self.outbox
             .insert(id.clone(), Kind::Command, Draft::default());
         self.outbox.wait(&id, super::outbox::Waiting::ClearClose);
-        self.clear.close = Some(id);
         vec![
             self.subscribe(&session, Level::Full),
             self.ask_commands(&session),
@@ -196,8 +179,7 @@ impl App {
     /// answer says: the notice already names a refusal, and an accept
     /// needs no mark.
     pub(super) fn clear_close_settled(&mut self, id: &str) {
-        if self.clear.close.as_deref() == Some(id) {
-            self.clear.close = None;
+        if self.outbox.waiting(id) == Some(super::outbox::Waiting::ClearClose) {
             self.outbox.settled(id);
         }
     }
@@ -222,8 +204,7 @@ impl App {
         if self.settle_clear_start(id) {
             return true;
         }
-        if self.clear.close.as_deref() == Some(id) {
-            self.clear.close = None;
+        if self.outbox.waiting(id) == Some(super::outbox::Waiting::ClearClose) {
             self.outbox.settled(id);
             self.notices.push(
                 ErrorCode::ConnectionFailed,
@@ -242,10 +223,11 @@ impl App {
 
     /// Removes the matching pending clear start and its outbox entry.
     fn settle_clear_start(&mut self, id: &str) -> bool {
+        let waiting = self.outbox.waiting(id);
         let Some(_) = self
             .clear
             .pending
-            .take_if(|pending| pending.command_id == id)
+            .take_if(|_| waiting == Some(super::outbox::Waiting::ClearStart))
         else {
             return false;
         };
@@ -254,19 +236,19 @@ impl App {
         true
     }
 
-    /// Updates the clear's pending start id when the hooks offer resends
-    /// it. Returns whether a clear start is still pending.
-    // debt: the feature's command_id copy kept in step with the outbox tag by hand here (outbox.settled(refused_id), outbox.wait(&retry_id, ..) and pending.command_id = retry_id), the outbox tag becomes the sole record once the id lookup runs the other way for all five features (clear, history, images, rewind, and the dismiss path) once #4115 lands.
+    /// Resends the pending clear start under `retry_id` once the hooks
+    /// offer takes ownership of the refusal: the refused tag settles and
+    /// the retry tag waits. True when `refused_id` was the pending clear.
     pub(super) fn retry_clear_start(&mut self, refused_id: &str, retry_id: String) -> bool {
-        let Some(pending) = self.clear.pending.as_mut() else {
+        if self.outbox.waiting(refused_id) != Some(super::outbox::Waiting::ClearStart) {
             return false;
-        };
-        if pending.command_id == refused_id {
-            self.outbox.settled(refused_id);
-            self.outbox
-                .wait(&retry_id, super::outbox::Waiting::ClearStart);
-            pending.command_id = retry_id;
         }
+        if self.clear.pending.is_none() {
+            return false;
+        }
+        self.outbox.settled(refused_id);
+        self.outbox
+            .wait(&retry_id, super::outbox::Waiting::ClearStart);
         true
     }
 }
