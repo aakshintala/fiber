@@ -154,3 +154,6 @@ crates/loop/src/reviewer_tests.rs	fiber-4234	plan	2026-11-06T21:25:32Z	Amoghs-Ma
 docs/permissions.md	fiber-4234	plan	2026-11-06T21:25:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/tests/reviewer.rs	fiber-4234	plan	2026-11-06T21:25:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/reviewer/shown.rs	fiber-4234	plan	2026-11-06T21:25:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/jobs_timing.rs	fiber-4110	plan	2026-11-06T21:59:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/support/mod.rs	fiber-4110	plan	2026-11-06T21:59:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/tests/extension_harness/mod.rs	fiber-4110	plan	2026-11-06T21:59:49Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
