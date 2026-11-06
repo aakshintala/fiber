@@ -156,3 +156,4 @@ crates/main/tests/keeper.rs	fiber-3891	plan	2026-11-06T07:51:50Z	Amoghs-MacBook-
 xtask/src/select/reuse_tests.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
 xtask/src/select.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
 xtask/src/main.rs	fiber-4272	grant	2026-11-06T08:16:25Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/ci/4272-linux-only-pr-ci	
+crates/tui/src/event_loop/attach_tests.rs	fiber-4276	plan	2026-11-06T08:26:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
