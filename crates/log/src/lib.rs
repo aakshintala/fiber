@@ -4,7 +4,7 @@
 //! fsync, and it hands every event to whoever is watching.
 //!
 //! [`Log`] is the writing side, one per session process. [`read`] and
-//! [`Watcher`] are the reading side, which `tui` and `doors` may use
+//! [`Watcher`] are the reading side, which `doors` may use
 //! (`docs/architecture.md`, "The call rules"). [`crash`] installs the
 //! panic hook: one crash report under `crashes/` in Fiber home before the
 //! process aborts.

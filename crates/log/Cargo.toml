@@ -20,10 +20,6 @@ serde_json.workspace = true
 support = { path = "../support" }
 thiserror.workspace = true
 
-# The process's resources for a `resources` line (docs/dependencies.md).
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
-
 [dev-dependencies]
 fakes = { path = "../fakes" }
 proptest.workspace = true
