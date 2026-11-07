@@ -30,7 +30,7 @@ use super::super::output::{OUTPUT_CAP, Shared, align_char_boundary, lock, note_e
 use super::{
     GroupMembers, MoveAsk, PS_BOUND, deadline_note, description_of, format_rows, group_members,
     output_tail, parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt, to_completed,
-    with_spill_line,
+    with_deadline, with_spill_line,
 };
 
 fn finished(
@@ -210,81 +210,19 @@ fn a_shell_exit_names_members_or_says_the_group_is_still_occupied() {
     assert!(!unnamed.contains("leaving"), "{unnamed}");
 }
 
-/// Hands off a move whose saved listing names members: the receipt reuses
-/// those names instead of running `ps` a second time. The job's own drive
-/// is already settled, so its thread ends on its own.
-fn hand_off_with_saved(
-    dir: &std::path::Path,
-    code: i32,
-    members: GroupMembers,
-) -> (String, String) {
-    let clock = FakeClock::new();
-    let shared = Arc::new(Shared::default());
-    note_eof(&shared);
-    {
-        let mut inner = lock(&shared.inner);
-        inner.reaped = true;
-        inner.status = Some(status_of(&format!("exit {code}")));
-    }
-    let moved = Moved {
-        reason: MoveReason::ShellExited { code },
-        bridge: None,
-        progress: Run {
-            phase: Phase::Draining {
-                until: clock.origin(),
-            },
-            stop: None,
-            sent_signal: false,
-            seen_empty: true,
-            stream_carry: Vec::new(),
-            timeout_at: None,
-            move_at: None,
-            members: Some(members),
-            pgid: 99,
-            hosted: None,
-            listing: None,
-            shared,
-            ask: None,
-            job: None,
-            feed: None,
-        },
-        cap: OUTPUT_CAP,
-        spill: None,
-        protection: None,
-    };
-    let jobs: Arc<dyn contract::jobs::Jobs> = fakes::jobs::FakeJobs::new(dir);
-    let clock: Arc<dyn contract::clock::Clock> = clock;
-    let output = take(
-        moved,
-        jobs,
-        clock,
-        "true",
+#[test]
+fn members_listing_moves_at_once_and_names_the_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-members-receipt");
+    let (text, job) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Members("sleep (12), my cmd (34)".to_owned()),
+        None,
         Some(Limit {
             ms: 5_000,
             monitor: false,
         }),
         false,
-        &CancelToken::new(),
-        &Recorder::default(),
-        None,
-        None,
-    );
-    let ContentPart::Text { text } = &output.content[0] else {
-        panic!("receipt text");
-    };
-    let contract::jobs::JobRecord::Started(started) = &output.jobs[0] else {
-        panic!("the receipt records the job");
-    };
-    (text.clone(), started.job_id.0.clone())
-}
-
-#[test]
-fn members_listing_moves_at_once_and_names_the_receipt() {
-    let dir = fakes::TempDir::new("fiber-shell-members-receipt");
-    let (text, job) = hand_off_with_saved(
-        dir.path(),
-        3,
-        GroupMembers::Members("sleep (12), my cmd (34)".to_owned()),
     );
     let path = dir.path().join("j_0000000000000001.log");
     assert_eq!(
@@ -299,7 +237,17 @@ fn members_listing_moves_at_once_and_names_the_receipt() {
 #[test]
 fn unavailable_listing_moves_with_unnamed_receipt() {
     let dir = fakes::TempDir::new("fiber-shell-unavailable-receipt");
-    let (text, job) = hand_off_with_saved(dir.path(), 3, GroupMembers::Unavailable);
+    let (text, job) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Unavailable,
+        None,
+        Some(Limit {
+            ms: 5_000,
+            monitor: false,
+        }),
+        false,
+    );
     let path = dir.path().join("j_0000000000000001.log");
     assert_eq!(
         text,
@@ -310,7 +258,7 @@ fn unavailable_listing_moves_with_unnamed_receipt() {
     );
 }
 
-/// Hands off a move like [`hand_off_with_saved`], but with the drive's
+/// Hands off a move whose saved listing names members, with the drive's
 /// timeout deadline `lead` past the move when given, and `limit` as the
 /// call's limit: the receipt names when the timeout fires. The job's own
 /// drive is already settled, so its thread ends on its own.
@@ -1026,4 +974,40 @@ fn the_receipt_gains_the_spills_extra_line() {
         text.ends_with("Output before the move is also in /s/s_1/artifacts/s_x.txt.\n"),
         "{text}"
     );
+}
+
+#[test]
+fn the_deadline_closes_the_receipt_after_the_spill_line() {
+    // `docs/tools.md`, "Moving to the background": the receipt ends with the
+    // stop sentence, so the deadline comes after any spill line.
+    let started = JobStarted {
+        job_id: JobId("j_1".into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "echo hi".into(),
+        output_path: "j_1.log".into(),
+    };
+    let path = Path::new("/tmp/j_1.log");
+    let plain = receipt(&started, path, &MoveReason::StartedInBackground, None);
+    // A wall a minute past the fake clock's 2023-11-14T22:13:20Z origin.
+    let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_060);
+    let composed = with_deadline(
+        with_spill_line(
+            plain,
+            Some("Output before the move is also in /s/s_1/artifacts/s_x.txt.".to_owned()),
+        ),
+        Some((60_000, wall)),
+    );
+    let ContentPart::Text { text } = &composed.content[0] else {
+        panic!("receipt text");
+    };
+    assert!(text.contains("Output before the move is also in"), "{text}");
+    assert!(
+        text.contains("Fiber stops it at 2023-11-14T22:14:20Z (timeout_ms 60000)"),
+        "{text}"
+    );
+    assert!(text.ends_with("or with `detach`.\n"), "{text}");
+    let spill_at = text.find("Output before the move").expect("spill line");
+    let deadline_at = text.find("Fiber stops it at").expect("deadline line");
+    assert!(spill_at < deadline_at, "{text}");
 }

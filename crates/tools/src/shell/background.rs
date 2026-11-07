@@ -316,13 +316,21 @@ fn hand_off(
     // The moved job keeps the command's timeout (`docs/tools.md`,
     // "Timeout"), so the receipt names when it fires: the wall clock now
     // plus what is left of the drive's deadline, saturated when the
-    // deadline already passed. Without a limit, or without a deadline in
-    // hand, there is nothing to name. Captured before the job's thread
-    // takes the move, beside the saved members above.
+    // deadline already passed. A keeper-hosted move keeps no drive
+    // deadline (`docs/tools.md`, "The keeper"), so the receipt reads the
+    // wall the host handoff stored instead. Without a limit, or without a
+    // deadline in hand, there is nothing to name. Captured before the job's
+    // thread takes the move, beside the saved members above.
     let stop = match (limit, moved.progress.timeout_at) {
         (Some(limit), Some(timeout_at)) => clock
             .wall()
             .checked_add(timeout_at.saturating_duration_since(clock.now()))
+            .map(|wall| (limit.ms, wall)),
+        (Some(limit), None) => moved
+            .progress
+            .hosted
+            .as_ref()
+            .and_then(|hosted| hosted.deadline)
             .map(|wall| (limit.ms, wall)),
         _ => None,
     };
@@ -360,28 +368,19 @@ fn hand_off(
         tty::wait_first_output(&shared, clock.as_ref(), cancel);
         tty::output_so_far(&opened.path)
     });
-    match first {
-        Some(first) => with_spill_line(
-            with_deadline(
-                terminal_receipt(
-                    &opened.started,
-                    &opened.path,
-                    &reason,
-                    members.as_deref(),
-                    &first,
-                ),
-                stop,
-            ),
-            spill_line,
+    let output = match first {
+        Some(first) => terminal_receipt(
+            &opened.started,
+            &opened.path,
+            &reason,
+            members.as_deref(),
+            &first,
         ),
-        None => with_spill_line(
-            with_deadline(
-                receipt(&opened.started, &opened.path, &reason, members.as_deref()),
-                stop,
-            ),
-            spill_line,
-        ),
-    }
+        None => receipt(&opened.started, &opened.path, &reason, members.as_deref()),
+    };
+    // The deadline closes the receipt after any spill line (`docs/tools.md`,
+    // "Moving to the background").
+    with_deadline(with_spill_line(output, spill_line), stop)
 }
 
 /// Appends the timeout's stop line to a shell receipt that kept one, if
