@@ -183,6 +183,15 @@ struct Driver {
     _reader: Reader,
 }
 
+/// Which frames a [`Driver::wait_screen`] may match.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Frames {
+    /// The live grid only.
+    Live,
+    /// The live grid or the frame [`Driver::retain`] kept.
+    Kept,
+}
+
 impl Driver {
     /// `wake` is the sender the reader signals each chunk on and `wakes`
     /// its receiver; the test hands `serve` a clone of `wake` too, so one
@@ -256,7 +265,6 @@ impl Driver {
 
     /// Whether the grid no longer holds `text`.
     fn lacks(&self, text: &str) -> bool {
-        // settled: FRAME_END or the top-page request
         !self.shared.lock().unwrap().grid().contents.contains(text)
     }
 
@@ -294,14 +302,17 @@ impl Driver {
         }
     }
 
-    /// Waits until the grid matches, however many frames arrive; the frame
-    /// [`Driver::retain`] kept matches too. A wait
+    /// Waits until the grid matches, however many frames arrive. A wait
     /// that outlives the loop panics naming the wait and the last grid;
     /// an expiry panics with `extra`'s report, so a stall says whether
-    /// the poisoned page was even requested.
+    /// the poisoned page was even requested. With `Frames::Kept` the
+    /// frame [`Driver::retain`] kept matches too; only the wait for the
+    /// retained needle passes it, since any other wait must read the live
+    /// grid and the kept frame is older.
     #[track_caller]
     fn wait_screen(
         &self,
+        frames: Frames,
         what: &str,
         mut done: impl FnMut(&Grid) -> bool,
         extra: impl FnOnce() -> String,
@@ -309,11 +320,13 @@ impl Driver {
         let wait = self.deadline.start_wait();
         let start_left = wait.left();
         loop {
-            let retained = { self.shared.lock().unwrap().retained() };
-            if let Some(kept) = retained
-                && done(&kept)
-            {
-                return kept;
+            if frames == Frames::Kept {
+                let retained = { self.shared.lock().unwrap().retained() };
+                if let Some(kept) = retained
+                    && done(&kept)
+                {
+                    return kept;
+                }
             }
             let grid = { self.shared.lock().unwrap().grid() };
             if done(&grid) {
@@ -468,6 +481,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // any typing goes out.
     driver.wait_bytes(0, TITLE, "the end of the first frame");
     driver.wait_screen(
+        Frames::Live,
         "the last turn's rows",
         |grid| grid.contents.contains(LAST),
         || format!("hub saw: {:?}", seen.lock().unwrap()),
@@ -495,7 +509,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // no clock: the grid says when the top is reached.
     let mut batches = 0;
     loop {
-        if !driver.shared.lock().unwrap().grid().contents.contains(LAST) {
+        if driver.lacks(LAST) {
             break;
         }
         assert!(
@@ -525,6 +539,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // The scroll lands first: the last turn's rows leave the screen.
     // Only then can the loop name the top page and fetch it.
     driver.wait_screen(
+        Frames::Live,
         "the scroll to reach the top",
         |grid| !grid.contents.contains(LAST),
         seen_report,
@@ -557,6 +572,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // either way exactly one failure notice shows for it, and the
     // scroll below asserts the loop keeps drawing past it.
     driver.wait_screen(
+        Frames::Kept,
         "the load-failure notice",
         |grid| grid.contents.contains(NOTICE),
         || notice_wait_report(&seen, &finished, &driver.output()),
@@ -568,6 +584,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         driver.write(b"\x1b[6~");
     }
     let grid = driver.wait_screen(
+        Frames::Live,
         "rows past the page that cannot load",
         |grid| grid.contents.contains(LAST),
         seen_report,
