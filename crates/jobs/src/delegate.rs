@@ -586,6 +586,7 @@ impl DelegateWiring {
                     None,
                     timeout,
                     Some(self.registry.usage_forward()),
+                    self.registry.timing().cloned(),
                 );
                 let runner = runner.with_worktree(worktree_run);
                 let (child, listing) = match runner.spawn(&self.launch, &launched) {

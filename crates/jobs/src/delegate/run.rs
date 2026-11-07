@@ -14,6 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
+use contract::diag::{Op, Timing, TimingName};
 use contract::events::{EventKind, FiberExited};
 use contract::jobs::Stop;
 use contract::shapes::Usage;
@@ -434,6 +435,9 @@ pub(crate) struct Runner {
     /// with the delegate's session. `None` keeps the existing unwired
     /// behavior.
     on_usage: Option<UsageForward>,
+    /// Times the receive and deliver traces. `None` emits nothing,
+    /// mirroring the untimed behaviour.
+    timing: Option<Timing>,
     deadline: Option<Instant>,
     /// The `seq` of the delegate log's last complete line before this
     /// run spawned: lines at or before it belong to an earlier run, so
@@ -467,6 +471,7 @@ impl Runner {
         after: Option<u64>,
         timeout: Option<Duration>,
         on_usage: Option<UsageForward>,
+        timing: Option<Timing>,
     ) -> (Self, Stop) {
         let deadline = timeout.and_then(|timeout| clock.now().checked_add(timeout));
         let shared = Shared::new(Arc::clone(&clock), bound);
@@ -485,6 +490,7 @@ impl Runner {
                 cap,
                 watch,
                 on_usage,
+                timing,
                 deadline,
                 after,
                 shared,
@@ -706,6 +712,8 @@ impl Runner {
                     wake: Arc::clone(&wake),
                     on_usage: self.on_usage.clone(),
                     worktree_guard: self.worktree_run.as_ref().and_then(|run| run.guard.clone()),
+                    timing: self.timing.clone(),
+                    job_id: self.job_id.clone(),
                 };
                 thread::spawn(|| watcher.run());
             }
@@ -821,6 +829,11 @@ struct Watcher {
     /// `None` keeps the existing unwired behavior.
     on_usage: Option<UsageForward>,
     worktree_guard: Option<WorktreeGuard>,
+    /// Times the receive trace. `None` emits nothing, mirroring the
+    /// untimed behaviour.
+    timing: Option<Timing>,
+    /// The delegate's job id, carried on the receive trace.
+    job_id: JobId,
 }
 
 impl Watcher {

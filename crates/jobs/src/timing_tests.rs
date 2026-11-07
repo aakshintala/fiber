@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 
 use contract::SessionId;
 use contract::clock::Clock as _;
-use contract::diag::{Op, Timing};
+use contract::diag::{Op, Timing, TimingName};
 use contract::events::JobCompleted;
 use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, Jobs as _, Stop};
@@ -82,7 +82,7 @@ impl Probe {
         let registry = Arc::clone(&self.registry);
         let records = self.records.clone();
         Arc::new(
-            move |op: Op, tool: Option<&str>, started: Option<Instant>| {
+            move |op: Op, name: Option<TimingName>, started: Option<Instant>| {
                 calls.fetch_add(1, Ordering::SeqCst);
                 let start = started.unwrap_or_else(|| clock.now());
                 let scope = Scope {
@@ -90,7 +90,10 @@ impl Probe {
                     registry: Arc::clone(&registry),
                     records: records.clone(),
                     op,
-                    tool: tool.map(str::to_owned),
+                    tool: name.and_then(|name| match name {
+                        TimingName::Tool(tool) => Some(tool.to_owned()),
+                        TimingName::Job(_) => None,
+                    }),
                     start,
                 };
                 Some(Box::new(scope) as Box<dyn Send>)

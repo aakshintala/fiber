@@ -26,7 +26,7 @@ use config::{Config, ProjectKey, Sources};
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::clock::Wake;
-use contract::diag::{DebugLog, HookChain, HttpRequest, Identity, Op, Purpose, Timing};
+use contract::diag::{DebugLog, HookChain, HttpRequest, Identity, Op, Purpose, Timing, TimingName};
 use contract::events::CallStatus;
 use contract::events::HandoffTrigger;
 use contract::hook::{
@@ -110,8 +110,14 @@ type Scopes = Arc<Mutex<Vec<(Op, Option<String>)>>>;
 fn recording() -> (Timing, Scopes) {
     let calls: Scopes = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&calls);
-    let timing: Timing = Arc::new(move |op, tool, _started| {
-        seen.lock().unwrap().push((op, tool.map(str::to_owned)));
+    let timing: Timing = Arc::new(move |op, name, _started| {
+        seen.lock().unwrap().push((
+            op,
+            name.and_then(|name| match name {
+                TimingName::Tool(tool) => Some(tool.to_owned()),
+                TimingName::Job(_) => None,
+            }),
+        ));
         Some(Box::new(()) as Box<dyn Send>)
     });
     (timing, calls)

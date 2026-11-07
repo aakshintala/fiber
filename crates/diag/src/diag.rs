@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::SessionId;
 use contract::clock::{Clock, wall_ms};
-use contract::diag::{DebugLog, HttpRequest, Op, Timing};
+use contract::diag::{DebugLog, HttpRequest, Op, Timing, TimingName};
 use support::lock;
 
 pub use memory::{ResourcesSample, resources_sample};
@@ -130,14 +130,17 @@ struct AllocMetrics {
 }
 
 /// The `data` of an `op_timing` line: the operation, whole milliseconds,
-/// and the tool's name on a tool's timers. No other field is recorded,
-/// and never an argument, a path or any content.
+/// the tool's name on a tool's timers, and the job id on a job's timers.
+/// One subject only: a line carries a tool or a job, never both. No other
+/// field is recorded, and never an argument, a path or any content.
 #[derive(serde::Serialize)]
 struct TimingData<'a> {
     op: Op,
     ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    job: Option<&'a str>,
     /// The operation's allocation metrics, present as one unit: an
     /// `alloc-stats` build only, and only when the timer ends on the
     /// thread that started it. Otherwise absent, never a partial set.
@@ -376,7 +379,8 @@ impl Diag {
 
     /// The callable form of [`timed`]: one level check inside, none
     /// before it, so restricted crates time through the seam without
-    /// depending on `log`.
+    /// depending on `log`. A tool name starts the timer under that name;
+    /// a job id is stamped onto the returned guard, whose line carries it.
     pub fn timings(&self) -> Timing {
         let level = self.level;
         let clock = Arc::clone(&self.clock);
@@ -384,11 +388,20 @@ impl Diag {
         let process = self.process;
         let rotate_at = self.rotate_at;
         let state = Arc::clone(&self.state);
-        Arc::new(move |op, tool, started| {
+        Arc::new(move |op, name, started| {
+            let tool = name.and_then(|name| match name {
+                TimingName::Tool(tool) => Some(tool),
+                TimingName::Job(_) => None,
+            });
             start_timer(
                 level, &clock, &logs, process, rotate_at, &state, op, tool, started,
             )
-            .map(|timer| Box::new(timer) as Box<dyn Send>)
+            .map(|mut timer| {
+                if let Some(TimingName::Job(job)) = name {
+                    timer.job = Some(job.0.clone());
+                }
+                Box::new(timer) as Box<dyn Send>
+            })
         })
     }
 }
@@ -447,6 +460,7 @@ pub struct Timer {
     state: Arc<Mutex<State>>,
     op: Op,
     tool: Option<String>,
+    job: Option<String>,
     start: Instant,
     end: Option<Instant>,
     /// Dropped without a line when set: the operation's span is held
@@ -519,6 +533,7 @@ fn start_timer(
         state: Arc::clone(state),
         op,
         tool: tool.map(str::to_owned),
+        job: None,
         start,
         end: None,
         disarmed: false,
@@ -632,6 +647,7 @@ impl Drop for Timer {
                 op: self.op,
                 ms,
                 tool: self.tool.as_deref(),
+                job: self.job.as_deref(),
                 #[cfg(feature = "alloc-stats")]
                 alloc,
             }),

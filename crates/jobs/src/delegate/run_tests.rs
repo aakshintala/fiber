@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use crate::delegate::group::listed;
 use contract::Envelope;
 use contract::clock::Clock as _;
+use contract::diag::{Op, Timing, TimingName};
 use contract::events::{EventKind, FiberExited, FinalMessage, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::Jobs as _;
@@ -336,11 +337,14 @@ impl Rig {
         cap: u64,
         after: Option<u64>,
     ) -> mpsc::Receiver<()> {
-        self.start_timeout(shell, bound, cap, after, None, None).0
+        self.start_timeout(shell, bound, cap, after, None, None, None)
+            .0
     }
 
     /// Builds the runner, spawns, records and drives it. `on_usage` is
     /// the watcher's tap; `None` keeps the existing unwired behavior.
+    /// `timing` is the trace probe; `None` emits nothing, mirroring the
+    /// untimed behaviour.
     fn start_timeout(
         &self,
         shell: &str,
@@ -349,6 +353,7 @@ impl Rig {
         after: Option<u64>,
         timeout: Option<Duration>,
         on_usage: Option<super::UsageForward>,
+        timing: Option<Timing>,
     ) -> (mpsc::Receiver<()>, Arc<Parker>) {
         let shell = shell.to_owned();
         let script = Arc::clone(&self.script);
@@ -374,6 +379,7 @@ impl Rig {
             after,
             timeout,
             on_usage,
+            timing,
         );
         let runner = runner.with_worktree(self.worktree_run.lock().unwrap().take());
         let launched = Launched {
@@ -903,6 +909,133 @@ fn the_folded_signal_comes_after_on_line_returns() {
     });
 }
 
+/// One owned trace record: the op and the subject the probe cloned off
+/// the seam's borrowed payload before boxing its guard.
+#[derive(Debug, PartialEq, Eq)]
+enum OwnedName {
+    Tool(String),
+    Job(JobId),
+}
+
+/// The channel-only probe beside the order test: it takes the seam's
+/// payload, clones it into an owned record before boxing, and sends that
+/// record on its guard's drop. The record path touches no registry lock.
+fn probe_timing(tx: mpsc::Sender<(Op, Option<OwnedName>)>) -> Timing {
+    Arc::new(
+        move |op: Op, name: Option<TimingName>, _started: Option<Instant>| {
+            let owned = name.map(|name| match name {
+                TimingName::Tool(tool) => OwnedName::Tool(tool.to_owned()),
+                TimingName::Job(job) => OwnedName::Job(job.clone()),
+            });
+            let tx = tx.clone();
+            Some(Box::new(ProbeGuard { op, owned, tx }) as Box<dyn Send>)
+        },
+    )
+}
+
+struct ProbeGuard {
+    op: Op,
+    owned: Option<OwnedName>,
+    tx: mpsc::Sender<(Op, Option<OwnedName>)>,
+}
+
+impl Drop for ProbeGuard {
+    fn drop(&mut self) {
+        let _sent = self.tx.send((self.op, self.owned.take()));
+    }
+}
+
+/// Asserts the order `docs/state.md` ("Diagnostic logs") promises for one
+/// job id: `jobs.receive` precedes `jobs.deliver`, paired by `job`.
+fn assert_receive_then_deliver(
+    receive: &(Op, Option<OwnedName>),
+    deliver: &(Op, Option<OwnedName>),
+    job: &JobId,
+) {
+    assert_eq!(
+        receive.0,
+        Op::JobsReceive,
+        "the watcher trace fires first: {receive:?}"
+    );
+    assert_eq!(
+        deliver.0,
+        Op::JobsDeliver,
+        "the runner trace fires second: {deliver:?}"
+    );
+    assert_eq!(
+        receive.1,
+        Some(OwnedName::Job(job.clone())),
+        "the receive names the job: {receive:?}"
+    );
+    assert_eq!(
+        deliver.1,
+        Some(OwnedName::Job(job.clone())),
+        "the delivery names the same job: {deliver:?}"
+    );
+}
+
+/// The watcher receives the delegate's exit before the runner delivers
+/// it, paired by job id: the scripted watch yields one `fiber_exited`
+/// line while the child still blocks on its fifo, so the reap cannot beat
+/// the receive down the stdout fallback, which emits no receive. The two
+/// probe records are separate waits with their own bounds: the receive is
+/// taken before the release, the delivery after it.
+#[test]
+fn the_receive_and_deliver_traces_fire_in_order_for_one_exit() {
+    let dir = TempDir::new("fiber-delegate-trace-order");
+    let release = fifo(dir.path(), "release");
+    let shell = format!("read _ < '{}'; exit 0", release.display());
+    let rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(
+        1, "Done.",
+    )])]);
+    // Backstop: kills the group if the test fails before the child exits.
+    let watchdog = Watchdog::matching(&release.to_string_lossy());
+    let (trace_tx, trace_rx) = mpsc::channel();
+    let (done, _park) = rig.start_timeout(
+        &shell,
+        BOUND,
+        1024,
+        None,
+        None,
+        None,
+        Some(probe_timing(trace_tx)),
+    );
+    let stop = Arc::new(AtomicBool::new(false));
+    let clock = Arc::clone(&rig.clock);
+    let script = Arc::clone(&rig.script);
+    let started = Arc::clone(&rig.runner_started);
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+            drive_runner_clock(&stop, &clock, &script, &started, &deadline, None);
+        });
+        // The watcher folds the scripted line while the child still
+        // blocks: the receive lands with no reap in flight.
+        let receive_deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+        let receive = receive_deadline.recv_or_fail(&trace_rx, "the watcher to receive the exit");
+        // The fold signal lands after `on_line` returns, so the socket
+        // store already ran: releasing now reaps down the socket path.
+        wait_folded(&rig, 1);
+        release_fifo(&release, b"go\n");
+        let deliver_deadline = Deadline::after(MUST_SUCCEED_WITHIN);
+        let deliver = deliver_deadline.recv_or_fail(&trace_rx, "the runner to deliver the exit");
+        assert_receive_then_deliver(&receive, &deliver, &rig.job);
+        stop.store(true, Ordering::Relaxed);
+    });
+    // The delivery proof is unchanged behaviour: the run completes as
+    // before, with the delegate's text.
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    assert_eq!(
+        notice.delegate.as_ref().map(|finish| finish.text.clone()),
+        Some("Done.".into())
+    );
+    Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv(&done)
+        .expect("the runner returns after `fiber_exited`");
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
 /// Wakes the runner through one refused-watch backoff: the runner parks
 /// at `at`, the test advances `gap`, and the watch runs again
 /// (docs/testing.md, "Waits and timeouts": a test advances a fake clock
@@ -1171,6 +1304,8 @@ fn an_unknown_kind_with_a_valid_usage_payload_is_not_adopted_forwarded_or_folded
         wake: Arc::new(Parker::new()),
         on_usage: Some(on_usage),
         worktree_guard: Some(guard),
+        timing: None,
+        job_id: crate::registry::mint_job_id(),
     }
     .run();
 
@@ -2168,7 +2303,7 @@ fn timeout_stops_a_term_trap_without_sigkill() {
     let rig = rig(vec![WatchReply::Block(held)]);
     let origin = rig.clock.now();
     let timeout = Duration::from_millis(500);
-    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout), None);
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout), None, None);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
@@ -2204,7 +2339,7 @@ fn timeout_does_not_replace_a_childs_own_early_exit() {
         block.display(),
         json_line(1, "done")
     );
-    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10), None);
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10), None, None);
     let watchdog = Watchdog::group(pid_in_file(&pidfile));
     release_fifo(&block, b"go\n");
     let notice = timeout_report(&rig, &park);
@@ -2676,6 +2811,7 @@ fn a_member_listed_past_the_bound_gets_sigkill_from_retire() {
         None,
         None,
         None,
+        None,
     );
     // The stop sets the bound; the member ignores nothing and no other
     // thread signals this group.
@@ -2999,6 +3135,8 @@ fn run_watch(
         wake: waker,
         on_usage: None,
         worktree_guard: None,
+        timing: None,
+        job_id: crate::registry::mint_job_id(),
     }
     .run();
 }
@@ -3160,6 +3298,7 @@ fn the_fold_starts_from_the_run_boundary() {
         Some(5),
         None,
         None,
+        None,
     );
     let launched = Launched {
         worktree: None,
@@ -3283,6 +3422,7 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
             Some(1),
             None,
             Some(rig.registry.usage_forward()),
+            None,
         )
         .0;
     let _waited = waited;
@@ -3419,6 +3559,7 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
             None,
             None,
             Some(rig.registry.usage_forward()),
+            None,
         )
         .0;
     let _waited = waited;
@@ -3503,6 +3644,8 @@ fn run_backfill(
         wake: waker,
         on_usage: Some(on_usage),
         worktree_guard: None,
+        timing: None,
+        job_id: crate::registry::mint_job_id(),
     }
     .run();
     let seen = seen.lock().unwrap().clone();
@@ -3571,6 +3714,7 @@ fn the_reap_replays_file_usage_the_socket_never_saw() {
             None,
             None,
             Some(rig.registry.usage_forward()),
+            None,
         )
         .0;
     let _waited = waited;
@@ -3741,6 +3885,7 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
             None,
             None,
             Some(rig.registry.usage_forward()),
+            None,
         )
         .0;
     let _done = done;
@@ -3843,6 +3988,7 @@ fn a_correction_applies_only_its_delta() {
             None,
             None,
             Some(rig.registry.usage_forward()),
+            None,
         )
         .0;
     let _waited = waited;

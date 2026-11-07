@@ -351,7 +351,8 @@ What is recorded:
 - **At `debug`, how long a timed operation takes:** one `op_timing` line
   when it ends, written by the one timer every timed place goes through
   (`log::diag::timed`). `data` holds `op`, the operation's name, and `ms`,
-  whole milliseconds; a tool's timers add `tool`, the tool's name. In an
+  whole milliseconds; a tool's timers add `tool`, the tool's name, and a
+  job's timers add `job`, the job id. In an
   `alloc-stats` build, and only when the timer ends on the thread that
   started it, the line also carries `alloc_bytes`, bytes allocated during
   the operation, `allocs`, the allocation count during the operation, and
@@ -453,7 +454,12 @@ What is recorded:
   its own thread runs, before the receipt is built. A refused call, a
   spawn or registration failure, and a call cancelled before its job
   starts write none, and the job's later life adds nothing. Its `data`
-  holds only `op` and `ms`. Installed for worktrees is `worktree.create`
+  holds only `op` and `ms`. Also installed for jobs are `jobs.receive`
+  and `jobs.deliver`: one line each per delegate exit, when the parent's
+  job watcher receives it and when the runner delivers it to the loop.
+  The two pair by `job`, the job id, with the receive preceding the
+  delivery for one job id. Their `data` holds `op`, `ms` and `job`.
+  Installed for worktrees is `worktree.create`
   and `worktree.remove`. `worktree.create` covers the one `git worktree
   add` a new or resumed session runs to make its worktree, stamped before
   the configuration is read and written once the writer opens, so its `ts`

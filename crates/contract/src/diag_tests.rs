@@ -160,6 +160,8 @@ fn every_operation_serializes_to_its_wire_name() {
         (Op::Hook(BeforeHandoff), "hook.before_handoff"),
         (Op::McpConnect, "mcp.connect"),
         (Op::JobsStart, "jobs.start"),
+        (Op::JobsReceive, "jobs.receive"),
+        (Op::JobsDeliver, "jobs.deliver"),
         (Op::WorktreeCreate, "worktree.create"),
         (Op::WorktreeRemove, "worktree.remove"),
         (Op::PictureRun, "picture.run"),

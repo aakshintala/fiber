@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use serde::Serialize;
 
+use crate::ids::JobId;
 use crate::provider::{ModelCall, ModelRequest};
 
 /// Redacted digests of one request's cacheable prefix segments, in the
@@ -355,6 +356,10 @@ pub enum Op {
     McpConnect,
     /// A background job or delegate, until it runs.
     JobsStart,
+    /// A delegate's exit, as the parent's job watcher receives it.
+    JobsReceive,
+    /// The same exit, as the runner delivers it to the loop.
+    JobsDeliver,
     /// Creating a git worktree a session or delegate runs in.
     WorktreeCreate,
     /// Removing one.
@@ -415,6 +420,8 @@ impl Op {
             Self::Hook(chain) => chain.hook_name(),
             Self::McpConnect => "mcp.connect",
             Self::JobsStart => "jobs.start",
+            Self::JobsReceive => "jobs.receive",
+            Self::JobsDeliver => "jobs.deliver",
             Self::WorktreeCreate => "worktree.create",
             Self::WorktreeRemove => "worktree.remove",
             Self::PictureRun => "picture.run",
@@ -475,7 +482,19 @@ impl HookChain {
 /// may follow the work to its worker; dropping it without stopping stamps
 /// the drop time.
 pub type Timing =
-    Arc<dyn Fn(Op, Option<&str>, Option<Instant>) -> Option<Box<dyn Send>> + Send + Sync>;
+    Arc<dyn Fn(Op, Option<TimingName>, Option<Instant>) -> Option<Box<dyn Send>> + Send + Sync>;
+
+/// What names one `op_timing` line's subject: a tool's registered name,
+/// or a job's id, never an argument, a path or any content. One enum, so
+/// a line cannot name both (`docs/code-quality.md`, "Types"): tool timers
+/// carry the name, job timers carry the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimingName<'a> {
+    /// A tool's registered name.
+    Tool(&'a str),
+    /// A job's id, a delegate's included.
+    Job(&'a JobId),
+}
 
 #[cfg(test)]
 #[path = "diag_tests.rs"]
