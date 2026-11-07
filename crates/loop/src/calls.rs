@@ -282,18 +282,17 @@ impl Loop {
             .enumerate()
             .map(|(at, queued)| match &queued.record {
                 JobRecord::DelegateFinished(finished) => {
-                    taken
-                        .iter()
-                        .skip(at + 1)
-                        .find_map(|later| match &later.record {
-                            JobRecord::Completed(end) if end.job_id == finished.job_id => {
-                                Some((end.status, end.process.clone()))
-                            }
-                            JobRecord::Started(_)
-                            | JobRecord::DelegateStarted(_)
-                            | JobRecord::DelegateFinished(_)
-                            | JobRecord::Completed(_) => None,
-                        })
+                    // From the finish itself: it is not a `Completed`, so
+                    // the search still finds only a later end.
+                    taken.iter().skip(at).find_map(|later| match &later.record {
+                        JobRecord::Completed(end) if end.job_id == finished.job_id => {
+                            Some((end.status, end.process.clone()))
+                        }
+                        JobRecord::Started(_)
+                        | JobRecord::DelegateStarted(_)
+                        | JobRecord::DelegateFinished(_)
+                        | JobRecord::Completed(_) => None,
+                    })
                 }
                 JobRecord::Started(_) | JobRecord::DelegateStarted(_) | JobRecord::Completed(_) => {
                     None

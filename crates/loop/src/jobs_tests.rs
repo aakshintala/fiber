@@ -7024,6 +7024,42 @@ fn a_claimed_delegate_finish_whose_write_fails_logs_no_path() {
 }
 
 #[test]
+fn a_claimed_finish_takes_its_status_from_its_own_jobs_end() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    // Another job's end sits between the finish and its own end.
+    let mut other = failed("other");
+    other.status = Outcome::Cancelled;
+    other.process = None;
+    let mut pair = claimed_pair(session.path());
+    pair.insert(
+        1,
+        Taken {
+            record: JobRecord::Completed(other),
+            action: None,
+        },
+    );
+    let mut world = World::new(
+        vec![calls("settles"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Settles { taken: pair })],
+    )
+    .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    write_started(&mut world, "other", Some("shell"));
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let chains: Vec<_> = hooks
+        .calls()
+        .into_iter()
+        .filter(|seen| seen.delivery == Some(JobDelivery::Delegate))
+        .collect();
+    assert_eq!(chains.len(), 1);
+    assert_eq!(chains[0].status, CallStatus::Failed);
+    assert_eq!(chains[0].process, failed(DELEGATE).process);
+}
+
+#[test]
 fn a_claimed_finish_naming_no_file_runs_no_delegate_chain() {
     let session = delegate_session();
     let hooks = Arc::new(RecordingHooks::default());

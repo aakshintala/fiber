@@ -1392,7 +1392,7 @@ ended while its parent was gone, whose `job_completed` the keeper wrote
 | `job_id` | string | yes | the delegate's job |
 | `text` | string | yes | the final message, bounded as `docs/tools.md`, "Bounded results", says |
 | `artifact` | string | no | the file holding the final message, relative to the session directory that owns it: `artifacts/final.md` in the delegate's own directory, except when a hook returned artifact text for the finish, then that hook's `artifacts/<job_id>.txt` in the parent's; absent when no file was written or the harness is not Fiber |
-| `artifact_absolute` | string | no | the final-message file's absolute path, which the wake and `jobs wait` name; the file holds the final message after the `delegate` delivery hooks, and on a line a `jobs wait`, `stop` or `write` claimed, `text` is the message as the delegate wrote it, so it can differ from the file when a hook changed it; absent when the file was not written or the harness is not Fiber |
+| `artifact_absolute` | string | no | the final-message file's absolute path, which the wake and `jobs wait` name; the file holds the final message after the `delegate` delivery hooks, and on a line a `jobs wait`, `stop` or `write` claimed, `text` is the message as the delegate wrote it, so it can differ from the file when a hook changed it; absent when the file was not written or the harness is not Fiber; the `jobs wait` result names the path whenever the claim path attempted the write, so it can name a file that failed to write |
 | `questions` | `questions` | no | when the delegate's turn ended on `ask_user` |
 | `usage` | `usage` | yes | the run's totals |
 | `changed_by` | `changed_by` | no | when a hook changed the final message, and named itself |
