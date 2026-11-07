@@ -2881,3 +2881,60 @@ fn verdict_keeps_a_touched_retry_failure_with_no_new_breaks() {
         "{out}"
     );
 }
+
+#[test]
+fn break_glass_audit_rejects_an_unknown_argument() {
+    let dir = workspace();
+    let (code, out) = xtask(&dir, &["break-glass-audit", "--bogus"], &[], "");
+    assert_eq!(code, 2);
+    assert!(
+        out.starts_with("xtask: usage: cargo xtask break-glass-audit"),
+        "{out}"
+    );
+}
+
+#[test]
+fn break_glass_audit_since_prints_the_cutoff_without_stdin() {
+    let dir = workspace();
+    let (code, out) = xtask(
+        &dir,
+        &["break-glass-audit", "--since", "--now", "1794000000"],
+        &[],
+        "",
+    );
+    assert_eq!((code, out.as_str()), (0, "2026-11-04T21:20:00Z\n"));
+}
+
+#[test]
+fn break_glass_audit_exits_one_on_an_undeclared_merge_and_two_on_bad_input() {
+    let dir = workspace();
+    let sha = "a".repeat(40);
+    let head = "1".repeat(40);
+    let input = serde_json::json!({
+        "commits": {"ok": true, "body": [{"sha": sha, "commit": {"committer": {"date": "2026-11-06T20:00:00Z"}}}]},
+        "pulls": {sha.clone(): {"ok": true, "body": [{"number": 7, "body": "x", "merged_at": "2026-11-06T20:00:01Z", "base": {"ref": "main"}, "head": {"sha": head}}]}},
+        "checks": {head.clone(): {"ok": true, "body": {"total_count": 0, "check_runs": []}}},
+    });
+    let args = ["break-glass-audit", "--now", "1794000000"];
+    let (code, out) = xtask(&dir, &args, &[], &input.to_string());
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains(&format!(
+            "merge {sha} head {head} PR #7 ticket - undeclared\n"
+        )),
+        "{out}"
+    );
+    assert!(!out.contains("::error::"), "{out}");
+    let (code, out) = xtask(
+        &dir,
+        &args,
+        &[("GITHUB_ACTIONS", "true")],
+        &input.to_string(),
+    );
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("::error::merge "), "{out}");
+
+    let (code, out) = xtask(&dir, &args, &[], "{not json");
+    assert_eq!(code, 2, "{out}");
+    assert!(out.starts_with("xtask: break-glass-audit:"), "{out}");
+}
