@@ -289,6 +289,18 @@ pub(crate) fn install(
             lua.create_string(hmac::sign(&key, &bytes.as_bytes()).as_ref())
         })?,
     )?;
+    // Invalid UTF-8 never reaches an outer result: the result's conversion
+    // rejects it and fails the run, so codemode's `capture` replaces each
+    // invalid sequence with one U+FFFD, as `from_utf8_lossy` does. The
+    // callback is plain bytes in and a string out, so it stays beside the
+    // other byte-level helpers; only codemode's capture calls it, never
+    // the global result conversion.
+    host.set(
+        "utf8_lossy",
+        lua.create_function(|_, bytes: LuaString| {
+            Ok(String::from_utf8_lossy(&bytes.as_bytes()).into_owned())
+        })?,
+    )?;
     let json = lua.create_table()?;
     json.set(
         "encode",
@@ -303,8 +315,30 @@ pub(crate) fn install(
     )?;
     json.set(
         "decode",
-        lua.create_function(|lua, text: LuaString| {
-            let value: Value = serde_json::from_slice(&text.as_bytes())
+        lua.create_function(|lua, (text, options): (LuaString, Option<LuaValue>)| {
+            let lenient = match options {
+                None | Some(LuaValue::Nil) => false,
+                Some(LuaValue::Table(options)) => {
+                    let lenient: LuaValue = options
+                        .get("lenient")
+                        .map_err(|e| mlua::Error::RuntimeError(format!("json.decode: {e}")))?;
+                    !matches!(lenient, LuaValue::Nil | LuaValue::Boolean(false))
+                }
+                Some(_) => {
+                    return Err(mlua::Error::RuntimeError(
+                        "json.decode: options must be a table".to_owned(),
+                    ));
+                }
+            };
+            let raw = text.as_bytes();
+            let sanitized;
+            let bytes: &[u8] = if lenient {
+                sanitized = escape_raw_controls(&raw);
+                &sanitized
+            } else {
+                &raw
+            };
+            let value: Value = serde_json::from_slice(bytes)
                 .map_err(|e| mlua::Error::RuntimeError(format!("json.decode: {e}")))?;
             lua.to_value(&value)
         })?,
@@ -313,6 +347,52 @@ pub(crate) fn install(
     globals.set("host", host)?;
     globals.set("json", json)?;
     Ok((LuaValue::Table(tag), timer_funcs, delegate_handles))
+}
+
+/// Escape raw control bytes inside JSON strings, so `json.decode` with
+/// `{ lenient = true }` accepts real-world tool output. A byte outside a
+/// string passes through untouched, so a raw control in structural text
+/// still raises exactly as strict. Escaped quotes and backslashes keep the
+/// string tracking honest.
+fn escape_raw_controls(bytes: &[u8]) -> Vec<u8> {
+    fn hex(nibble: u8) -> u8 {
+        if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + nibble - 10
+        }
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut in_string = false;
+    let mut escaped = false;
+    for &b in bytes {
+        if escaped {
+            out.push(b);
+            escaped = false;
+        } else if in_string && b == b'\\' {
+            out.push(b);
+            escaped = true;
+        } else if b == b'"' {
+            out.push(b);
+            in_string = !in_string;
+        } else if in_string && b < 0x20 {
+            match b {
+                0x08 => out.extend_from_slice(b"\\b"),
+                0x09 => out.extend_from_slice(b"\\t"),
+                0x0A => out.extend_from_slice(b"\\n"),
+                0x0C => out.extend_from_slice(b"\\f"),
+                0x0D => out.extend_from_slice(b"\\r"),
+                _ => {
+                    out.extend_from_slice(b"\\u00");
+                    out.push(hex(b >> 4));
+                    out.push(hex(b & 0x0F));
+                }
+            }
+        } else {
+            out.push(b);
+        }
+    }
+    out
 }
 
 /// One `host.http` call, copied out of Lua so it can run off the extension's
