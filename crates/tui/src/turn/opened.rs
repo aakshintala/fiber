@@ -147,10 +147,25 @@ pub(crate) fn prefix(call: &Call, width: u16) -> Vec<Body> {
 /// draws none. Every span passes `safe_line`, which the Markdown
 /// renderer does not.
 fn message_rows(call: &Call, width: u16, bodies: &mut Vec<Body>) {
+    use crate::format::Kind;
     let text_key = match crate::format::kind(&call.name, &call.arguments) {
-        crate::format::Kind::DelegateMessage => "message",
-        crate::format::Kind::SessionMessage => "text",
-        _ => return,
+        Kind::DelegateMessage => "message",
+        Kind::SessionMessage => "text",
+        Kind::Read
+        | Kind::Search
+        | Kind::List
+        | Kind::Edit
+        | Kind::Write
+        | Kind::Shell
+        | Kind::Delegate
+        | Kind::Jobs
+        | Kind::Ask(_)
+        | Kind::Fetch
+        | Kind::Web
+        | Kind::Skill
+        | Kind::Tools
+        | Kind::Session
+        | Kind::Other => return,
     };
     let argument = |key: &str| {
         call.arguments
