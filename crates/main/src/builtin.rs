@@ -182,7 +182,8 @@ pub(crate) fn builtin_timed(
     }
     let mut driver = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
         .with_search(fiber)
-        .with_artifacts(artifacts.to_path_buf());
+        .with_artifacts(artifacts.to_path_buf())
+        .with_no_timeout();
     if let Some(host) = host {
         driver = driver.with_host(host);
     }

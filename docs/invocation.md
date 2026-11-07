@@ -561,7 +561,10 @@ job and keeps its timeout.
 
 **`shell` runs the person's own command, and the model sees it only if asked.**
 It runs in the session's workspace with the shell and output cap of the shell
-tool (`docs/tools.md`, "Shell"), and `cancel` stops it. It needs no approval:
+tool (`docs/tools.md`, "Shell"), and `cancel` stops it. It has no timeout: it
+runs until it exits or the session shuts down. The 600,000 (10-minute) default
+in `docs/tools.md` ("Timeout") bounds the agent's `shell` tool calls, not this
+command. It needs no approval:
 the person typed it, and a client that can attach already controls the session
 ([#30](https://github.com/aakshintala/fiber/issues/30)).
 

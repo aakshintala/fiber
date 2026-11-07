@@ -45,6 +45,25 @@ fn shared(name: &str, stored: &str, credential: Option<CredentialSource>) -> Pro
     }
 }
 
+/// A Bedrock-shaped provider: its `credential()` reads nothing Fiber stores,
+/// so its sentences must not advise `fiber login`.
+fn bedrock() -> ProviderData {
+    ProviderData {
+        name: "bedrock".into(),
+        credential_name: None,
+        headers: Default::default(),
+        placeholders: Default::default(),
+        models: Vec::new(),
+        reviewer_model: None,
+        credential_from: config::CredentialFrom::Function(config::CredentialLabelSources {
+            names: "profile".into(),
+            default: "the environment".into(),
+            credential_env: Vec::new(),
+            credential_paths: Vec::new(),
+        }),
+    }
+}
+
 fn default_key(config: &Config, provider: &ProviderData) -> Result<Secret, ConfigError> {
     config
         .credentials()
@@ -1243,4 +1262,36 @@ fn a_declared_path_resolves_as_a_call_path_does() {
         .resolve(&env_of(&[("AWS_SHARED_CREDENTIALS_FILE", "../keys")]))
         .unwrap();
     assert_eq!(resolve_declared(&workspace.join(chosen)), tmp.join("keys"));
+}
+
+#[test]
+fn a_function_provider_missing_renders_no_login_advice() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    let err = default_key(&config, &bedrock()).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CredentialMissing);
+    let message = err.to_string();
+    assert!(message.contains("No credential for `bedrock`"), "{message}");
+    assert!(!message.contains("fiber login"), "{message}");
+}
+
+#[test]
+fn a_function_provider_empty_stored_file_renders_no_login_advice() {
+    let setup = Setup::new();
+    store_credential(
+        &setup.home(),
+        "bedrock",
+        "default",
+        &Secret::new(" \n".into()),
+    )
+    .unwrap();
+    let config = setup.load(&[]).unwrap();
+    let err = default_key(&config, &bedrock()).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CredentialFailed);
+    let message = err.to_string();
+    assert!(
+        message.contains("The stored credential for `bedrock` cannot be used"),
+        "{message}"
+    );
+    assert!(!message.contains("fiber login"), "{message}");
 }

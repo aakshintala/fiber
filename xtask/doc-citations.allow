@@ -395,7 +395,7 @@ crates/main/tests/startup_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
 crates/main/tests/stop.rs	2	docs/state.md`, "Sockets"
 crates/main/tests/stream_closed_notice.rs	1	docs/events.md`, "session_status"
 crates/main/tests/support/mod.rs	1	docs/state.md`,\n/// "Sockets"
-crates/main/tests/support/pty.rs	1	docs/testing.md`,\n        // "Races are forced, not waited for"
+crates/main/tests/support_helpers.rs	1	docs/testing.md`,\n    // "Races are forced, not waited for"
 crates/main/tests/terminal.rs	1	docs/configuration.md:119
 crates/main/tests/terminal.rs	3	docs/invocation.md:115
 crates/main/tests/terminal.rs	2	docs/invocation.md:1268-1270

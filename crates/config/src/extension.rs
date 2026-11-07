@@ -241,6 +241,12 @@ impl CredentialFrom {
         }
     }
 
+    /// Whether the sentence advises `fiber login`: set where the provider
+    /// reads the key `fiber login` stores, or its data declares `login`.
+    pub fn advises_login(&self) -> bool {
+        matches!(self, Self::Stored { .. })
+    }
+
     /// The paths a `credential()` that reads nothing Fiber stores draws
     /// secrets from; none for a stored credential.
     pub fn credential_paths(&self) -> &[CredentialPath] {

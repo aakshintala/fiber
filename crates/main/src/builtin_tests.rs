@@ -1382,3 +1382,117 @@ fn the_model_shell_marks_confined_when_on_and_available() {
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     assert!(!effects.declared.confined);
 }
+
+/// The person's `!` command runs with no foreground timeout: advancing the
+/// clock past the agent's 10-minute default moves nothing, and a cancel
+/// still stops the run.
+#[test]
+fn driver_shell_has_no_foreground_default() {
+    let root = fakes::TempDir::new("fiber-driver-no-timeout");
+    let fake = fakes::clock::FakeClock::new();
+    let clock: Arc<dyn Clock> = fake.clone();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (_tools, _infos, driver, _forget, _images) = super::builtin(
+        root.path().join("fiber-stub"),
+        &root.path().join("home"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        &Arc::new(tools::PathLocks::new()),
+        None,
+        &delegates(),
+        skills(),
+    )
+    .unwrap();
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "command".to_owned(),
+        serde_json::Value::String("true; sleep 60".to_owned()),
+    );
+    let cancel = fakes::CancelToken::new();
+    let run_cancel = cancel.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let driver_thread = match std::thread::Builder::new()
+        .name("fiber-driver-no-timeout".to_owned())
+        .spawn(move || {
+            let output = driver.run(&arguments, &run_cancel, &Quiet);
+            done.send(output).unwrap_or(());
+        }) {
+        Ok(handle) => handle.thread().id(),
+        Err(err) => panic!("could not start a thread for the driver call: {err}"),
+    };
+    // The start marker: the driver waits on the clock with no deadline. A
+    // parked caller alone never moves the clock (`docs/testing.md`, "Waits
+    // and timeouts"); the park is the signal the assertions below read.
+    let (parked_tx, parked_rx) = std::sync::mpsc::channel();
+    // One wait for one park signal: the observer receives on this wait's
+    // behalf, so observer and receive share the one deadline made here
+    // (docs/testing.md, "Waits and timeouts").
+    let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    std::thread::Builder::new()
+        .name("fiber-driver-parked".to_owned())
+        .spawn({
+            let fake = fake.clone();
+            move || {
+                loop {
+                    let parked = fake.parked();
+                    if parked.contains(&None) {
+                        parked_tx.send(()).unwrap_or(());
+                        return;
+                    }
+                    if bound.left().is_zero() {
+                        panic!("the driver call never waited with no deadline: {parked:?}");
+                    }
+                    std::thread::yield_now();
+                }
+            }
+        })
+        .unwrap();
+    bound.recv_or_fail(&parked_rx, "the driver call to wait with no deadline");
+    // The 10-minute foreground default parks nowhere: the driver's only
+    // park carries no deadline. A moved default parks at some instant and
+    // fails the second assertion.
+    let parked = fake.parked();
+    assert!(
+        parked.contains(&None),
+        "the driver call waits with no deadline: {parked:?}"
+    );
+    assert!(
+        !parked.iter().any(|until| until.is_some()),
+        "no foreground default parks the driver call: {parked:?}"
+    );
+    // Advancing past the agent's default moves nothing: the call stays
+    // parked until the cancel below stops it.
+    let advance = Duration::from_millis(600_000);
+    fake.advance_when_parked(
+        None,
+        Some(driver_thread),
+        advance,
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+    );
+    assert!(
+        finished.try_recv().is_err(),
+        "the driver call returned after a clock advance with no deadline"
+    );
+    cancel.cancel();
+    let output =
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "the driver call");
+    let text = match output.content.first() {
+        Some(contract::shapes::ContentPart::Text { text }) => text.clone(),
+        _ => String::new(),
+    };
+    assert!(
+        output.error.is_none(),
+        "cancel carries no error, only its closing line: {text}"
+    );
+    assert_eq!(text, "Cancelled and stopped.\n");
+    assert!(
+        !text.contains("Timed out after"),
+        "no foreground default reaches the driver call: {text}"
+    );
+}
