@@ -353,30 +353,19 @@ fn job_id_of(text: &str) -> String {
         .to_owned()
 }
 
-/// As [`probe_answer`], but the probe's parent runs `runner` with the quoted
-/// command lines appended (instead of `python3 {probe} {hub_socket}`), and
-/// the probe subscribes to `target` while the shell runs in `session`: a
-/// fake session ancestor for runners like `xargs sh session ...`.
-fn probe_answer_full(
-    client: &Socket,
-    session: &str,
-    target: &str,
-    runner: &str,
-    subscribe_first: bool,
-    line: &Value,
-) -> Value {
-    // The subscribe id is unique to this probe call: command ids are
-    // admitted once across connections, so a second probe reusing
-    // `c_probe_sub` would be rejected and proceed unsubscribed.
-    let sub_id = if subscribe_first {
-        format!("c_sub_{}", line["id"].as_str().unwrap())
-    } else {
-        "-".to_owned()
-    };
-    let mut args = format!("{runner} '{target}' '{sub_id}'");
-    args.push_str(&format!(" '{line}'"));
-    let command = args;
-    let shell_id = format!("c_shell_{}", line["id"].as_str().unwrap());
+/// Sends `command` to `session` through the hub's `shell` and returns the
+/// probe's printed answer line: the dispatch and answer parsing shared by
+/// the hub-socket and session-socket probes.
+#[track_caller]
+fn run_probe_command(client: &Socket, session: &str, command: String) -> Value {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_SHELL_ID: AtomicU64 = AtomicU64::new(0);
+    // Command ids are admitted once across connections, so each dispatch
+    // mints a fresh shell id instead of reusing the probe line's id.
+    let shell_id = format!(
+        "c_shell_probe_{}",
+        NEXT_SHELL_ID.fetch_add(1, Ordering::Relaxed)
+    );
     client.send(
         &json!({
             "id": shell_id,
@@ -400,6 +389,30 @@ fn probe_answer_full(
         .find(|line| line.starts_with('{'))
         .unwrap_or_else(|| panic!("the shell printed no answer line: {ack}"));
     serde_json::from_str(printed).unwrap()
+}
+
+/// As [`probe_answer`], but the probe's parent runs `runner` with the quoted
+/// command lines appended (instead of `python3 {probe} {hub_socket}`), and
+/// the probe subscribes to `target` while the shell runs in `session`: a
+/// fake session ancestor for runners like `xargs sh session ...`.
+fn probe_answer_full(
+    client: &Socket,
+    session: &str,
+    target: &str,
+    runner: &str,
+    subscribe_first: bool,
+    line: &Value,
+) -> Value {
+    // The subscribe id is unique to this probe call: command ids are
+    // admitted once across connections, so a second probe reusing
+    // `c_probe_sub` would be rejected and proceed unsubscribed.
+    let sub_id = if subscribe_first {
+        format!("c_sub_{}", line["id"].as_str().unwrap())
+    } else {
+        "-".to_owned()
+    };
+    let command = format!("{runner} '{target}' '{sub_id}' '{line}'");
+    run_probe_command(client, session, command)
 }
 
 /// Runs the probe as a direct child of the test, with `program` and `args`
@@ -738,30 +751,7 @@ fn probe_answer_session_socket(
     line: &Value,
 ) -> Value {
     let command = format!("python3 {probe} {socket} '{line}'");
-    let shell_id = format!("c_shell_{}", line["id"].as_str().unwrap());
-    client.send(
-        &json!({
-            "id": shell_id,
-            "session_id": session,
-            "command": "shell",
-            "args": {"command": command, "send": false},
-        })
-        .to_string(),
-    );
-    let ack = recv_answer(client, &shell_id, "the shell acknowledgement");
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    let result = &ack["payload"]["result"];
-    let text = result
-        .get("output")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| result.to_string());
-    let printed = text
-        .lines()
-        .map(str::trim)
-        .find(|line| line.starts_with('{'))
-        .unwrap_or_else(|| panic!("the shell printed no answer line: {ack}"));
-    serde_json::from_str(printed).unwrap()
+    run_probe_command(client, session, command)
 }
 
 #[test]
