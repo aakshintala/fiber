@@ -50,6 +50,7 @@ fn file(
         extension: None,
         content: content.map(str::to_owned),
         sent,
+        size: None,
     })
 }
 
@@ -157,6 +158,7 @@ fn created_section_file_names_the_section() {
             extension: Some("fiber.test/notes".into()),
             content: Some("New notes.\n".into()),
             sent: InstructionSent::Full,
+            size: None,
         }),
         None,
         "fake/model-1",
@@ -208,6 +210,184 @@ fn subdirectory_renders_the_reached_file() {
     );
     assert!(text.contains("### /w/sub/AGENTS.md"), "{text}");
     assert_eq!(had.get("/w/sub/AGENTS.md"), Some(&"Sub.\n".to_owned()));
+}
+
+fn stub_file(path: &str, reason: InstructionReason, content: &str, size: u64) -> Event {
+    Event::InstructionFile(InstructionFile {
+        path: path.into(),
+        reason,
+        extension: None,
+        content: Some(content.to_owned()),
+        sent: InstructionSent::Stub,
+        size: Some(size),
+    })
+}
+
+fn rendered_stub(event: &Event) -> (String, BTreeMap<String, String>) {
+    let mut had = BTreeMap::new();
+    let mut conversation = Vec::new();
+    render(
+        &mut conversation,
+        event,
+        None,
+        "fake/model-1",
+        &mut had,
+        &mut crate::handoff::Carry::default(),
+        None,
+    );
+    assert_eq!(conversation.len(), 1);
+    (user_text(&conversation[0]).to_owned(), had)
+}
+
+#[test]
+fn subdirectory_stub_renders_path_size_headings_and_read_instruction() {
+    let content = "# Alpha\nBody line one.\n   ## Beta\nA # mid-line hash is prose.\n";
+    let (text, had) = rendered_stub(&stub_file(
+        "/w/sub/AGENTS.md",
+        InstructionReason::Subdirectory,
+        content,
+        40_000,
+    ));
+    assert!(text.contains("### /w/sub/AGENTS.md"), "len {}", text.len());
+    assert!(text.contains("40000 bytes"), "len {}", text.len());
+    assert!(text.contains("# Alpha"), "len {}", text.len());
+    assert!(text.contains("## Beta"), "len {}", text.len());
+    assert!(
+        text.contains("Read it before working in that directory."),
+        "len {}",
+        text.len()
+    );
+    assert!(!text.contains("Body line one."), "len {}", text.len());
+    assert!(
+        !text.contains("A # mid-line hash is prose."),
+        "len {}",
+        text.len()
+    );
+    // The log still holds the full content behind the stub.
+    assert_eq!(had.get("/w/sub/AGENTS.md"), Some(&content.to_owned()));
+}
+
+#[test]
+fn subdirectory_stub_without_headings_names_no_headings() {
+    let (text, _) = rendered_stub(&stub_file(
+        "/w/sub/AGENTS.md",
+        InstructionReason::Subdirectory,
+        "Just prose, no headings.\n",
+        40_000,
+    ));
+    assert!(text.contains("(no headings)"), "len {}", text.len());
+    assert!(text.contains("40000 bytes"), "len {}", text.len());
+}
+
+#[test]
+fn subdirectory_changed_stub_rerenders_updated_headings_and_size() {
+    let mut had = BTreeMap::from([(
+        "/w/sub/AGENTS.md".to_owned(),
+        "# Old\nOld body.\n".to_owned(),
+    )]);
+    let mut conversation = Vec::new();
+    render(
+        &mut conversation,
+        &stub_file(
+            "/w/sub/AGENTS.md",
+            InstructionReason::Changed,
+            "# New\nNew body.\n",
+            40_001,
+        ),
+        None,
+        "fake/model-1",
+        &mut had,
+        &mut crate::handoff::Carry::default(),
+        None,
+    );
+    assert_eq!(conversation.len(), 1);
+    let text = user_text(&conversation[0]).to_owned();
+    assert!(text.contains("# New"), "len {}", text.len());
+    assert!(text.contains("40001 bytes"), "len {}", text.len());
+    assert!(!text.contains("Old body."), "len {}", text.len());
+    assert_eq!(
+        had.get("/w/sub/AGENTS.md"),
+        Some(&"# New\nNew body.\n".to_owned())
+    );
+}
+
+#[test]
+fn subdirectory_created_stub_rerenders_after_delete_recreate() {
+    // A delete dropped the path, so the recreate carries reason `Created`.
+    let (text, had) = rendered_stub(&stub_file(
+        "/w/sub/AGENTS.md",
+        InstructionReason::Created,
+        "# Fresh\nFresh body.\n",
+        40_002,
+    ));
+    assert!(text.contains("# Fresh"), "len {}", text.len());
+    assert!(text.contains("40002 bytes"), "len {}", text.len());
+    assert!(!text.contains("Fresh body."), "len {}", text.len());
+    assert_eq!(
+        had.get("/w/sub/AGENTS.md"),
+        Some(&"# Fresh\nFresh body.\n".to_owned())
+    );
+}
+
+#[test]
+fn subdirectory_stub_invalid_utf8_size_is_raw_bytes_live_and_rebuild_equal() {
+    // 32769 raw bytes holding one invalid byte: the logged content
+    // decodes longer than the raw size, so the stub must show the raw
+    // length, and the rebuild must render the identical bytes.
+    let mut bytes = vec![b'x'; 32769];
+    bytes[0] = b'#';
+    bytes[100] = 0xFF;
+    let content = String::from_utf8_lossy(&bytes).into_owned();
+    assert_eq!(bytes.len(), 32769);
+    assert_eq!(content.len(), 32771);
+    let event = stub_file(
+        "/w/sub/AGENTS.md",
+        InstructionReason::Subdirectory,
+        &content,
+        bytes.len() as u64,
+    );
+    let mut live = Vec::new();
+    let mut had = BTreeMap::new();
+    render(
+        &mut live,
+        &event,
+        None,
+        "fake/model-1",
+        &mut had,
+        &mut crate::handoff::Carry::default(),
+        None,
+    );
+    assert_eq!(live.len(), 1);
+    let text = user_text(&live[0]).to_owned();
+    assert!(text.contains("32769 bytes"), "len {}", text.len());
+    assert!(!text.contains("32771"), "len {}", text.len());
+    let lines = vec![line("instruction_file", &event, None)];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(live, rebuilt);
+}
+
+#[test]
+fn subdirectory_small_file_still_renders_full() {
+    let mut had = BTreeMap::new();
+    let mut conversation = Vec::new();
+    render(
+        &mut conversation,
+        &file(
+            "/w/sub/AGENTS.md",
+            InstructionReason::Subdirectory,
+            InstructionSent::Full,
+            Some("Small body.\n"),
+        ),
+        None,
+        "fake/model-1",
+        &mut had,
+        &mut crate::handoff::Carry::default(),
+        None,
+    );
+    assert_eq!(conversation.len(), 1);
+    let text = user_text(&conversation[0]);
+    assert!(text.contains("has its own instruction file"), "{text}");
+    assert!(text.contains("Small body.\n"), "{text}");
 }
 
 #[test]

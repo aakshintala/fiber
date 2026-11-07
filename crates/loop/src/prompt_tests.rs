@@ -231,8 +231,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        6940,
-        0xce299c6e8b5e5daf,
+        7279,
+        0x64497c1fa25760f2,
     );
 }
 
@@ -257,6 +257,7 @@ fn messages_md_holds_every_section_the_doc_names() {
         "instruction-file",
         "no-instruction-files",
         "subdirectory-file",
+        "subdirectory-stub",
         "created-file",
         "created-section-file",
         "replaced-file",

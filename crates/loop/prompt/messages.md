@@ -48,6 +48,16 @@ Fiber: you worked in {dir}, which has its own instruction file. It applies to {d
 
 {content}
 
+## subdirectory-stub
+
+Fiber: you worked in {dir}, which has its own instruction file. It is {size} bytes, over the 32 KiB limit, so you were sent this stub instead of the full text. Read it before working in that directory. It applies to {dir} and everything below it, and wins over the files above it.
+
+### {path}
+
+Headings:
+
+{headings}
+
 ## created-file
 
 Fiber: a new instruction file appeared. It applies to {dir} and everything below it.

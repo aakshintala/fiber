@@ -178,6 +178,7 @@ fn apply_instruction_sets_and_clears_one_path() {
         extension: None,
         content: Some("new".into()),
         sent: InstructionSent::Diff,
+        size: None,
     });
     apply(&mut had, &set);
     assert_eq!(had.get("/w/AGENTS.md"), Some(&"new".to_owned()));
@@ -187,6 +188,7 @@ fn apply_instruction_sets_and_clears_one_path() {
         extension: None,
         content: None,
         sent: InstructionSent::Deleted,
+        size: None,
     });
     apply(&mut had, &clear);
     assert!(!had.contains_key("/w/AGENTS.md"));
@@ -837,6 +839,7 @@ fn resumed_state_folds_changes_deletes_and_the_date() {
         extension: None,
         content: Some("Kept v2.\n".into()),
         sent: InstructionSent::Diff,
+        size: None,
     });
     let deleted = Event::InstructionFile(contract::events::InstructionFile {
         path: canon(&gone).display().to_string(),
@@ -844,6 +847,7 @@ fn resumed_state_folds_changes_deletes_and_the_date() {
         extension: None,
         content: None,
         sent: InstructionSent::Deleted,
+        size: None,
     });
     let dated = Event::DateChanged(contract::events::DateChanged {
         date: "2023-11-20".into(),
@@ -2019,6 +2023,7 @@ fn resumed_ignores_a_historical_section_line_the_manifest_no_longer_names() {
         extension: Some("fiber.test/notes".into()),
         content: Some("Revised by the call.\n".into()),
         sent: InstructionSent::None,
+        size: None,
     });
     let lines = vec![
         envelope("opening_message", &Event::OpeningMessage(message)),

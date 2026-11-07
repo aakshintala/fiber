@@ -383,6 +383,7 @@ impl State {
                             extension: extension.clone(),
                             content: Some(content.clone()),
                             sent,
+                            size: None,
                         }
                     }
                     None => InstructionFile {
@@ -391,6 +392,7 @@ impl State {
                         extension,
                         content: Some(content),
                         sent: InstructionSent::Full,
+                        size: None,
                     },
                 });
             }
@@ -405,6 +407,7 @@ impl State {
                         extension: self.extension_of(path).map(str::to_owned),
                         content: None,
                         sent: InstructionSent::Deleted,
+                        size: None,
                     });
                 }
             }
@@ -497,6 +500,7 @@ impl State {
                         extension: None,
                         content: Some(content),
                         sent: InstructionSent::Full,
+                        size: None,
                     }),
                     None,
                 )
@@ -568,6 +572,7 @@ impl State {
                             extension,
                             content: Some(content),
                             sent: InstructionSent::None,
+                            size: None,
                         });
                     }
                 }
@@ -583,6 +588,7 @@ impl State {
                             extension,
                             content: None,
                             sent: InstructionSent::None,
+                            size: None,
                         });
                     }
                 }
