@@ -4782,7 +4782,7 @@ fn delegate_models_omits_logged_out_provider_references() {
         &json!({}),
         None,
     );
-    install_pb_without_credential(&setup, "http://127.0.0.1:1", None);
+    install_pb_without_credential(&setup, "http://127.0.0.1:1");
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
@@ -6017,11 +6017,7 @@ const ABSENT_CHILD_CREDENTIAL: &str = "FIBER_TEST_ABSENT_CHILD_KEY_2347";
 /// Installs provider `pb` with model `m` whose credential comes from an
 /// environment variable nothing sets: resolving `fiber:pb/m` succeeds, so
 /// the delegate spawns, but starting it fails before its session exists.
-fn install_pb_without_credential(
-    setup: &support::Setup,
-    url: &str,
-    probe: Option<std::sync::mpsc::Sender<()>>,
-) {
+fn install_pb_without_credential(setup: &support::Setup, url: &str) {
     let source = setup.root.path().join("src-pb-nocred");
     let manifest = json!({"name": "pb", "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
         "providers": {"pb": [format!("{url}/v1")]}});
@@ -6041,7 +6037,7 @@ fn install_pb_without_credential(
         setup.deadline.start_wait(),
         &request,
         "0.0.0",
-        probe,
+        None,
     );
 }
 
@@ -6144,7 +6140,7 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
         &json!({}),
         None,
     );
-    install_pb_without_credential(&setup, &child.url(), None);
+    install_pb_without_credential(&setup, &child.url());
     // Presence can come from any label; the selected default still fails
     // acquisition inside the child because its environment source is absent.
     config::store_credential(

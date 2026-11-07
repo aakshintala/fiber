@@ -341,12 +341,7 @@ fn a_repository_level_is_ignored_for_native_requests() {
 
 /// Installs provider `fake` with model `m` on `protocol` at the fake
 /// server, as [`Setup::provider`] does for `openai-responses`.
-fn install_protocol(
-    setup: &Setup,
-    protocol: &str,
-    server: &ProviderServer,
-    probe: Option<std::sync::mpsc::Sender<()>>,
-) {
+fn install_protocol(setup: &Setup, protocol: &str, server: &ProviderServer) {
     let source = setup.root.path().join("src");
     write_json(
         &source.join("extension.json"),
@@ -366,7 +361,7 @@ fn install_protocol(
         setup.deadline.start_wait(),
         &request,
         "0.0.0",
-        probe,
+        None,
     );
     write_json(
         &setup.home().join("config.json"),
@@ -389,7 +384,7 @@ fn a_query_bearing_url_is_logged_without_it() {
     let setup = Setup::new();
     let body_len = gemini_hello().body.len();
     let server = ProviderServer::start([gemini_hello()]).unwrap();
-    install_protocol(&setup, "google-generative-ai", &server, None);
+    install_protocol(&setup, "google-generative-ai", &server);
     debug_config(&setup, json!({}));
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -966,7 +961,7 @@ fn each_protocol_writes_one_diagnostics_line() {
             setup.provider(&server);
             debug_config(&setup, json!({"cache": {"diagnostics": true}}));
         } else {
-            install_protocol(&setup, protocol, &server, None);
+            install_protocol(&setup, protocol, &server);
             debug_config(&setup, json!({"cache": {"diagnostics": true}}));
         }
         let run = ask(&setup);
