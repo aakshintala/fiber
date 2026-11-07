@@ -579,6 +579,10 @@ fn hub_log_tail_shows_a_short_log_whole() {
     assert_eq!(hub_log_tail("a\nb"), "a\nb");
 }
 
+// No asserted count cites a `docs/<area>.md` line promising it
+// (`docs/code-quality.md`, "What a reviewer checks"): the tail's width is
+// the helper's own bound, so these tests pin presence and recency, not the
+// bound. A long log keeps its last line and drops an early one.
 #[test]
 fn hub_log_tail_keeps_the_last_line() {
     let log = (1..=25)

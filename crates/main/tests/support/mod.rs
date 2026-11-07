@@ -1651,10 +1651,6 @@ pub(crate) fn hub_log_tail(log: &str) -> String {
     lines[lines.len().saturating_sub(HUB_LOG_TAIL)..].join("\n")
 }
 
-// No asserted count cites a `docs/<area>.md` line promising it
-// (`docs/code-quality.md`, "What a reviewer checks"): the tail's width is
-// the helper's own bound, so these tests pin presence and recency, not the
-// bound. A long log keeps its last line and drops an early one.
 /// What a hub that did not start left behind: the child status a
 /// `try_wait` snapshots (`None` for a hub still running or never spawned)
 /// and the tail of `hub.log`. The snapshot neither waits on the child nor
