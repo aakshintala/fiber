@@ -238,7 +238,6 @@ pub(crate) struct InnerRunning {
     request: Raised,
     pub(crate) stream: Arc<Stream>,
     cancel: Arc<InnerCancel>,
-    bound: contract::tool::Bound,
     declared: contract::shapes::DeclaredEffects,
     arguments: Arc<serde_json::Map<String, Value>>,
     rewritten: Option<Vec<String>>,
@@ -475,7 +474,6 @@ impl crate::Loop {
         let effects = Arc::new(prepared.effects);
         let worker_effects = Arc::clone(&effects);
         let tool = prepared.tool;
-        let bound = tool.bound();
         // The entered inner run's worker context, gated like the outer
         // call's, so `info` clones nothing.
         let worker = self.diag.worker().map(|diag| (diag, call.name.clone()));
@@ -503,7 +501,6 @@ impl crate::Loop {
             request,
             stream,
             cancel,
-            bound,
             declared: effects.declared.clone(),
             arguments,
             rewritten: prepared.rewritten,
@@ -561,7 +558,13 @@ impl crate::Loop {
                 output,
                 (&call.request.name, &call.arguments),
                 call.rewritten.as_deref(),
-                call.bound,
+                // Inner results reach the script whole: the cut in the
+                // loop's `shape`/`capped` bounds the model-facing outer
+                // result, never the script's own inner call.
+                contract::tool::Bound {
+                    start: usize::MAX,
+                    end: 0,
+                },
                 call.cancel.is_cancelled(),
                 &call.id,
                 turn,

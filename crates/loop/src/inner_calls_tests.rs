@@ -1,6 +1,6 @@
 //! The inner-call seam, slots and cancellation.
 
-use fakes::MUST_SUCCEED_WITHIN;
+use fakes::{MUST_SUCCEED_WITHIN, NoRules};
 use std::sync::Arc;
 
 use contract::ActionId;
@@ -524,4 +524,237 @@ fn an_anchor_finished_during_the_checks_never_runs_the_request() {
     let taken = take(false, false, Window::FinishAnchor);
     assert_eq!(taken.status, Some(contract::events::CallStatus::Cancelled));
     assert_eq!(taken.runs, 0);
+}
+
+/// A tool answering one text part, completed or failed.
+struct Answer {
+    text: String,
+    failed: bool,
+}
+
+impl contract::tool::Tool for Answer {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "inner".into(),
+            description: "An inner tool.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+                confined: false,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            review_when_confined: false,
+            hosts: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output {
+            content: vec![contract::shapes::ContentPart::Text {
+                text: self.text.clone(),
+            }],
+            error: self.failed.then(|| contract::shapes::Failure {
+                code: contract::ErrorCode::InvalidArguments,
+                message: "nope".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            ..contract::tool::Output::default()
+        }
+    }
+}
+
+/// Rules that fail closed: the loop denies the inner call before it runs.
+struct Unreadable;
+
+impl contract::rules::Rules for Unreadable {
+    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
+        Err(contract::rules::RulesError("gone".into()))
+    }
+
+    fn remember(
+        &self,
+        _: &str,
+        _: &str,
+        _: &contract::SessionId,
+    ) -> Result<(), contract::rules::RulesError> {
+        Ok(())
+    }
+}
+
+/// Raises one inner call and serves it to its answer, returning the
+/// completion the script's `host.tool` call resumes with.
+fn serve(
+    tool: Arc<Answer>,
+    rules: Arc<dyn contract::rules::Rules>,
+) -> Box<contract::events::ToolCallCompleted> {
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
+    let home = fakes::TempDir::new("fiber-inner-serve");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        log::Log::create(
+            home.path(),
+            contract::SessionId("s_test".into()),
+            Arc::clone(&clock),
+        )
+        .unwrap(),
+    );
+    let turn = Arc::new(crate::TurnCancel::default());
+    assert!(turn.arm());
+    let (woke_tx, woke) = std::sync::mpsc::channel();
+    let notice: Arc<dyn contract::clock::Wake> = Arc::new(Notice(woke_tx));
+    let wake = Arc::new(SharedWake::default());
+    wake.forward(Some(notice));
+    let anchor_id = ActionId("a_outer".into());
+    let slot = Arc::new(super::InnerSlot::new(
+        Arc::clone(&wake),
+        anchor_id.clone(),
+        "outer".into(),
+        0,
+    ));
+    let anchor = Arc::new(
+        crate::progress::Stream::new(Arc::clone(&wake), anchor_id.clone(), true)
+            .with_inner(Arc::clone(&slot)),
+    );
+    let answered = raise(Arc::clone(&slot), "inner");
+    deadline.recv_or_fail(&woke, "raised inner call");
+    let (_inbox, rx) = std::sync::mpsc::channel();
+    let mut looped = crate::Loop::start(
+        crate::Session {
+            log,
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new()))
+                as Arc<dyn contract::provider::Provider>,
+            model: crate::Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: vec![(
+                "builtin".to_owned(),
+                Arc::clone(&tool) as Arc<dyn contract::tool::Tool>,
+            )],
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
+        None,
+    )
+    .unwrap()
+    .cancelled_by(Arc::clone(&turn));
+    let streams = [(&anchor_id, anchor.as_ref())];
+    let mut inner = Vec::new();
+    let mut release = crate::asking::Release::default();
+    let turn_id = contract::TurnId("t_test".into());
+    // The scope joins the tool's worker, so the output waits when served.
+    std::thread::scope(|scope| {
+        looped
+            .take_inner(
+                scope,
+                &streams,
+                &mut inner,
+                &mut release,
+                &wake,
+                Some(&turn_id),
+            )
+            .unwrap();
+    });
+    looped
+        .serve_inner(&mut inner, &|_| false, Some(&turn_id))
+        .unwrap();
+    assert!(inner.is_empty(), "the served call leaves no running inner");
+    drop(inner);
+    drop(release);
+    deadline
+        .recv_or_fail(&answered, "served inner call")
+        .unwrap()
+}
+
+fn served(text: String, failed: bool) -> Box<contract::events::ToolCallCompleted> {
+    serve(Arc::new(Answer { text, failed }), Arc::new(NoRules))
+}
+
+#[test]
+fn inner_untruncated_completion_arrives_whole_without_artifact() {
+    // Past the 16 KiB outer bound: the old cut would have kept 16384 bytes
+    // with an artifact and kept ranges.
+    let text = "x".repeat(20_000);
+    let done = served(text.clone(), false);
+    assert_eq!(done.status, contract::events::CallStatus::Completed);
+    assert_eq!(
+        done.content,
+        vec![contract::shapes::ContentPart::Text { text }]
+    );
+    assert!(done.artifact.is_none());
+    assert!(done.kept.is_none());
+}
+
+#[test]
+fn inner_untruncated_failed_completion_passes_through_unchanged() {
+    let done = served("nope".into(), true);
+    assert_eq!(done.status, contract::events::CallStatus::Failed);
+    assert_eq!(
+        done.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "nope".into()
+        }]
+    );
+    assert!(done.artifact.is_none());
+    assert!(done.kept.is_none());
+}
+
+#[test]
+fn inner_untruncated_denied_completion_is_unchanged() {
+    // Unreadable rules fail closed: the deny answers before the call runs,
+    // so the cut never sees it.
+    let done = serve(
+        Arc::new(Answer {
+            text: "never runs".into(),
+            failed: false,
+        }),
+        Arc::new(Unreadable),
+    );
+    assert_eq!(done.status, contract::events::CallStatus::Denied);
+    assert_eq!(
+        done.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "gone It did not run.".into()
+        }]
+    );
+    assert!(done.artifact.is_none());
+    assert!(done.kept.is_none());
 }

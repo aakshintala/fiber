@@ -218,10 +218,14 @@ fn json_decode_lenient_escapes_raw_controls_inside_strings() {
         );
         let encoded: String = lua.load(&code).eval().unwrap();
         assert_eq!(encoded, format!(r#""a{escaped}b""#), "byte {byte}");
-        // The default stays strict, and so does an empty options table.
+        // The default stays strict, and so do an empty options table and
+        // an explicit false.
         for strict in [
             format!(r#"return json.decode('"a' .. string.char({byte}) .. 'b"')"#),
             format!(r#"return json.decode('"a' .. string.char({byte}) .. 'b"', {{}})"#),
+            format!(
+                r#"return json.decode('"a' .. string.char({byte}) .. 'b"', {{ lenient = false }})"#
+            ),
         ] {
             assert!(lua.load(&strict).exec().is_err(), "byte {byte}: {strict}");
         }
