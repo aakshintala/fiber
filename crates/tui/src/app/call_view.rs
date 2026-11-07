@@ -134,13 +134,14 @@ impl CallView {
     /// so the completion rebuilds the uncapped rows and paging inputs
     /// from the same per-kind renderer. True when the view's call
     /// completed, so the caller pumps the new artifact fetch.
-    fn refresh_from_completed(&mut self, done: &ToolCallCompleted) -> bool {
+    fn refresh_from_completed(&mut self, done: &ToolCallCompleted, width: u16) -> bool {
         let fresh = opened::snapshot_completed(
             self.call,
             &self.name.clone(),
             &self.arguments.clone(),
             &self.action.clone(),
             done,
+            width,
         );
         let was_paged = self.paged();
         self.plain = fresh.plain;
@@ -429,7 +430,7 @@ impl App {
             .flat_map(|turns| turns.iter())
             .flat_map(|turn| turn.groups())
             .flat_map(|group| group.calls());
-        opened::snapshot(calls, id)
+        opened::snapshot(calls, id, self.screen.pages().wrap_width())
     }
 
     /// The call `id` names on the attached screen: its action, tool
@@ -463,13 +464,14 @@ impl App {
         done: &ToolCallCompleted,
     ) -> Vec<String> {
         let id = crate::turn::target_id(action);
+        let width = self.screen.pages().wrap_width();
         let Some(view) = self.call_view_mut() else {
             return Vec::new();
         };
         if view.call != id || view.session != *session {
             return Vec::new();
         }
-        view.refresh_from_completed(done);
+        view.refresh_from_completed(done, width);
         self.refresh_call_view_matches();
         self.call_view_pump().into_iter().collect()
     }
