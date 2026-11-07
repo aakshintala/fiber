@@ -385,3 +385,13 @@ docs/errors.md	fiber-4244	plan	2026-11-07T07:25:04Z	Amoghs-MacBook-Pro:/Users/aa
 crates/loop/src/questions.rs	fiber-4244	plan	2026-11-07T07:25:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 *.snap	fiber-4244	plan	2026-11-07T07:25:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/completion_tests.rs	fiber-4244	plan	2026-11-07T07:25:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/mod.rs	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/pty.rs	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/hub_start.rs	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support_helpers.rs	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/Cargo.toml	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/rules.rs	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/rules_tests.rs	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/main.rs	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/check	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/code-quality.md	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
