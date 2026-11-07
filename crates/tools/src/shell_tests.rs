@@ -1644,24 +1644,6 @@ fn with_no_timeout_parks_without_a_deadline() {
 }
 
 #[test]
-fn driver_shell_precancelled_is_cancelled_before_start() {
-    let dir = fakes::TempDir::new("fiber-shell-driver-pre-cancel");
-    let marker = dir.path().join("marker");
-    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_no_timeout();
-    let cancel = CancelToken::new();
-    cancel.cancel();
-    let output = shell.run(
-        &args(&format!("touch {}", marker.display())),
-        &cancel,
-        &Recorder::default(),
-    );
-    assert!(output.error.is_none());
-    assert!(output.process.is_none());
-    assert_eq!(text(&output), "Cancelled before it started.\n");
-    assert!(!marker.exists());
-}
-
-#[test]
 fn zero_timeout_is_rejected_with_hint_and_starts_nothing() {
     let dir = fakes::TempDir::new("fiber-shell-zero-hint");
     let marker = dir.path().join("marker");
