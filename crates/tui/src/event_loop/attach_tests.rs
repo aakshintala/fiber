@@ -7166,8 +7166,6 @@ fn command_counts(seen: &Arc<Mutex<Vec<Value>>>) -> std::collections::BTreeMap<S
     counts
 }
 
-/// Probe: the #4259 app-level refusal shape, driven here to bisect
-/// the loop-level silence.
 /// A refused resume surfaces its reason as a notice, returns the
 /// draft, and the loop still handles a follow-up input; a refusal for
 /// another session's id settles nothing on the attached session

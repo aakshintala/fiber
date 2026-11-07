@@ -1700,9 +1700,9 @@ impl<B: Backend> Loop<B> {
                 }
                 Err(message) => self.app.load_failed_inner(&session, &range, &message),
             }
-            // A range still needed after its fail leaves the frame
-            // instead of spinning: the failed mark keeps it out of the
-            // next frame's needs, so the loop never re-requests it.
+            // A range still needed after its fail ends this frame's
+            // loop: the next frame pages it in again instead of
+            // spinning on it here.
             if self.app.needs().contains(&(session, range)) {
                 break;
             }
