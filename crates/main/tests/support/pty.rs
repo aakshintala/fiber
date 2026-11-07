@@ -83,21 +83,36 @@ impl Reader {
         writer: Writer,
         deadline: Deadline,
     ) -> (Self, mpsc::Receiver<()>) {
-        let (stop_read, stop_write) = std::io::pipe().unwrap();
         let (wake, wakes) = mpsc::channel();
+        (
+            Self::start_with_wake(master, shared, writer, deadline, wake),
+            wakes,
+        )
+    }
+
+    /// As [`Reader::start`], sending each wake on `wake`, so a test that
+    /// also wakes on other events (a recorded hub command) shares one
+    /// receiver. The reader sends one `()` per chunk appended, after the
+    /// chunk is published and the lock released.
+    #[track_caller]
+    pub(crate) fn start_with_wake(
+        master: fs::File,
+        shared: Arc<Mutex<Shared>>,
+        writer: Writer,
+        deadline: Deadline,
+        wake: mpsc::Sender<()>,
+    ) -> Self {
+        let (stop_read, stop_write) = std::io::pipe().unwrap();
         let (done, finished) = mpsc::channel();
         let master = OwnedFd::from(master);
         thread::Builder::new()
             .spawn(move || Self::drain(master, stop_read, shared, writer, wake, done, deadline))
             .unwrap();
-        (
-            Self {
-                stop: stop_write,
-                done: finished,
-                deadline,
-            },
-            wakes,
-        )
+        Self {
+            stop: stop_write,
+            done: finished,
+            deadline,
+        }
     }
 
     /// Drains `master` on a thread as in [`Reader::start`], sharing the
