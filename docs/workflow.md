@@ -367,4 +367,6 @@ GitHub stops one from editing the ruleset, or from using the bypass while
 the owner has it on: agents never merge with `--admin`, never change a
 ruleset, branch protection or repository setting, and never ask a peer to.
 
-The `break-glass audit` job lists every merge to `main` whose head had no green `CI` and fails on one that did not declare break-glass (`docs/ci.md`, "The break-glass audit"): the detection half.
+The `break-glass audit` job is the detection half: it lists every merge to
+`main` whose head had no green `CI` and fails on one that did not declare
+break-glass (`docs/ci.md`, "The break-glass audit").

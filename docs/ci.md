@@ -357,11 +357,11 @@ On Linux x86_64 alone:
   whether or not it touches anything else; any other `research/` path alone
   selects the docs job alone
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
-- `shellcheck --shell=bash` on every other `scripts/` shell file: `break-glass-audit`, `bug-red`,
+- `shellcheck --shell=bash` on every other `scripts/` shell file: `bug-red`,
   `cache-prune`, `check`, `check-docs`, `check-resources`, `flaky-tests`, `install-shells`,
   `leak-scan`, `paging-jig`, `release-pack`, `release-size`,
   `stored-results`,
-  `test-break-glass-audit`, `test-bug-red`, `test-bug-red-cargo`, `test-bug-red-target-cargo`, `test-flake-report`, `test-flaky-tests`, `test-leak-probe`,
+  `test-bug-red`, `test-bug-red-cargo`, `test-bug-red-target-cargo`, `test-flake-report`, `test-flaky-tests`, `test-leak-probe`,
   `test-leak-scan`, and `lib/release.sh`
 - actionlint over every file in `.github/workflows/`, when the diff changes
   one. A workflow change runs the whole selection ("Selection"), so the job is
@@ -542,13 +542,14 @@ green `CI`. The `break-glass audit` job in `scheduled.yml` is the detection
 half: it finds merges to `main` that did so and checks that each one declared
 it. It runs daily at 06:53Z and on `workflow_dispatch`.
 
-`scripts/break-glass-audit` lists every commit on `main` from the last 48
-hours. The window is twice the cadence, so one skipped or failed run leaves no
-gap; the overlap lists a merge twice, which is harmless. Each commit maps to
-the merged pull request that carries it, and that pull request's head must
-have a completed `CI` check run with conclusion `success`. Only the exact name
-`CI` counts: a `CI (draft)` run does not. When a head has several `CI` runs,
-the newest decides.
+The job fetches with `gh api` and hands the responses to
+`cargo xtask break-glass-audit`, which makes every decision. It audits each
+commit on `main` from the last 48 hours. The window is twice the cadence, so
+one skipped or failed run leaves no gap; the overlap lists a merge twice,
+which is harmless. Each commit maps to the merged pull request that carries
+it, and that pull request's head must have a completed `CI` check run with
+conclusion `success`. Only the exact name `CI` counts: a `CI (draft)` run does
+not. When a head has several `CI` runs, the newest decides.
 
 A merge with no green `CI` is listed on one line:
 `merge <sha> head <sha> PR #<n> ticket <#n|-> <declared|undeclared>`. The
