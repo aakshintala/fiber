@@ -63,7 +63,7 @@ fn payload(state: Value) -> Value {
 /// A `session_status` envelope for `session` in `state`.
 fn envelope(session: &str, state: Value) -> Envelope {
     Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

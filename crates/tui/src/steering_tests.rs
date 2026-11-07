@@ -315,7 +315,7 @@ fn a_click_does_not_select_a_row_with_an_image() {
 fn attached() -> crate::app::App {
     let mut app = crate::app::App::new(std::path::PathBuf::from("/w"));
     let hello = contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -329,7 +329,7 @@ fn attached() -> crate::app::App {
 fn feed(app: &mut crate::app::App, queue: &SteeringQueue) {
     let payload = serde_json::to_value(queue).unwrap_or(serde_json::json!({"messages": []}));
     let line = crate::link::Line::Session(contract::Envelope {
-        kind: EventKind::SteeringQueue.name().to_owned(),
+        kind: EventKind::SteeringQueue,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

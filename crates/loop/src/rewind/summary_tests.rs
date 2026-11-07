@@ -2,6 +2,7 @@
 
 #![allow(clippy::unwrap_used, reason = "test fixtures must parse")]
 
+use contract::events::EventKind;
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
 
@@ -9,7 +10,7 @@ use super::excerpt;
 
 fn line(kind: &str, payload: Value) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_quote".into()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

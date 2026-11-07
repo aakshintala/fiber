@@ -52,7 +52,7 @@ fn now() -> std::time::Instant {
 
 fn envelope(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -102,7 +102,7 @@ impl Fixture {
         });
         app.set_size(width, height);
         app.on_line(Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: contract::HubEventKind::HubHello,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),

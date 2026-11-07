@@ -45,7 +45,7 @@ fn home(width: u16, height: u16) -> (App, Arc<Fake>) {
     app.set_size(width, height);
     app.set_configure(Arc::clone(&seam) as Arc<dyn Configure>);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -76,7 +76,7 @@ fn offer(app: &mut App, names: Vec<String>) {
         .cloned()
         .expect("the start waits");
     let refused = Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -194,7 +194,7 @@ fn the_offer_draws_nothing_while_the_query_runs() {
         .cloned()
         .expect("the start waits");
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [

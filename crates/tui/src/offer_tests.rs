@@ -20,7 +20,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// One envelope of `kind` from [`SESSION`].
 fn envelope(kind: &str, payload: Value) -> Envelope {
     Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -141,7 +141,7 @@ fn buffer(items: Value, width: u16) -> Buffer {
     let height = 60;
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

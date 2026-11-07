@@ -389,7 +389,7 @@ impl FakeHub {
         });
         self.got = Some(rx);
         let hello = HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: HubEventKind::HubHello,
             ts: 1,
             schema_version: 1,
             payload: Map::new(),

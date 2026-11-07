@@ -61,7 +61,7 @@ fn status(session: &str, state: Value, since: u64) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

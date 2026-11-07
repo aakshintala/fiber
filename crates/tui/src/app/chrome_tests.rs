@@ -76,7 +76,7 @@ fn plain(width: u16, height: u16) -> App {
 /// One envelope of `session`.
 fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -467,7 +467,7 @@ fn a_crashed_card_only_screen_draws_the_rail() {
     let mut app = attached(160, 40);
     app.on_line(status(SESSION, "one"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::SessionLeft.name().to_owned(),
+        kind: HubEventKind::SessionLeft,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": SESSION, "how": "crashed"})

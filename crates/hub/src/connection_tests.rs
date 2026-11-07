@@ -668,7 +668,7 @@ fn a_written_but_undrained_answer_waits_out_the_bound() {
                     &hub,
                     &writer,
                     &web,
-                    "command_accepted",
+                    contract::HubEventKind::CommandAccepted,
                     serde_json::Map::from_iter([(
                         "command_id".to_owned(),
                         Value::String("c_1".to_owned()),
@@ -745,7 +745,7 @@ fn an_unwritten_answer_with_a_drained_web_still_waits() {
                     &hub,
                     &writer,
                     &web,
-                    "command_accepted",
+                    contract::HubEventKind::CommandAccepted,
                     serde_json::Map::from_iter([(
                         "command_id".to_owned(),
                         Value::String("c_2".to_owned()),
@@ -3953,6 +3953,10 @@ mod session_refusal_tests {
         json!({"command": "prompt", "args": {"content": [{"type": "text", "text": "hi"}]}, "id": id})
     }
 
+    fn sandbox(id: &str) -> Value {
+        json!({"command": "sandbox", "args": {"enabled": true}, "id": id})
+    }
+
     fn message(id: &str) -> Value {
         json!({"command": "message", "args": {"text": "hi"}, "id": id})
     }
@@ -4107,6 +4111,144 @@ mod session_refusal_tests {
             message,
             session_command_refusal("reply", OWNED),
             "{message}"
+        );
+    }
+
+    #[test]
+    fn sandbox_to_a_target_on_the_caller_walk_is_refused() {
+        let mut rig = Rig::new(plain_target());
+        let (_peer, _tx) = rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay("c_1", OWNED, sandbox("c_1"), &session_caller(&[TARGET]));
+        let line = rig.next_client_line();
+        assert_eq!(line["kind"], "command_rejected");
+        assert_eq!(line["payload"]["code"], "from_session");
+        let message = line["payload"]["message"].as_str().unwrap();
+        assert_eq!(
+            message,
+            session_command_refusal("sandbox", OWNED),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn relay_refuses_exactly_the_shared_from_session_set() {
+        fn line_for(command: &str, id: &str) -> Value {
+            match command {
+                "prompt" => prompt(id),
+                "steer" => steer(id),
+                "reply" => reply_with(id, labels_args("r_1")),
+                "sandbox" => sandbox(id),
+                _ => unreachable!("the shared set names its members"),
+            }
+        }
+        for command in contract::commands::FROM_SESSION_COMMANDS {
+            let mut rig = Rig::new(plain_target());
+            let (_peer, _tx) =
+                rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+            rig.relay(
+                "c_1",
+                OWNED,
+                line_for(command, "c_1"),
+                &session_caller(&[TARGET]),
+            );
+            let line = rig.next_client_line();
+            assert_eq!(line["kind"], "command_rejected", "{command} is refused");
+            assert_eq!(line["payload"]["code"], "from_session", "{command}");
+            assert_eq!(
+                line["payload"]["message"].as_str().unwrap(),
+                session_command_refusal(command, OWNED),
+                "{command}"
+            );
+        }
+        // Near misses and other commands reach the session even under full
+        // refusal pressure: the target is on the caller's walk, so a name
+        // the shared set does not hold is never refused.
+        let probes: [(&str, Value); 6] = [
+            ("message", message("c_message")),
+            ("cancel", json!({"command": "cancel", "id": "c_cancel"})),
+            ("subscribe", full_subscribe("c_subscribe")),
+            (
+                "shell",
+                json!({"command": "shell", "args": {"command": "echo hi"}, "id": "c_shell"}),
+            ),
+            (
+                "sandboxx",
+                json!({"command": "sandboxx", "args": {"enabled": true}, "id": "c_sandboxx"}),
+            ),
+            ("", json!({"command": "", "id": "c_empty"})),
+        ];
+        for (name, line) in probes {
+            let id = line["id"].as_str().unwrap().to_owned();
+            let mut rig = Rig::new(plain_target());
+            let (peer, _tx) =
+                rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+            rig.relay(&id, OWNED, line, &session_caller(&[TARGET]));
+            let mut forwarded = String::new();
+            std::io::BufReader::new(peer)
+                .read_line(&mut forwarded)
+                .unwrap();
+            let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+            assert_eq!(sent["command"], name, "{name} is never refused");
+        }
+    }
+
+    #[test]
+    fn sandbox_reaches_its_direct_parent() {
+        let script = Script {
+            current: support::peer::EffectiveUid(1000),
+            parents: [
+                (TARGET, PEER),
+                (PEER, support::peer::Pid(1)),
+                (support::peer::Pid(1), support::peer::Pid(0)),
+            ]
+            .into_iter()
+            .collect(),
+            euids: [
+                (TARGET, support::peer::EffectiveUid(1000)),
+                (PEER, support::peer::EffectiveUid(1000)),
+                (support::peer::Pid(1), support::peer::EffectiveUid(1000)),
+            ]
+            .into_iter()
+            .collect(),
+            argvs: [
+                (PEER, vec![b"/bin/sh".to_vec()]),
+                (support::peer::Pid(1), vec![b"/sbin/init".to_vec()]),
+            ]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let mut rig = Rig::new(script);
+        let (peer, _tx) = rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
+        rig.relay(
+            "c_1",
+            OTHER,
+            sandbox("c_1"),
+            &session_caller(&[CALLER_HOST]),
+        );
+        let mut forwarded = String::new();
+        std::io::BufReader::new(peer)
+            .read_line(&mut forwarded)
+            .unwrap();
+        let sent: Value = serde_json::from_str(forwarded.trim_end()).unwrap();
+        assert_eq!(sent["command"], "sandbox");
+    }
+
+    #[test]
+    fn sandbox_to_a_synthetic_replay_is_not_refused() {
+        let command = sandbox("c_1");
+        let stripped = command.as_object().unwrap();
+        let target = contract::SessionId(OWNED.to_owned());
+        let read = plain_target();
+        assert!(
+            crate::relay::session_command_refusal(
+                &session_caller(&[CALLER_HOST]),
+                stripped,
+                &target,
+                crate::relay::RelayTarget::SyntheticReplay,
+                &read,
+            )
+            .is_none()
         );
     }
 

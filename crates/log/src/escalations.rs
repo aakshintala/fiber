@@ -12,7 +12,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
+use std::borrow::Cow;
 
 /// One escalation a person answered allow: the `projects/<key>` directory
 /// name of the session whose log holds it, the identity that session's
@@ -76,14 +77,13 @@ fn escalations_in(session: &place::Place) -> Vec<AllowedEscalation> {
             Ok(kind) => kind,
             Err(_) => return found,
         };
-        let kind = contract::events::EventKind::from_name(&kind.kind);
-        if kind == contract::events::EventKind::PermissionRequested {
+        if kind.kind == contract::events::EventKind::PermissionRequested {
             if let Ok(line) = serde_json::from_slice::<RequestLine>(&raw)
                 && let Some((id, prefix)) = counted(&line.payload)
             {
                 pending.insert(id, prefix);
             }
-        } else if kind == contract::events::EventKind::PermissionResolved
+        } else if kind.kind == contract::events::EventKind::PermissionResolved
             && let Ok(line) = serde_json::from_slice::<ResolvedLine>(&raw)
             && let Some(prefix) = answered(&line.payload, &mut pending)
         {
@@ -96,10 +96,23 @@ fn escalations_in(session: &place::Place) -> Vec<AllowedEscalation> {
     }
 }
 
-/// A line's kind alone: every other line is skipped past this.
+/// A line's kind alone: every other line is skipped past this. The kind
+/// reads through the typed vocabulary, so an unfamiliar name parses to
+/// its retained variant and skips the line; a missing or non-string
+/// kind stays a serde error and stops the walk.
 #[derive(Deserialize)]
 struct Kind {
-    kind: String,
+    #[serde(deserialize_with = "kind_field")]
+    kind: contract::events::EventKind,
+}
+
+/// The `kind` key, read once as a string and parsed without its payload.
+pub(crate) fn kind_field<'de, D>(deserializer: D) -> Result<contract::events::EventKind, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let name = Cow::deserialize(deserializer)?;
+    Ok(contract::events::EventKind::from_name(&name))
 }
 
 /// A `permission_requested` line, carrying only its payload.

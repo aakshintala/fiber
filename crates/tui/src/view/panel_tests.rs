@@ -69,7 +69,7 @@ fn timed_line(kind: &str, ts: u64, payload: serde_json::Value) -> Line {
 /// One envelope of `session` at `ts`.
 fn timed_line_for(session: &str, kind: &str, ts: u64, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,
@@ -333,7 +333,7 @@ fn preamble_line_for(session: &str, window: u64, trigger: Option<u64>) -> Line {
 /// attached one.
 fn other_waiting(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -361,7 +361,7 @@ fn other_waiting(session: &str) -> Line {
 /// attached one.
 fn other_idle(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1018,6 +1018,41 @@ fn the_model_falls_back_to_the_status() {
         texts(&app, 40)
             .iter()
             .any(|row| *row == "test/model".to_owned() + &" ".repeat(22) + "high")
+    );
+}
+
+/// The Session card names the model the session runs on: a preamble
+/// naming the configured default with a `session_status` naming the
+/// session-only choice draws the choice in `accent`, while the
+/// thinking level still comes from the preamble (`docs/tui.md`, "The
+/// panel").
+#[test]
+fn the_session_card_names_the_session_status_model_over_the_preamble() {
+    use crate::app::panel::Spot;
+    use crate::theme::{Role, style};
+    let mut app = attached(160, 40);
+    app.on_line(preamble_line(Some(800)));
+    app.on_line(session_line(
+        "session_status",
+        serde_json::json!({
+            "name": "work", "workspace": "/Users/you/work/fiber", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "chosen/model", "delegates": 0, "jobs": 0, "clients": 0,
+        }),
+    ));
+    let model = rows(&app, 40)
+        .into_iter()
+        .find(|row| row.spot == Some(Spot::Model))
+        .expect("a model row");
+    assert_eq!(model.line.spans[0].content, "chosen/model");
+    assert_eq!(model.line.spans[0].style, style(Role::Accent));
+    assert!(
+        model.line.to_string().ends_with("high"),
+        "{:?}",
+        model.line.to_string()
     );
 }
 

@@ -538,6 +538,7 @@ impl App {
                     spot,
                     dim: false,
                     text,
+                    session_mark: false,
                 };
                 let dim = home.no_workspace();
                 let workspace = if dim {
@@ -561,17 +562,37 @@ impl App {
                         },
                     ));
                 }
+                // The model and thinking the next `start` carries: the
+                // pending session-only choice first, else the launch
+                // chips. A pending choice marks the model chip with a
+                // dim `ⓢ`, leaving the model name bright
+                // (`docs/tui.md`, "Home").
+                let pending = self.model_picker.start_model.is_some();
+                // With no pending choice the level is the launch's own:
+                // `home_model()` is `None` without a launch model, but
+                // a configured `thinking` still shows.
+                let (model, thinking) = if pending {
+                    self.home_model()
+                        .map(|(model, level)| (Some(model), level))
+                        .unwrap_or((None, None))
+                } else {
+                    (home.launch.model.clone(), home.launch.thinking.clone())
+                };
                 chips.extend([
-                    chip(
-                        Some(Spot::Model),
-                        format!("[{}]", home.launch.model.as_deref().unwrap_or("no model")),
-                    ),
+                    Chip {
+                        session_mark: pending,
+                        ..chip(
+                            Some(Spot::Model),
+                            if pending {
+                                format!("[ⓢ {}]", model.as_deref().unwrap_or("no model"))
+                            } else {
+                                format!("[{}]", model.as_deref().unwrap_or("no model"))
+                            },
+                        )
+                    },
                     chip(
                         Some(Spot::Thinking),
-                        format!(
-                            "[thinking: {}]",
-                            home.launch.thinking.as_deref().unwrap_or("default")
-                        ),
+                        format!("[thinking: {}]", thinking.as_deref().unwrap_or("default")),
                     ),
                     chip(None, "Enter starts a session".to_owned()),
                 ]);

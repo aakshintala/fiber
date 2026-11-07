@@ -82,7 +82,7 @@ fn app() -> App {
 /// A hub line of `kind` with `payload`.
 fn hub(kind: &str, payload: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: kind.to_owned(),
+        kind: contract::HubEventKind::from(kind.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().cloned().unwrap_or_default(),
@@ -175,7 +175,7 @@ fn turn(session: &str, text: &str, source: &str) -> Line {
         _ => {}
     }
     Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: contract::events::EventKind::TurnStarted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -210,7 +210,7 @@ fn remote_history() -> App {
 
 fn remote_history_row(app: &mut App, id: &str, project: &str, workspace: &str, since: u64) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(), session_id: contract::SessionId(id.to_owned()), ts:0,
+        kind: contract::events::EventKind::SessionStatus, session_id: contract::SessionId(id.to_owned()), ts:0,
         schema_version: contract::SCHEMA_VERSION, turn_id:None, action_id:None, seq:None,
         payload: json!({"name":"row", "project":project,"workspace":workspace,"since":since,"state":"idle",
             "started":0,"calls":0,"delegates":0,"jobs":0,"clients":0,"model":"test/model",
@@ -857,7 +857,7 @@ fn a_page_after_any_edit_ctrl_g_send_or_clear_leaves_the_draft() {
 /// A line of `kind` from `S_A` with `payload`.
 fn from_a(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -27,7 +27,7 @@ use contract::commands::SentPart;
 use contract::diag::DebugLog;
 use contract::events::CommandResult;
 use contract::events::VariablesSource;
-use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
+use contract::{CommandId, ErrorCode, HubEventKind, HubLine, SCHEMA_VERSION, SessionId};
 use log::diag::Severity;
 use serde_json::{Map, Value};
 
@@ -783,7 +783,7 @@ fn serve_from(
         if let Some(pause) = lock(&hub.before_hello).take() {
             pause();
         }
-        send(&writer, &hub, "hub_hello", hello_payload(&hub));
+        send(&writer, &hub, HubEventKind::HubHello, hello_payload(&hub));
     }
     let mut fresh = Relays {
         attribution: Some(attribution.clone()),
@@ -1151,7 +1151,7 @@ fn on_command(
                         Value::Array(held.iter().cloned().map(Value::String).collect()),
                     );
                 }
-                send(writer, hub, "command_rejected", payload);
+                send(writer, hub, HubEventKind::CommandRejected, payload);
             }
         },
         "prune" if hub.machine.is_some() => {
@@ -1382,8 +1382,8 @@ fn on_stop(
     if !sessions.unwrap_or(false) {
         let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
         match web {
-            Some(web) => drain_web(hub, writer, web, "command_accepted", payload),
-            None => send(writer, hub, "command_accepted", payload),
+            Some(web) => drain_web(hub, writer, web, HubEventKind::CommandAccepted, payload),
+            None => send(writer, hub, HubEventKind::CommandAccepted, payload),
         }
         #[cfg(test)]
         if let Some(pause) = lock(&hub.bare_stop_pause).take() {
@@ -1411,7 +1411,7 @@ fn on_stop(
                     hub,
                     writer,
                     web,
-                    "command_rejected",
+                    HubEventKind::CommandRejected,
                     rejection(Some(id), &ErrorCode::IoFailed, message),
                 ),
                 None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, message),
@@ -1430,7 +1430,7 @@ fn on_stop(
                     let mut payload =
                         Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
                     payload.insert("result".to_owned(), result);
-                    drain_web(hub, writer, web, "command_accepted", payload);
+                    drain_web(hub, writer, web, HubEventKind::CommandAccepted, payload);
                 }
                 None => accept_result(writer, hub, id, result),
             }
@@ -1445,7 +1445,7 @@ fn on_stop(
                     hub,
                     writer,
                     web,
-                    "command_rejected",
+                    HubEventKind::CommandRejected,
                     rejection(Some(id), &ErrorCode::IoFailed, &message),
                 ),
                 None => reject(writer, hub, Some(id), &ErrorCode::IoFailed, &message),
@@ -1519,7 +1519,7 @@ fn drain_web(
     hub: &Hub,
     writer: &Arc<Mutex<UnixStream>>,
     web: &Arc<crate::port::Web>,
-    kind: &str,
+    kind: HubEventKind,
     payload: Map<String, Value>,
 ) {
     let written = Arc::new(AtomicBool::new(false));
@@ -1702,7 +1702,7 @@ pub(crate) fn accept_result(
     let mut payload = Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.0.clone()));
     payload.insert("result".to_owned(), result);
-    send(writer, hub, "command_accepted", payload);
+    send(writer, hub, HubEventKind::CommandAccepted, payload);
 }
 
 /// Why a hub command is rejected: its code and Fiber's own sentence.
@@ -1748,7 +1748,7 @@ pub(crate) fn reject(
     send(
         writer,
         hub,
-        "command_rejected",
+        HubEventKind::CommandRejected,
         rejection(id, code, message),
     );
 }
@@ -1775,7 +1775,7 @@ pub(crate) fn rejection(
 pub(crate) fn send(
     writer: &Arc<Mutex<UnixStream>>,
     hub: &Hub,
-    kind: &str,
+    kind: HubEventKind,
     payload: Map<String, Value>,
 ) {
     let bytes = line(hub, kind, payload);
@@ -1785,9 +1785,9 @@ pub(crate) fn send(
 
 /// Serialises one hub line, without its trailing newline: the port sends
 /// it as one websocket text message.
-pub(crate) fn line(hub: &Hub, kind: &str, payload: Map<String, Value>) -> Vec<u8> {
+pub(crate) fn line(hub: &Hub, kind: HubEventKind, payload: Map<String, Value>) -> Vec<u8> {
     let line = HubLine {
-        kind: kind.to_owned(),
+        kind,
         ts: wall_ms(hub.clock.wall()),
         schema_version: SCHEMA_VERSION,
         payload,

@@ -165,9 +165,9 @@ impl CaseRun {
                 events.push(serde_json::to_value(&line).unwrap_or(Value::Null));
             }
             let kind = line.kind();
-            let occurrence = seen.entry(line.kind.clone()).or_default();
+            let occurrence = seen.entry(line.kind.name().to_owned()).or_default();
             *occurrence = occurrence.saturating_add(1);
-            seen_order.push(line.kind.clone());
+            seen_order.push(line.kind.name().to_owned());
             if kind == EventKind::ExtensionsLoaded
                 && let Some(command) = command.take()
                 && !self.send_command(&driver, &cancel, &command, &mut failures)
@@ -202,7 +202,7 @@ impl CaseRun {
             while let Some(line) =
                 self.next_event(&mut event_source, exit_deadline, &mut failures, false)
             {
-                seen_order.push(line.kind.clone());
+                seen_order.push(line.kind.name().to_owned());
                 if line.is_durable() {
                     events.push(serde_json::to_value(&line).unwrap_or(Value::Null));
                 }

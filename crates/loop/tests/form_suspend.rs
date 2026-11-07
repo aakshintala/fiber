@@ -1294,7 +1294,7 @@ fn a_cancel_in_the_finishing_turn_declines_the_form() {
 /// Appends a line of `kind` with `payload` under the suspended turn.
 fn append(session: &Session, like: &Envelope, kind: &str, payload: Value, action: Option<&str>) {
     let mut line = like.clone();
-    kind.clone_into(&mut line.kind);
+    line.kind = EventKind::from_name(kind);
     line.payload = payload.as_object().unwrap().clone();
     let event = Event::from_envelope(&line).unwrap().unwrap();
     let action = action.map(|action| ActionId(action.into()));

@@ -2,14 +2,16 @@
 //! "Seeing the tools").
 
 use super::*;
-use contract::events::{CacheLifetime, Empty, Event, PreambleBuilt, PreambleReason, SentTool};
+use contract::events::{
+    CacheLifetime, Empty, Event, EventKind, PreambleBuilt, PreambleReason, SentTool,
+};
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value, json};
 
 fn envelope(kind: &str, action: Option<&str>, payload: Map<String, Value>) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_1".into()),
         ts: 1,
         schema_version: SCHEMA_VERSION,

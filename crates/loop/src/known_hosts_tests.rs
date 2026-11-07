@@ -77,7 +77,7 @@ fn known_hosts_named_in_prose_respects_url_boundaries() {
 
 fn event(kind: &str, payload: serde_json::Value) -> Event {
     let line = contract::Envelope {
-        kind: kind.into(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: contract::SessionId("s".into()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

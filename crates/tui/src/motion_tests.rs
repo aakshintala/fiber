@@ -210,7 +210,7 @@ fn waiting_row(since_ms: u64) -> crate::home::Row {
         "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0,
     });
     crate::home::from_status(&contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId("s_x".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
