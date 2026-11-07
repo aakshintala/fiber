@@ -378,3 +378,14 @@ scripts/bug-red,scripts/test-bug-red	fiber-4324	grant	2026-11-07T06:17:56Z	round
 crates/loop/src/history_tests.rs	fiber-4244	plan	2026-11-07T06:22:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
 crates/loop/tests/resume.rs	fiber-4244	plan	2026-11-07T06:22:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
 crates/loop/tests/review_jig.rs	fiber-4244	plan	2026-11-07T06:22:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+crates/main/src/delegates.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/parts.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/reload.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/delegates_tests.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/reload_tests.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/delegates.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate/models.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate/models_tests.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate/delegate_tests.rs	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/delegates.md	fiber-4242	plan	2026-11-07T06:26:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
