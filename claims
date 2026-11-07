@@ -389,3 +389,8 @@ crates/tui/src/app.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/U
 crates/tui/src/app/screen.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/screen_tests.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop/attach_tests.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/error.rs	fiber-4215	plan	2026-11-07T08:27:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/credential.rs	fiber-4215	plan	2026-11-07T08:27:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/credential_tests.rs	fiber-4215	plan	2026-11-07T08:27:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/tests/credentials.rs	fiber-4215	plan	2026-11-07T08:27:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/tests/credential_origins.rs	fiber-4215	plan	2026-11-07T08:27:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
