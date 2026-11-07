@@ -1206,3 +1206,80 @@ fn a_message_call_shows_its_recipient_as_the_target() {
     // Another tool keeps the generic order: text before id.
     assert_eq!(summary("other", &json!({"id": "x", "text": "t"})), "t");
 }
+
+const TUI_DOC: &str = include_str!("../../../docs/tui.md");
+
+/// A `Kinds` with the count `kind` adds set to `n`.
+fn kinds_of(kind: &Kind, n: u64) -> Kinds {
+    let mut kinds = Kinds::default();
+    // Exhaustive, so a new kind fails to compile until its count is here.
+    match kind {
+        Kind::Read => kinds.read = n,
+        Kind::Search => kinds.searched = n,
+        Kind::List => kinds.listed = n,
+        Kind::Edit => kinds.edited = n,
+        Kind::Write => kinds.wrote = n,
+        Kind::Shell => kinds.ran = n,
+        Kind::Delegate => kinds.delegates = n,
+        Kind::Jobs => kinds.jobs = n,
+        Kind::Ask(_) => kinds.asked = n,
+        Kind::Fetch => kinds.fetched = n,
+        Kind::Web => kinds.web = n,
+        Kind::Skill => kinds.skills = n,
+        Kind::Tools => kinds.tool_lookups = n,
+        Kind::DelegateMessage => kinds.messaged_delegates = n,
+        Kind::SessionMessage => kinds.messaged_sessions = n,
+        Kind::Session => kinds.sessions = n,
+        Kind::Other => kinds.called = n,
+    }
+    kinds
+}
+
+/// The kind-word table in `docs/tui.md` ("Tool groups and the ledger")
+/// says what the code does: each tool's word, and its summary phrase
+/// for many calls and for one.
+#[test]
+fn docs_kind_table_matches_code() {
+    let rows: Vec<Vec<&str>> = TUI_DOC
+        .split("| Tool | Kind word | Summary, many | Summary, one |\n")
+        .nth(1)
+        .expect("the kind-word table is in the doc")
+        .lines()
+        .skip(1)
+        .take_while(|line| line.starts_with('|'))
+        .map(|line| {
+            line.trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let mut tools = Vec::new();
+    for row in &rows {
+        let [tool, word, many, one] = row[..] else {
+            panic!("a table row has four cells: {row:?}");
+        };
+        let tool = tool.trim_matches('`');
+        tools.push(tool);
+        let found = kind(tool, &json!({"questions": [{}]}));
+        assert_eq!(found.word(), word, "{tool}: kind word");
+        // `ask_user` counts questions, so two of them make "N" = 2.
+        let many_text = text(&kinds_of(&found, 2));
+        let one_text = text(&kinds_of(&found, 1));
+        assert_eq!(many_text, capital(&many.replace('N', "2")), "{tool}: many");
+        assert_eq!(one_text, capital(one), "{tool}: one");
+    }
+    for name in contract::tool::BUILT_IN_TOOLS {
+        assert!(tools.contains(name), "{name} has no row in the table");
+    }
+    assert_eq!(tools.len(), contract::tool::BUILT_IN_TOOLS.len());
+}
+
+/// `phrase` with its first letter upper case, as the summary line shows it.
+fn capital(phrase: &str) -> String {
+    let mut chars = phrase.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
