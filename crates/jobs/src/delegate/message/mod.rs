@@ -596,6 +596,7 @@ impl DelegateMessage {
             | ErrorCode::Refused
             | ErrorCode::RepositoryCodeSkipped
             | ErrorCode::ReviewerSelectionFailed
+            | ErrorCode::ReviewerSetup
             | ErrorCode::Sandbox
             | ErrorCode::SessionHasDependents
             | ErrorCode::SessionHeld
