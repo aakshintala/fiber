@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
-use contract::events::{DirectoryAdded, Event, InstructionReason, InstructionSent};
+use contract::events::{DirectoryAdded, Event, EventKind, InstructionReason, InstructionSent};
 use contract::shapes::{DeclaredEffects, Effect};
 use contract::{Envelope, Seq, SessionId};
 use fakes::clock::FakeClock;
@@ -127,7 +127,7 @@ fn declared(paths: Option<&[&str]>) -> DeclaredEffects {
 
 fn envelope(kind: &str, event: &Event) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_test".into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,

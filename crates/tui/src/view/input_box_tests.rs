@@ -307,7 +307,7 @@ fn rule_row(screen: &str) -> usize {
 /// One session envelope for the box's keyboard tests.
 fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> crate::link::Line {
     crate::link::Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1076,7 +1076,7 @@ fn item_opened(app: &mut App) {
     use contract::SessionId;
     let lines: Vec<serde_json::Value> = app
         .on_line(crate::link::Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: contract::HubEventKind::HubHello,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -1131,7 +1131,7 @@ fn item_opened(app: &mut App) {
         serde_json::Value::String(id.clone()),
     );
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: SessionId(ITEM_SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1149,7 +1149,7 @@ fn item_opened(app: &mut App) {
         .to_owned();
     payload.insert("command_id".to_owned(), serde_json::Value::String(raise_id));
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: SessionId(ITEM_SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -18,7 +18,7 @@ const BADGE_ONE: &str = "  ⚠ 1 approvals waiting · click to reopen";
 fn attached() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     let hello = contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -230,7 +230,7 @@ fn source_refusals_are_inline_from_the_session_or_hub_and_duplicates_are_ignored
                 json!({"command_id": command["id"], "code": code, "message": "Read refused."});
             let line = if hub {
                 Line::Hub(contract::HubLine {
-                    kind: HubEventKind::CommandRejected.name().to_owned(),
+                    kind: HubEventKind::CommandRejected,
                     ts: 0,
                     schema_version: 1,
                     payload: payload.as_object().unwrap().clone(),
@@ -256,7 +256,7 @@ fn reconnect_closes_source_and_replay_shows_the_offer_list() {
     assert!(app.offer.source_open());
     app.disconnected();
     let resent = app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

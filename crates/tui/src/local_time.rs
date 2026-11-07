@@ -48,7 +48,7 @@ pub(crate) fn new_york() -> TimeZone {
 #[cfg(test)]
 pub(crate) fn turn_started_at(session: &str, text: &str, ts: u64) -> crate::link::Line {
     crate::link::Line::Session(contract::Envelope {
-        kind: contract::events::EventKind::TurnStarted.name().to_owned(),
+        kind: contract::events::EventKind::TurnStarted,
         session_id: contract::SessionId(session.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

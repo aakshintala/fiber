@@ -69,7 +69,7 @@ fn timed_line(kind: &str, ts: u64, payload: serde_json::Value) -> Line {
 /// One envelope of `session` at `ts`.
 fn timed_line_for(session: &str, kind: &str, ts: u64, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,
@@ -333,7 +333,7 @@ fn preamble_line_for(session: &str, window: u64, trigger: Option<u64>) -> Line {
 /// attached one.
 fn other_waiting(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -361,7 +361,7 @@ fn other_waiting(session: &str) -> Line {
 /// attached one.
 fn other_idle(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

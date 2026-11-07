@@ -205,7 +205,7 @@ fn matching_rejections_mark_query_refused_until_reattach() {
             json!({"command_id": id, "code": "unknown_command", "message": "old session"});
         let line = if hub {
             Line::Hub(contract::HubLine {
-                kind: HubEventKind::CommandRejected.name().to_owned(),
+                kind: HubEventKind::CommandRejected,
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
                 payload: payload.as_object().unwrap().clone(),
@@ -234,7 +234,7 @@ fn a_left_row_sends_nothing_and_reattach_discards_a_lost_answer() {
     answer(&mut app, &old);
     let payload = json!({"session_id": SESSION, "how": "exited"});
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::SessionLeft.name().to_owned(),
+        kind: HubEventKind::SessionLeft,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().unwrap().clone(),
@@ -453,7 +453,7 @@ fn quota_refusal_on_either_link_settles_its_tag() {
             json!({"command_id": id, "code": "unknown_command", "message": "old session"});
         let line = if hub {
             Line::Hub(contract::HubLine {
-                kind: HubEventKind::CommandRejected.name().to_owned(),
+                kind: HubEventKind::CommandRejected,
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
                 payload: payload.as_object().unwrap().clone(),

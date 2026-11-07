@@ -67,13 +67,13 @@ const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 
 /// A monitor's deadline when the model gives no `timeout_ms`: 5 minutes
 /// (`docs/tools.md`, "Background jobs").
-const DEFAULT_DEADLINE_MS: u64 = 300_000;
+pub(crate) const DEFAULT_DEADLINE_MS: u64 = 300_000;
 
 /// The longest deadline a monitor may have: 30 minutes.
-const MAX_DEADLINE_MS: u64 = 1_800_000;
+pub(crate) const MAX_DEADLINE_MS: u64 = 1_800_000;
 
 /// The longest deadline in a non-interactive run: 10 minutes.
-const MAX_DEADLINE_NON_INTERACTIVE_MS: u64 = 600_000;
+pub(crate) const MAX_DEADLINE_NON_INTERACTIVE_MS: u64 = 600_000;
 
 const CANCELLED: &str = "Cancelled and stopped.";
 pub(crate) const INDETERMINATE: &str =
@@ -126,6 +126,11 @@ pub struct Shell {
     /// "Background jobs"). `None` in a session that offers no detached
     /// commands, such as the driver shell.
     detached: Option<PathBuf>,
+    /// The person's own commands run with no foreground timeout: a `!` or
+    /// `!!` command and the `shell` driver command run until they exit,
+    /// until `cancel` stops them, or until the session shuts down. The
+    /// agent's `shell` tool calls keep the 10-minute default.
+    no_timeout: bool,
     host: Option<Arc<dyn contract::keeper::CommandHost>>,
 }
 
@@ -154,6 +159,7 @@ impl Shell {
             spill_wrap: None,
             protection: None,
             detached: None,
+            no_timeout: false,
             host: None,
         }
     }
@@ -267,6 +273,17 @@ impl Shell {
         }
     }
 
+    /// Runs a foreground call with no `timeout_ms` under no timeout: it runs
+    /// until it exits, until `cancel` stops it, or until the session shuts
+    /// down. An explicit `timeout_ms` still bounds the call on every mode.
+    #[must_use]
+    pub fn with_no_timeout(self) -> Self {
+        Self {
+            no_timeout: true,
+            ..self
+        }
+    }
+
     /// The current sandbox settings. `effects` declares a call confined
     /// only when the platform can apply them; a call declared confined then
     /// fails closed if the policy becomes unavailable before spawn
@@ -375,7 +392,12 @@ impl Tool for Shell {
             .get("command")
             .and_then(Value::as_str)
             .is_some_and(review_when_confined);
-        let mut effects = match parse(arguments, &self.workspace, self.max_timeout_ms) {
+        let mut effects = match parse(
+            arguments,
+            &self.workspace,
+            self.max_timeout_ms,
+            self.no_timeout,
+        ) {
             Ok(parsed) => {
                 unconfined = parsed.unconfined;
                 detach = parsed.detach;
@@ -434,7 +456,12 @@ impl Tool for Shell {
         let settings = self.selected();
         if let Err(unavailable) = sandbox::check_available(&settings, &self.workspace) {
             let cause = unavailable.to_string();
-            return match parse(arguments, &self.workspace, self.max_timeout_ms) {
+            return match parse(
+                arguments,
+                &self.workspace,
+                self.max_timeout_ms,
+                self.no_timeout,
+            ) {
                 Ok(parsed) => {
                     let mut output = errored(ShellError::SandboxApply { cause });
                     output.details = Some(details(&parsed.command, None));
@@ -487,7 +514,13 @@ impl Tool for Shell {
     /// cloned under the lock and the lock released before classifying, so
     /// no filesystem read runs while it is held.
     fn review_note(&self, arguments: &Map<String, Value>) -> Option<String> {
-        let parsed = parse(arguments, &self.workspace, self.max_timeout_ms).ok()?;
+        let parsed = parse(
+            arguments,
+            &self.workspace,
+            self.max_timeout_ms,
+            self.no_timeout,
+        )
+        .ok()?;
         let entries = support::lock(&self.read_only).clone();
         classify::not_shown_read_only(&parsed.command, &self.workspace, &parsed.workdir, &entries)
     }
@@ -510,7 +543,12 @@ impl Shell {
         if cancel.is_cancelled() {
             return cancelled_before();
         }
-        let parsed = match parse(arguments, &self.workspace, self.max_timeout_ms) {
+        let parsed = match parse(
+            arguments,
+            &self.workspace,
+            self.max_timeout_ms,
+            self.no_timeout,
+        ) {
             Ok(parsed) => parsed,
             Err(error) => return errored(error),
         };
@@ -518,7 +556,9 @@ impl Shell {
             return errored(ShellError::NoJobs);
         }
         if !parsed.detach && !parsed.mode.in_background() && bare_wait(&parsed.command) {
-            return errored(ShellError::BareWait);
+            return errored(ShellError::BareWait {
+                command: parsed.command.clone(),
+            });
         }
         // The functions reach only the model's own command line: `classify`
         // and `effects` saw the original string above.
@@ -561,8 +601,9 @@ impl Shell {
             (Some(_), Mode::Terminal { .. }) => command::MovePolicy::Terminal,
             (Some(_), Mode::Monitor) => command::MovePolicy::Monitor,
         };
-        // `None` only for an `in_background()` call with no `timeout_ms`,
-        // which has no timeout.
+        // `None` is a call with no timeout: an `in_background()` call with
+        // no `timeout_ms`, or a person's own foreground call with no
+        // `timeout_ms`.
         let limit: Option<Limit> = parsed.timeout_ms.map(|ms| Limit {
             ms,
             monitor: parsed.mode == Mode::Monitor,
@@ -697,7 +738,8 @@ struct Parsed {
     command: String,
     workdir: PathBuf,
     /// The command's timeout: `timeout_ms`, or a monitor's deadline. `None`
-    /// is a background call with no `timeout_ms`, which has no timeout.
+    /// is a call with no timeout: a background call with no `timeout_ms`,
+    /// or a person's own foreground call with no `timeout_ms`.
     timeout_ms: Option<u64>,
     mode: Mode,
     /// Whether the call leaves the OS sandbox: only a literal
@@ -749,9 +791,10 @@ impl Mode {
 
 /// How long a command may run, and whether it is a monitor's deadline,
 /// which a timeout names as such (`docs/tools.md`, "Background jobs").
-/// `None` in place of a limit is a background call with no `timeout_ms`,
-/// which has no timeout: the drive never stops it, so a stop always has a
-/// limit in hand.
+/// `None` in place of a limit is a call with no timeout: a background
+/// call with no `timeout_ms`, or a person's own foreground call with no
+/// `timeout_ms`. The drive never stops it, so a stop always has a limit in
+/// hand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limit {
     /// Milliseconds.
@@ -784,6 +827,7 @@ fn parse(
     arguments: &Map<String, Value>,
     workspace: &Path,
     max_timeout_ms: u64,
+    no_timeout: bool,
 ) -> Result<Parsed, ShellError> {
     let args: Args = crate::tool_util::parsed(arguments)?;
     let command = args.command;
@@ -829,8 +873,14 @@ fn parse(
     } else if mode.in_background() {
         // A background call with no `timeout_ms` has no timeout.
         given_timeout
+    } else if let Some(given) = given_timeout {
+        Some(given)
+    } else if no_timeout {
+        // The person's own commands run with no timeout: until they exit,
+        // until `cancel` stops them, or until the session shuts down.
+        None
     } else {
-        Some(given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS))
+        Some(DEFAULT_TIMEOUT_MS)
     };
     Ok(Parsed {
         command,

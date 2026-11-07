@@ -45,7 +45,7 @@ fn envelope(
     event: &Event,
 ) -> Envelope {
     Envelope {
-        kind: event.kind().to_owned(),
+        kind: EventKind::from_name(event.kind()),
         session_id: SessionId(session.to_owned()),
         ts: 1_759_150_000_000 + seq,
         schema_version: SCHEMA_VERSION,
@@ -1216,7 +1216,7 @@ fn an_unreadable_name_line_fails_the_resume() {
     let mut bad_payload = serde_json::Map::new();
     bad_payload.insert("by".to_owned(), json!("person"));
     let bad = Envelope {
-        kind: "session_named".to_owned(),
+        kind: EventKind::SessionNamed,
         session_id: SessionId(C.to_owned()),
         ts: 1_759_150_000_001,
         schema_version: SCHEMA_VERSION,

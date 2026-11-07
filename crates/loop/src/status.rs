@@ -919,7 +919,7 @@ impl Status {
 
 fn control(kind: &str) -> Envelope {
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(String::new()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

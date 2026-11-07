@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Recording wrapper around the stub cargo for scripts/test-bug-red's
+# target-dir case: records the CARGO_TARGET_DIR each nextest invocation
+# sees and, on nextest run, writes a probe file into it without creating
+# parents, so the probe's location also proves bug-red creates the dir.
+# The wrapper mkdirs nothing.
+set -euo pipefail
+if [ "${1-}" = nextest ] && [ "${2-}" = list ]; then
+  printf '%s\n' "${CARGO_TARGET_DIR-<unset>}" >>"$BUG_RED_TARGET_RECORD"
+  exit 0
+fi
+if [ "${1-}" = nextest ] && [ "${2-}" = run ]; then
+  printf '%s\n' "${CARGO_TARGET_DIR-<unset>}" >>"$BUG_RED_TARGET_RECORD"
+  : >"$CARGO_TARGET_DIR/bug-red-target-probe"
+  exit "${BUG_RED_NEXTEST_STATUS:-100}"
+fi
+exec "$BUG_RED_STUB_CARGO" "$@"

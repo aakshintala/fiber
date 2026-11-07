@@ -365,7 +365,7 @@ struct HubAnswer {
 impl From<HubLine> for HubAnswer {
     fn from(line: HubLine) -> Self {
         Self {
-            kind: HubEventKind::from(line.kind),
+            kind: line.kind,
             payload: line.payload,
         }
     }

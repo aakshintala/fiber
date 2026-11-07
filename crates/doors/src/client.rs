@@ -1047,8 +1047,8 @@ pub(crate) enum FromSessionRefusal<'a> {
         /// The session the approval is for.
         target: &'a contract::SessionId,
     },
-    /// `prompt`, `steer` or `reply` to a session on the caller's walk or
-    /// sharing a session process with it.
+    /// `prompt`, `steer`, `reply` or `sandbox` to a session on the
+    /// caller's walk or sharing a session process with it.
     SessionCommand {
         /// The refused wire command.
         command: &'a str,
@@ -1179,10 +1179,10 @@ fn is_approval_reply(command: &Command) -> bool {
 /// (`docs/permissions.md`, "Sessions on the sockets"). Refusal 1 rejects
 /// an approval answer from a local connection whose walk passes a session
 /// process, or whose walk could not be read, with no exception. Refusal 2
-/// rejects `prompt`, `steer` and every `reply` when the target pid is on
-/// the caller's walk, or when a session-process pid from this session's
-/// parent walk is also on the caller's walk, unless the caller is this
-/// session's current kernel parent with a readable ancestry. A `message`
+/// rejects `prompt`, `steer`, every `reply` and `sandbox` when the target
+/// pid is on the caller's walk, or when a session-process pid from this
+/// session's parent walk is also on the caller's walk, unless the caller
+/// is this session's current kernel parent with a readable ancestry. A `message`
 /// is a session message, never a person's words, so it is never refused.
 /// An unreadable target pid, parent, or walk fails closed.
 pub(crate) fn session_command_refusal(
@@ -1253,6 +1253,11 @@ pub(crate) fn session_command_refusal(
         | Command::OfferedFile(_)
         | Command::Unknown => return None,
     };
+    // The socket and the hub relay read one shared refusal set: a name
+    // the set does not hold is never refused, whatever it classifies as.
+    if !contract::commands::is_from_session_command(command_name) {
+        return None;
+    }
     let refusal = || FromSessionRefusal::SessionCommand {
         command: command_name,
         target,

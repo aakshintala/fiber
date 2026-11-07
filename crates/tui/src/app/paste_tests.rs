@@ -455,7 +455,7 @@ fn live(session: &str, name: &str, workspace: &str, project: &str, state: Value)
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -469,7 +469,7 @@ fn live(session: &str, name: &str, workspace: &str, project: &str, state: Value)
 /// A hub `command_accepted` for `id` with `result`.
 fn accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [

@@ -112,7 +112,7 @@ impl Providers {
                 if holders.is_empty() {
                     return resolved;
                 }
-                Err(missing_credential(rest, &holders))
+                Err(missing_credential(rest, &holders, self))
             }
             [single] => self.resolve(single).map(|mut made| {
                 made.thinking = thinking;
@@ -180,20 +180,29 @@ fn logged_out_holders(
 
 /// The missing-credential error for a bare id no switched-on provider
 /// has: the first logged-out holder, sorted, with `why` naming every
-/// logged-out holder as not logged in, each with its `fiber login`
-/// command, in the shape of the session's own missing-credential error.
+/// logged-out holder as not logged in. The sentence advises `fiber login`
+/// only where the named holder reads the key `fiber login` stores: a
+/// `credential()` holder reads nothing stored, so its sentence carries no
+/// such advice.
 #[allow(
     clippy::indexing_slicing,
     reason = "every caller passes a non-empty holder list"
 )]
-fn missing_credential(id: &str, holders: &[String]) -> crate::Error {
+fn missing_credential(id: &str, holders: &[String], registry: &Providers) -> crate::Error {
     let mut owners: Vec<&str> = holders.iter().map(|reference| owner(reference)).collect();
     owners.sort();
     owners.dedup();
     let provider = owners[0].to_owned();
     // One login instruction lives in `ConfigError::CredentialMissing`'s
     // display (`Run fiber login {provider}`), so `why` names every holder
-    // without adding a second one.
+    // without adding a second one. Every holder is installed, so the
+    // registry holds the named one; the fallbacks keep today's advice on
+    // the unreachable miss.
+    let login_advice = owners.first().is_none_or(|name| {
+        registry
+            .get(name)
+            .is_none_or(|data| data.credential_from.advises_login())
+    });
     let why = if owners.len() == 1 {
         format!("`{}` has `{id}` but is not logged in", owners[0])
     } else {
@@ -204,7 +213,11 @@ fn missing_credential(id: &str, holders: &[String]) -> crate::Error {
             .join(", ");
         format!("{names} have `{id}` but are not logged in")
     };
-    crate::Error::Config(config::ConfigError::CredentialMissing { provider, why })
+    crate::Error::Config(config::ConfigError::CredentialMissing {
+        provider,
+        why,
+        login_advice,
+    })
 }
 
 /// The `provider/model` references the naming list holds for the bare id
@@ -254,6 +267,7 @@ fn resolve_literal<'a>(
                 return Some(Err(missing_credential(
                     typed,
                     &logged_out_holders(&matches, Some(&reference), registry, on),
+                    registry,
                 )));
             }
             if !counted.contains(&reference) {
@@ -281,7 +295,7 @@ fn resolve_literal<'a>(
                     if holders.is_empty() {
                         return None;
                     }
-                    return Some(Err(missing_credential(typed, &holders)));
+                    return Some(Err(missing_credential(typed, &holders, registry)));
                 }
                 [single] => return Some(registry.resolve(single)),
                 [..] => return Some(Err(ambiguous(typed, &mut counted))),
@@ -295,7 +309,7 @@ fn resolve_literal<'a>(
     if counted.is_empty() {
         let holders = logged_out_holders(&matches, None, registry, on);
         if !holders.is_empty() {
-            return Some(Err(missing_credential(typed, &holders)));
+            return Some(Err(missing_credential(typed, &holders, registry)));
         }
     }
     None

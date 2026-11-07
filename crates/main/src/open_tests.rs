@@ -279,7 +279,7 @@ impl FakeHub {
             (&hub).write_all(answer.as_bytes()).unwrap();
         });
         let hello = contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: contract::HubEventKind::HubHello,
             ts: 1,
             schema_version: 1,
             payload: serde_json::Map::new(),

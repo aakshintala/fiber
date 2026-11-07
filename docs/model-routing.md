@@ -1030,7 +1030,9 @@ When a person types a model:
    provider has is `no_model` too, and its message says to run
    `fiber models`. When no switched-on provider has the id but a logged-out
    installed one does, the error is `credential_missing`: it names the
-   provider as not logged in, with the login command. Only a
+   provider as not logged in, with the login command, except a logged-out
+   `credential()` holder's sentence carries no such command
+   (`docs/errors.md`, "The shape"). Only a
    `provider/model` whose provider is not installed is `extension_missing`.
    These rules match a model left out with `model_unconfigured` too, so
    naming one is `model_unconfigured`, not `no_model`, and a bare id it

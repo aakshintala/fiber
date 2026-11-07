@@ -594,10 +594,22 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - A bare wait is rejected. When the call is not `run_in_background` and
   the first part of the command is `sleep N` with N of 25 seconds or more,
   alone or followed by other commands, the call completes as `failed` with
-  code `invalid_arguments` and never starts. The message points to
-  `run_in_background`, `jobs wait`, or a monitor running an `until` loop.
-  A `sleep` inside a loop is not the first part of the command and is
-  allowed.
+  code `invalid_arguments` and never starts. The message quotes the refused
+  command and gives two copy-and-run rewrites: run the same command with
+  `run_in_background`, then wait with `jobs wait`, and a monitor `until`
+  snippet naming the check command when the command holds one, with the
+  deadline rule. Refusing `sleep 240; echo hi` says: "`sleep 240; echo hi`
+  waits with `sleep` for 25 seconds or more, so it never started. Run it in
+  the background instead: call `shell` again with `run_in_background: true`
+  and the command `sleep 240; echo hi`, then wait for it with `jobs wait`.
+  To wait for a condition instead, start a monitor with `monitor: true` and
+  a command like `until echo hi; do sleep 5; done`; every monitor has a
+  deadline, 5 minutes (300000 ms) by default, at most 30 minutes
+  (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive
+  run." When the command holds no usable check command — a bare `sleep 60`,
+  an empty, comment-only or separator-led rest, or a rest opening with a loop
+  keyword — the `until` snippet names `<check command>` instead. A `sleep`
+  inside a loop is not the first part of the command and is allowed.
 
 ### Timeout
 

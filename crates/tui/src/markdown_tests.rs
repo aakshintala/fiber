@@ -1178,7 +1178,7 @@ fn conversation(text: &str) -> ratatui::buffer::Buffer {
                 action: Option<&str>,
                 payload: serde_json::Value| {
         app.on_line(LinkLine::Session(contract::Envelope {
-            kind: EventKind::from_name(kind).name().to_owned(),
+            kind: EventKind::from_name(kind),
             session_id: contract::SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

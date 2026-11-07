@@ -273,20 +273,17 @@ crates/bench/examples/bench/idle.rs 2
 crates/bench/examples/bench/resume.rs 1
 crates/bench/examples/bench/run.rs 1
 crates/bench/examples/bench/session_list.rs 2
-crates/bench/examples/bench/wheel.rs 2
 crates/cli/src/doctor/files.rs 2
 crates/cli/src/feedback.rs 1
 crates/cli/src/hub_pair.rs 2
 crates/cli/src/login/browser.rs 1
 crates/cli/src/login/reviewer.rs 1
 crates/cli/src/sessions.rs 1
-crates/contract/src/envelope.rs 2
 crates/contract/src/events.rs 1
 crates/doors/src/attach.rs 2
 crates/doors/src/client/writer.rs 3
 crates/doors/src/hub.rs 1
 crates/doors/src/isolation.rs 2
-crates/doors/src/session.rs 4
 crates/extensions/src/attend.rs 2
 crates/extensions/src/case/format.rs 1
 crates/extensions/src/case/run.rs 5
@@ -301,7 +298,6 @@ crates/fakes/src/oauth_server.rs 1
 crates/hub/src/attention.rs 1
 crates/hub/src/device_login.rs 1
 crates/hub/src/fake.rs 1
-crates/hub/src/feed.rs 1
 crates/hub/src/pairing.rs 1
 crates/hub/src/resume.rs 2
 crates/hub/src/rewind.rs 2
@@ -310,8 +306,6 @@ crates/hub/src/spawn.rs 2
 crates/hub/src/start.rs 2
 crates/jobs/src/error.rs 1
 crates/diag/src/diag.rs 4
-crates/log/src/escalations.rs 2
-crates/log/src/escalations/reviewer_shell_calls.rs 2
 crates/log/src/name.rs 1
 crates/log/src/rate.rs 1
 crates/log/src/read.rs 1
@@ -325,14 +319,9 @@ crates/loop/src/rewind.rs 5
 crates/loop/src/rewind/command.rs 9
 crates/loop/src/rewind/stop.rs 1
 crates/loop/src/rewind/workspace.rs 1
-crates/loop/src/status.rs 3
 crates/loop/src/suspend.rs 2
 crates/main/src/configure/login.rs 1
 crates/main/src/configure/remote.rs 1
-crates/main/src/delegates.rs 5
-crates/main/src/main.rs 2
-crates/main/src/model_host.rs 1
-crates/main/src/rewind.rs 1
 crates/mcp/src/login.rs 3
 crates/mcp/src/rpc.rs 1
 crates/provider/src/error.rs 3
@@ -342,7 +331,6 @@ crates/provider/src/scripted.rs 1
 crates/tools/src/error.rs 1
 crates/tools/src/files.rs 1
 crates/tools/src/web_search.rs 2
-crates/tui/src/app.rs 11
 crates/tui/src/app/call_view.rs 2
 crates/tui/src/app/change_workspace.rs 1
 crates/tui/src/app/clear.rs 1
@@ -390,7 +378,7 @@ EOF
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl \
         crates/main/tests/release_pack_fixture/bin/gh
-      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/test-flake-report scripts/test-stress-plan scripts/leak-scan scripts/test-leak-scan scripts/look-diff scripts/test-look-diff scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/cache-prune scripts/check-docs scripts/check-resources scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/mutants-shard-finish scripts/test-mutants-shard-finish scripts/paging-jig scripts/release-size scripts/release-pack scripts/stored-results scripts/lib/release.sh
+      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/test-flake-report scripts/test-stress-plan scripts/leak-scan scripts/test-leak-scan scripts/look-diff scripts/test-look-diff scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/test-bug-red-target-cargo scripts/cache-prune scripts/check-docs scripts/check-resources scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/mutants-shard-finish scripts/test-mutants-shard-finish scripts/paging-jig scripts/release-size scripts/release-pack scripts/stored-results scripts/lib/release.sh
       shellcheck --shell=bash scripts/test-journey-report
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"

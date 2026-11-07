@@ -9,13 +9,55 @@ use crate::{ActionId, Seq, SessionId, TurnId};
 /// (`docs/events.md`, "Versioning").
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Adapters between the typed carrier fields below and the wire, which
+/// carries every `kind` as a string (`docs/events.md`, "The envelope").
+/// Serializing writes [`EventKind::name`]; deserializing reads a string and
+/// parses it once, keeping an unfamiliar name in `Unknown` verbatim. A
+/// non-string `kind` is rejected, as a missing required field is.
+mod kind_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::HubEventKind;
+    use crate::events::EventKind;
+
+    pub(super) fn serialize_session<S: Serializer>(
+        kind: &EventKind,
+        out: S,
+    ) -> Result<S::Ok, S::Error> {
+        out.serialize_str(kind.name())
+    }
+
+    pub(super) fn deserialize_session<'de, D: Deserializer<'de>>(
+        input: D,
+    ) -> Result<EventKind, D::Error> {
+        String::deserialize(input).map(|name| EventKind::from_name(&name))
+    }
+
+    pub(super) fn serialize_hub<S: Serializer>(
+        kind: &HubEventKind,
+        out: S,
+    ) -> Result<S::Ok, S::Error> {
+        out.serialize_str(kind.name())
+    }
+
+    pub(super) fn deserialize_hub<'de, D: Deserializer<'de>>(
+        input: D,
+    ) -> Result<HubEventKind, D::Error> {
+        String::deserialize(input).map(HubEventKind::from)
+    }
+}
+
 /// One event line. The fields serialize in the order `docs/events.md` lists
 /// them, and an optional field is absent when it does not apply, never
 /// `null`. Fields a consumer does not know are ignored when reading.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Envelope {
     /// The only discriminator a consumer switches on.
-    pub kind: String,
+    #[serde(
+        serialize_with = "kind_serde::serialize_session",
+        deserialize_with = "kind_serde::deserialize_session"
+    )]
+    pub kind: crate::events::EventKind,
     /// The session this event belongs to.
     pub session_id: SessionId,
     /// Milliseconds since the epoch.
@@ -37,9 +79,10 @@ pub struct Envelope {
 }
 
 impl Envelope {
-    /// Parse the current discriminator, preserving unfamiliar names exactly.
+    /// The current discriminator, as stored: assigning [`Envelope::kind`]
+    /// updates what this returns.
     pub fn kind(&self) -> crate::events::EventKind {
-        crate::events::EventKind::from_name(&self.kind)
+        self.kind.clone()
     }
 
     /// Whether this line is durable. A line is durable if and only if it
@@ -56,7 +99,11 @@ impl Envelope {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HubLine {
     /// The only discriminator a consumer switches on.
-    pub kind: String,
+    #[serde(
+        serialize_with = "kind_serde::serialize_hub",
+        deserialize_with = "kind_serde::deserialize_hub"
+    )]
+    pub kind: crate::HubEventKind,
     /// Milliseconds since the epoch.
     pub ts: u64,
     /// The schema version this line is written against.
@@ -66,9 +113,10 @@ pub struct HubLine {
 }
 
 impl HubLine {
-    /// Parse the current discriminator, preserving unfamiliar names exactly.
+    /// The current discriminator, as stored: assigning [`HubLine::kind`]
+    /// updates what this returns.
     pub fn kind(&self) -> crate::HubEventKind {
-        crate::HubEventKind::from(self.kind.clone())
+        self.kind.clone()
     }
 }
 

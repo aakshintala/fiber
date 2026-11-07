@@ -637,7 +637,7 @@ impl ScriptedLog {
             None
         };
         let line = Envelope {
-            kind: event.kind().to_owned(),
+            kind: EventKind::from_name(event.kind()),
             session_id: SessionId("case-run-loop".to_owned()),
             ts: 0,
             schema_version: SCHEMA_VERSION,

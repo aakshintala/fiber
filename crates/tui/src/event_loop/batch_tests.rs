@@ -13,7 +13,7 @@ use contract::events::EventKind;
 /// One hub line named `hub-{seq}`.
 fn hub(seq: u64) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: EventKind::Unknown(format!("hub-{seq}")).name().to_owned(),
+        kind: EventKind::Unknown(format!("hub-{seq}")),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

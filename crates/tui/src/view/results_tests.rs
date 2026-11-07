@@ -126,7 +126,7 @@ fn two_turns_show_each_matchs_own_turn_label() {
         ),
     ] {
         app.on_line(crate::link::Line::Session(contract::Envelope {
-            kind: EventKind::from_name(kind).name().to_owned(),
+            kind: EventKind::from_name(kind),
             session_id: contract::SessionId(crate::results_support::SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

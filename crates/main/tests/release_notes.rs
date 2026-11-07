@@ -225,7 +225,7 @@ fn synthetic_long_notes_wrap_and_page_on_a_narrow_pty() {
     let mut run = support::pty::Run::attach(master, 48, 14, deadline);
     let (client, mut hub) = UnixStream::pair().unwrap();
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),

@@ -36,7 +36,7 @@ fn home(width: u16, height: u16, session: &str) -> App {
     });
     app.set_size(width, height);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -48,7 +48,7 @@ fn home(width: u16, height: u16, session: &str) -> App {
 /// A `session_status` for `session` waiting on an approval.
 fn waiting(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 fn envelope(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -107,7 +107,7 @@ fn permission_requested() -> Line {
 
 fn hub_hello() -> contract::HubLine {
     contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1388,7 +1388,7 @@ fn the_notice_overlay_hides_the_turn_stops() {
 /// One sequenced line of a session whose first turn spans pages.
 fn seq_line(seq: u64, kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: seq.saturating_mul(1_000),
         schema_version: contract::SCHEMA_VERSION,
