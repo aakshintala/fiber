@@ -685,6 +685,163 @@ fn shell_child_prompt_and_question_reply_to_own_session_are_refused() {
     finish(hub, client, guard, &[&session], &[&sub]);
 }
 
+/// A probe the session's own `shell` runs against the session socket: it
+/// subscribes without a session id (direct sockets name none), sends one
+/// command line, and prints the command's answer. The probe is a child of
+/// the session process, so the walk from its socket passes a session
+/// process.
+const PROBE_SESSION: &str = r#"import json, socket, sys
+path = sys.argv[1]
+line = json.loads(sys.argv[2])
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(path)
+f = s.makefile("r")
+f.readline()
+
+
+def wait_for(cid):
+    while True:
+        l = f.readline()
+        if not l:
+            print("SOCKET_CLOSED")
+            sys.exit(0)
+        try:
+            v = json.loads(l)
+        except Exception:
+            continue
+        p = v.get("payload", {})
+        if isinstance(p, dict) and p.get("command_id") == cid:
+            return v
+
+
+sub = {"id": "c_direct_sub", "command": "subscribe", "args": {"level": "full"}}
+s.sendall((json.dumps(sub) + "\n").encode())
+wait_for("c_direct_sub")
+cid = line["id"]
+s.sendall((json.dumps(line) + "\n").encode())
+print(json.dumps(wait_for(cid)))
+"#;
+
+/// Writes the session-socket probe beside the workspace and returns its path.
+fn write_session_probe(setup: &Setup) -> String {
+    let path = setup.workspace().join("probe_session.py");
+    fs::write(&path, PROBE_SESSION).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// Sends `line` to the session socket from the session's own shell, and
+/// returns the printed answer line.
+fn probe_answer_session_socket(
+    client: &Socket,
+    session: &str,
+    probe: &str,
+    socket: &str,
+    line: &Value,
+) -> Value {
+    let command = format!("python3 {probe} {socket} '{line}'");
+    let shell_id = format!("c_shell_{}", line["id"].as_str().unwrap());
+    client.send(
+        &json!({
+            "id": shell_id,
+            "session_id": session,
+            "command": "shell",
+            "args": {"command": command, "send": false},
+        })
+        .to_string(),
+    );
+    let ack = recv_answer(client, &shell_id, "the shell acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let result = &ack["payload"]["result"];
+    let text = result
+        .get("output")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| result.to_string());
+    let printed = text
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with('{'))
+        .unwrap_or_else(|| panic!("the shell printed no answer line: {ack}"));
+    serde_json::from_str(printed).unwrap()
+}
+
+#[test]
+fn shell_child_sandbox_to_own_session_is_refused_from_session() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start([hello(), hello(), hello(), hello()]).unwrap();
+    let probe = write_probe(&setup);
+    let session_probe = write_session_probe(&setup);
+    let hub_socket = setup.hub_socket().to_string_lossy().into_owned();
+    let (hub, client, guard, session, sub) = start_hub_and_session(&setup, &server, "hello");
+    let refused_shape =
+        format!("A connection from inside a session cannot send `sandbox` to session `{session}`.");
+    // The subscribed relay path: the probe's hub connection subscribed.
+    let answer = probe_answer(
+        &client,
+        &session,
+        &probe,
+        &hub_socket,
+        &json!({
+            "id": "c_probe_sandbox",
+            "session_id": session,
+            "command": "sandbox",
+            "args": {"enabled": true},
+        }),
+    );
+    assert_eq!(answer["kind"], "command_rejected", "{answer}");
+    assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
+    assert_eq!(
+        answer["payload"]["message"].as_str().unwrap(),
+        refused_shape,
+        "{answer}"
+    );
+    // A fresh hub connection: the refusal runs before any relay publishes.
+    let answer = probe_answer_via(
+        &client,
+        &session,
+        &probe,
+        &hub_socket,
+        false,
+        &json!({
+            "id": "c_probe_sandbox_bare",
+            "session_id": session,
+            "command": "sandbox",
+            "args": {"enabled": false},
+        }),
+    );
+    assert_eq!(answer["kind"], "command_rejected", "{answer}");
+    assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
+    assert_eq!(
+        answer["payload"]["message"].as_str().unwrap(),
+        refused_shape,
+        "{answer}"
+    );
+    // The session socket: the same sentence names the same session.
+    let session_socket = setup
+        .session_socket(&session)
+        .to_string_lossy()
+        .into_owned();
+    let answer = probe_answer_session_socket(
+        &client,
+        &session,
+        &session_probe,
+        &session_socket,
+        &json!({
+            "id": "c_probe_sandbox_direct",
+            "command": "sandbox",
+            "args": {"enabled": true},
+        }),
+    );
+    assert_eq!(answer["kind"], "command_rejected", "{answer}");
+    assert_eq!(answer["payload"]["code"], "from_session", "{answer}");
+    assert_eq!(
+        answer["payload"]["message"].as_str().unwrap(),
+        refused_shape,
+        "{answer}"
+    );
+    finish(hub, client, guard, &[&session], &[&sub]);
+}
+
 #[test]
 fn steer_to_a_hub_started_session_is_allowed() {
     let setup = Setup::new();
