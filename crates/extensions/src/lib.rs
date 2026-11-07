@@ -122,9 +122,10 @@ pub use oauth::{Browser, SystemBrowser};
 pub use package::{Package, PackageOptions};
 pub use prepare::{Observe, platform};
 pub use providers::{
-    Model, Providers, START_ONLY, StartedRefresh, Unconfigured, UnconfiguredModel, closest_refs,
-    distance, leave_out_invalid, refresh_lists, roles_line,
+    Model, Providers, START_ONLY, StartedRefresh, Unconfigured, UnconfiguredModel,
+    leave_out_invalid, refresh_lists,
 };
+pub use providers::{closest_refs, distance, roles_line};
 pub use release::fetch_nightly_tag;
 pub use release::install_docs_if_missing;
 pub use release::latest_stable_tag;
