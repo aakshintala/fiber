@@ -125,7 +125,7 @@ Your workspace is {workspace}, a worktree of {parent_workspace}. Paths above und
 
 ## jobs-pending
 
-Fiber: this session is about to end, and these background jobs are still running: {job_ids}. Stop any you do not need with `jobs stop`; the rest will be waited for.
+Fiber: this session is about to end, and these background jobs are still running: {job_ids}. Stop any you do not need with `jobs stop`; the rest will be waited for. A process meant to outlive the session must be started with `shell` and `detach: true`.
 
 ## jobs-check
 

@@ -2175,7 +2175,7 @@ fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
 /// What the ending notice reads for `ids`.
 fn ending_text(ids: &[&str]) -> String {
     format!(
-        "Fiber: this session is about to end, and these background jobs are still running: {}. Stop any you do not need with `jobs stop`; the rest will be waited for.",
+        "Fiber: this session is about to end, and these background jobs are still running: {}. Stop any you do not need with `jobs stop`; the rest will be waited for. A process meant to outlive the session must be started with `shell` and `detach: true`.",
         ids.join(", ")
     )
 }
@@ -2572,6 +2572,21 @@ fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
     );
     assert_eq!(ending[2].turn_id, ending[0].turn_id);
     assert_eq!(ending[2].action_id, None);
+    // `docs/tools.md`, "Background jobs": the ending wake names the job,
+    // says the rest is waited for, and names `detach` as the way out.
+    let text = ending[0].payload["input"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains(&id), "notice names the running job: {text}");
+    assert!(
+        text.contains("will be waited for"),
+        "notice says the rest is waited for: {text}"
+    );
+    assert!(text.contains("`shell`"), "notice names shell: {text}");
+    assert!(
+        text.contains("detach"),
+        "notice names detach as the way out: {text}"
+    );
     let requests = world.requests();
     assert_eq!(requests.len(), 2);
     // The request carries the logged message once: `jobs_pending_notified`

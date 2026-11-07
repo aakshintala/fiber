@@ -293,10 +293,14 @@ wrote in it is its tool calls and the replies the person answered, so there
 is little in it that can argue for a verdict.
 
 A reply only says what a short answer such as "yes", "go ahead" or "A" refers
-to. The consent is the person's answer, and it covers only the one action and
-target the reply proposed. A reply that offers options proposes none of them,
+to. The consent is the person's answer, and it covers every step, target and
+effect the reply it answers proposed. A reply that offers options proposes none of them,
 so a bare "yes" under it approves nothing and a pick by label or by its words
-approves that option alone. A reply with no human message after it is not
+approves that option alone. A step the approved action needs is covered when it
+adds no new target, destination or data beyond what was approved: stopping the
+process an approved restart replaces, and starting the local service an approved
+run uses, are covered. A delete, a push or a send that the plan didn't name is
+not. A reply with no human message after it is not
 shown, so a proposal the person never answered approves nothing.
 
 **A person's answer to a question counts as a person message, and the question
@@ -306,9 +310,11 @@ and an extension's `host.ask` answer each render as the person's input with
 its eliciting context as the reply. The reply holds the agent's questions as
 asked; for a server or extension channel it holds fiber's own description of
 the channel, never the submitted prompt words. The consent is still the
-person's answer, and it covers only the one action and target an agent reply
+person's answer, and it covers every step, target and effect an agent reply
 proposed, so a foreign question never approves the call under review by
-itself.
+itself. A step the approved action needs is covered when it adds no new target,
+destination or data beyond what was approved. A delete, a push or a send that
+the plan didn't name is not.
 A reply longer than 6,000 characters is cut to its first 6,000, followed by
 a line saying how many characters were left out.
 

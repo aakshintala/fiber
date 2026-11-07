@@ -1061,7 +1061,7 @@ The kinds are `docs/events.md`.
 - When a session is about to end with jobs still running — a non-interactive
   run whose model has given its final answer, `close` without `now`, or a delegate
   finishing its task — Fiber wakes the model once with a notice listing the running jobs, telling it to stop the ones it
-  does not need and that the rest will be waited for. Whatever is still
+  does not need and that the rest will be waited for. A process meant to outlive the session must be started with `shell` and `detach: true`. Whatever is still
   running after that is waited for, whatever its kind, and each completion
   wakes the model. The session ends when it is idle with no jobs running.
   The idle delay never ends a session with jobs running; a session left
