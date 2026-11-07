@@ -163,3 +163,7 @@ docs/ci.md	fiber-4178	plan	2026-11-07T17:06:21Z	Amoghs-MacBook-Pro:/Users/aakshi
 docs/workflow.md	fiber-4178	plan	2026-11-07T17:06:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/break-glass-audit	fiber-4178	grant	2026-11-07T17:07:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4178-break-glass-audit	
 scripts/test-break-glass-audit	fiber-4178	grant	2026-11-07T17:07:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4178-break-glass-audit	
+scripts/shellcheck-files	fiber-3998	plan	2026-11-07T17:10:45Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+scripts/test-shellcheck-files	fiber-3998	plan	2026-11-07T17:10:45Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+scripts/check	fiber-3998	plan	2026-11-07T17:10:45Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+docs/ci.md	fiber-3998	plan	2026-11-07T17:10:45Z	roundhouse-7010-plus-1:/home/aakshintala/work	
