@@ -1232,6 +1232,41 @@ fn already_present_entries_converge_to_saved_without_rewriting() {
     );
 }
 
+#[test]
+fn an_identical_entry_keeps_its_own_bytes_when_the_text_changes() {
+    fakes::within(
+        "identical entry keeps bytes",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            // The extra `note` key is not the writer's: only an untouched
+            // entry keeps it, so a rewrite of the identical entry loses it.
+            setup.write(
+                &setup.global(),
+                r#"{"reviewer": {"context": "old"}, "shell": {"read_only": {"acme-cli query": {"flags": ["--json"], "note": "keep"}}}}"#,
+            );
+            let read = setup.read();
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "new")),
+                    None,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                )
+                .unwrap();
+            assert!(matches!(saved, NotesSaved::Written(_)));
+            let root: Value =
+                serde_json::from_slice(&setup.bytes(&setup.global()).unwrap()).unwrap();
+            assert_eq!(root["reviewer"]["context"], json!("new"));
+            assert_eq!(
+                root["shell"]["read_only"]["acme-cli query"],
+                json!({"flags": ["--json"], "note": "keep"}),
+                "an identical entry is left as it was"
+            );
+        },
+    );
+}
+
 // ------------------------------------------------------- entry preview
 
 fn preview(

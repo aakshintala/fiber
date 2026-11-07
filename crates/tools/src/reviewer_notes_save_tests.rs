@@ -218,6 +218,63 @@ fn yes_saves_both_layers_with_per_file_counts_and_changes() {
 }
 
 #[test]
+fn a_resent_topic_strikes_what_it_leaves_out_and_counts_the_removals() {
+    let rig = rig();
+    // Seed: two internal hosts, one source-control line.
+    let seeded = run_asking(
+        &rig,
+        &args(vec![
+            line("internal_hosts", "global", "old-one.example"),
+            line("internal_hosts", "global", "old-two.example"),
+            line("internal_hosts", "global", "kept.example"),
+            line("source_control", "global", "github.com/acme/* are ours"),
+        ]),
+        &FakeAsk::answering(yes()),
+    );
+    assert_eq!(seeded.error, None);
+    // Resend internal_hosts without the two old lines, with a new one:
+    // the unsent source_control line stays, `kept` is neither struck nor
+    // duplicated, and the two omitted lines are struck.
+    let ask = FakeAsk::answering(yes());
+    let output = run_asking(
+        &rig,
+        &args(vec![
+            line("internal_hosts", "global", "kept.example"),
+            line("internal_hosts", "global", "new.example"),
+        ]),
+        &ask,
+    );
+    assert_eq!(output.error, None);
+    let prompt = ask.asked().remove(0).prompt;
+    for needle in [
+        "- - old-one.example",
+        "- - old-two.example",
+        "+ - new.example",
+    ] {
+        assert!(
+            prompt.contains(needle),
+            "the confirm lacks {needle}\n{prompt}"
+        );
+    }
+    assert!(!prompt.contains("- - kept.example"), "{prompt}");
+    assert!(!prompt.contains("- - github.com"), "{prompt}");
+    let text = text_of(&output);
+    assert!(
+        text.contains(&format!(
+            "{}: 1 added, 2 removed",
+            global_file(&rig).display()
+        )),
+        "{text}"
+    );
+    let global = read_file(&global_file(&rig)).expect("global written");
+    assert!(!global.contains("old-one.example"), "{global}");
+    assert!(!global.contains("old-two.example"), "{global}");
+    assert_eq!(global.matches("kept.example").count(), 1, "{global}");
+    assert!(global.contains("new.example"), "{global}");
+    assert!(global.contains("github.com/acme/* are ours"), "{global}");
+}
+
+#[test]
 fn identical_lines_report_unchanged_without_asking_and_write_nothing() {
     let rig = rig();
     let arguments = args(vec![line("internal_hosts", "global", "corp.example")]);

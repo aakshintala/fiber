@@ -2540,9 +2540,9 @@ fn is_block(envelope: &Envelope) -> bool {
             // blocked: the `no_model` notice already says what to set.
             let no_model = escalation
                 .and_then(|escalation| escalation.get("error"))
-                .and_then(|error| error.get("code"))
-                .and_then(Value::as_str)
-                == Some("no_model");
+                .and_then(Value::as_object)
+                .map(hub_code)
+                == Some(ErrorCode::NoModel);
             matches!(
                 cause,
                 Some("consecutive_blocks" | "session_blocks" | "reviewer_failed")
