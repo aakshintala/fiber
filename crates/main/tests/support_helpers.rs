@@ -13,7 +13,10 @@
 )]
 
 #[path = "support/hub_start.rs"]
-#[allow(dead_code, reason = "the moved tests cover the failure paths; ATTEMPTS, free_port and the Served fields stay live through the other binaries")]
+#[allow(
+    dead_code,
+    reason = "the moved tests cover the failure paths; ATTEMPTS, free_port and the Served fields stay live through the other binaries"
+)]
 mod hub_start;
 mod support;
 
