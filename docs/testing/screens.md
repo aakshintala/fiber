@@ -15,14 +15,14 @@ and the test asserts the commands it sends to the session.
 
 A few tests run the real binary in a pseudo-terminal, for what memory cannot
 show: raw mode, resize, the terminal restored on exit, and seven journeys that
-cross features. Two are in `crates/main/tests/terminal.rs`: from a prompt
+cross features. Two are in `crates/main/tests/screens/terminal.rs`: from a prompt
 through an approval, a resize and a quit, and from a turn through a quit, a
-resume and a new answer. Four are in `crates/main/tests/journeys.rs`: an image
+resume and a new answer. Four are in `crates/main/tests/screens/journeys.rs`: an image
 pasted, answered, closed and resumed; the model picker matched by display name,
 switched and answered on the new model; a question form answered, then the
 session's second form declined; and an interrupted turn followed by a turn
 whose failed model call Fiber retries. The journey in
-`crates/main/tests/inline_images.rs` scrolls and clicks an inline PNG, opens
+`crates/main/tests/screens/inline_images.rs` scrolls and clicks an inline PNG, opens
 the viewer, and asserts one transmit and place before a session-change delete,
 with no later image writes. The 255-read journey past the placeholder range,
 whose past-range caption click opens its viewer with no placeholder grid above

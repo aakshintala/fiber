@@ -698,7 +698,7 @@ pub(crate) fn support_tests(files: &[RustFile]) -> Vec<String> {
         let declarers = support_declarers(&f.path, tests_dir, &by_path);
         if declarers > 1 {
             failures.push(format!(
-                "{} holds {count} #[test] collected by {declarers} binaries; move it to crates/main/tests/support_helpers.rs",
+                "{} holds {count} #[test] collected by {declarers} binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs",
                 f.path
             ));
         }

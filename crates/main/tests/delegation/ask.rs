@@ -1,0 +1,4203 @@
+//! Binary-level tests of `fiber ask` (`docs/testing.md`, "Levels"): the
+//! built `fiber` runs in its own process group with its own `FIBER_HOME`,
+//! holding an ordinary provider whose base URL is the fake server.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::print_stderr,
+    reason = "test helpers; a failure is the test's; a live test prints its outcome"
+)]
+
+use crate::support;
+
+use std::ffi::OsStr;
+use std::fs;
+use std::io::Write;
+use std::os::fd::OwnedFd;
+use std::os::unix::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use fakes::{ProviderServer, Request, Response, fingerprint};
+use rustix::pty;
+use serde_json::{Value, json};
+use support::{
+    Deadline, HELLO_KINDS, KillGroup, Setup, git, hello_inline_completed as hello, is_status,
+    spawn_watched,
+};
+
+#[path = "../../../provider/tests/support/probes.rs"]
+mod probes;
+
+impl Setup {
+    #[track_caller]
+    fn new_with_started_deadline() -> Self {
+        Self::within(Deadline::start())
+    }
+
+    fn within(deadline: Deadline) -> Self {
+        let root = fakes::TempDir::new("fa");
+        fs::create_dir_all(root.path().join("h")).unwrap();
+        fs::create_dir_all(root.path().join("w")).unwrap();
+        Self { deadline, root }
+    }
+
+    /// As [`Setup::provider`], with the model declaring the `low` and
+    /// `high` thinking levels and defaulting to `low`.
+    fn provider_with_thinking(&self, server: &ProviderServer) {
+        let source = self.root.path().join("src");
+        write(
+            &source.join("extension.json"),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+        );
+        write(
+            &source.join("providers/fake.json"),
+            &json!({
+                "name": "fake",
+                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": [{"id": "m", "protocol": "openai-responses",
+                    "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+                    "thinking_levels": ["low", "high"], "thinking_default": "low"}]
+            }),
+        );
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        write(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m"}),
+        );
+    }
+
+    /// Disables retries for the next run: `retry.attempts` 0, so a
+    /// retryable failure fails at once, with no backoff to sleep through.
+    fn no_retry(&self) {
+        write(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m", "retry": {"attempts": 0}}),
+        );
+    }
+
+    /// Runs `fiber` with `args`, `stdin` piped in (closed when `None`) and
+    /// `FIBER_HOME` set to `home`.
+    #[track_caller]
+    fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> TextRun {
+        self.run(home, args, Stdio::piped(), stdin, &[])
+    }
+
+    /// Runs `fiber` with `args` and the extra environment `env`.
+    #[track_caller]
+    fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> TextRun {
+        let home = self.home();
+        self.run(home.to_str().unwrap(), args, Stdio::piped(), None, env)
+    }
+
+    /// Copies the first-party package `providers/<name>` with every base
+    /// URL's origin `origin` replaced by `url`, and returns the copy.
+    fn package(&self, name: &str, origin: &str, url: &str) -> PathBuf {
+        let to = self.root.path().join(format!("pkg-{name}"));
+        support::package::copy_package(name, &to, origin, url)
+    }
+
+    /// Runs `fiber` with `args` and its stdin on a pseudo-terminal.
+    #[track_caller]
+    fn fiber_on_terminal(&self, args: &[&str]) -> TextRun {
+        self.fiber_typing(args, "")
+    }
+
+    /// Runs `fiber` with `args`, its stdin on a pseudo-terminal where
+    /// `typed` was already typed.
+    #[track_caller]
+    fn fiber_typing(&self, args: &[&str], typed: &str) -> TextRun {
+        self.fiber_typing_env(args, typed, &[])
+    }
+
+    /// [`Self::fiber_typing`] with extra environment variables.
+    #[track_caller]
+    fn fiber_typing_env(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> TextRun {
+        let terminal = Terminal::open();
+        let mut main = fs::File::from(terminal.main.try_clone().unwrap());
+        let typed = typed.to_owned();
+        support::bounded(self.deadline, "typing on the terminal", move || {
+            main.write_all(typed.as_bytes())
+        })
+        .unwrap();
+        let home = self.home();
+        self.run(home.to_str().unwrap(), args, terminal.stdin(), None, env)
+    }
+
+    /// Runs `fiber` in its own process group, waits for it under the test's
+    /// [`Deadline`], and asserts that nothing it started is left in the
+    /// group, after a timeout too (`docs/testing.md`, "Running tests").
+    /// A watchdog beside it kills that group if this process dies first.
+    #[track_caller]
+    fn run(
+        &self,
+        home: &str,
+        args: &[&str],
+        stdin: Stdio,
+        text: Option<&str>,
+        env: &[(&str, &str)],
+    ) -> TextRun {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args(args)
+            .current_dir(self.root.path().join("w"))
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.root.path())
+            .env("FIBER_HOME", home)
+            .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            .envs(env.iter().copied())
+            .stdin(stdin)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (mut child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        let guard = KillGroup(group);
+        // Taking the pipe closes it once written. The write runs on a
+        // thread, so a child that never reads it is bounded by the exit wait.
+        if let Some(mut pipe) = child.stdin.take()
+            && let Some(text) = text
+        {
+            let text = text.to_owned();
+            thread::spawn(move || match pipe.write_all(text.as_bytes()) {
+                Ok(()) | Err(_) => {}
+            });
+        }
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
+        };
+        assert!(
+            !fakes::group_alive(group),
+            "`fiber` left a process in its group behind"
+        );
+        // The group is empty. Skip the drop, which would kill it again,
+        // and tell the watchdog to exit without signalling.
+        std::mem::forget(guard);
+        watchdog.stand_down(self.deadline.cleanup_phase());
+        TextRun::from(output)
+    }
+
+    #[track_caller]
+    fn run_with_stdin(&self, args: &[&str], stdin: Option<&str>) -> TextRun {
+        self.fiber_with_home(self.home().to_str().unwrap(), args, stdin)
+    }
+
+    /// `stdin` is the child's standard input as given. A write end the caller
+    /// still holds stays open until this returns, so an unread pipe is open
+    /// when `fiber` exits.
+    #[track_caller]
+    fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> TextRun {
+        self.run(self.home().to_str().unwrap(), args, stdin, None, &[])
+    }
+}
+
+/// The recorded credential header equals the fingerprint of `value`, the
+/// bytes that package sends (`docs/testing.md`, "Model calls").
+fn assert_fingerprint(request: &Request, header: &str, value: &str) {
+    assert_eq!(
+        request.header(header),
+        Some(fingerprint(value).as_str()),
+        "{header}"
+    );
+}
+
+fn write(file: &Path, value: &Value) {
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(file, value.to_string()).unwrap();
+}
+
+/// A pseudo-terminal, opened through rustix's safe calls. The main side
+/// stays open while the run uses the terminal side.
+struct Terminal {
+    main: OwnedFd,
+    terminal: fs::File,
+}
+
+impl Terminal {
+    #[track_caller]
+    fn open() -> Self {
+        let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
+        pty::grantpt(&main).unwrap();
+        pty::unlockpt(&main).unwrap();
+        let name = pty::ptsname(&main, Vec::new()).unwrap();
+        let path = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
+        let terminal = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        Self { main, terminal }
+    }
+
+    fn stdin(&self) -> Stdio {
+        Stdio::from(self.terminal.try_clone().unwrap())
+    }
+}
+
+/// One finished run that keeps stdout's text and raw lines: the help and
+/// `list` tests pin the text, the others read parsed lines. Shared behaviour
+/// (`kinds`, `session_id`) comes from the inner run.
+struct TextRun {
+    run: support::Run,
+    stdout: String,
+    raw: Vec<String>,
+}
+
+impl std::ops::Deref for TextRun {
+    type Target = support::Run;
+
+    fn deref(&self) -> &Self::Target {
+        &self.run
+    }
+}
+
+impl From<Output> for TextRun {
+    fn from(output: Output) -> Self {
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let raw: Vec<String> = stdout
+            .lines()
+            .filter(|l| !is_status(l))
+            .map(str::to_owned)
+            .collect();
+        let lines = raw
+            .iter()
+            // `fiber list` prints text; a `kind` lookup on it fails the test.
+            .map(|l| serde_json::from_str(l).unwrap_or(Value::Null))
+            .collect();
+        Self {
+            run: support::Run {
+                code: output.status.code(),
+                lines,
+                stderr: String::from_utf8(output.stderr).unwrap(),
+            },
+            stdout,
+            raw,
+        }
+    }
+}
+
+impl TextRun {
+    fn last(&self) -> &Value {
+        self.lines.last().expect("stdout has a line")
+    }
+
+    /// The session's directory, from its id.
+    fn session_dir(&self, setup: &Setup) -> PathBuf {
+        let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
+        let key = workspace.to_string_lossy().replace('/', "-");
+        setup
+            .home()
+            .join("projects")
+            .join(key)
+            .join("sessions")
+            .join(self.session_id())
+    }
+}
+
+/// An Anthropic Messages stream answering `Hello.` in two fragments.
+fn anthropic_hello() -> Response {
+    let events = [
+        json!({"type": "message_start", "message": {
+            "id": "msg_1", "usage": {"input_tokens": 10, "output_tokens": 0}
+        }}),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "Hel"}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "lo."}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta",
+            "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+        json!({"type": "message_stop"}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+/// An `openai-completions` stream answering `Hello.` in two fragments,
+/// its usage chunk carrying `cost`: OpenRouter's inline figure.
+fn completions_hello(id: &str, cost: Value) -> Response {
+    let chunks = [
+        json!({"id": id, "object": "chat.completion.chunk", "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]}),
+        json!({"id": id, "object": "chat.completion.chunk", "choices": [
+            {"index": 0, "delta": {"content": "lo."}, "finish_reason": "stop"}]}),
+        json!({"id": id, "choices": [], "usage": {"prompt_tokens": 15,
+            "completion_tokens": 9, "total_tokens": 24, "cost": cost,
+            "prompt_tokens_details": {"cached_tokens": 14}}}),
+    ];
+    let mut body: String = chunks
+        .iter()
+        .map(|chunk| format!("data: {chunk}\n\n"))
+        .collect();
+    body.push_str("data: [DONE]\n\n");
+    Response::stream(body)
+}
+
+/// The text of the first message in the session's `turn_started`.
+fn turn_input(run: &TextRun) -> &str {
+    let started = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "turn_started")
+        .unwrap();
+    started["payload"]["input"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+}
+
+#[test]
+fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.stderr, "");
+    assert_eq!(run.lines[1]["payload"]["resumed"], false);
+    assert_eq!(turn_input(&run), "hi");
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited["text"], "Hello.");
+    let message = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "assistant_message_completed")
+        .unwrap();
+    assert_eq!(exited["final_action_id"], message["action_id"]);
+    assert_eq!(exited["usage"]["tokens"]["output"], 3);
+    assert_eq!(exited.get("error"), None);
+
+    // Stdout filtered to this session's durable lines is the log, byte for
+    // byte.
+    let dir = run.session_dir(&setup);
+    let durable: String = run
+        .raw
+        .iter()
+        .zip(&run.lines)
+        .filter(|(_, l)| l.get("seq").is_some() && l["session_id"] == run.session_id())
+        .map(|(raw, _)| format!("{raw}\n"))
+        .collect();
+    assert_eq!(
+        fs::read_to_string(dir.join("events.jsonl")).unwrap(),
+        durable
+    );
+
+    // The socket was bound in `run/` and is gone after exit.
+    assert!(setup.home().join("run").is_dir());
+    assert!(!setup.home().join("run").join(run.session_id()).exists());
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test");
+    assert!(String::from_utf8_lossy(&requests[0].body).contains("\"hi\""));
+}
+
+/// Copies the repository's `docs/skills/` into Fiber home's `docs/skills/`,
+/// compiled in so the test checks what ships.
+fn install_docs_skills(home: &Path) {
+    for (name, skill) in [
+        (
+            "cache-warming",
+            include_str!("../../../../docs/skills/cache-warming/SKILL.md"),
+        ),
+        (
+            "using-fiber",
+            include_str!("../../../../docs/skills/using-fiber/SKILL.md"),
+        ),
+    ] {
+        let dir = home.join("docs/skills").join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), skill).unwrap();
+    }
+}
+
+fn opening_skills(run: &TextRun) -> Vec<(String, String, String)> {
+    let opening = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "opening_message")
+        .unwrap();
+    opening["payload"]["skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["name"].as_str().unwrap().to_owned(),
+                s["path"].as_str().unwrap().to_owned(),
+                s["source"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_opening_message_lists_the_built_in_skills_from_home_docs() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    install_docs_skills(&setup.home());
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let home = setup.home();
+    // The listing names the canonical directory, past macOS's `/var`
+    // symlink.
+    let docs = home.join("docs/skills").canonicalize().unwrap();
+    assert_eq!(
+        opening_skills(&run),
+        [
+            (
+                "cache-warming".to_owned(),
+                docs.join("cache-warming/SKILL.md").display().to_string(),
+                "builtin".to_owned(),
+            ),
+            (
+                "using-fiber".to_owned(),
+                docs.join("using-fiber/SKILL.md").display().to_string(),
+                "builtin".to_owned(),
+            ),
+        ]
+    );
+
+    fs::remove_dir_all(home.join("docs")).unwrap();
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert!(opening_skills(&run).is_empty());
+}
+
+#[test]
+fn a_prompt_on_stdin_runs_one_turn() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run_with_stdin(&["ask"], Some("review the brief\n"));
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "review the brief\n");
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+}
+
+#[test]
+fn a_failed_turn_exits_1_with_the_turns_error() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([Response::status(503, "{}")]).unwrap();
+    setup.provider(&server);
+    setup.no_retry();
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(1));
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let turn = &run.lines[9]["payload"];
+    assert_eq!(turn["outcome"], "failed");
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 1);
+    assert_eq!(exited["error"], turn["error"]);
+    assert_eq!(exited["error"]["code"], "provider_unavailable");
+    assert_eq!(exited.get("text"), None);
+    let message = exited["error"]["message"].as_str().unwrap();
+    assert_eq!(run.stderr, format!("fiber: {message}\n"));
+    assert!(run.session_dir(&setup).join("events.jsonl").is_file());
+}
+
+/// The one line stdout holds when the process failed before any session.
+fn assert_pre_session(run: &TextRun, exit: i32, code: &str) {
+    assert_eq!(run.code, Some(exit));
+    assert_eq!(run.kinds(), ["fiber_exited"]);
+    let line = run.last();
+    assert_eq!(line.get("session_id"), None);
+    assert_eq!(line["payload"]["exit_code"], exit);
+    assert_eq!(line["payload"]["error"]["code"], code);
+    let message = line["payload"]["error"]["message"].as_str().unwrap();
+    assert_eq!(run.stderr, format!("fiber: {message}\n"));
+}
+
+#[test]
+fn two_prompts_or_none_is_a_usage_error() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    assert_pre_session(&setup.run_with_stdin(&["ask"], None), 2, "usage");
+    assert_pre_session(&setup.run_with_stdin(&["ask", "a", "b"], None), 2, "usage");
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "--model", "x"], None),
+        2,
+        "usage",
+    );
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "--verbose"], None),
+        2,
+        "usage",
+    );
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "x", "fake/m", "hi"], None),
+        2,
+        "usage",
+    );
+    let run = setup.run_with_stdin(&["ask", "--model"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert!(
+        run.stderr
+            .contains("A value is required for '--model <model>' but none was supplied."),
+        "{}",
+        run.stderr
+    );
+    assert!(server.requests().is_empty());
+    assert!(!setup.home().join("projects").exists());
+}
+
+#[test]
+fn opencode_providers_name_the_opencode_extension() {
+    let setup = Setup::new_with_started_deadline();
+    for reference in [
+        "opencode-go/muse-spark-1.3-contributor",
+        "opencode-zen/muse-spark-1.3",
+    ] {
+        let run = setup.run_with_stdin(&["ask", "--model", reference, "hi"], None);
+        assert_pre_session(&run, 1, "extension_missing");
+        let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
+        let provider = reference.split('/').next().unwrap();
+        assert_eq!(
+            message,
+            format!(
+                "The provider `{provider}` is not installed. Run `fiber extension install opencode`."
+            )
+        );
+    }
+}
+
+#[test]
+fn a_bare_model_id_nobody_has_is_no_model_pointing_at_fiber_models() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["ask", "--model", "nope", "hi"], None);
+    assert_pre_session(&run, 1, "no_model");
+    let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("`nope`") && message.contains("fiber models"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_provider_no_first_party_package_serves_names_no_extension() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["ask", "--model", "nobody-serves/x", "hi"], None);
+    assert_pre_session(&run, 1, "extension_missing");
+    let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
+    assert_eq!(
+        message,
+        "The provider `nobody-serves` is not installed. Install the extension that provides it with `fiber extension install <name or URL>`."
+    );
+}
+
+#[test]
+fn a_failure_before_any_session_ends_stdout_with_fiber_exited_and_no_session_id() {
+    let setup = Setup::new_with_started_deadline();
+
+    assert_pre_session(&setup.run_with_stdin(&["ask", "hi"], None), 1, "no_model");
+    assert_pre_session(&setup.fiber_with_home("", &["ask", "hi"], None), 2, "usage");
+    assert_pre_session(
+        &setup.fiber_with_home("rel", &["ask", "hi"], None),
+        2,
+        "usage",
+    );
+    assert!(!setup.home().join("projects").exists());
+}
+
+#[test]
+fn a_model_with_no_context_window_is_left_out_before_the_session() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let source = setup.home().join("extensions/fake/providers/fake.json");
+    let text = fs::read_to_string(&source)
+        .unwrap()
+        .replace("\"context_window\":100000,", "");
+    assert!(!text.contains("context_window"), "{text}");
+    fs::write(&source, text).unwrap();
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "no_model");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn preamble_built_records_the_models_declared_window() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["context_window"], 100_000);
+}
+
+#[test]
+fn a_missing_credential_fails_before_the_session() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let source = setup.home().join("extensions/fake/providers/fake.json");
+    let text = fs::read_to_string(&source)
+        .unwrap()
+        .replace("FIBER_TEST_FAKE_KEY", "FIBER_TEST_UNSET_KEY");
+    fs::write(&source, text).unwrap();
+
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "hi"], None),
+        1,
+        "credential_missing",
+    );
+}
+
+#[test]
+fn a_work_label_keeps_models_visible_but_never_substitutes_for_default() {
+    let setup = Setup::new_with_started_deadline();
+    let base = "http://127.0.0.1:1/v1";
+    let data = json!({"name":"acme","models":[{"id":"m1","protocol":"openai-responses","base_url":base,"context_window":100000}]});
+    inline_extension(
+        &setup,
+        "acme",
+        "fiber.provider('acme', {})",
+        base,
+        Some(&data),
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "work",
+        &config::Secret::new("work-key".into()),
+    )
+    .unwrap();
+    let models = setup.run_with_stdin(&["models", "--json"], None);
+    assert_eq!(models.code, Some(0));
+    assert_eq!(models.lines[0]["model"], "acme/m1");
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(run.stderr.contains("work"), "{}", run.stderr);
+}
+
+#[test]
+fn function_presence_precedes_callback_and_preserves_present_source_failure() {
+    let setup = Setup::new_with_started_deadline();
+    let path = setup.root.path().join("declared-key");
+    let marker = setup.root.path().join("callback-ran");
+    let base = "http://127.0.0.1:1/v1";
+    let data = json!({"name":"acme","models":[{"id":"m1","protocol":"openai-responses","base_url":base,"context_window":100000}],"credential_label":{"names":"profile","default":"file","credential_paths":[{"path":path}]}});
+    inline_extension(
+        &setup,
+        "acme",
+        &format!(
+            "fiber.provider('acme', {{credential={{timeout=1000,run=function() host.fs.write({:?}, 'called'); error('callback failed') end}}}})",
+            marker.display().to_string()
+        ),
+        base,
+        Some(&data),
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("ignored".into()),
+    )
+    .unwrap();
+    let absent = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_pre_session(&absent, 1, "credential_missing");
+    assert!(!marker.exists());
+    fs::write(&path, "").unwrap();
+    let present = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_pre_session(&present, 1, "credential_failed");
+    assert_eq!(fs::read_to_string(&marker).unwrap(), "called");
+    assert!(
+        present.last()["payload"]["error"]["provider"]["message"]
+            .as_str()
+            .unwrap()
+            .ends_with("callback failed")
+    );
+}
+
+#[test]
+fn a_failing_credential_command_is_named_by_its_program_alone() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "providers": {"fake": {"credentials": {"default": {"command": ["false", "sk-in-argument"]}}}}}),
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(run.stderr.contains("`false` failed"), "{}", run.stderr);
+    assert!(!run.stdout.contains("sk-in-argument"), "{}", run.stdout);
+    assert!(!run.stderr.contains("sk-in-argument"), "{}", run.stderr);
+}
+
+#[test]
+fn fiber_without_ask_is_a_usage_error_naming_fiber_ask() {
+    let setup = Setup::new_with_started_deadline();
+
+    let bare = setup.run_with_stdin(&[], None);
+    assert_eq!(bare.code, Some(2));
+    assert!(bare.stderr.contains("fiber ask"), "stderr: {}", bare.stderr);
+    assert!(bare.lines.is_empty());
+
+    let unknown = setup.run_with_stdin(&["hi"], None);
+    assert_eq!(unknown.code, Some(2));
+    assert!(unknown.lines.is_empty());
+    assert!(
+        unknown.stderr.contains("Unrecognized subcommand 'hi'"),
+        "stderr: {}",
+        unknown.stderr
+    );
+}
+
+/// The menu clap prints, including the trailing newline it appends.
+const MENU: &str = r#"Fiber, a coding agent.
+
+Usage: fiber <command> [arguments]
+
+Sessions:
+  fiber [--model <model>] [-c <key>=<value>]...                                                                   Open the terminal
+  ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  resume [<id>] [--credential <label>]                                                                            Open a session in the terminal, or home at the session list
+  continue [--hub <name>]                                                                                           Open the most recent session in this project
+  sessions [--all] [--json]                                                                                       List sessions: id, state, name, what it waits on, spend
+  sessions search [--all] [--json] <text>                                                                         Search the logs of past and running sessions for the text
+  sessions delete [--hub <name>] [--cascade] [--yes] <id>                                                         Delete a session, and with --cascade the sessions that continue it
+  sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
+  sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
+  models [<search>] [--json]                                                                                      List the models the installed providers serve
+
+Fiber itself:
+  setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]  Ask the questions a new install needs, applying each answer
+  update                                    Update the Fiber binary and every installed extension together; `upgrade` runs the same command, with `--channel stable|nightly`
+  approve [--yes]                           Show what this repository ships and approve it
+  login [<name>] [--as <label>] [--device]   Store a provider's key or an extension's secret
+  logout <provider> [--as <label> | --all]  Delete a provider's stored key
+  doctor                                    Says whether a session can start, and how to fix it when it cannot
+  stop [--hub <name>]                       Shut down every running session, then the hub
+  feedback [<prompt>] [-] [--session <id>]  Write a feedback report and print the issue link.
+  completion <shell>                        Print a completion script for bash, zsh or fish
+  help [<command>]                          Print this menu, or a command's help
+  version                                   Print the version
+
+Extensions:
+  extension install [--project] <name or path>  Install an extension and its dependencies
+  extension update [<name>]         Update one extension, or every installed extension, to its newest tag
+  extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
+  extension reinstall <name>        Remove an extension and install it again from its recorded source and commit
+  extension list                    List installed extensions: name, version and commit
+  extension test [<path>]           Run an extension's test cases against the scripted provider
+
+MCP servers:
+  mcp add [--project | --repo] <name> <url>                                                      Declare a remote server
+  mcp add [--project | --repo] <name> [-e KEY=value]... [--secret KEY]... -- <command> [args]...  Declare a stdio server
+  mcp remove [--project | --repo] <name>                                                         Remove a server's declaration
+  mcp list                                                                                       List declared servers, their layers and approvals
+  mcp login <server>                                                                             Log in to a server that needs OAuth
+  mcp logout <server>                                                                            Delete a server's stored token
+
+Configuration:
+  config get <key>                              Print the effective value and the layer it came from
+  config set [--project | --repo] <key> <value>  Write one key in one layer's file
+  import <claude-code | codex>                   Copy another harness's configuration into Fiber home, once
+
+The hub:
+  hub add [--default] <name> <address>  Add a hub to this client's list
+  hub remove <name>                    Remove a hub from this client's list
+  hub install [--port <port>]          Register the hub as a login service
+  hub uninstall                        Remove the hub's login service; running sessions carry on
+  hub status [--json]                  Print the hub's state: running, version, port, clients, devices, installed
+  hub refresh                          Rebuild the hub's environment for the sessions it starts from now on
+  hub pair <device> [--address <url>]  Print a pairing code for a device of that name
+  hub token list                       List paired devices: name, when paired, last connection
+  hub token revoke <device>            Revoke a device's token and close its live connections
+
+Flags:
+  -h, --help     Print this menu
+  -v, --version  Print the version
+
+Examples:
+  fiber ask "review the diff on this branch"
+  fiber ask < brief.md
+  git diff | fiber ask "review this diff" -
+  fiber extension install openrouter
+  fiber login openrouter
+  fiber help ask
+"#;
+
+fn printed(run: &TextRun) -> String {
+    if run.raw.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", run.raw.join("\n"))
+    }
+}
+
+fn assert_help(run: &TextRun, about: &str) {
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr, "");
+    let text = printed(run);
+    assert!(text.contains(about), "{text}");
+    assert!(!text.contains("fiber_exited"), "{text}");
+}
+
+#[test]
+fn help_prints_the_menu() {
+    let setup = Setup::new_with_started_deadline();
+    for args in [&["-h"][..], &["--help"], &["help"]] {
+        let run = setup.run_with_stdin(args, None);
+        assert_eq!(run.code, Some(0), "{args:?} stderr: {}", run.stderr);
+        assert_eq!(run.stderr, "");
+        assert_eq!(printed(&run), MENU, "{args:?}");
+    }
+}
+
+#[test]
+fn ask_help_prints_no_event_stream() {
+    let setup = Setup::new_with_started_deadline();
+    for args in [&["ask", "--help"][..], &["ask", "-h"], &["help", "ask"]] {
+        let run = setup.run_with_stdin(args, None);
+        assert_help(&run, "Run one session of one turn; its events go to stdout");
+    }
+}
+
+#[test]
+fn help_for_every_command_matches_the_flag() {
+    let setup = Setup::new_with_started_deadline();
+    for name in ["ask", "extension", "version", "help"] {
+        let via_help = setup.run_with_stdin(&["help", name], None);
+        let via_flag = setup.run_with_stdin(&[name, "--help"], None);
+        assert_eq!(via_help.code, Some(0), "{name}: {}", via_help.stderr);
+        assert_eq!(via_flag.code, Some(0), "{name}: {}", via_flag.stderr);
+        assert_eq!(via_help.stderr, "");
+        assert_eq!(via_flag.stderr, "");
+        assert_eq!(via_help.stdout, via_flag.stdout, "{name}");
+        assert!(
+            via_flag
+                .stdout
+                .lines()
+                .any(|line| line.starts_with(&format!("Usage: fiber {name}"))),
+            "{name}: {}",
+            via_flag.stdout
+        );
+    }
+    for (noun, verb) in [
+        ("sessions", "export"),
+        ("extension", "install"),
+        ("extension", "update"),
+        ("extension", "remove"),
+        ("extension", "list"),
+        ("extension", "test"),
+        ("config", "get"),
+        ("config", "set"),
+    ] {
+        let via_help = setup.run_with_stdin(&["help", noun, verb], None);
+        let via_flag = setup.run_with_stdin(&[noun, verb, "--help"], None);
+        assert_eq!(via_help.code, Some(0), "{noun} {verb}: {}", via_help.stderr);
+        assert_eq!(via_flag.code, Some(0), "{noun} {verb}: {}", via_flag.stderr);
+        assert_eq!(via_help.stderr, "");
+        assert_eq!(via_flag.stderr, "");
+        assert_eq!(via_help.stdout, via_flag.stdout, "{noun} {verb}");
+        assert!(
+            via_flag
+                .stdout
+                .lines()
+                .any(|line| line.starts_with(&format!("Usage: fiber {noun} {verb}"))),
+            "{noun} {verb}: {}",
+            via_flag.stdout
+        );
+    }
+}
+
+#[test]
+fn each_command_prints_its_own_help() {
+    let setup = Setup::new_with_started_deadline();
+    let commands = [
+        (
+            "extension install",
+            "Install an extension and its dependencies",
+        ),
+        (
+            "extension update",
+            "Update one extension, or every installed extension, to its newest tag",
+        ),
+        (
+            "extension remove",
+            "Remove an extension, the dependencies nothing else uses, and their data",
+        ),
+        (
+            "extension reinstall",
+            "Remove an extension and install it again from its recorded source and commit",
+        ),
+        (
+            "extension list",
+            "List installed extensions: name, version and commit",
+        ),
+        (
+            "extension test",
+            "Run an extension's test cases against the scripted provider",
+        ),
+        ("version", "Print the version"),
+        ("help", "Print this menu, or a command's help"),
+    ];
+    for (name, about) in commands {
+        if name.starts_with("extension ") {
+            let verb = name.strip_prefix("extension ").unwrap();
+            assert_help(
+                &setup.run_with_stdin(&["extension", verb, "--help"], None),
+                about,
+            );
+        } else {
+            for args in [vec![name, "--help"], vec!["help", name]] {
+                assert_help(&setup.run_with_stdin(&args, None), about);
+            }
+        }
+    }
+}
+
+#[test]
+fn version_prints_the_package_version() {
+    let setup = Setup::new_with_started_deadline();
+    let line = match option_env!("FIBER_COMMIT") {
+        Some(commit) => {
+            assert!(
+                commit.len() == 40
+                    && commit
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
+                "{commit}"
+            );
+            format!("fiber 0.0.0 ({})\n", &commit[..7])
+        }
+        None => "fiber 0.0.0\n".to_owned(),
+    };
+    for args in [&["-v"][..], &["--version"], &["version"]] {
+        let run = setup.run_with_stdin(args, None);
+        assert_eq!(run.code, Some(0), "{args:?} stderr: {}", run.stderr);
+        assert_eq!(run.stderr, "");
+        assert_eq!(printed(&run), line, "{args:?}");
+    }
+}
+
+#[test]
+fn a_capital_v_is_an_unknown_argument() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["-V"], None);
+    assert_eq!(run.code, Some(2));
+    assert!(run.lines.is_empty());
+    assert_eq!(
+        run.stderr,
+        "fiber: Unexpected argument '-V' found. Run `fiber --help` for usage.\n"
+    );
+}
+
+#[test]
+fn an_unknown_subcommand_suggests_the_nearest() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["extension", "i"], None);
+    assert_eq!(run.code, Some(2));
+    assert!(run.lines.is_empty());
+    assert_eq!(
+        run.stderr,
+        "fiber: Unrecognized subcommand 'i'; did you mean 'install'? Run `fiber --help` for usage.\n"
+    );
+}
+
+#[test]
+fn an_ask_parse_error_is_one_exited_line() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["ask", "--modle", "x", "hi"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert_eq!(
+        run.stderr,
+        "fiber: Unexpected argument '--modle' found; did you mean '--model'? Run `fiber --help` for usage.\n"
+    );
+}
+
+#[test]
+fn ask_with_the_wrong_shape_is_one_exited_line() {
+    let setup = Setup::new_with_started_deadline();
+    let sentence = "fiber: `fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.\n";
+    for args in [&["ask", "a", "b"][..], &["ask", "-", "a"]] {
+        let run = setup.run_with_stdin(args, None);
+        assert_pre_session(&run, 2, "usage");
+        assert_eq!(run.stderr, sentence, "{args:?}");
+    }
+}
+
+#[test]
+fn bare_fiber_names_ask_and_prints_nothing() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&[], None);
+    assert_eq!(run.code, Some(2));
+    assert!(run.lines.is_empty());
+    assert_eq!(
+        run.stderr,
+        "fiber: The terminal needs a tty; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage.\n"
+    );
+}
+
+#[test]
+fn a_prompt_argument_does_not_wait_on_an_open_stdin() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let (reader, writer) = std::io::pipe().unwrap();
+    let run = setup.fiber_with_stdio(&["ask", "hi"], Stdio::from(reader));
+    drop(writer);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "hi");
+}
+
+#[test]
+fn a_prompt_argument_leaves_stdin_unread() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let run = setup.run_with_stdin(&["ask", "hi"], Some("and this"));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "hi");
+}
+
+#[test]
+fn a_prompt_and_a_dash_append_stdin() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let run = setup.run_with_stdin(&["ask", "hi", "-"], Some("more"));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "hi\nmore");
+}
+
+#[test]
+fn a_dash_reads_stdin_as_the_prompt() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let run = setup.run_with_stdin(&["ask", "-"], Some("brief"));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "brief");
+}
+
+#[test]
+fn help_does_not_read_home_or_a_provider() {
+    let setup = Setup::new_with_started_deadline();
+    let menu = setup.fiber_with_home("", &["--help"], None);
+    assert_eq!(menu.code, Some(0), "stderr: {}", menu.stderr);
+    assert_eq!(menu.stderr, "");
+    assert_eq!(printed(&menu), MENU);
+
+    let ask = setup.run_with_stdin(&["ask", "--help"], None);
+    assert_help(&ask, "Run one session of one turn; its events go to stdout");
+}
+
+#[test]
+fn no_prompt_with_stdin_on_a_terminal_is_a_usage_error() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber_on_terminal(&["ask"]);
+
+    assert_pre_session(&run, 2, "usage");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_prompt_argument_with_stdin_on_a_terminal_runs_without_reading_it() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber_on_terminal(&["ask", "hi"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "hi");
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+}
+
+/// A first-party provider package in the repository's `providers/`.
+fn package(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../providers")
+        .join(name)
+}
+
+/// The OpenCode Go tool exchange with `muse-spark-1.3-contributor`: the
+/// recorded tool call, then the probe's answer after the tool result.
+fn go_exchange() -> [Response; 2] {
+    [
+        Response::stream(
+            include_bytes!("../../../provider/tests/recordings/opencode-go-tool-call.sse").to_vec(),
+        ),
+        Response::stream(
+            include_bytes!("../../../../research/opencode-probe/raw/go_stream_tools_1.sse")
+                .to_vec(),
+        ),
+    ]
+}
+
+/// Installs the package at `path` with `fiber extension install`, stdin not a
+/// terminal, so it does not ask.
+#[track_caller]
+fn install(setup: &Setup, path: &Path) {
+    let run = setup.run_with_stdin(&["extension", "install", path.to_str().unwrap()], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!run.stderr.contains("Go ahead?"), "{}", run.stderr);
+}
+
+#[test]
+fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
+    let setup = Setup::new_with_started_deadline();
+    let opencode = package("opencode");
+    let path = opencode.to_str().unwrap();
+    let installed = setup.home().join("extensions/opencode");
+
+    let declined = setup.fiber_typing(&["extension", "install", path], "n\n");
+    assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
+    assert!(!installed.exists());
+
+    let run = setup.fiber_typing(&["extension", "install", path], "y\n");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        format!(
+            "Install github.com/aakshintala/fiber/providers/opencode from {}\n\
+             Version 0.0.0\n\
+             Provider opencode-go: https://opencode.ai/zen/go/v1\n\
+             Provider opencode-zen: https://opencode.ai/zen/v1\n\
+             Go ahead? [y/N/s to show the full source] fiber: installed github.com/aakshintala/fiber/providers/opencode\n",
+            fs::canonicalize(&opencode).unwrap().display()
+        )
+    );
+    assert!(installed.join("providers/opencode-go.json").is_file());
+    assert!(installed.join("providers/opencode-zen.json").is_file());
+}
+
+#[test]
+fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
+    let setup = Setup::new_with_started_deadline();
+    let muse = package("muse");
+    install(&setup, &muse);
+    let name = "github.com/aakshintala/fiber/providers/muse";
+    let listed = setup.run_with_stdin(&["extension", "list"], None);
+    assert_eq!(listed.code, Some(0), "stderr: {}", listed.stderr);
+    assert_eq!(listed.raw, [format!("{name} 0.0.0 local")]);
+    let updated = setup.run_with_stdin(&["extension", "update", "muse"], None);
+    assert_eq!(updated.code, Some(0), "stderr: {}", updated.stderr);
+    assert_eq!(updated.stderr, format!("fiber: installed {name}\n"));
+    let removed = setup.run_with_stdin(&["extension", "remove", "muse"], None);
+    assert_eq!(removed.code, Some(0), "stderr: {}", removed.stderr);
+    assert_eq!(removed.stderr, format!("fiber: removed {name}\n"));
+    assert!(
+        setup
+            .run_with_stdin(&["extension", "list"], None)
+            .raw
+            .is_empty()
+    );
+    let again = setup.run_with_stdin(&["extension", "remove", "muse"], None);
+    assert_eq!(again.code, Some(1));
+    assert!(
+        again.stderr.contains("is not installed"),
+        "{}",
+        again.stderr
+    );
+}
+
+#[test]
+fn install_by_name_without_git_fails_as_usage_and_says_to_install_it() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.fiber_with_env(&["extension", "install", "openrouter"], &[("PATH", "")]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert!(run.stderr.contains("Install git"), "{}", run.stderr);
+}
+
+#[test]
+fn the_extension_commands_take_their_arguments() {
+    let setup = Setup::new_with_started_deadline();
+    for args in [
+        vec!["extension", "install"],
+        vec!["extension", "install", "a", "b"],
+        vec!["extension", "remove"],
+        vec!["extension", "list", "x"],
+        vec!["extension", "update", "a", "b"],
+    ] {
+        let run = setup.run_with_stdin(&args, None);
+        assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
+    }
+}
+
+#[test]
+fn extension_update_all_updates_every_requested_extension() {
+    let setup = Setup::new_with_started_deadline();
+    install(&setup, &package("muse"));
+    install(&setup, &package("opencode"));
+    let run = setup.run_with_stdin(&["extension", "update"], None);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(run.raw.is_empty());
+    assert!(
+        run.stderr
+            .contains("fiber: installed github.com/aakshintala/fiber/providers/muse")
+    );
+    assert!(
+        run.stderr
+            .contains("fiber: installed github.com/aakshintala/fiber/providers/opencode")
+    );
+}
+
+#[test]
+fn extension_update_all_on_an_empty_home_exits_zero() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["extension", "update"], None);
+    assert_eq!(run.code, Some(0));
+    assert_eq!(run.stderr, "");
+    assert!(run.raw.is_empty());
+}
+
+#[test]
+fn extension_update_all_moves_unrequested_dependencies_and_floors_them() {
+    let setup = Setup::new_with_started_deadline();
+    let gh = Github::new(&setup);
+    gh.release_with_needs_muse("v0.1.0", "v1.0.0", "v0.1.0");
+    let run = setup.fiber_with_env(&["extension", "install", NEEDS_MUSE], &gh.env());
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    gh.release_with_needs_muse("v0.2.0", "v1.0.1", "v0.1.0");
+    let v2 = git(setup.deadline, &gh.repo, &["rev-parse", "v0.2.0^{commit}"]);
+    let run = setup.fiber_with_env(&["extension", "update"], &gh.env());
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let listed = setup.fiber_with_env(&["extension", "list"], &[]);
+    assert!(
+        listed
+            .raw
+            .iter()
+            .any(|line| line.contains(&format!("{MUSE} v0.2.0 {v2}"))),
+        "muse moves to v0.2.0 when update-all moves unrequested extensions: {:?}",
+        listed.raw
+    );
+    assert!(
+        listed
+            .raw
+            .iter()
+            .any(|line| line.contains("needs-muse") && line.contains("v1.0.1")),
+        "{:?}",
+        listed.raw
+    );
+    // The move recorded a floor without making muse a person request.
+    let record: Value = serde_json::from_str(
+        &fs::read_to_string(setup.home().join("extensions/muse/.fiber.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["floor"], json!("v0.2.0"), "{record}");
+    assert_eq!(record["requested"], json!(false), "{record}");
+    // muse is still a dependency only: removing what needed it removes it.
+    let removed = setup.run_with_stdin(&["extension", "remove", NEEDS_MUSE], None);
+    assert_eq!(removed.code, Some(0), "{}", removed.stderr);
+    assert_eq!(
+        removed.stderr,
+        format!("fiber: removed {NEEDS_MUSE}\nfiber: removed {MUSE}\n")
+    );
+    assert!(
+        setup
+            .run_with_stdin(&["extension", "list"], None)
+            .raw
+            .is_empty()
+    );
+}
+
+#[test]
+fn extension_update_all_stops_at_the_first_failure() {
+    let setup = Setup::new_with_started_deadline();
+    let muse = setup.package("muse", "", "");
+    install(&setup, &package("opencode"));
+    install(&setup, &muse);
+    fs::remove_dir_all(&muse).unwrap();
+    let run = setup.run_with_stdin(&["extension", "update"], None);
+    assert_ne!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        !run.stderr
+            .contains("installed github.com/aakshintala/fiber/providers/opencode"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn old_extension_command_names_are_unknown() {
+    let setup = Setup::new_with_started_deadline();
+    for args in [
+        &["install", "x"][..],
+        &["update"][..],
+        &["remove", "x"][..],
+        &["list"][..],
+    ] {
+        if args.first() == Some(&"update") {
+            // `update` is a built command now, so it no longer belongs
+            // with the unknown old names; the rows below still do.
+            continue;
+        }
+        let run = setup.run_with_stdin(args, None);
+        assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
+        assert!(run.raw.is_empty());
+        let lines: Vec<_> = run.stderr.lines().collect();
+        assert_eq!(lines.len(), 1, "{args:?}: {:?}", lines);
+        assert!(
+            lines[0].starts_with("fiber: Unrecognized subcommand"),
+            "{}",
+            lines[0]
+        );
+    }
+}
+
+/// Fiber's own repository as a local one, with `providers/muse` committed
+/// and tagged `tag`, and the environment that makes `https://github.com/`
+/// mean the directory holding it. This is git's own `url.<base>.insteadOf`,
+/// so the shipped binary needs no test switch.
+struct Github {
+    repo: PathBuf,
+    deadline: Deadline,
+    key: String,
+    value: String,
+}
+
+impl Github {
+    #[track_caller]
+    fn new(setup: &Setup) -> Self {
+        let base = setup.root.path().join("gh");
+        let repo = base.join("aakshintala/fiber");
+        fs::create_dir_all(&repo).unwrap();
+        git(setup.deadline, &repo, &["init", "--quiet"]);
+        Self {
+            repo,
+            deadline: setup.deadline,
+            key: format!("url.file://{}/.insteadOf", base.display()),
+            value: "https://github.com/".into(),
+        }
+    }
+
+    fn env(&self) -> [(&str, &str); 3] {
+        [
+            ("GIT_CONFIG_COUNT", "1"),
+            ("GIT_CONFIG_KEY_0", &self.key),
+            ("GIT_CONFIG_VALUE_0", &self.value),
+        ]
+    }
+
+    /// Commits `providers/muse` with a note file and tags it.
+    #[track_caller]
+    fn release(&self, tag: &str) {
+        let dir = self.repo.join("providers/muse");
+        fs::create_dir_all(dir.join("providers")).unwrap();
+        for file in ["extension.json", "providers/muse.json"] {
+            fs::copy(package("muse").join(file), dir.join(file)).unwrap();
+        }
+        fs::write(dir.join("NOTES.md"), format!("notes for {tag}\n")).unwrap();
+        git(self.deadline, &self.repo, &["add", "."]);
+        git(self.deadline, &self.repo, &["commit", "--quiet", "-m", tag]);
+        git(self.deadline, &self.repo, &["tag", tag]);
+    }
+
+    /// Commits `providers/muse` together with `providers/needs-muse`, which
+    /// depends on [`MUSE`] at `muse_min`, and tags the one commit twice, so
+    /// one release step costs one commit instead of two.
+    #[track_caller]
+    fn release_with_needs_muse(&self, muse_tag: &str, needs_tag: &str, muse_min: &str) {
+        let muse = self.repo.join("providers/muse");
+        fs::create_dir_all(muse.join("providers")).unwrap();
+        for file in ["extension.json", "providers/muse.json"] {
+            fs::copy(package("muse").join(file), muse.join(file)).unwrap();
+        }
+        fs::write(muse.join("NOTES.md"), format!("notes for {muse_tag}\n")).unwrap();
+        let dir = self.repo.join("providers/needs-muse");
+        fs::create_dir_all(dir.join("providers")).unwrap();
+        let manifest = format!(
+            r#"{{"name":"{NEEDS_MUSE}","version":"0.0.0","fiber":"0.0.0","api":1,"depends":{{"{MUSE}":"{muse_min}"}}}}"#
+        );
+        fs::write(dir.join("extension.json"), manifest).unwrap();
+        fs::write(dir.join("providers/.gitkeep"), "").unwrap();
+        fs::write(dir.join("NOTES.md"), format!("needs-muse {needs_tag}\n")).unwrap();
+        git(self.deadline, &self.repo, &["add", "."]);
+        git(
+            self.deadline,
+            &self.repo,
+            &["commit", "--quiet", "-m", needs_tag],
+        );
+        git(self.deadline, &self.repo, &["tag", muse_tag]);
+        git(self.deadline, &self.repo, &["tag", needs_tag]);
+    }
+}
+
+const MUSE: &str = "github.com/aakshintala/fiber/providers/muse";
+const NEEDS_MUSE: &str = "github.com/aakshintala/fiber/providers/needs-muse";
+
+#[test]
+fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
+    let setup = Setup::new_with_started_deadline();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    let commit = git(setup.deadline, &gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
+    let run = setup.fiber_with_env(&["extension", "install", "muse"], &gh.env());
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr, format!("fiber: installed {MUSE}\n"));
+    let listed = setup.fiber_with_env(&["extension", "list"], &[]);
+    assert_eq!(listed.raw, [format!("{MUSE} v0.1.0 {commit}")]);
+    assert!(
+        setup
+            .home()
+            .join("extensions/muse/providers/muse.json")
+            .is_file()
+    );
+}
+
+/// `fiber extension install` ignores a `GIT_DIR` the caller exported:
+/// the install lands with its recorded commit, and the decoy repository
+/// the variable names keeps its own `HEAD`.
+#[test]
+fn an_install_ignores_a_redirected_git_dir() {
+    let setup = Setup::new_with_started_deadline();
+    let gh = Github::new(&setup);
+    gh.release("v1.0.0");
+    let commit = git(setup.deadline, &gh.repo, &["rev-parse", "v1.0.0^{commit}"]);
+    let decoy = setup.root.path().join("decoy");
+    fs::create_dir_all(&decoy).unwrap();
+    git(setup.deadline, &decoy, &["init", "--quiet"]);
+    git(
+        setup.deadline,
+        &decoy,
+        &["commit", "--quiet", "--allow-empty", "-m", "decoy"],
+    );
+    let decoy_head = git(setup.deadline, &decoy, &["rev-parse", "HEAD"]);
+    let decoy_git = decoy.join(".git").to_str().unwrap().to_owned();
+    let mut env: Vec<(&str, &str)> = gh.env().into_iter().collect();
+    env.push(("GIT_DIR", &decoy_git));
+    let run = setup.fiber_with_env(&["extension", "install", MUSE], &env);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        setup
+            .home()
+            .join("extensions/muse/providers/muse.json")
+            .is_file()
+    );
+    let listed = setup.fiber_with_env(&["extension", "list"], &[]);
+    assert_eq!(listed.raw, [format!("{MUSE} v1.0.0 {commit}")]);
+    assert_eq!(
+        git(setup.deadline, &decoy, &["rev-parse", "HEAD"]),
+        decoy_head
+    );
+}
+
+#[test]
+fn install_by_name_in_a_terminal_shows_the_version_asks_and_can_show_the_source() {
+    let setup = Setup::new_with_started_deadline();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    let installed = setup.home().join("extensions/muse");
+    let declined = setup.fiber_typing_env(&["extension", "install", "muse"], "n\n", &gh.env());
+    assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
+    assert!(
+        declined.stderr.contains("Version v0.1.0\n"),
+        "{}",
+        declined.stderr
+    );
+    assert!(!installed.exists());
+    let run = setup.fiber_typing_env(&["extension", "install", "muse"], "s\ny\n", &gh.env());
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr.matches("Go ahead?").count(), 2, "{}", run.stderr);
+    assert!(run.stderr.contains("--- NOTES.md"), "{}", run.stderr);
+    assert!(run.stderr.contains("notes for v0.1.0"), "{}", run.stderr);
+    assert!(installed.join("NOTES.md").is_file());
+}
+
+#[test]
+fn update_moves_to_the_newest_tag_and_a_terminal_shows_what_changed() {
+    let setup = Setup::new_with_started_deadline();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    let run = setup.fiber_with_env(&["extension", "install", "muse"], &gh.env());
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    gh.release("v0.2.0");
+    let declined = setup.fiber_typing_env(&["extension", "update", "muse"], "n\n", &gh.env());
+    assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
+    assert!(declined.stderr.contains("Update "), "{}", declined.stderr);
+    assert!(declined.stderr.contains("NOTES.md"), "{}", declined.stderr);
+    assert!(setup.fiber_with_env(&["extension", "list"], &[]).raw[0].contains("v0.1.0"));
+    let run = setup.fiber_with_env(&["extension", "update", "muse"], &gh.env());
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(setup.fiber_with_env(&["extension", "list"], &[]).raw[0].contains(" v0.2.0 "));
+}
+
+#[test]
+fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
+    let setup = Setup::new_with_started_deadline();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    assert_eq!(
+        setup
+            .fiber_with_env(&["extension", "install", "muse"], &gh.env())
+            .code,
+        Some(0)
+    );
+    let data = setup.home().join("data/muse");
+    let settings = setup.home().join("config/muse.json");
+    fs::create_dir_all(&data).unwrap();
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(data.join("index"), "x").unwrap();
+    fs::write(&settings, "{}").unwrap();
+    let declined = setup.fiber_typing(&["extension", "remove", "muse"], "n\n");
+    assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
+    assert!(
+        declined
+            .stderr
+            .contains(&format!("Delete {}", data.display())),
+        "{}",
+        declined.stderr
+    );
+    assert!(
+        declined
+            .stderr
+            .contains(&format!("Delete {}", settings.display())),
+        "{}",
+        declined.stderr
+    );
+    assert!(data.join("index").exists() && settings.exists());
+    let approved = setup.fiber_typing(&["extension", "remove", "muse"], "y\n");
+    assert_eq!(approved.code, Some(0), "stderr: {}", approved.stderr);
+    assert!(!data.exists() && !settings.exists());
+    assert!(
+        setup
+            .fiber_with_env(&["extension", "list"], &[])
+            .raw
+            .is_empty()
+    );
+
+    assert_eq!(
+        setup
+            .fiber_with_env(&["extension", "install", "muse"], &gh.env())
+            .code,
+        Some(0)
+    );
+    fs::create_dir_all(&data).unwrap();
+    let headless = setup.run_with_stdin(&["extension", "remove", "muse"], None);
+    assert_eq!(headless.code, Some(0), "stderr: {}", headless.stderr);
+    assert!(!data.exists());
+}
+
+/// Asserts a completed turn that answered the weather question.
+fn assert_weather(run: &TextRun) {
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let step = [
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+    ];
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+    ];
+    kinds.extend(step);
+    kinds.extend([
+        "tool_call_arguments_delta",
+        "reasoning_started",
+        "reasoning_completed",
+        "text_completed",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_completed",
+    ]);
+    kinds.extend(step);
+    kinds.extend(["assistant_message_delta"; 4]);
+    kinds.extend([
+        "reasoning_started",
+        "reasoning_completed",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(run.kinds(), kinds);
+    let call = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "tool_call_requested")
+        .unwrap();
+    assert_eq!(call["payload"]["name"], "get_weather");
+    assert_eq!(
+        run.last()["payload"]["text"],
+        "The weather in Paris is 18°C and clear."
+    );
+}
+
+#[test]
+fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
+    let setup = Setup::new_with_started_deadline();
+    let server = support::package::opencode_go_ask_server(go_exchange().to_vec());
+    install(
+        &setup,
+        &setup.package("opencode", "https://opencode.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "opencode-go/muse-spark-1.3-contributor",
+            "What is the weather in Paris?",
+        ],
+        &[("OPENCODE_API_KEY", "sk-test-opencode-go")],
+    );
+
+    assert_weather(&run);
+    let requests = server.requests();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path == "/zen/go/v1/responses")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    for request in &calls {
+        assert_eq!(request.path, "/zen/go/v1/responses");
+        assert_fingerprint(request, "authorization", "Bearer sk-test-opencode-go");
+        assert_eq!(request.header("x-opencode-session"), Some(run.session_id()));
+        assert!(request.header("user-agent").unwrap().starts_with("fiber/"));
+    }
+    let recorded: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 2);
+    for line in &recorded {
+        assert_eq!(line["payload"]["subscription"], true);
+        assert!(line["payload"]["cost"].as_f64().is_some());
+    }
+    let totals = &run.last()["payload"]["usage"];
+    assert_eq!(totals["cost"], 0.0);
+    assert!(totals["subscription_cost"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "budget": {"usd": 0}}),
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["outcome"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "budget_exceeded");
+    assert_eq!(
+        completed["payload"]["error"]["message"],
+        "The session reached its spending budget of $0.00 (budget.usd)."
+    );
+    assert!(server.requests().is_empty());
+    assert_eq!(run.last()["payload"]["exit_code"], 1);
+}
+
+#[test]
+fn the_configured_budget_reaches_preamble_built() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "budget": {"usd": 1.5}}),
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["budget"], 1.5);
+}
+
+/// Meta's own `openai-responses` stream for `muse-spark-1.3-contributor`,
+/// rebuilt from the lines the probe kept: reasoning, then
+/// `response.incomplete` at the probe's 16-token cap, with no text.
+fn muse_recording() -> Response {
+    let probe: Value = serde_json::from_str(include_str!(
+        "../../../../research/provider-errors/raw/muse-responses.ok-stream.json"
+    ))
+    .unwrap();
+    let body: String = probe["stream"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| format!("{}\n", line[1].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+#[test]
+fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([muse_recording()]).unwrap();
+    install(
+        &setup,
+        &setup.package("muse", "https://api.meta.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "muse/muse-spark-1.3-contributor", "hi"],
+        &[("META_API_KEY", "sk-test-muse")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited["text"], "");
+    assert_eq!(exited["usage"]["tokens"]["input"], 10);
+    assert_eq!(exited["usage"]["tokens"]["output"], 16);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-muse");
+    assert_eq!(requests[0].header("x-opencode-session"), None);
+    assert!(
+        requests[0]
+            .header("user-agent")
+            .unwrap()
+            .starts_with("fiber/")
+    );
+}
+
+/// An `openai-responses` stream calling `shell` with `touch
+/// .fiber-review-marker`. `touch` is not on the shell's read-only list, so
+/// the call declares `executes` and step 7 reviews it (`docs/tools.md`,
+/// "Shell", "Effects"). Running `touch` creates the marker.
+fn shell_true_call() -> Response {
+    let events = [
+        json!({"type": "response.output_item.done", "item": {
+            "type": "function_call", "id": "fc_1", "call_id": "call_1",
+            "name": "shell", "arguments": "{\"command\":\"touch .fiber-review-marker\"}"}}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+/// An `openai-responses` stream answering `allow` in one fragment: the
+/// reviewer's stage-1 verdict.
+fn allow_text() -> Response {
+    let events = [
+        json!({"type": "response.output_text.delta", "delta": "allow"}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": "allow"}]}}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+#[test]
+fn the_providers_reviewer_model_decides_a_reviewed_call() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package("muse", "https://api.meta.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "muse/muse-spark-1.3", "Touch the marker."],
+        &[("META_API_KEY", "sk-test-muse")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the reviewed call resolves");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    assert_eq!(
+        resolved["payload"]["reviewer"]["model"],
+        "muse/muse-spark-1.3"
+    );
+}
+
+/// One recorded probe exchange as a fake-server response: the stream's
+/// bytes, or the recorded error status with its body. `bytes` is the
+/// compiled-in probe file named `name`, whose extension picks the decoding.
+fn probe(name: &str, bytes: &[u8], label: &str) -> Response {
+    let exchanges = probes::parse(name, bytes).unwrap();
+    let exchange = exchanges
+        .into_iter()
+        .find(|e| e.label.contains(label))
+        .unwrap();
+    match exchange.response {
+        probes::Recorded::Stream(bytes) => Response::stream(bytes),
+        probes::Recorded::Status(status, body) => Response::status(status, body),
+    }
+}
+
+#[test]
+fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([
+        probe(
+            "stream.json",
+            include_bytes!("../../../../research/anthropic-messages-probe/raw/stream.json"),
+            "stream tool use",
+        ),
+        probe(
+            "stream.json",
+            include_bytes!("../../../../research/anthropic-messages-probe/raw/stream.json"),
+            "stream plain text",
+        ),
+    ])
+    .unwrap();
+    install(
+        &setup,
+        &setup.package("anthropic", "https://api.anthropic.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "anthropic/claude-sonnet-5-5",
+            "What is the weather in Paris? Use the tool.",
+        ],
+        &[("ANTHROPIC_API_KEY", "sk-test-anthropic")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+    ];
+    kinds.extend(["tool_call_arguments_delta"; 4]);
+    kinds.extend([
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+    ]);
+    kinds.extend(["assistant_message_delta"; 3]);
+    kinds.extend([
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(run.kinds(), kinds);
+    assert_eq!(run.last()["payload"]["text"], "Hello, lovely human!");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.path, "/v1/messages");
+        assert_fingerprint(request, "x-api-key", "sk-test-anthropic");
+    }
+}
+
+#[test]
+fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([
+        probe(
+            "probe.json",
+            include_bytes!("../../../../research/openai-responses-probe/raw/probe.json"),
+            "tool no strict",
+        ),
+        probe(
+            "probe.json",
+            include_bytes!("../../../../research/openai-responses-probe/raw/probe.json"),
+            "instructions #1",
+        ),
+    ])
+    .unwrap();
+    install(
+        &setup,
+        &setup.package("openai", "https://api.openai.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "openai/gpt-6-luna",
+            "Call f with a=\"x\".",
+        ],
+        &[("OPENAI_API_KEY", "sk-test-openai")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(run.last()["payload"]["text"], "7");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.path, "/v1/responses");
+        assert_fingerprint(request, "authorization", "Bearer sk-test-openai");
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["store"], Value::Bool(false));
+    }
+}
+
+#[test]
+fn openai_responses_cache_write_is_recorded_and_priced_from_the_write() {
+    let setup = Setup::new_with_started_deadline();
+    // The probe's warming block: 2,347 input tokens with 2,344 written.
+    let events = vec![
+        json!({"type": "response.output_text.delta", "delta": "Hel"}),
+        json!({"type": "response.output_text.delta", "delta": "lo."}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message",
+            "content": [{"type": "output_text", "text": "Hello."}]}}),
+    ];
+    let warming = json!({"input_tokens": 2347, "input_tokens_details":
+        {"cache_write_tokens": 2344, "cached_tokens": 0},
+        "output_tokens": 3});
+    let server = ProviderServer::start([fakes::wire::stream_with_usage(&events, warming)]).unwrap();
+    install(
+        &setup,
+        &setup.package("openai", "https://api.openai.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "openai/gpt-6-luna", "hi"],
+        &[("OPENAI_API_KEY", "sk-test-openai")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/responses");
+    let recorded: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["payload"]["tokens"]["input"], 3);
+    // OpenAI writes always key `5m`, whatever the request's cache lifetime.
+    assert_eq!(
+        recorded[0]["payload"]["tokens"]["cache_write"],
+        json!({"5m": 2344})
+    );
+    // gpt-6-luna declares its cache-write price, so the warming block
+    // prices from the write: input, read and write at its base tier.
+    let want = (0.1 * 3.0 + 0.01 * 0.0 + 0.125 * 2344.0 + 0.5 * 3.0) / 1_000_000.0;
+    assert_eq!(recorded[0]["payload"]["cost"], json!(want));
+}
+
+#[test]
+fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([
+        probe(
+            "id-emitted-gemini-3.1-flash-lite.json",
+            include_bytes!(
+                "../../../../research/google-generative-ai-probe/raw/id-emitted-gemini-3.1-flash-lite.json"
+            ),
+            "id-emitted",
+        ),
+        probe(
+            "sse2-stream-ok.json",
+            include_bytes!(
+                "../../../../research/google-generative-ai-probe/raw/sse2-stream-ok.json"
+            ),
+            "sse2-stream-ok",
+        ),
+    ])
+    .unwrap();
+    install(
+        &setup,
+        &setup.package(
+            "gemini",
+            "https://generativelanguage.googleapis.com",
+            &server.url(),
+        ),
+    );
+
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "gemini/gemini-3.1-flash-lite",
+            "Plot point x=3 y=4 with v \"a\".",
+        ],
+        &[("GEMINI_API_KEY", "sk-test-gemini")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The `functionCall` part carries a `thoughtSignature`, which decodes
+    // as reasoning. The second recording joins its text fragments and
+    // trailing signature into one text part.
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_arguments_delta",
+            "reasoning_started",
+            "reasoning_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(
+        run.last()["payload"]["text"],
+        "Hello! How can I help you today?"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(
+            request.path,
+            "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
+        );
+        assert_fingerprint(request, "x-goog-api-key", "sk-test-gemini");
+    }
+}
+
+#[test]
+fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
+    let setup = Setup::new_with_started_deadline();
+    let server = support::package::openrouter_ask_server(vec![completions_hello(
+        "gen-abc123",
+        json!(0.0000072),
+    )]);
+    install(
+        &setup,
+        &setup.package("openrouter", "https://openrouter.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "openrouter/z-ai/glm-5.3-flash", "hi"],
+        &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/api/v1/key")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].path, "/api/v1/models");
+    assert_eq!(calls[1].path, "/api/v1/chat/completions");
+    assert_fingerprint(calls[1], "authorization", "Bearer sk-test-openrouter");
+    // The stream's 15 prompt tokens hold 14 cached, so the declared
+    // prices give about 0.0000051: the inline figure stands instead.
+    let recorded: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["payload"]["cost"], json!(0.0000072));
+    assert_eq!(recorded[0]["payload"]["generation_id"], "gen-abc123");
+}
+
+/// The event kinds of a turn whose first stream closes early: the failed
+/// attempt's usage, the retry, and the completed turn.
+const EARLY_CLOSE_KINDS: [&str; 20] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "usage_recorded",
+    "assistant_message_completed",
+    "retry_scheduled",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+#[test]
+fn an_openrouter_stream_closed_early_records_its_generation_at_once() {
+    let setup = Setup::new_with_started_deadline();
+    // The first stream names its generation and closes: no usage, no
+    // `[DONE]`. The retry completes with the vendor's own figure.
+    let early = json!({"id": "gen-early", "object": "chat.completion.chunk", "choices": [
+        {"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]});
+    let server = support::package::openrouter_ask_server(vec![
+        Response::stream(format!("data: {early}\n\n")),
+        completions_hello("gen-ok", json!(0.0000072)),
+    ]);
+    install(
+        &setup,
+        &setup.package("openrouter", "https://openrouter.ai", &server.url()),
+    );
+    // The retry's backoff is real time in the binary: kept short.
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "retry": {"initial_delay_ms": 1}}),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "openrouter/z-ai/glm-5.3-flash", "hi"],
+        &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), EARLY_CLOSE_KINDS);
+    // The package's provider file ran and `fiber.provider` took `cost`:
+    // the package loaded, and no notice says it failed.
+    let loaded = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "extensions_loaded")
+        .unwrap();
+    assert!(
+        loaded["payload"]["extensions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["name"] == "github.com/aakshintala/fiber/providers/openrouter"),
+        "{loaded}"
+    );
+    assert!(
+        run.lines.iter().all(|line| line["kind"] != "notice"),
+        "{:?}",
+        run.kinds()
+    );
+    let recorded: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 2, "{:?}", run.kinds());
+    assert_eq!(recorded[0]["payload"]["generation_id"], "gen-early");
+    // No usage was seen, so the declared prices give 0 for its tokens.
+    assert_eq!(recorded[0]["payload"]["cost"], json!(0.0));
+    assert_eq!(recorded[1]["payload"]["generation_id"], "gen-ok");
+    assert_eq!(recorded[1]["payload"]["cost"], json!(0.0000072));
+    // `ask` ended before the lookup's 30 s.
+    assert!(
+        server
+            .requests()
+            .iter()
+            .all(|request| !request.path.starts_with("/api/v1/generation")),
+        "{:?}",
+        server.requests()
+    );
+}
+
+#[test]
+fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
+    let setup = Setup::new_with_started_deadline();
+    let server =
+        support::package::openrouter_ask_server(vec![completions_hello("gen-one", json!(0.0001))]);
+    install(
+        &setup,
+        &setup.package("openrouter", "https://openrouter.ai", &server.url()),
+    );
+
+    // The default lifetime is 1 hour: the markers carry `ttl: "1h"`.
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "openrouter/anthropic/claude-sonnet-5.5",
+            "hi",
+        ],
+        &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["cache_lifetime"], "1h");
+    let requests = server.requests();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/api/v1/key")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].path, "/api/v1/models");
+    let body: Value = serde_json::from_slice(&calls[1].body).unwrap();
+    assert_eq!(body["session_id"], run.session_id());
+    assert_eq!(body["prompt_cache_key"], run.session_id());
+    let hour = json!({"type": "ephemeral", "ttl": "1h"});
+    // The system message holds several parts; the marker is on its last.
+    // The opening message stands between it and the prompt, so the
+    // prompt's marker is on the messages' last.
+    let system = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(system.last().unwrap()["cache_control"], hour);
+    let last = body["messages"].as_array().unwrap();
+    assert_eq!(last.last().unwrap()["content"][0]["cache_control"], hour);
+}
+
+/// Runs `fiber ask` for the OpenRouter Claude model against `server`, with
+/// `home_config` as the global `config.json` and `repo_config` as the
+/// workspace's `.fiber/config.json` when given. Returns the run and the
+/// request it sent.
+#[track_caller]
+fn openrouter_claude_request(
+    server: &ProviderServer,
+    setup: &Setup,
+    home_config: Value,
+    repo_config: Option<Value>,
+) -> (TextRun, Value) {
+    install(
+        setup,
+        &setup.package("openrouter", "https://openrouter.ai", &server.url()),
+    );
+    write(&setup.home().join("config.json"), &home_config);
+    if let Some(repo) = repo_config {
+        write(
+            &setup.root.path().join("w").join(".fiber/config.json"),
+            &repo,
+        );
+    }
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "openrouter/anthropic/claude-sonnet-5.5",
+            "hi",
+        ],
+        &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let requests = server.requests();
+    // The background quota() fetch races the turn: it may or may not be
+    // recorded yet, so only the turn's own requests are pinned here.
+    let calls: Vec<_> = requests
+        .iter()
+        .filter(|request| request.path != "/api/v1/key")
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0].path, "/api/v1/models");
+    let body: Value = serde_json::from_slice(&calls[1].body).unwrap();
+    (run, body)
+}
+
+/// A 5-minute run records `"5m"` in `preamble_built` and marks the system
+/// and last-message blocks with a `ttl`-less marker.
+fn assert_five_minute_markers(run: &TextRun, body: &Value) {
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["cache_lifetime"], "5m");
+    let five = json!({"type": "ephemeral"});
+    let system = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(system.last().unwrap()["cache_control"], five);
+    let last = body["messages"].as_array().unwrap();
+    assert_eq!(last.last().unwrap()["content"][0]["cache_control"], five);
+}
+
+#[test]
+fn a_per_model_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
+    let setup = Setup::new_with_started_deadline();
+    let server =
+        support::package::openrouter_ask_server(vec![completions_hello("gen-one", json!(0.0001))]);
+    let (run, body) = openrouter_claude_request(
+        &server,
+        &setup,
+        json!({"models": {"openrouter/anthropic/claude-sonnet-5.5": {"cache": {"lifetime": "5m"}}}}),
+        None,
+    );
+    assert_five_minute_markers(&run, &body);
+}
+
+#[test]
+fn a_repository_cache_lifetime_of_five_minutes_marks_the_request_without_ttl() {
+    let setup = Setup::new_with_started_deadline();
+    let server =
+        support::package::openrouter_ask_server(vec![completions_hello("gen-one", json!(0.0001))]);
+    let (run, body) = openrouter_claude_request(
+        &server,
+        &setup,
+        json!({"model": "openrouter/anthropic/claude-sonnet-5.5"}),
+        Some(json!({"cache": {"lifetime": "5m"}})),
+    );
+    assert_five_minute_markers(&run, &body);
+}
+
+#[test]
+fn a_zen_model_is_sent_to_zens_url() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package("opencode", "https://opencode.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "opencode-zen/muse-spark-1.3", "hi"],
+        &[("OPENCODE_API_KEY", "sk-test-zen")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests[0].path, "/zen/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-zen");
+    assert_eq!(
+        requests[0].header("x-opencode-session"),
+        Some(run.session_id())
+    );
+}
+
+#[test]
+fn install_takes_one_name_or_path() {
+    let setup = Setup::new_with_started_deadline();
+    let missing = setup.run_with_stdin(&["extension", "install"], None);
+    assert_eq!(missing.code, Some(2));
+    assert_eq!(
+        missing.stderr,
+        "fiber: The following required arguments were not provided: <name or path>. Run `fiber --help` for usage.\n"
+    );
+    let extra = setup.run_with_stdin(&["extension", "install", "a", "b"], None);
+    assert_eq!(extra.code, Some(2));
+    assert_eq!(
+        extra.stderr,
+        "fiber: Unexpected argument 'b' found. Run `fiber --help` for usage.\n"
+    );
+    let run = setup.run_with_stdin(&["extension", "install", "/nonexistent"], None);
+    assert_eq!(run.code, Some(1));
+    let root = setup.home().join("extensions");
+    let installed = fs::read_dir(&root).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+    });
+    assert!(!installed, "a refused install leaves no extension");
+    assert!(!setup.home().join(".extensions.lock").exists());
+}
+
+/// A live turn with `model`, opt in by naming the key
+/// file in `var` (`docs/testing.md`, "Live calls and evals"). Prints the
+/// event kinds and the final text.
+#[track_caller]
+fn live(var: &str, package_name: &str, provider: &str, model: &str, key_env: &str) {
+    let deadline = Deadline::start();
+    let Some(key_file) = std::env::var_os(var) else {
+        return;
+    };
+    let key = fs::read_to_string(key_file).unwrap();
+    let setup = Setup::within(deadline);
+    install(&setup, &package(package_name));
+
+    let model = format!("{provider}/{model}");
+    let run = setup.fiber_with_env(
+        &["ask", "--model", &model, "Reply with one short sentence."],
+        &[(key_env, key.trim())],
+    );
+
+    eprintln!("kinds: {:?}", run.kinds());
+    eprintln!("text: {}", run.last()["payload"]["text"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!run.last()["payload"]["text"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn live_opencode_go_completes_one_turn() {
+    live(
+        "FIBER_LIVE_OPENCODE_KEY_FILE",
+        "opencode",
+        "opencode-go",
+        "muse-spark-1.3-contributor",
+        "OPENCODE_API_KEY",
+    );
+}
+
+#[test]
+fn live_muse_completes_one_turn() {
+    live(
+        "FIBER_LIVE_MUSE_KEY_FILE",
+        "muse",
+        "muse",
+        "muse-spark-1.3-contributor",
+        "META_API_KEY",
+    );
+}
+
+#[test]
+fn live_anthropic_completes_one_turn() {
+    live(
+        "FIBER_LIVE_ANTHROPIC_KEY_FILE",
+        "anthropic",
+        "anthropic",
+        "claude-sonnet-5-5",
+        "ANTHROPIC_API_KEY",
+    );
+}
+
+#[test]
+fn live_openai_completes_one_turn() {
+    live(
+        "FIBER_LIVE_OPENAI_KEY_FILE",
+        "openai",
+        "openai",
+        "gpt-6-luna",
+        "OPENAI_API_KEY",
+    );
+}
+
+#[test]
+fn live_gemini_completes_one_turn() {
+    live(
+        "FIBER_LIVE_GEMINI_KEY_FILE",
+        "gemini",
+        "gemini",
+        "gemini-3.1-flash-lite",
+        "GEMINI_API_KEY",
+    );
+}
+
+#[test]
+fn two_runs_send_byte_identical_preambles() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+
+    let first = setup.run_with_stdin(&["ask", "one"], None);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let second = setup.run_with_stdin(&["ask", "two"], None);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let first_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let second_body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(first_body["instructions"], second_body["instructions"]);
+    assert_eq!(first_body["tools"], second_body["tools"]);
+    let names: Vec<_> = first_body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "ask_user",
+            "delegate_fork",
+            "delegate_message",
+            "delegate_models",
+            "delegate_spawn",
+            "edit",
+            "handoff",
+            "jobs",
+            "name_session",
+            "read",
+            "session_list",
+            "session_message",
+            "session_search",
+            "shell",
+            "skill",
+            "web_fetch",
+            "write"
+        ]
+    );
+}
+
+/// Installs the `review-pr` skill with body `Review the pull request named
+/// in the arguments.` in the workspace's `.agents/skills/`.
+fn install_review_skill(setup: &Setup) {
+    let dir = setup.root.path().join("w/.agents/skills/review-pr");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: review-pr\ndescription: Reviews a pull request.\n---\nReview the pull request named in the arguments.\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    install_review_skill(&setup);
+
+    let run = setup.run_with_stdin(&["ask", "/review-pr 42"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let expanded = "Review the pull request named in the arguments.\n\n42";
+    assert_eq!(turn_input(&run), expanded);
+    // The fake provider's received user message carries the expanded text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        String::from_utf8_lossy(&requests[0].body)
+            .contains(&serde_json::to_string(expanded).unwrap())
+    );
+}
+
+#[test]
+fn a_prompt_naming_no_skill_is_sent_as_written() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    install_review_skill(&setup);
+
+    let run = setup.run_with_stdin(&["ask", "/nope x"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "/nope x");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        String::from_utf8_lossy(&requests[0].body)
+            .contains(&serde_json::to_string("/nope x").unwrap())
+    );
+}
+
+#[test]
+fn a_slash_prompt_runs_a_prompt_template() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // A prompt template: a skill with `disable-model-invocation: true`. It
+    // is left out of the listing but keeps its `/name`.
+    let dir = setup.root.path().join("w/.agents/skills/plan");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: plan\ndescription: Plans the work.\ndisable-model-invocation: true\n---\nPlan the work below.\n",
+    )
+    .unwrap();
+
+    let run = setup.run_with_stdin(&["ask", "/plan 42"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "Plan the work below.\n\n42");
+}
+
+#[test]
+fn slash_init_sends_the_first_party_template() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
+        ),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    setup.provider(&server);
+    let installed =
+        fs::read_to_string(setup.home().join("extensions/init/prompts/init/SKILL.md")).unwrap();
+    let body = installed.splitn(3, "---\n").nth(2).unwrap().trim();
+
+    let run = setup.run_with_stdin(&["ask", "/init"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let input = turn_input(&run);
+    assert_eq!(input, body);
+    for case in ["`AGENTS.md`", "`CLAUDE.md`", "write `AGENTS.md`"] {
+        assert!(input.contains(case), "{case}: {input}");
+    }
+}
+
+#[test]
+fn a_personal_init_template_overrides_the_first_party_one() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../extensions/init"),
+        ),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    setup.provider(&server);
+    let dir = setup.home().join("skills/init");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: init\ndescription: My notes.\ndisable-model-invocation: true\n---\nWrite the person's own notes.\n",
+    )
+    .unwrap();
+
+    let run = setup.run_with_stdin(&["ask", "/init"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(5, "notice");
+    assert_eq!(run.kinds(), expected);
+    assert_eq!(turn_input(&run), "Write the person's own notes.");
+    let notice = run.lines.iter().find(|l| l["kind"] == "notice").unwrap();
+    assert_eq!(notice["payload"]["code"], "skill_shadowed");
+    let message = notice["payload"]["message"].as_str().unwrap();
+    for path in [
+        dir.join("SKILL.md"),
+        setup.home().join("extensions/init/prompts/init/SKILL.md"),
+    ] {
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+}
+
+#[test]
+fn twenty_five_shadowed_skills_raise_one_grouped_notice() {
+    // One notice per code, per pass: a home with 25 skills each shadowed
+    // by the same name in the person's `~/.agents/skills` raises exactly
+    // one `skill_shadowed` notice listing all 25 (`#3679`, "The rule";
+    // `docs/errors.md`, "Notices": one notice per code, count and items;
+    // `docs/system-prompt.md`, "Skills": one `skill_shadowed` notice per
+    // pass). The notice lands at the opening flush, after
+    // `opening_message` and before `turn_started`.
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    for index in 0..25 {
+        let name = format!("dup{index:02}");
+        let body =
+            format!("---\nname: {name}\ndescription: {name} skill.\n---\n{name} does things.\n");
+        let winner = setup.home().join("skills").join(&name);
+        fs::create_dir_all(&winner).unwrap();
+        fs::write(winner.join("SKILL.md"), &body).unwrap();
+        let loser = setup.root.path().join(".agents").join("skills").join(&name);
+        fs::create_dir_all(&loser).unwrap();
+        fs::write(loser.join("SKILL.md"), &body).unwrap();
+    }
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(5, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notices: Vec<&Value> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
+    assert_eq!(
+        notices.len(),
+        1,
+        "one notice per code per pass: {}",
+        run.stdout
+    );
+    assert_eq!(notices[0]["payload"]["code"], "skill_shadowed");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    for index in 0..25 {
+        let name = format!("dup{index:02}");
+        assert!(message.contains(&name), "{name} missing: {message}");
+    }
+}
+
+/// Installs the fixture extension and points its provider at `server`,
+/// with `fixture/m1` as the configured model.
+fn fixture(setup: &Setup, server: &ProviderServer) {
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(fakes::lua_fixture()),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    // The installed manifest declares the fixture provider at the test
+    // server's URL, so the session admits its models.
+    let dir = setup
+        .home()
+        .join("extensions")
+        .join("fiber.test-lua-fixture");
+    let mut installed: Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("extension.json")).unwrap()).unwrap();
+    if let Some(into) = installed.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fixture": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&dir.join("extension.json"), &installed);
+    config::store_secret(
+        &setup.home(),
+        "fixture.url",
+        &config::Secret::new(server.url()),
+    )
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.api_key",
+        &config::Secret::new("k1".into()),
+    )
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fixture/m1"}),
+    );
+}
+
+/// A token expiry far enough ahead that the running binary reads it as
+/// future, as a fixed stamp rather than a read of the test's clock.
+const EXPIRES_AT: u64 = 2_000_000_000;
+
+/// A reply the fixture's `models()` and `credential()` both read: the model
+/// list and the token in one body, so the background refresh and the token
+/// request succeed in either arrival order.
+fn listing_and_token() -> Response {
+    Response::status(
+        200,
+        json!({
+            "data": [{"id": "m1", "context_length": 1000}],
+            "access_token": "tok-1",
+            "expires_at": EXPIRES_AT,
+        })
+        .to_string(),
+    )
+}
+
+/// Whether `value` is 64 lowercase hex digits, a SHA-256 in hex.
+fn is_hex64(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// The model's request: exactly one went out, carrying the token and the
+/// signature.
+fn only_model_request(server: &ProviderServer) -> Request {
+    let sent: Vec<Request> = server
+        .requests()
+        .into_iter()
+        .filter(|request| request.path == "/v1/responses")
+        .collect();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    let request = &sent[0];
+    assert_fingerprint(request, "authorization", "Bearer tok-1");
+    assert_eq!(
+        request.header("x-fixture-saw"),
+        Some("body_sha256,headers,method,time,url")
+    );
+    let signature = request.header("x-fixture-signature").unwrap_or("");
+    assert!(is_hex64(signature), "{signature:?}");
+    let content_sha = request.header("x-fixture-content-sha256").unwrap_or("");
+    assert!(is_hex64(content_sha), "{content_sha:?}");
+    sent.into_iter().next().unwrap()
+}
+
+#[test]
+fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
+    let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    // With no cache discovery runs synchronously once and no refresh
+    // runs: one reply each for discovery, the token and the model request.
+    let server = ProviderServer::start_with_fallback(
+        [listing_and_token(), listing_and_token(), hello()],
+        hello(),
+    )
+    .unwrap();
+    fixture(&setup, &server);
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited["text"], "Hello.");
+    only_model_request(&server);
+    // Discovery cached the list for the next start.
+    let cached: Value = serde_json::from_str(
+        &fs::read_to_string(setup.home().join("cache/models/fixture.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        cached
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "m1"),
+        "{cached:?}"
+    );
+    // Discovery ran synchronously once at startup: with no cache no
+    // background refresh runs, so exactly one `GET /v1/models` went out.
+    // The run above waited for the session to finish, past when a refresh
+    // would have arrived. The token request went out too.
+    let requests = server.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "GET" && request.path == "/v1/models")
+            .count(),
+        1,
+        "{requests:?}"
+    );
+    assert!(
+        requests.iter().any(|request| request.path == "/token"),
+        "{requests:?}"
+    );
+}
+
+#[test]
+fn a_provider_whose_listing_fails_with_no_cache_is_listed_once() {
+    let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    let server = ProviderServer::start_routed(
+        [
+            (
+                "/token",
+                Response::status(
+                    200,
+                    json!({"access_token": "tok-1", "expires_at": EXPIRES_AT}).to_string(),
+                ),
+            ),
+            ("/v1/models", Response::status(500, "{}")),
+        ],
+        Response::status(500, "{}"),
+    )
+    .unwrap();
+    fixture(&setup, &server);
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_ne!(run.code, Some(0), "no model was discovered: {}", run.stderr);
+    // With no cached copy the synchronous discovery is the only listing: the
+    // start refresh covers stale cached lists only.
+    let requests = server.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "GET" && request.path == "/v1/models")
+            .count(),
+        1,
+        "{requests:?}"
+    );
+}
+
+#[test]
+fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
+    let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    // Answered by path: the background refresh races the session's own
+    // requests, so no order of arrival is fixed. The listing path fails, so
+    // a startup that fetched the list synchronously would fail the run: the
+    // run succeeding proves the cache served the model.
+    let server = ProviderServer::start_routed(
+        [
+            (
+                "/token",
+                Response::status(
+                    200,
+                    json!({"access_token": "tok-1", "expires_at": EXPIRES_AT}).to_string(),
+                ),
+            ),
+            ("/v1/models", Response::status(500, "{}")),
+            ("/v1/responses", hello()),
+        ],
+        Response::status(500, "{}"),
+    )
+    .unwrap();
+    fixture(&setup, &server);
+    let file = setup.home().join("cache/models/fixture.json");
+    write(
+        &file,
+        &json!([{
+            "id": "m1",
+            "protocol": "openai-responses",
+            "base_url": format!("{}/v1", server.url()), "context_window": 100000,
+        }]),
+    );
+    // The copy is stale: backdated past `model_lists.refresh_after`, so
+    // startup refreshes it in the background (`docs/model-routing.md`,
+    // "Model discovery"). An ancient mtime is older than any age cap,
+    // without reading the clock.
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited["text"], "Hello.");
+    assert!(
+        server.await_requests(3, setup.deadline),
+        "waited for the refresh, the token and the model request"
+    );
+    let mut paths: Vec<String> = server
+        .requests()
+        .iter()
+        .map(|request| format!("{} {}", request.method, request.path))
+        .collect();
+    paths.sort();
+    assert_eq!(
+        paths,
+        ["GET /v1/models", "POST /token", "POST /v1/responses"]
+    );
+    only_model_request(&server);
+}
+
+#[test]
+fn a_credential_that_errors_fails_before_any_session_line() {
+    let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "fixture",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    let server = ProviderServer::start([
+        Response::status(
+            200,
+            json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
+        ),
+        Response::status(500, "{}"),
+    ])
+    .unwrap();
+    fixture(&setup, &server);
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "credential_failed");
+}
+
+#[test]
+fn a_lua_provider_without_credential_uses_the_stored_key() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let source = setup.root.path().join("src-plain");
+    // The manifest declares the URL the script's `models()` serves.
+    let mut manifest = json!({"name": "plain", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"plain": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&source.join("extension.json"), &manifest);
+    fs::write(
+        { std::fs::create_dir_all((source.join("providers/plain.lua")).parent().unwrap()).unwrap(); source.join("providers/plain.lua") },
+        format!(
+            "fiber.provider(\"plain\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\", context_window = 100000 }} }}\n   end,\n }},\n}})\n",
+            server.url()
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    config::store_credential(
+        &setup.home(),
+        "plain",
+        "default",
+        &config::Secret::new("k-plain".into()),
+    )
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "plain/m1"}),
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "waited for the model request"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].path, "/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer k-plain");
+    assert!(
+        !requests.iter().any(|request| request.path == "/token"),
+        "{requests:?}"
+    );
+}
+
+#[test]
+fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_thinking(&server);
+
+    let run = setup.run_with_stdin(&["ask", "--model", "fake/m:high", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["thinking"], "high");
+
+    assert_pre_session(
+        &setup.run_with_stdin(&["ask", "--model", "fake/m:max", "hi"], None),
+        1,
+        "invalid_arguments",
+    );
+}
+
+#[test]
+fn a_declared_thinking_default_is_sent_when_no_level_is_given() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_thinking(&server);
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "waited for the model request"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["reasoning"], json!({"effort": "low"}));
+}
+
+#[test]
+fn a_configured_level_the_model_does_not_declare_logs_one_notice_and_runs() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_thinking(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "thinking": "max"}),
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notice = run.lines.iter().find(|l| l["kind"] == "notice").unwrap();
+    assert_eq!(notice["payload"]["code"], "config_key_ignored");
+    let message = notice["payload"]["message"].as_str().unwrap();
+    for part in ["`thinking`", "`max`", "`fake/m`"] {
+        assert!(message.contains(part), "{message}");
+    }
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["thinking"], "low");
+}
+
+#[test]
+fn an_unknown_config_key_logs_one_notice_and_runs() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notices: Vec<_> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
+    assert_eq!(notices.len(), 1, "{:?}", run.kinds());
+    assert_eq!(notices[0]["payload"]["code"], "config_key_ignored");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    assert!(message.contains("frobnicate"), "{message}");
+    assert!(
+        message.contains(&setup.home().join("config.json").display().to_string()),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_incompatible_extension_logs_one_notice_and_runs() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let dir = setup.home().join("extensions/old");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("extension.json"),
+        json!({"name": "old", "version": "v0.0.0", "fiber": "0.0.0", "api": 999}).to_string(),
+    )
+    .unwrap();
+    support::write_record(&dir);
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut expected = HELLO_KINDS.to_vec();
+    expected.insert(3, "notice");
+    assert_eq!(run.kinds(), expected);
+    let notices: Vec<_> = run.lines.iter().filter(|l| l["kind"] == "notice").collect();
+    assert_eq!(notices.len(), 1, "{:?}", run.kinds());
+    assert_eq!(notices[0]["payload"]["code"], "extension_incompatible");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    for part in ["old", "999"] {
+        assert!(message.contains(part), "{message}");
+    }
+}
+
+#[test]
+fn config_get_with_an_unknown_key_prints_its_notice_as_one_line() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.run_with_stdin(&["config", "get", "model"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.stdout,
+        format!(
+            "\"fake/m\" from {}\n",
+            setup.home().join("config.json").display()
+        )
+    );
+    assert_eq!(
+        run.stderr,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
+fn models_with_an_unknown_key_prints_its_notice_as_one_line() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.run_with_stdin(&["models"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(run.stdout.contains("fake/m"), "{}", run.stdout);
+    assert_eq!(
+        run.stderr,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+#[test]
+fn login_with_an_unknown_key_prints_its_notice_first() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "frobnicate": 1}),
+    );
+
+    let run = setup.run_with_stdin(&["login", "fake"], Some("sk-test-login\n"));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stdout, "");
+    assert_eq!(
+        run.stderr,
+        format!(
+            "{}: ignored `frobnicate`, which this Fiber does not know.\n\
+             fiber: stored credentials/fake/default\n",
+            setup.home().join("config.json").display()
+        )
+    );
+}
+
+/// Installs an inline extension `name` with `init_lua`, and `data` as its
+/// provider data file when given, and makes `name/m1` the configured model.
+fn inline_extension(
+    setup: &Setup,
+    name: &str,
+    init_lua: &str,
+    base_url: &str,
+    data: Option<&Value>,
+) {
+    let source = setup.root.path().join(format!("src-{name}"));
+    // The manifest declares the URL the script's `models()` serves.
+    let manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1,
+        "providers": {name: [base_url]}});
+    write(&source.join("extension.json"), &manifest);
+    fs::create_dir_all(source.join("providers")).unwrap();
+    fs::write(
+        source.join("providers").join(format!("{name}.lua")),
+        init_lua,
+    )
+    .unwrap();
+    if let Some(data) = data {
+        write(&source.join("providers").join(format!("{name}.json")), data);
+    }
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": format!("{name}/m1")}),
+    );
+}
+
+#[test]
+fn the_initial_model_loads_only_its_own_provider_file() {
+    let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "lp",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let base_url = format!("{}/v1", server.url());
+    let mut markers = Vec::new();
+    for name in ["lp", "uq"] {
+        let marker = setup.root.path().join(format!("{name}-loaded"));
+        inline_extension(
+            &setup,
+            name,
+            &format!(
+                "local ok, old = pcall(host.fs.read, {marker:?})\n host.fs.write({marker:?}, (ok and old or '') .. 'x\\n')\n fiber.provider('{name}', {{credential={{timeout=5000, run=function() return {{token='tok-{name}', expires_at=4102444800}} end}}}})",
+                marker = marker.display().to_string()
+            ),
+            &base_url,
+            None,
+        );
+        config::write_model_cache(&setup.home(), name, &json!([{
+            "id":"lm", "protocol":"openai-responses", "base_url":base_url, "context_window":100000
+        }])).unwrap();
+        markers.push(marker);
+    }
+    let run = setup.run_with_stdin(&["ask", "--model", "lp/lm", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(fs::read_to_string(&markers[0]).unwrap(), "x\n");
+    assert!(!markers[1].exists(), "the unused provider file ran");
+}
+
+#[test]
+fn a_credential_error_at_startup_is_fiber_s_sentence_and_its_text_goes_in_provider() {
+    let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    let server = ProviderServer::start([]).unwrap();
+    let base_url = format!("{}/v1", server.url());
+    inline_extension(
+        &setup,
+        "acme",
+        &format!(
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{base_url}\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n }},\n}})\n",
+        ),
+        &base_url,
+        None,
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "credential_failed");
+    let error = &run.last()["payload"]["error"];
+    // The data declares no `login`, so `fiber login acme` would store a key
+    // `credential()` never reads.
+    assert_eq!(error["message"], "acme's credential() failed.");
+    assert_eq!(error["provider"]["name"], "acme");
+    let said = error["provider"]["message"].as_str().unwrap();
+    assert!(said.ends_with("refresh failed: body-xyz"), "{said}");
+    assert!(error["provider"].get("status").is_none());
+    assert!(!run.stderr.contains("body-xyz"), "{}", run.stderr);
+}
+
+#[test]
+fn a_credential_error_at_startup_advises_fiber_login_when_the_provider_s_data_declares_login() {
+    let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    let server = ProviderServer::start([]).unwrap();
+    let base_url = format!("{}/v1", server.url());
+    let data = json!({"name": "acme", "login": "browser", "models": [{"id": "m1",
+        "protocol": "openai-responses", "base_url": base_url, "context_window": 100000}]});
+    inline_extension(
+        &setup,
+        "acme",
+        "fiber.provider(\"acme\", {\n credential = {\n   timeout = 5000,\n   run = function()\n     error(\"refresh failed: body-xyz\")\n   end,\n },\n})\n",
+        &base_url,
+        Some(&data),
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "credential_failed");
+    let error = &run.last()["payload"]["error"];
+    assert_eq!(
+        error["message"],
+        "acme's credential() failed. Run `fiber login acme`."
+    );
+    let said = error["provider"]["message"].as_str().unwrap();
+    assert!(said.ends_with("refresh failed: body-xyz"), "{said}");
+}
+
+#[test]
+fn a_credential_label_ignores_stored_origins_even_without_a_callback() {
+    // A function provider's stored key never proves presence.
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([Response::status(401, "{}")]).unwrap();
+    let base_url = format!("{}/v1", server.url());
+    let data = json!({"name": "acme", "models": [{"id": "m1", "protocol": "openai-responses",
+        "base_url": base_url, "context_window": 100000}],
+        "credential_label": {"names": "acme profile", "default": "the environment"}});
+    inline_extension(
+        &setup,
+        "acme",
+        "fiber.provider(\"acme\", {})\n",
+        &base_url,
+        Some(&data),
+    );
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("k-acme".into()),
+    )
+    .unwrap();
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_sign_error_keeps_the_token_out_of_every_line() {
+    let setup = Setup::new_with_started_deadline();
+    config::store_credential(
+        &setup.home(),
+        "acme",
+        "default",
+        &config::Secret::new("test".into()),
+    )
+    .unwrap();
+    let server = ProviderServer::start([]).unwrap();
+    let base_url = format!("{}/v1", server.url());
+    inline_extension(
+        &setup,
+        "acme",
+        &format!(
+            "fiber.provider(\"acme\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{base_url}\", context_window = 100000 }} }}\n   end,\n }},\n credential = {{\n   timeout = 5000,\n   run = function()\n     return {{ token = \"tok-secret-1\", expires_at = {EXPIRES_AT} }}\n   end,\n }},\n sign = {{\n   timeout = 5000,\n   run = function(request)\n     error(\"bad signature for \" .. request.headers.authorization)\n   end,\n }},\n}})\n",
+        ),
+        &base_url,
+        None,
+    );
+
+    let run = setup.run_with_stdin(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 1);
+    let error = &exited["error"];
+    assert_eq!(error["code"], "credential_failed");
+    assert_eq!(error["message"], "acme's sign() failed.");
+    let said = error["provider"]["message"].as_str().unwrap();
+    assert!(
+        said.ends_with("bad signature for Bearer [redacted]"),
+        "{said}"
+    );
+    assert!(error["provider"].get("status").is_none());
+    assert!(!run.stdout.contains("tok-secret-1"), "{}", run.stdout);
+    assert!(!run.stderr.contains("tok-secret-1"), "{}", run.stderr);
+    assert!(
+        !server
+            .requests()
+            .iter()
+            .any(|request| request.path == "/v1/responses"),
+        "{:?}",
+        server.requests()
+    );
+}
+
+/// Installs a provider `fake` speaking `protocol` at the fake server
+/// with the model ids `ids`, and writes `global` as the global
+/// `config.json`: the `extensions::plan(...).commit()` pattern
+/// [`Setup::provider`] uses, with more than one model.
+fn provider_with(
+    setup: &Setup,
+    server: &ProviderServer,
+    protocol: &str,
+    ids: &[&str],
+    global: &Value,
+) {
+    let source = setup.root.path().join("src");
+    let models: Vec<Value> = ids
+        .iter()
+        .map(|id| {
+            json!({"id": id, "protocol": protocol,
+                   "base_url": format!("{}/v1", server.url()),
+                   "context_window": 100000})
+        })
+        .collect();
+    // The manifest declares the models' URL, which the script above
+    // also serves.
+    let mut manifest = json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"fake": [format!("{}/v1", server.url())]}),
+        );
+    }
+    write(&source.join("extension.json"), &manifest);
+    write(
+        &source.join("providers/fake.json"),
+        &json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": models}),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write(&setup.home().join("config.json"), global);
+}
+
+/// Writes `config` as the per-project `config.json` for the workspace:
+/// `projects/<key>/config.json`, the key the canonical workspace with
+/// every `/` made `-`, as [`Run::session_dir`] builds it.
+fn write_project_config(setup: &Setup, config: &Value) {
+    let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
+    let key = workspace.to_string_lossy().replace('/', "-");
+    write(
+        &setup.home().join("projects").join(key).join("config.json"),
+        config,
+    );
+}
+
+/// The one request body the fake server saw: every `-c` run here sends
+/// exactly one.
+fn only_body(server: &ProviderServer) -> Value {
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    serde_json::from_slice(&requests[0].body).unwrap()
+}
+
+#[test]
+fn a_run_flag_model_wins_over_every_file() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    provider_with(
+        &setup,
+        &server,
+        "openai-responses",
+        &["m", "m2"],
+        &json!({"model": "fake/m"}),
+    );
+    write(
+        &setup.root.path().join("w").join(".fiber/config.json"),
+        &json!({"model": "fake/m"}),
+    );
+    write_project_config(&setup, &json!({"model": "fake/m"}));
+
+    let run = setup.run_with_stdin(&["ask", "-c", "model=fake/m2", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(only_body(&server)["model"], "m2");
+
+    // The files are read: with every one naming a model that resolves
+    // nowhere, the run without `-c` fails before any session.
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/nope"}),
+    );
+    write(
+        &setup.root.path().join("w").join(".fiber/config.json"),
+        &json!({"model": "fake/nope"}),
+    );
+    write_project_config(&setup, &json!({"model": "fake/nope"}));
+    let run = setup.run_with_stdin(&["ask", "-c", "model=fake/m2", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(body["model"], "m2");
+}
+
+#[test]
+fn a_later_run_flag_wins_over_an_earlier_one() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider_with(
+        &setup,
+        &server,
+        "openai-responses",
+        &["m", "m2"],
+        &json!({"model": "fake/m"}),
+    );
+
+    let run = setup.run_with_stdin(
+        &["ask", "-c", "model=fake/nope", "-c", "model=fake/m2", "hi"],
+        None,
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(only_body(&server)["model"], "m2");
+}
+
+#[test]
+fn a_run_flag_model_wins_over_the_model_flag() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider_with(
+        &setup,
+        &server,
+        "openai-responses",
+        &["m", "m2"],
+        &json!({"model": "fake/m"}),
+    );
+
+    let run = setup.run_with_stdin(
+        &["ask", "--model", "fake/nope", "-c", "model=fake/m2", "hi"],
+        None,
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(only_body(&server)["model"], "m2");
+}
+
+#[test]
+fn a_numeric_run_flag_sets_a_number() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run_with_stdin(&["ask", "-c", "handoff.tokens=200000", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+}
+
+#[test]
+fn a_quoted_run_flag_value_is_rejected_as_the_wrong_type() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run_with_stdin(&["ask", "-c", "handoff.tokens=\"200000\"", "hi"], None);
+    assert_pre_session(&run, 1, "config_invalid");
+    let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
+    assert!(message.starts_with("-c: "), "{message}");
+    assert!(message.contains("handoff.tokens"), "{message}");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_run_flag_without_an_equals_is_a_usage_error() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run_with_stdin(&["ask", "-c", "nokey", "hi"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert_eq!(
+        run.last()["payload"]["error"]["message"].as_str().unwrap(),
+        "Invalid value 'nokey' for '-c <key>=<value>': expected a dotted key and a value, as in \
+         `-c handoff.tokens=200000`. Run `fiber --help` for usage."
+    );
+    assert!(server.requests().is_empty());
+    assert!(!setup.home().join("projects").exists());
+}
+
+#[test]
+fn a_run_flag_with_no_key_path_is_a_usage_error() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.run_with_stdin(&["ask", "-c", "a..b=1", "hi"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert_eq!(
+        run.last()["payload"]["error"]["message"].as_str().unwrap(),
+        "`a..b` is not a dotted key and a value, as in `-c handoff.tokens=200000`. \
+         Run `fiber --help` for usage."
+    );
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn ask_help_names_the_run_flag() {
+    let setup = Setup::new_with_started_deadline();
+    let run = setup.run_with_stdin(&["help", "ask"], None);
+    assert_help(&run, "-c <key>=<value>");
+}
+
+/// Every `cache_control` marker in `body`, in document order.
+fn cache_controls(body: &Value) -> Vec<Value> {
+    let mut found = Vec::new();
+    walk(body, &mut found);
+    return found;
+
+    fn walk(value: &Value, found: &mut Vec<Value>) {
+        match value {
+            Value::Object(map) => {
+                for (key, item) in map {
+                    if key == "cache_control" {
+                        found.push(item.clone());
+                    } else {
+                        walk(item, found);
+                    }
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    walk(item, found);
+                }
+            }
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+}
+
+#[test]
+fn a_per_run_cache_lifetime_marks_anthropic_markers_without_ttl() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([anthropic_hello()]).unwrap();
+    provider_with(
+        &setup,
+        &server,
+        "anthropic-messages",
+        &["m"],
+        &json!({"model": "fake/m"}),
+    );
+
+    let run = setup.run_with_stdin(&["ask", "-c", "cache.lifetime=5m", "hi"], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let built = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "preamble_built")
+        .unwrap();
+    assert_eq!(built["payload"]["cache_lifetime"], "5m");
+    let markers = cache_controls(&only_body(&server));
+    assert!(!markers.is_empty(), "a marker is cached");
+    for marker in &markers {
+        assert_eq!(marker, &json!({"type": "ephemeral"}));
+    }
+}
+
+/// Installs the synthetic provider `syn` with the session model `sess`
+/// and three reviewer candidates, `over`, `prov` and `pkg`, behind one
+/// loopback server: `reviewer` is the package default, if any. Every
+/// request lands on `server`, told apart by its `model`.
+fn review_fixture(setup: &Setup, server: &ProviderServer, reviewer: Option<&str>) {
+    let source = setup.root.path().join("src");
+    let models: Vec<Value> = ["sess", "over", "prov", "pkg"]
+        .iter()
+        .map(|id| {
+            json!({"id": id, "protocol": "openai-responses",
+                   "base_url": format!("{}/v1", server.url()),
+                   "context_window": 100000})
+        })
+        .collect();
+    let mut manifest = json!({"name": "syn", "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    if let Some(into) = manifest.as_object_mut() {
+        into.insert(
+            "providers".to_owned(),
+            json!({"syn": [format!("{}/v1", server.url())]}),
+        );
+    }
+    let mut data = json!({"name": "syn", "credential": {"env": "SYN_API_KEY"}, "models": models});
+    if let Some(reviewer) = reviewer {
+        data["reviewer_model"] = json!(reviewer);
+    }
+    write(&source.join("extension.json"), &manifest);
+    write(&source.join("providers/syn.json"), &data);
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// Every `model` the fake server was asked for, in request order.
+fn requested_models(server: &ProviderServer) -> Vec<String> {
+    server
+        .requests()
+        .iter()
+        .map(|request| {
+            serde_json::from_slice::<Value>(&request.body).unwrap()["model"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+/// The reviewed call's `permission_resolved` line.
+fn resolved(run: &TextRun) -> &Value {
+    run.lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the reviewed call resolves")
+}
+
+#[test]
+fn an_explicit_reviewer_model_wins_over_provider_and_package_picks() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    review_fixture(&setup, &server, Some("pkg"));
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "-c",
+            "reviewer.model=syn/over",
+            "-c",
+            "providers.syn.reviewer_model=prov",
+            "--model",
+            "syn/sess",
+            "Touch the marker.",
+        ],
+        &[("SYN_API_KEY", "sk-test-syn")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = resolved(&run);
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["reviewer"]["model"], "syn/over");
+    assert_eq!(requested_models(&server), ["sess", "over", "sess"]);
+}
+
+#[test]
+fn a_provider_reviewer_pick_wins_over_the_package_default() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    review_fixture(&setup, &server, Some("pkg"));
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "-c",
+            "providers.syn.reviewer_model=prov",
+            "--model",
+            "syn/sess",
+            "Touch the marker.",
+        ],
+        &[("SYN_API_KEY", "sk-test-syn")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = resolved(&run);
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["reviewer"]["model"], "syn/prov");
+    assert_eq!(requested_models(&server), ["sess", "prov", "sess"]);
+}
+
+#[test]
+fn the_package_reviewer_default_decides_when_nothing_is_saved() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), allow_text(), hello()]).unwrap();
+    review_fixture(&setup, &server, Some("pkg"));
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "syn/sess", "Touch the marker."],
+        &[("SYN_API_KEY", "sk-test-syn")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = resolved(&run);
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["reviewer"]["model"], "syn/pkg");
+    assert_eq!(requested_models(&server), ["sess", "pkg", "sess"]);
+}
+
+#[test]
+fn with_no_reviewer_anywhere_the_call_is_denied_with_no_reviewer_request() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([shell_true_call(), hello()]).unwrap();
+    review_fixture(&setup, &server, None);
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "syn/sess", "Touch the marker."],
+        &[("SYN_API_KEY", "sk-test-syn")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let resolved = resolved(&run);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "no_reviewer");
+    assert_eq!(resolved["payload"]["reason"], r#loop::NO_MODEL_MESSAGE);
+    // The once-per-session notice before the escalation it explains.
+    let notices: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1, "{:?}", run.kinds());
+    assert_eq!(notices[0]["payload"]["code"], "no_model");
+    assert_eq!(notices[0]["payload"]["message"], r#loop::NO_MODEL_MESSAGE);
+    // Only the session model was ever requested: nothing fell back to it
+    // as a reviewer, and no reviewer request ran. The second request is
+    // the session continuing after the denial.
+    assert_eq!(requested_models(&server), ["sess", "sess"]);
+}
+
+/// One `fiber ask` run without the provider key in its environment: the
+/// startup wire diagnoses the same failure doctor names.
+fn ask_without_key(setup: &Setup, args: &[&str]) -> TextRun {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+    command
+        .args(args)
+        .current_dir(setup.root.path().join("w"))
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", setup.root.path())
+        .env("FIBER_HOME", setup.home())
+        .env_remove("FIBER_TEST_FAKE_KEY")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    TextRun::from(support::run_to_exit(
+        setup.deadline,
+        "`fiber ask` with no key to exit",
+        command,
+    ))
+}
+
+#[test]
+fn a_missing_key_at_startup_carries_the_doctor_line_first() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let run = ask_without_key(&setup, &["ask", "hi"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.lines.len(), 1, "{:?}", run.lines);
+    let error = &run.last()["payload"]["error"];
+    assert_eq!(error["code"], "credential_missing");
+    assert_eq!(
+        error["message"],
+        "no key for fake: run `fiber login fake`\n\
+         No credential for `fake`: nothing is stored in credentials/fake/default, \
+         and the environment variable FIBER_TEST_FAKE_KEY is not set. \
+         Run `fiber login fake`."
+    );
+}
+
+#[test]
+fn a_per_run_credential_label_is_the_diagnosed_one() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let run = ask_without_key(
+        &setup,
+        &["ask", "-c", "providers.fake.credential=work", "hi"],
+    );
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.lines.len(), 1, "{:?}", run.lines);
+    let error = &run.last()["payload"]["error"];
+    assert_eq!(error["code"], "credential_missing");
+    let message = error["message"].as_str().unwrap();
+    let mut lines = message.lines();
+    assert_eq!(
+        lines.next(),
+        Some("no key for fake under work: run `fiber login fake --as work`"),
+        "{message}"
+    );
+    assert!(
+        lines.next().unwrap().contains("credentials/fake/work"),
+        "{message}"
+    );
+}

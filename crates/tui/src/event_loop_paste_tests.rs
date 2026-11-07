@@ -35,7 +35,7 @@ fn ctrl_v_without_a_clipboard_draws_the_notice() {
     assert_eq!(lp.app.input().expand(), "");
 }
 
-/// A 1x1 PNG, 69 bytes, as `crates/main/tests/session_command.rs` holds
+/// A 1x1 PNG, 69 bytes, as `crates/main/tests/session_turns/session_command.rs` holds
 /// it.
 const PIXEL: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
