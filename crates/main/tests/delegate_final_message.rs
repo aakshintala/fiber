@@ -19,9 +19,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
+use fakes::deadline::WAIT;
 use fakes::{ProviderServer, Request, Response, Watchdog};
 use serde_json::{Value, json};
-use support::{Deadline, KillGroup, SessionGuard, WAITS, function_call, hello, stream, text_reply};
+use support::{Deadline, KillGroup, SessionGuard, function_call, hello, stream, text_reply};
 
 /// The marker in the wake notice and the `jobs wait` result ahead of the
 /// file's absolute path.
@@ -258,12 +259,12 @@ impl Ask {
         }
     }
 
-    /// Stdout lines until one satisfies `done`, each receive under one
-    /// wait of its own.
+    /// Stdout lines until one satisfies `done`, all under one wait.
     #[track_caller]
     fn until(&mut self, what: &str, done: impl Fn(&Value) -> bool) {
+        let wait = Deadline::after(WAIT);
         loop {
-            let line = Deadline::after(WAITS).recv_or_fail(&self.lines, what);
+            let line = wait.recv_or_fail(&self.lines, what);
             let stop = done(&line);
             self.taken.push(line);
             if stop {
@@ -276,18 +277,18 @@ impl Ask {
     #[track_caller]
     fn finish(mut self) -> Vec<Value> {
         let (code, stderr) =
-            Deadline::after(WAITS).recv_or_fail(&self.exited, "`fiber ask` to exit");
+            Deadline::after(WAIT).recv_or_fail(&self.exited, "`fiber ask` to exit");
         assert_eq!(code, Some(0), "stderr: {stderr}");
         assert!(
             !fakes::group_alive(self.group),
             "`fiber ask` left a process in its group behind"
         );
-        self.watchdog.stand_down(Deadline::after(WAITS));
+        self.watchdog.stand_down(Deadline::after(WAIT));
         std::mem::forget(self._guard);
         while let Ok(line) = self.lines.try_recv() {
             self.taken.push(line);
         }
-        let wait = Deadline::after(WAITS).start_wait();
+        let wait = Deadline::after(WAIT);
         while let Ok(line) = wait.recv(&self.lines) {
             self.taken.push(line);
         }
