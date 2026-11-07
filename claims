@@ -380,3 +380,6 @@ scripts/bug-red	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/a
 scripts/test-bug-red	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-bug-red-cargo	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/bug-red,scripts/test-bug-red	fiber-4324	grant	2026-11-07T06:17:56Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4324-bug-red-own-target	
+crates/loop/src/history_tests.rs	fiber-4244	plan	2026-11-07T06:22:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+crates/loop/tests/resume.rs	fiber-4244	plan	2026-11-07T06:22:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+crates/loop/tests/review_jig.rs	fiber-4244	plan	2026-11-07T06:22:06Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
