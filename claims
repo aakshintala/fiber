@@ -133,3 +133,5 @@ crates/provider/src/http_tests.rs	fiber-4312	plan	2026-11-07T15:48:55Z	Amoghs-Ma
 crates/tools/src/job_timing_tests.rs	fiber-4312	plan	2026-11-07T15:48:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/picture_timing_tests.rs	fiber-4312	plan	2026-11-07T15:48:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing.md	fiber-4312	plan	2026-11-07T15:48:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/bug-red	fiber-4091	plan	2026-11-07T15:50:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-bug-red	fiber-4091	plan	2026-11-07T15:50:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
