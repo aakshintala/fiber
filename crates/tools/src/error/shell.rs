@@ -141,7 +141,9 @@ fn bare_wait_message(command: &str) -> String {
 /// rest past the refused command's first separator, with `#` comments
 /// removed and only lines that are blank outside quotes dropped, when its
 /// first code-bearing line opens with neither a separator nor a loop
-/// keyword and no later line opens with a separator. Every kept line stays
+/// keyword and no later line opens with a separator. A rest holding a
+/// newline inside quotes names the placeholder instead: only an unquoted
+/// multiline check is named, never a quoted one. Every kept line stays
 /// byte for byte — leading spaces and blank lines within a multiline quote
 /// included — so the emitted `until` snippet polls the check as written
 /// and stays valid shell no `#` comments out.
@@ -149,6 +151,29 @@ fn usable_check(command: &str) -> Option<String> {
     let end = command.find(['\n', ';', '&', '|'])?;
     let rest = command.get(end + 1..)?.trim();
     let cleaned = strip_shell_comments(rest)?;
+    // Fallback: a newline inside quotes cannot be named verbatim, so the
+    // refusal names the placeholder instead. Quote state carries across
+    // newlines exactly as the comment strip tracks it.
+    {
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut escaped = false;
+        for ch in cleaned.chars() {
+            if ch == '\n' && (in_single || in_double) {
+                return None;
+            }
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' if !in_single => escaped = true,
+                '\'' if !in_double => in_single = !in_single,
+                '"' if !in_single => in_double = !in_double,
+                _ => {}
+            }
+        }
+    }
     // Walk the comment-stripped rest with the same quote rules, cutting
     // lines at newlines: a line is dropped only when it holds no content
     // and starts outside quotes, so whitespace within a multiline quote

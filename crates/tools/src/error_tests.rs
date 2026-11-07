@@ -1104,8 +1104,8 @@ fn a_bare_wait_multiline_check_names_the_complete_check() {
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
     let text = error.to_string();
     assert!(
-        text.contains("until printf '%s' \"a\n# b\nc\"; do sleep 5; done"),
-        "a quoted hash across lines stays part of the check: {text}"
+        text.contains("until <check command>; do sleep 5; done"),
+        "a newline inside quotes names the placeholder: {text}"
     );
     let error = ShellError::BareWait {
         command: "sleep 30; echo \"hi".to_owned(),
@@ -1173,19 +1173,19 @@ fn a_bare_wait_multiline_check_names_the_complete_check() {
 }
 
 #[test]
-fn a_bare_wait_quoted_whitespace_survives_verbatim() {
+fn a_bare_wait_quoted_newline_falls_back_to_placeholder() {
     let error = ShellError::BareWait {
         command: "sleep 30; test \"$(cat ready)\" = 'READY\n  DONE'".to_owned(),
     };
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
     let text = error.to_string();
     assert!(
-        text.contains("until test \"$(cat ready)\" = 'READY\n  DONE'; do sleep 5; done"),
-        "leading spaces inside a multiline quote are named byte for byte: {text}"
+        text.contains("until <check command>; do sleep 5; done"),
+        "a newline inside quotes names the placeholder: {text}"
     );
     assert!(
-        !text.contains("until <check command>"),
-        "a rest holding a quoted check does not fall back: {text}"
+        !text.contains("until test \"$(cat ready)\""),
+        "a quoted check is not named verbatim: {text}"
     );
     let error = ShellError::BareWait {
         command: "sleep 30; printf 'a\n\nb'".to_owned(),
@@ -1193,8 +1193,12 @@ fn a_bare_wait_quoted_whitespace_survives_verbatim() {
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
     let text = error.to_string();
     assert!(
-        text.contains("until printf 'a\n\nb'; do sleep 5; done"),
-        "a blank line inside quotes is significant and stays: {text}"
+        text.contains("until <check command>; do sleep 5; done"),
+        "a blank line inside quotes names the placeholder: {text}"
+    );
+    assert!(
+        !text.contains("until printf"),
+        "a quoted check is not named verbatim: {text}"
     );
 }
 
