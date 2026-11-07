@@ -641,8 +641,12 @@ that ticket's resolution holds the rationale and the rejected alternatives.
     command ends").
 - Moving never kills anything and never restarts anything. The tool call
   completes with the job's receipt, which says the command is still
-  running, why it moved, the `job_id` and the output file's path. Output
-  already produced and all later output go to the job's output file.
+  running, why it moved, the `job_id` and the output file's path. When
+  the job kept the command's timeout, the receipt ends with when Fiber
+  stops it and how to keep a long-running process instead ("When a
+  command ends"). A moved command with no timeout says nothing about a
+  deadline. Output already produced and all later output go to the job's
+  output file.
 
 ### When a command ends
 
@@ -653,7 +657,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   command moves to the background at once. The receipt gives the shell's
   exit code and names what was left running (command names and process
   ids). The job ends when the group is empty, and keeps the command's
-  timeout.
+  timeout. A receipt for a move that kept a timeout ends with the stop
+  time in UTC, the timeout, and the long-running-process hint, for
+  example (``Fiber stops it at 2023-11-14T22:13:50Z (timeout_ms 60000).
+  To keep a long-running process such as a server, start it with
+  `run_in_background` and no timeout, or with `detach`. ``).
 - A process that left the group on purpose, for example with `setsid`,
   is not tracked. `nohup` does not leave the group: the process stays in
   it, and a timeout, a cancellation, a `jobs stop` and a shutdown stop it
@@ -692,6 +700,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   - `Exit code N.` for an exit, 0 included;
   - `Killed by SIGNAME.` for a signal;
   - `Timed out after N ms; Fiber stopped the whole process group.` for a timeout;
+    a moved job's timeout adds the long-running-process hint ("When a
+    command ends");
   - `The monitor's deadline of N ms passed; start it again if you still need it.` for a monitor's deadline;
   - `Cancelled and stopped.` for a cancellation;
   - `The command was stopped, and Fiber cannot tell whether it completed.` for
