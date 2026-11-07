@@ -167,3 +167,8 @@ crates/tui/examples/paging.rs	fiber-4059	plan	2026-11-07T17:44:35Z	Amoghs-MacBoo
 crates/main/tests/item_views_look.rs	fiber-4378	plan	2026-11-07T17:48:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask/src/main.rs	fiber-4178	plan	2026-11-07T18:25:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4377
 xtask/src/main_tests.rs	fiber-4178	plan	2026-11-07T18:25:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4377
+crates/main/tests/support/mod.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/driver_shell_sent.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/driver_shell_spill.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/hub.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support_helpers.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
