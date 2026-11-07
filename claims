@@ -156,7 +156,6 @@ crates/tui/src/app/home.rs	fiber-4192	plan	2026-11-07T16:27:31Z	Amoghs-MacBook-P
 crates/tui/src/window.rs	fiber-4192	plan	2026-11-07T16:27:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4360
 crates/tui/src/window/residency.rs	fiber-4192	plan	2026-11-07T16:27:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4360
 crates/tui/src/paging_tests.rs	fiber-4192	plan	2026-11-07T16:27:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4360
-docs/invocation.md	fiber-4214	plan	2026-11-07T16:33:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/docs/4214-invocation-versioning-xref	
 scripts/check	fiber-4178	plan	2026-11-07T17:06:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/scheduled.yml	fiber-4178	plan	2026-11-07T17:06:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4178	plan	2026-11-07T17:06:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
