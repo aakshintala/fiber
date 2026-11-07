@@ -1569,6 +1569,70 @@ fn background_without_timeout_has_none_while_foreground_keeps_default() {
     assert_eq!(driver(json!({"run_in_background": true})).timeout_ms, None);
 }
 
+/// `with_no_timeout` leaves a foreground call with no `timeout_ms`
+/// deadline-free: the call parks with no deadline, and cancelling it
+/// carries no timeout. Deleting the flag parks the agent default instead
+/// and fails the park assertions.
+#[test]
+fn with_no_timeout_parks_without_a_deadline() {
+    let dir = fakes::TempDir::new("fiber-shell-no-timeout-park");
+    let pipe = dir.path().join("block");
+    fakes::fifo(&pipe);
+    let clock = FakeClock::new();
+    let shell = Shell::new(dir.path().to_path_buf(), clock.clone()).with_no_timeout();
+    let cancel = CancelToken::new();
+    let run_cancel = cancel.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("fiber-shell-no-timeout".to_owned())
+        .spawn(move || {
+            let output = shell.run(
+                &args(&format!("cat {}", pipe.display())),
+                &run_cancel,
+                &Recorder::default(),
+            );
+            done.send(output).unwrap_or(());
+        })
+        .unwrap();
+    // The start marker: the call waits on the clock with no deadline.
+    let (parked_tx, parked_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("fiber-shell-no-timeout-parked".to_owned())
+        .spawn({
+            let clock = clock.clone();
+            move || {
+                while !clock.parked().contains(&None) {
+                    std::thread::yield_now();
+                }
+                parked_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&parked_rx, "the no-timeout call to wait with no deadline");
+    // No deadline parks anywhere: deleting the flag parks the agent
+    // default instead and fails here.
+    let parked = clock.parked();
+    assert!(
+        parked.contains(&None),
+        "the call waits with no deadline: {parked:?}"
+    );
+    assert!(
+        !parked.iter().any(|until| until.is_some()),
+        "no default parks the call: {parked:?}"
+    );
+    cancel.cancel();
+    let output = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&finished, "the no-timeout call");
+    assert!(output.error.is_none());
+    assert_eq!(text(&output), "Cancelled and stopped.\n");
+    assert!(
+        !text(&output).contains("Timed out after"),
+        "no default reaches the call: {}",
+        text(&output)
+    );
+}
+
 #[test]
 fn driver_shell_precancelled_is_cancelled_before_start() {
     let dir = fakes::TempDir::new("fiber-shell-driver-pre-cancel");
