@@ -127,6 +127,19 @@ fn shape_ticket_session() {
     );
     let chain = crate::paging_session::ticket_chain();
     assert_eq!(chain.len(), 4, "the chain holds four sessions");
+    for (at, (_, log)) in chain.iter().enumerate() {
+        if at == 1 || at == 2 {
+            let small_messages = message_texts(log);
+            let small_long = small_messages
+                .iter()
+                .filter(|text| rows(text) == crate::paging_session::TICKET_LONG_ROWS)
+                .count();
+            assert_eq!(
+                small_long, 0,
+                "middle links stay small, found {small_long} long messages"
+            );
+        }
+    }
     let mut links = 0usize;
     for (_, log) in &chain {
         let first = log

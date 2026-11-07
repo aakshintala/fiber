@@ -202,7 +202,12 @@ fn ticket_log(
     let started = serde_json::json!({"effects": [], "reversible": false});
     let mut payload = serde_json::json!({"workspace": "~/work/fiber", "variables": {"path": "/usr/bin:/bin", "names": [], "source": "inherited"}});
     if let Some((parent_id, at)) = parent {
-        payload["forked_from"] = serde_json::json!({"session_id": parent_id, "seq": at});
+        let _ = payload.as_object_mut().map(|object| {
+            object.insert(
+                "forked_from".to_owned(),
+                serde_json::json!({"session_id": parent_id, "seq": at}),
+            )
+        });
     }
     log.line("session_started", None, &payload);
     log.line(
@@ -275,7 +280,7 @@ fn ticket_log(
 /// The ticket's single large session: thousands of entries with one long
 /// message and one long tool output of tens of thousands of rows.
 pub fn ticket_session() -> String {
-    let (log, _) = ticket_log(TICKET_IDS[3], TICKET_LARGE_STEPS, None, true, 0);
+    let (log, _) = ticket_log("s_dddddddddddddddd", TICKET_LARGE_STEPS, None, true, 0);
     log
 }
 
@@ -284,33 +289,33 @@ pub fn ticket_session() -> String {
 /// middle links stay small. Each child's fork point is its parent's last
 /// line, so every ancestor scan covers almost the whole ancestor log.
 pub fn ticket_chain() -> Vec<(String, String)> {
-    let (root, root_count) = ticket_log(TICKET_IDS[0], TICKET_LARGE_STEPS, None, true, 0);
+    let (root, root_count) = ticket_log("s_aaaaaaaaaaaaaaaa", TICKET_LARGE_STEPS, None, true, 0);
     let (second, second_count) = ticket_log(
-        TICKET_IDS[1],
+        "s_bbbbbbbbbbbbbbbb",
         TICKET_SMALL_STEPS,
-        Some((TICKET_IDS[0], root_count.saturating_sub(1))),
+        Some(("s_aaaaaaaaaaaaaaaa", root_count.saturating_sub(1))),
         false,
         100_000,
     );
     let (third, third_count) = ticket_log(
-        TICKET_IDS[2],
+        "s_cccccccccccccccc",
         TICKET_SMALL_STEPS,
-        Some((TICKET_IDS[1], second_count.saturating_sub(1))),
+        Some(("s_bbbbbbbbbbbbbbbb", second_count.saturating_sub(1))),
         false,
         200_000,
     );
     let (child, _) = ticket_log(
-        TICKET_IDS[3],
+        "s_dddddddddddddddd",
         TICKET_LARGE_STEPS,
-        Some((TICKET_IDS[2], third_count.saturating_sub(1))),
+        Some(("s_cccccccccccccccc", third_count.saturating_sub(1))),
         true,
         300_000,
     );
     vec![
-        (TICKET_IDS[0].to_owned(), root),
-        (TICKET_IDS[1].to_owned(), second),
-        (TICKET_IDS[2].to_owned(), third),
-        (TICKET_IDS[3].to_owned(), child),
+        ("s_aaaaaaaaaaaaaaaa".to_owned(), root),
+        ("s_bbbbbbbbbbbbbbbb".to_owned(), second),
+        ("s_cccccccccccccccc".to_owned(), third),
+        ("s_dddddddddddddddd".to_owned(), child),
     ]
 }
 
