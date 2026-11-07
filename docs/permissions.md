@@ -774,9 +774,9 @@ when it:
 
 1. answers an approval with `reply`, on any live session socket. The
    rejection names `reply` and its target session, not the source session;
-2. sends `prompt`, `steer` or `reply` to its own session — the session whose
-   process is on the connection's ancestor walk — or to a session whose
-   parent walk shares one of those processes;
+2. sends `prompt`, `steer`, `reply` or `sandbox` to its own session — the
+   session whose process is on the connection's ancestor walk — or to a
+   session whose parent walk shares one of those processes;
 3. asks for `pairing_code`.
 
 A target with no live process keeps the existing not-found or replay
