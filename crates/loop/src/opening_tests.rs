@@ -1222,3 +1222,28 @@ fn added_folders_are_listed_in_first_event_order_but_never_read_at_the_opening()
     assert!(plain.added_directories.is_empty());
     assert!(!render(&plain).contains("Added folders"));
 }
+
+#[test]
+fn large_top_level_file_is_collected_and_rendered_in_full() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // A 40 KiB chain file: the stub rule never touches top-level files,
+    // so the opening collects and renders the whole text.
+    let mut content = String::from("# Top rules.\n");
+    content.push_str(&"x".repeat(40 * 1024 - content.len()));
+    assert_eq!(content.len(), 40 * 1024);
+    write(&workspace.join("AGENTS.md"), &content);
+    let fake = clock();
+    let message = collected(&home, &workspace, &fake).message;
+    assert_eq!(message.instruction_files.len(), 1);
+    assert_eq!(message.instruction_files[0].content.len(), 40 * 1024);
+    assert!(
+        message.instruction_files[0]
+            .content
+            .contains("# Top rules.")
+    );
+    let text = render(&message);
+    assert!(text.contains("# Top rules."), "len {}", text.len());
+    assert!(text.contains(&"x".repeat(1024)), "len {}", text.len());
+}

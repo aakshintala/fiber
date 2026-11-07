@@ -178,6 +178,7 @@ fn apply_instruction_sets_and_clears_one_path() {
         extension: None,
         content: Some("new".into()),
         sent: InstructionSent::Diff,
+        size: None,
     });
     apply(&mut had, &set);
     assert_eq!(had.get("/w/AGENTS.md"), Some(&"new".to_owned()));
@@ -187,6 +188,7 @@ fn apply_instruction_sets_and_clears_one_path() {
         extension: None,
         content: None,
         sent: InstructionSent::Deleted,
+        size: None,
     });
     apply(&mut had, &clear);
     assert!(!had.contains_key("/w/AGENTS.md"));
@@ -749,6 +751,413 @@ fn subdirectory_file_queues_once_per_context() {
     assert!(state.take_queued().is_empty());
 }
 
+/// A subdirectory instruction file of exactly `bytes` raw bytes: one
+/// heading line, then `x` padding.
+fn sized_subdirectory_file(workspace: &Path, bytes: usize) -> PathBuf {
+    let head = "# Sub rules.\n";
+    assert!(bytes > head.len());
+    let mut content = String::with_capacity(bytes);
+    content.push_str(head);
+    content.push_str(&"x".repeat(bytes - head.len()));
+    let path = workspace.join("sub/AGENTS.md");
+    write(&path, &content);
+    path
+}
+
+/// Queues `sub/` once and applies what the queue emits to what the model
+/// had, as the loop's render does when it writes the lines.
+fn queue_subdirectory(state: &mut State, workspace: &Path) -> Vec<Event> {
+    let own = state.call_completed(workspace, &declared(Some(&["sub/notes.txt"])));
+    assert!(own.is_empty());
+    let queued = state.take_queued();
+    for event in &queued {
+        apply(&mut state.had, event);
+    }
+    queued
+}
+
+fn stub_line(events: &[Event]) -> &contract::events::InstructionFile {
+    let Event::InstructionFile(line) = &events[0] else {
+        panic!("queued a subdirectory line first");
+    };
+    line
+}
+
+fn stub_notice(events: &[Event]) -> &contract::events::Notice {
+    let Event::Notice(notice) = &events[1] else {
+        panic!("queued the stub notice second");
+    };
+    notice
+}
+
+#[test]
+fn over_limit_subdirectory_queues_stub_and_notice() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let key = canon(&path).display().to_string();
+    let queued = queue_subdirectory(&mut state, &canon(&workspace));
+    assert_eq!(queued.len(), 2);
+    let line = stub_line(&queued);
+    assert_eq!(line.path, key);
+    assert_eq!(line.reason, InstructionReason::Subdirectory);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(40 * 1024));
+    let content = line.content.as_deref().unwrap();
+    assert_eq!(content.len(), 40 * 1024);
+    assert!(content.contains("# Sub rules."), "len {}", content.len());
+    let notice = stub_notice(&queued);
+    assert_eq!(notice.code, contract::ErrorCode::InstructionsLarge);
+    assert!(notice.message.contains(&key), "{}", notice.message);
+    assert!(notice.message.contains("40960 bytes"), "{}", notice.message);
+    assert!(notice.message.contains("stub"), "{}", notice.message);
+    // Once stubbed, the path stays stubbed for the context.
+    assert!(state.stubbed.contains(&key));
+}
+
+#[test]
+fn subdirectory_32kib_boundary_sends_full() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    sized_subdirectory_file(&workspace, 32768);
+    let queued = queue_subdirectory(&mut state, &canon(&workspace));
+    assert_eq!(queued.len(), 1);
+    let line = stub_line(&queued);
+    assert_eq!(line.sent, InstructionSent::Full);
+    assert_eq!(line.size, None);
+}
+
+#[test]
+fn subdirectory_32kib_minus_one_sends_full() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    sized_subdirectory_file(&workspace, 32767);
+    let queued = queue_subdirectory(&mut state, &canon(&workspace));
+    assert_eq!(queued.len(), 1);
+    assert_eq!(stub_line(&queued).sent, InstructionSent::Full);
+}
+
+#[test]
+fn subdirectory_32kib_plus_one_sends_stub() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    sized_subdirectory_file(&workspace, 32769);
+    let queued = queue_subdirectory(&mut state, &canon(&workspace));
+    assert_eq!(queued.len(), 2);
+    let line = stub_line(&queued);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(32769));
+    assert_eq!(
+        stub_notice(&queued).code,
+        contract::ErrorCode::InstructionsLarge
+    );
+}
+
+#[test]
+fn queued_created_over_limit_32kib_stays_full() {
+    // The stub rule fires only on first-touch sends: a queued `created`
+    // line over the limit keeps today's mapping and raises no notice.
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let key = canon(&path).display().to_string();
+    let content = std::fs::read_to_string(&path).unwrap();
+    state
+        .queued
+        .push(Event::InstructionFile(contract::events::InstructionFile {
+            path: key.clone(),
+            reason: InstructionReason::Created,
+            extension: None,
+            content: Some(content),
+            sent: InstructionSent::Full,
+            size: None,
+        }));
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let line = stub_line(&queued);
+    assert_eq!(line.sent, InstructionSent::Full);
+    assert_eq!(line.size, None);
+    assert!(!state.stubbed.contains(&key));
+}
+
+#[test]
+fn stubbed_subdirectory_growth_keeps_stub() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let workspace = canon(&workspace);
+    queue_subdirectory(&mut state, &workspace);
+    // Grown outside the session: the re-send is a stub with the new
+    // size, never the full text.
+    let mut grown = String::from("# Sub rules, revised.\n");
+    grown.push_str(&"x".repeat(50 * 1024 - grown.len()));
+    assert_eq!(grown.len(), 50 * 1024);
+    std::fs::write(&path, &grown).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    let line = &out.files[0];
+    assert_eq!(line.reason, InstructionReason::Changed);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(50 * 1024));
+    assert_eq!(out.notices.len(), 1);
+    assert_eq!(out.notices[0].code, contract::ErrorCode::InstructionsLarge);
+    assert!(out.notices[0].message.contains(&line.path));
+    assert!(out.notices[0].message.contains("51200 bytes"));
+    assert!(out.notices[0].message.contains("stub"));
+    let content = line.content.as_deref().unwrap();
+    assert_eq!(content.len(), 50 * 1024);
+    assert!(
+        content.contains("# Sub rules, revised."),
+        "len {}",
+        content.len()
+    );
+}
+
+#[test]
+fn stubbed_subdirectory_delete_recreate_sends_created_stub() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let workspace = canon(&workspace);
+    let key = canon(&path).display().to_string();
+    queue_subdirectory(&mut state, &workspace);
+    std::fs::remove_file(&path).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Deleted);
+    for event in out
+        .files
+        .iter()
+        .map(|file| Event::InstructionFile(file.clone()))
+    {
+        apply(&mut state.had, &event);
+    }
+    // No prior content: the recreate reads as `created`, still a stub.
+    let mut fresh = String::from("# Sub rules, fresh.\n");
+    fresh.push_str(&"x".repeat(40 * 1024 - fresh.len()));
+    std::fs::write(&path, &fresh).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    let line = &out.files[0];
+    assert_eq!(line.path, key);
+    assert_eq!(line.reason, InstructionReason::Created);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(40 * 1024));
+    assert_eq!(out.notices.len(), 1);
+    assert_eq!(out.notices[0].code, contract::ErrorCode::InstructionsLarge);
+    assert!(out.notices[0].message.contains(&key));
+    assert!(out.notices[0].message.contains("40960 bytes"));
+    assert!(out.notices[0].message.contains("stub"));
+}
+
+#[test]
+fn queued_subdirectory_edited_before_emit_sends_reread_content() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let workspace = canon(&workspace);
+    // Queued but not yet emitted: a later call in the same batch edits
+    // the file, so the emit re-reads and sends the new content.
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/notes.txt"])));
+    assert!(own.is_empty());
+    let mut revised = String::from("# Revised rules.\n");
+    revised.push_str(&"x".repeat(44 * 1024 - revised.len()));
+    assert_eq!(revised.len(), 44 * 1024);
+    std::fs::write(&path, &revised).unwrap();
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 2);
+    let line = stub_line(&queued);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(44 * 1024));
+    assert_eq!(line.content.as_deref(), Some(revised.as_str()));
+    assert!(
+        line.content
+            .as_deref()
+            .unwrap()
+            .contains("# Revised rules.")
+    );
+}
+
+#[test]
+fn stubbed_subdirectory_shrink_keeps_stub_with_notice() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let key = canon(&path).display().to_string();
+    queue_subdirectory(&mut state, &canon(&workspace));
+    // Shrunk outside the session to 100 bytes: the re-send stays a stub
+    // with the new size, and its notice names the new size.
+    let mut small = String::from("# Tiny.\n");
+    small.push_str(&"x".repeat(100 - small.len()));
+    assert_eq!(small.len(), 100);
+    std::fs::write(&path, &small).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    let line = &out.files[0];
+    assert_eq!(line.path, key);
+    assert_eq!(line.reason, InstructionReason::Changed);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(100));
+    assert_eq!(out.notices.len(), 1);
+    assert_eq!(out.notices[0].code, contract::ErrorCode::InstructionsLarge);
+    assert!(out.notices[0].message.contains(&key));
+    assert!(out.notices[0].message.contains("100 bytes"));
+    assert!(out.notices[0].message.contains("stub"));
+    assert!(!out.notices[0].message.contains("over the 32 KiB"));
+}
+
+#[test]
+fn subdirectory_stub_invalid_utf8_persists_raw_length_for_resume() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    // 32769 raw bytes holding one invalid byte: the logged content
+    // decodes longer than the raw size.
+    let mut bytes = vec![b'x'; 32769];
+    bytes[0] = b'#';
+    bytes[100] = 0xFF;
+    let path = workspace.join("sub/AGENTS.md");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).unwrap();
+    }
+    std::fs::write(&path, &bytes).unwrap();
+    let workspace = canon(&workspace);
+    let key = canon(&path).display().to_string();
+    let queued = queue_subdirectory(&mut state, &workspace);
+    assert_eq!(queued.len(), 2);
+    let line = stub_line(&queued);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(32769));
+    assert_eq!(line.content.as_deref().unwrap().len(), 32771);
+    // The log round-trips the stub line: a resume restores the stubbed
+    // set, and the next change re-sends a stub with the new raw length.
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        envelope("instruction_file", &Event::InstructionFile(line.clone())),
+    ];
+    let mut resumed = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(resumed.stubbed.contains(&key));
+    let mut grown = bytes.clone();
+    grown.extend_from_slice(b"more\n");
+    std::fs::write(&path, &grown).unwrap();
+    let out = resumed.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].sent, InstructionSent::Stub);
+    assert_eq!(out.files[0].size, Some(32774));
+}
+
+#[test]
+fn resumed_state_restores_stubbed_set_from_stub_lines() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    let stub = Event::InstructionFile(contract::events::InstructionFile {
+        path: "/w/sub/AGENTS.md".into(),
+        reason: InstructionReason::Subdirectory,
+        extension: None,
+        content: Some("# Sub.\n".into()),
+        sent: InstructionSent::Stub,
+        size: Some(40 * 1024),
+    });
+    let full = Event::InstructionFile(contract::events::InstructionFile {
+        path: "/w/AGENTS.md".into(),
+        reason: InstructionReason::Changed,
+        extension: None,
+        content: Some("Leaf.\n".into()),
+        sent: InstructionSent::Full,
+        size: None,
+    });
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        envelope("instruction_file", &stub),
+        envelope("instruction_file", &full),
+    ];
+    let state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    assert!(state.stubbed.contains("/w/sub/AGENTS.md"));
+    assert!(!state.stubbed.contains("/w/AGENTS.md"));
+}
+
+#[test]
+fn queued_subdirectory_stub_own_edit_sends_nothing() {
+    // A later call in the same batch edited the queued file: its own
+    // edit already moved what the model had, so the queue drops the
+    // line and raises no stub notice.
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let workspace = canon(&workspace);
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/notes.txt"])));
+    assert!(own.is_empty());
+    let mut revised = String::from("# Sub rules, mine.\n");
+    revised.push_str(&"x".repeat(40 * 1024 - revised.len()));
+    std::fs::write(&path, &revised).unwrap();
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/AGENTS.md"])));
+    assert_eq!(own.len(), 1);
+    for event in own.into_iter().map(Event::InstructionFile) {
+        apply(&mut state.had, &event);
+    }
+    assert!(state.take_queued().is_empty());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn subdirectory_stub_non_utf8_dir_name_queues_nothing() {
+    // A subdirectory whose name is not valid UTF-8: the declared lossy
+    // name reaches it lexically, but the lossy candidate path reads as
+    // absent, so nothing queues and no notice names it.
+    use std::os::unix::ffi::OsStrExt;
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let dir = workspace.join(std::ffi::OsStr::from_bytes(b"sub-\xff"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "Sub rules.\n").unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let own = state.call_completed(
+        &canon(&workspace),
+        &declared(Some(&["sub-\u{fffd}/notes.txt"])),
+    );
+    assert!(own.is_empty());
+    assert!(state.take_queued().is_empty());
+}
+
 #[test]
 fn subdirectory_walk_reaches_nested_dirs_and_a_declared_dir() {
     let (home, _held) = root();
@@ -837,6 +1246,7 @@ fn resumed_state_folds_changes_deletes_and_the_date() {
         extension: None,
         content: Some("Kept v2.\n".into()),
         sent: InstructionSent::Diff,
+        size: None,
     });
     let deleted = Event::InstructionFile(contract::events::InstructionFile {
         path: canon(&gone).display().to_string(),
@@ -844,6 +1254,7 @@ fn resumed_state_folds_changes_deletes_and_the_date() {
         extension: None,
         content: None,
         sent: InstructionSent::Deleted,
+        size: None,
     });
     let dated = Event::DateChanged(contract::events::DateChanged {
         date: "2023-11-20".into(),
@@ -2019,6 +2430,7 @@ fn resumed_ignores_a_historical_section_line_the_manifest_no_longer_names() {
         extension: Some("fiber.test/notes".into()),
         content: Some("Revised by the call.\n".into()),
         sent: InstructionSent::None,
+        size: None,
     });
     let lines = vec![
         envelope("opening_message", &Event::OpeningMessage(message)),

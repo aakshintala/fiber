@@ -508,6 +508,7 @@ fn instruction(text: &str) -> Event {
         extension: None,
         content: Some(text.into()),
         sent: InstructionSent::Full,
+        size: None,
     })
 }
 

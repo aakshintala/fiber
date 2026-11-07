@@ -5139,6 +5139,7 @@ fn known_hosts_resume_restores_every_source_but_reviews_an_unknown_host() {
             extension: None,
             content: Some("https://instructions.test/".into()),
             sent: InstructionSent::Full,
+            size: None,
         }),
         None,
     );
