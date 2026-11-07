@@ -1050,11 +1050,13 @@ fn wait_behind_replay(
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp
                 .hub
                 .answer(
                     &rx,
                     "a_1",
+                    &target,
                     &mut lp.app,
                     &lp.tick,
                     lp.clock.as_ref(),
@@ -1142,11 +1144,13 @@ fn an_answer_first_leaves_no_stash() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp
                 .hub
                 .answer(
                     &rx,
                     "a_1",
+                    &target,
                     &mut lp.app,
                     &lp.tick,
                     lp.clock.as_ref(),
@@ -1381,11 +1385,13 @@ fn a_history_wait_at_the_plateau_stashes_queue_plus_one() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp
                 .hub
                 .answer(
                     &rx,
                     "a_1",
+                    &target,
                     &mut lp.app,
                     &lp.tick,
                     lp.clock.as_ref(),
@@ -1755,6 +1761,7 @@ fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
     let answer = lp.hub.answer(
         &rx,
         "a_1",
+        &session,
         &mut lp.app,
         &lp.tick,
         lp.clock.as_ref(),
@@ -1769,6 +1776,145 @@ fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
         rx.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
     ));
+}
+
+/// Runs one `history` wait for the attached session through `fetch` on a
+/// thread of its own, answering the minted command after a `stream_reopened`
+/// naming `reopened`: the fetch's result and the loop back, with the minted
+/// id, the needed span and the awaited lines. The caller names which
+/// reopening the wait sees: another session's, or the read one.
+fn fetch_past_reopen(
+    read: contract::SessionId,
+    reopened: contract::SessionId,
+) -> (
+    Result<Vec<contract::Envelope>, String>,
+    super::super::Loop<ratatui::backend::TestBackend>,
+    String,
+    std::ops::RangeInclusive<contract::Seq>,
+    Vec<contract::Envelope>,
+) {
+    let (mut lp, theirs, tx, rx) = opened();
+    assert_eq!(
+        lp.app.session(),
+        Some(&read),
+        "the read session is attached"
+    );
+    demand_top(&mut lp);
+    let needed = lp.app.needs();
+    assert!(!needed.is_empty(), "the top page still needs its lines");
+    let (segment, span) = needed[0].clone();
+    assert_eq!(segment, read, "the top page is the read session's");
+    // One `history` command answers 256 lines at most: fetch the span's
+    // first chunk, so the wait below sees exactly one command. The fold
+    // still lands the span's page, which is what `needs` tracks.
+    let from = span.start().0;
+    let end = from
+        .saturating_add(super::super::hub::HISTORY_LINES - 1)
+        .min(span.end().0);
+    let range = contract::Seq(from)..=contract::Seq(end);
+    let want = super::history(&session(), from, end);
+    assert!(!want.is_empty(), "the chunk holds the read session's lines");
+    let fetch_session = segment.clone();
+    let fetch_range = range.clone();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-history-fetch".to_owned())
+        .spawn(move || {
+            let result = lp.hub.fetch(
+                &rx,
+                &fetch_session,
+                &fetch_range,
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                lp.tick.armed(),
+            );
+            done.send((result, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The write precedes the wait: the command is already buffered once the
+    // fetch runs, so the read below returns at once.
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let command = read_command(&theirs);
+    assert_eq!(
+        command["command"], "history",
+        "the fetch asks once: {command}"
+    );
+    let id = command["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the minted id: {command}"))
+        .to_owned();
+    let last = session().len() as u64;
+    tx.send(Input::Hub(stream_event(
+        "stream_reopened",
+        &reopened,
+        Some(last),
+    )))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    // The wait may already have ended on the reopening, leaving the answer
+    // nowhere to go; the assertions below tell a live wait from a dead one.
+    tx.send(Input::Hub(Line::Session(command_answer(&id, want.clone()))))
+        .unwrap_or(());
+    let (result, lp) = Deadline::after(DEADLINE).recv_or_fail(&finished, "the history wait to end");
+    // No second command went out: the fetch returned after its one answer.
+    let mut byte = [0u8; 1];
+    match (&theirs).read(&mut byte) {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(0) => panic!("the hub's end closed"),
+        Ok(_) => panic!("the fetch asked twice"),
+        Err(error) => panic!("the hub's read failed: {error}"),
+    }
+    (result, lp, id, span, want)
+}
+
+/// A reopening for another session leaves the read's history wait live:
+/// the wait answers with the read session's lines, which fold into its
+/// page. B is the session being read; A resumes alongside it.
+#[test]
+fn a_reopened_stream_for_another_session_leaves_the_history_wait_live() {
+    let read = contract::SessionId(super::SESSION.to_owned());
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
+    assert_ne!(read, other, "two sessions resume at once");
+    let (result, mut lp, id, span, want) = fetch_past_reopen(read.clone(), other);
+    let lines = result.unwrap_or_else(|err| panic!("the foreign reopening ends the wait: {err}"));
+    assert_eq!(
+        lines, want,
+        "the wait answers with the read session's lines"
+    );
+    assert_eq!(
+        lp.app.outbox.waiting(&id),
+        None,
+        "the foreign reopening abandons nothing"
+    );
+    lp.app.load_inner(&read, lines);
+    assert!(
+        !lp.app.needs().contains(&(read.clone(), span)),
+        "the folded page is no longer needed"
+    );
+    assert!(
+        lp.app.pages().part(0).is_some(),
+        "the folded page is resident"
+    );
+}
+
+/// A reopening for the read session abandons its history wait at once:
+/// the wait ends with no lines and the minted id is abandoned.
+#[test]
+fn a_reopened_stream_for_the_read_session_abandons_its_wait() {
+    let read = contract::SessionId(super::SESSION.to_owned());
+    let (result, lp, id, _, _) = fetch_past_reopen(read.clone(), read.clone());
+    assert_eq!(
+        result,
+        Ok(Vec::new()),
+        "the reopening ends the wait with no lines"
+    );
+    assert_eq!(
+        lp.app.outbox.waiting(&id),
+        Some(crate::app::Waiting::Abandoned),
+        "the read session's reopening abandons its wait"
+    );
 }
 
 #[test]
@@ -5308,9 +5454,11 @@ fn wait_on(
     std::thread::Builder::new()
         .name("attach-history-wait".to_owned())
         .spawn(move || {
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp.hub.answer(
                 &rx,
                 "a_1",
+                &target,
                 &mut lp.app,
                 &lp.tick,
                 lp.clock.as_ref(),
@@ -5539,9 +5687,16 @@ fn an_answer_at_the_deadline_is_stashed_and_lost() {
         .name("attach-late-answer".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            let result = lp
-                .hub
-                .answer(&rx, "a_1", &mut lp.app, &lp.tick, lp.clock.as_ref(), None);
+            let target = lp.app.session().cloned().expect("attached");
+            let result = lp.hub.answer(
+                &rx,
+                "a_1",
+                &target,
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                None,
+            );
             done.send((result, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
