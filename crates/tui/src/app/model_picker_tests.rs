@@ -2806,6 +2806,74 @@ fn an_accepted_level_updates_only_the_matching_pending_start_model() {
     );
 }
 
+/// Attached with the preamble on `acme/m1` at `low` and the latest
+/// `session_status` on `zeta/z1`: the session runs on the status model
+/// (`docs/tui.md`, "The model picker").
+fn status_over_preamble() -> App {
+    let (mut app, _) = choosing_app();
+    app.on_line(preamble_line("acme/m1", Some("low")));
+    app.on_line(status_model("zeta/z1"));
+    app
+}
+
+/// The ids of the rows the open picker marks current.
+fn current_ids(app: &App) -> Vec<String> {
+    app.model_picker_view()
+        .expect("open")
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .filter(|model| model.current)
+        .map(|model| model.id.clone())
+        .collect()
+}
+
+#[test]
+fn the_picker_opens_on_and_marks_the_status_model_current() {
+    let mut app = status_over_preamble();
+    open(&mut app);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(current_ids(&app), ["z1"]);
+}
+
+#[test]
+fn thinking_acts_on_the_status_model() {
+    let mut app = status_over_preamble();
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    let line = sent(run_draft(&mut app, "/thinking low"));
+    assert_eq!(line["args"]["model"], json!("zeta/z1"));
+}
+
+#[test]
+fn choosing_the_status_model_at_its_level_rebuilds_nothing() {
+    let mut app = status_over_preamble();
+    app.on_line(usage_line(
+        SESSION,
+        1000,
+        200000,
+        json!({"1h": 34}),
+        json!({}),
+    ));
+    open(&mut app);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    sends_one(app.on_key(Key::Enter, now()));
+    assert!(app.notices().is_empty(), "{:?}", app.notices());
+}
+
+#[test]
+fn a_busy_level_only_choice_names_the_level_for_the_status_model() {
+    let mut app = status_over_preamble();
+    app.on_line(turn_started());
+    open(&mut app);
+    sends_one(app.on_key(Key::Enter, now()));
+    assert_eq!(
+        app.notice(),
+        Some("thinking low applies when this turn ends")
+    );
+}
+
 #[test]
 fn the_picker_marks_the_pending_home_choice_current() {
     let mut app = home();

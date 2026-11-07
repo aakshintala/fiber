@@ -371,7 +371,8 @@ fn ctx_segment(app: &App) -> Segment {
 
 /// The row's right side: the model in `accent` with the thinking level
 /// in `attention`, then the ctx segment, joined by a dim `  │  `. The
-/// model slot stays blank until a preamble names one
+/// model slot names the latest `session_status` model, else the
+/// preamble's; it stays blank until one of them lands
 /// (`docs/tui.md`, "The input box").
 fn status_right(app: &App) -> Joined {
     let panel = app.panel_state();

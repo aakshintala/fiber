@@ -2715,6 +2715,30 @@ fn a_pending_choice_level_follows_the_thinking_chip() {
     );
 }
 
+/// With no launch model the thinking chip still names the configured
+/// level, and no pending choice changes that (`docs/tui.md`, "Home").
+#[test]
+fn the_thinking_chip_names_the_configured_level_with_no_launch_model() {
+    let app = home_with(
+        80,
+        24,
+        Launch {
+            model: None,
+            thinking: Some("high".to_owned()),
+            ..launch()
+        },
+    );
+    assert_eq!(
+        chips(&app),
+        [
+            "[w]",
+            "[no model]",
+            "[thinking: high]",
+            "Enter starts a session",
+        ]
+    );
+}
+
 #[test]
 fn the_picker_lists_the_launch_directory_then_row_workspaces_once_each() {
     let mut app = home_with(80, 24, launch());

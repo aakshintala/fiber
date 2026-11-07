@@ -145,7 +145,7 @@ impl App {
         let on_screen = if self.on_home() {
             self.home_model()
         } else {
-            self.panel_state.model().map(|model| {
+            self.panel_state.session_model().map(|model| {
                 (
                     model.to_owned(),
                     self.panel_state.thinking().map(str::to_owned),
@@ -214,7 +214,7 @@ impl App {
         // A switch rebuilds the prompt cache: say its size before the
         // command goes out, only when the model or level changes and the
         // session on screen has a known last call.
-        let changed = Some(choice.reference.as_str()) != self.panel_state.model()
+        let changed = Some(choice.reference.as_str()) != self.panel_state.session_model()
             || choice.level.as_deref() != self.panel_state.thinking();
         if changed && let Some(tokens) = self.usage_on_screen() {
             self.push_notice(
@@ -390,7 +390,7 @@ impl App {
     fn pending_text(&self, reference: &str, level: Option<&str>) -> String {
         const END: &str = "applies when this turn ends";
         if let Some(level) = level
-            && self.panel_state.model() == Some(reference)
+            && self.panel_state.session_model() == Some(reference)
         {
             return format!("thinking {level} {END}");
         }
@@ -673,7 +673,7 @@ impl App {
         if self.on_home() {
             self.home_model()
         } else {
-            self.panel_state.model().map(|model| {
+            self.panel_state.session_model().map(|model| {
                 (
                     model.to_owned(),
                     self.panel_state.thinking().map(str::to_owned),
@@ -768,7 +768,7 @@ impl App {
             current = self.home_model().map(|(model, _)| model);
             current.as_deref()
         } else {
-            self.panel_state.model()
+            self.panel_state.session_model()
         };
         let home_only = if self.on_home() {
             self.model_picker

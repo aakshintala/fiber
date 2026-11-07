@@ -568,10 +568,16 @@ impl App {
                 // dim `ⓢ`, leaving the model name bright
                 // (`docs/tui.md`, "Home").
                 let pending = self.model_picker.start_model.is_some();
-                let (model, thinking) = self
-                    .home_model()
-                    .map(|(model, level)| (Some(model), level))
-                    .unwrap_or((None, None));
+                // With no pending choice the level is the launch's own:
+                // `home_model()` is `None` without a launch model, but
+                // a configured `thinking` still shows.
+                let (model, thinking) = if pending {
+                    self.home_model()
+                        .map(|(model, level)| (Some(model), level))
+                        .unwrap_or((None, None))
+                } else {
+                    (home.launch.model.clone(), home.launch.thinking.clone())
+                };
                 chips.extend([
                     Chip {
                         session_mark: pending,
