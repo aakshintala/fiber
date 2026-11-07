@@ -2523,7 +2523,7 @@ fn hub_code(payload: &Map<String, Value>) -> ErrorCode {
 
 /// Whether a session line is the reviewer blocking a call: its deny, or an
 /// escalation to the person whose cause is a block (`docs/events.md`,
-/// `permission_requested`).
+/// `permission_requested`), except a failure for want of a reviewer model.
 fn is_block(envelope: &Envelope) -> bool {
     let payload = &envelope.payload;
     let word = |key: &str| payload.get(key).and_then(Value::as_str);
@@ -2531,13 +2531,23 @@ fn is_block(envelope: &Envelope) -> bool {
         EventKind::PermissionResolved => {
             word("decided_by") == Some("reviewer") && word("decision") == Some("deny")
         }
-        EventKind::PermissionRequested => matches!(
-            payload
-                .get("escalation")
+        EventKind::PermissionRequested => {
+            let escalation = payload.get("escalation");
+            let cause = escalation
                 .and_then(|escalation| escalation.get("cause"))
-                .and_then(Value::as_str),
-            Some("consecutive_blocks" | "session_blocks" | "reviewer_failed")
-        ),
+                .and_then(Value::as_str);
+            // With no reviewer model no reviewer ran, so nothing was
+            // blocked: the `no_model` notice already says what to set.
+            let no_model = escalation
+                .and_then(|escalation| escalation.get("error"))
+                .and_then(|error| error.get("code"))
+                .and_then(Value::as_str)
+                == Some("no_model");
+            matches!(
+                cause,
+                Some("consecutive_blocks" | "session_blocks" | "reviewer_failed")
+            ) && !no_model
+        }
         EventKind::FiberStarted
         | EventKind::FiberExited
         | EventKind::SessionStarted

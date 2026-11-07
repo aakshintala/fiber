@@ -402,7 +402,8 @@ person through `ask_user`, and calls `reviewer_notes_save` with their kept
 lines. Two write paths stay closed: no agent edit reaches the notes except
 through that call, and the call writes only on a confirm the person answers.
 The first time in a session that the reviewer blocks a call while both layers
-of the notes are empty, the terminal shows one notice naming the command.
+of the notes are empty, the terminal shows one notice naming the command. A
+call escalated for want of a reviewer model (`no_model`) is no block.
 
 It proposes lines, one topic at a time, in the order of the bullets above.
 Each proposal comes from evidence:

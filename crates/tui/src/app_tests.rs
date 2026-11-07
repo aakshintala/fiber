@@ -2445,6 +2445,37 @@ fn first_block_notice_each_block_escalation_cause_shows() {
 }
 
 #[test]
+fn first_block_notice_a_reviewer_failure_for_no_model_stays_silent() {
+    let (mut app, _) = notice_app();
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_8", "effects": ["executes"],
+            "reversible": true, "step": "review",
+            "escalation": {"cause": "reviewer_failed",
+                "error": {"code": "no_model", "message": "No reviewer model is set."}}}),
+        Some("a_1"),
+    ));
+    assert_eq!(
+        app.notice(),
+        None,
+        "no reviewer ran, so nothing was blocked"
+    );
+    // Other failures of the reviewer still count, and the silent line did
+    // not mark the session done.
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_9", "effects": ["executes"],
+            "reversible": true, "step": "review",
+            "escalation": {"cause": "reviewer_failed",
+                "error": {"code": "provider_unavailable", "message": "down"}}}),
+        Some("a_2"),
+    ));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
 fn first_block_notice_other_escalation_causes_stay_silent() {
     for cause in [Some("escalate_rule"), Some("not_a_block"), None] {
         let (mut app, _) = notice_app();
