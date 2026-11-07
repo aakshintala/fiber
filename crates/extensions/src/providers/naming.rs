@@ -199,9 +199,9 @@ fn missing_credential(id: &str, holders: &[String], registry: &Providers) -> cra
     // registry holds the named one; the fallbacks keep today's advice on
     // the unreachable miss.
     let login_advice = owners.first().is_none_or(|name| {
-        registry.get(name).is_none_or(|data| {
-            matches!(data.credential_from, config::CredentialFrom::Stored { .. })
-        })
+        registry
+            .get(name)
+            .is_none_or(|data| data.credential_from.advises_login())
     });
     let why = if owners.len() == 1 {
         format!("`{}` has `{id}` but is not logged in", owners[0])

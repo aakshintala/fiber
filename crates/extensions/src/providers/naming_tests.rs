@@ -48,25 +48,13 @@ fn thinking(id: &str) -> ModelData {
 
 /// A registry holding `models` under each provider in `entries`.
 fn registry(entries: &[(&str, Vec<ModelData>)]) -> Providers {
-    let mut providers = Providers::default();
-    for (name, models) in entries {
-        providers.by_name.insert(
-            (*name).to_owned(),
-            ProviderData {
-                name: (*name).to_owned(),
-                credential_from: CredentialFrom::Stored {
-                    credential: None,
-                    login: None,
-                },
-                credential_name: None,
-                headers: BTreeMap::new(),
-                placeholders: BTreeMap::new(),
-                models: models.clone(),
-                reviewer_model: None,
-            },
-        );
-    }
-    providers
+    registry_from(
+        entries,
+        CredentialFrom::Stored {
+            credential: None,
+            login: None,
+        },
+    )
 }
 
 /// A registry like `registry`, with every provider reading its credential
