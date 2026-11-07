@@ -439,12 +439,12 @@ impl Connection {
                     // reopening for any other session, or with no session
                     // at all, waits stashed like every other held line,
                     // and the wait holds for its answer.
-                    if reopened != Some(target.0.as_str()) {
-                        self.push_stash(Input::Hub(Line::Hub(line)));
+                    let for_target = reopened == Some(target.0.as_str());
+                    self.push_stash(Input::Hub(Line::Hub(line)));
+                    if !for_target {
                         continue;
                     }
                     app.abandon_history(id.to_owned());
-                    self.push_stash(Input::Hub(Line::Hub(line)));
                     return Ok(Answer::Reopened);
                 }
                 // A tick while a frame waits for history is acked and
