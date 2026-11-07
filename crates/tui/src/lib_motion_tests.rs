@@ -231,9 +231,11 @@ fn a_tick_while_a_frame_waits_for_history_is_acked() {
         None,
     )))
     .unwrap_or_else(|err| panic!("send: {err}"));
+    let target = lp.app.session().cloned().expect("attached");
     let lines = lp.hub.answer(
         &rx,
         "c_1",
+        &target,
         &mut lp.app,
         &lp.tick,
         lp.clock.as_ref(),
