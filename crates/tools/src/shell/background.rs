@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use contract::JobId;
 use contract::clock::{Clock, Wake};
@@ -313,6 +313,19 @@ fn hand_off(
             hosted.host.stop(&hosted.id);
         }
     }
+    // The moved job keeps the command's timeout (`docs/tools.md`,
+    // "Timeout"), so the receipt names when it fires: the wall clock now
+    // plus what is left of the drive's deadline, saturated when the
+    // deadline already passed. Without a limit, or without a deadline in
+    // hand, there is nothing to name. Captured before the job's thread
+    // takes the move, beside the saved members above.
+    let stop = match (limit, moved.progress.timeout_at) {
+        (Some(limit), Some(timeout_at)) => clock
+            .wall()
+            .checked_add(timeout_at.saturating_duration_since(clock.now()))
+            .map(|wall| (limit.ms, wall)),
+        _ => None,
+    };
     let job_clock = Arc::clone(&clock);
     // The job's thread starts before the receipt is built, so its timeout
     // and stop hold while the receipt names the saved members.
@@ -349,20 +362,49 @@ fn hand_off(
     });
     match first {
         Some(first) => with_spill_line(
-            terminal_receipt(
-                &opened.started,
-                &opened.path,
-                &reason,
-                members.as_deref(),
-                &first,
+            with_deadline(
+                terminal_receipt(
+                    &opened.started,
+                    &opened.path,
+                    &reason,
+                    members.as_deref(),
+                    &first,
+                ),
+                stop,
             ),
             spill_line,
         ),
         None => with_spill_line(
-            receipt(&opened.started, &opened.path, &reason, members.as_deref()),
+            with_deadline(
+                receipt(&opened.started, &opened.path, &reason, members.as_deref()),
+                stop,
+            ),
             spill_line,
         ),
     }
+}
+
+/// Appends the timeout's stop line to a shell receipt that kept one, if
+/// any. A monitor's receipt names its own deadline; this covers the shell
+/// receipts only.
+fn with_deadline(mut output: Output, stop: Option<(u64, SystemTime)>) -> Output {
+    if let (Some((ms, wall)), Some(ContentPart::Text { text })) = (stop, output.content.first_mut())
+    {
+        text.push_str(&deadline_note(ms, wall));
+        text.push('\n');
+    }
+    output
+}
+
+/// The receipt's closing line for a moved job that kept its timeout: when
+/// Fiber stops it, and the timeout it carries. The stop wall renders in
+/// UTC, whole seconds, like every other time the model reads.
+fn deadline_note(ms: u64, stop: SystemTime) -> String {
+    let when = contract::clock::utc_time(contract::clock::wall_ms(stop) / 1_000);
+    format!(
+        "Fiber stops it at {when} (timeout_ms {ms}). {}",
+        super::MOVED_JOB_HINT
+    )
 }
 
 /// The receipt with the spill's extra line naming a raw file left behind,
@@ -656,7 +698,25 @@ pub(super) fn to_completed_reported(
     // over every other end but the cap.
     let stopped =
         !capped && !flooded && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
+    // A moved job's timeout carries the hint from its receipt: the same
+    // line a foreground kill says, plus how to keep a long-running
+    // process. A monitor's deadline names itself; an indeterminate end
+    // stays indeterminate, as `assemble` reads it first; and the
+    // foreground `assemble` above stays byte-identical. The capped and
+    // flooded branches below still win when they apply. Read before
+    // `assemble` consumes the end.
+    let moved_limit = match (finished.stop, limit) {
+        (Some(StopKind::Timeout), Some(limit)) if !limit.monitor && !finished.indeterminate => {
+            Some(limit.ms)
+        }
+        _ => None,
+    };
     let mut output = assemble(limit, finished, None, None);
+    if let Some(ms) = moved_limit {
+        output.error = Some(Failure::from(&ToolError::from(ShellError::TimedOutMoved {
+            ms,
+        })));
+    }
     output.protected_paths = report.as_ref().filter(|report| !report.is_empty()).cloned();
     if capped {
         output.error = Some(Failure::from(&ToolError::from(ShellError::Capped)));

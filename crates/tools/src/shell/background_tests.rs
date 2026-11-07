@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use contract::clock::{Clock, Wake};
 use contract::events::{JobStarted, Outcome};
@@ -28,8 +28,8 @@ use super::super::drive::{Phase, Run};
 use super::super::moved::Moved;
 use super::super::output::{OUTPUT_CAP, Shared, align_char_boundary, lock, note_eof};
 use super::{
-    GroupMembers, MoveAsk, PS_BOUND, description_of, format_rows, group_members, output_tail,
-    parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt, to_completed,
+    GroupMembers, MoveAsk, PS_BOUND, deadline_note, description_of, format_rows, group_members,
+    output_tail, parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt, to_completed,
     with_spill_line,
 };
 
@@ -311,18 +311,19 @@ fn unavailable_listing_moves_with_unnamed_receipt() {
 }
 
 /// Hands off a move like [`hand_off_with_saved`], but with the drive's
-/// timeout deadline `lead` past the move and a non-monitor limit of `ms`:
-/// the receipt names when the timeout fires. The job's own drive is
-/// already settled, so its thread ends on its own.
+/// timeout deadline `lead` past the move when given, and `limit` as the
+/// call's limit: the receipt names when the timeout fires. The job's own
+/// drive is already settled, so its thread ends on its own.
 fn hand_off_with_timeout(
     dir: &std::path::Path,
     code: i32,
     members: GroupMembers,
-    lead: Duration,
-    ms: u64,
+    lead: Option<Duration>,
+    limit: Option<Limit>,
+    terminal: bool,
 ) -> (String, String) {
     let clock = FakeClock::new();
-    let timeout_at = clock.now().checked_add(lead);
+    let timeout_at = lead.and_then(|lead| clock.now().checked_add(lead));
     let shared = Arc::new(Shared::default());
     note_eof(&shared);
     {
@@ -363,8 +364,8 @@ fn hand_off_with_timeout(
         jobs,
         clock,
         "true",
-        Some(Limit { ms, monitor: false }),
-        false,
+        limit,
+        terminal,
         &CancelToken::new(),
         &Recorder::default(),
         None,
@@ -388,8 +389,12 @@ fn moved_receipt_names_the_stop_time_and_timeout() {
         dir.path(),
         3,
         GroupMembers::Members("sleep (12)".to_owned()),
-        Duration::from_secs(30),
-        60_000,
+        Some(Duration::from_secs(30)),
+        Some(Limit {
+            ms: 60_000,
+            monitor: false,
+        }),
+        false,
     );
     let path = dir.path().join("j_0000000000000001.log");
     assert_eq!(
@@ -418,13 +423,91 @@ fn moved_timeout_error_carries_the_hint() {
     assert_eq!(end.status, Outcome::Failed);
     let error = end.error.unwrap();
     assert_eq!(error.code, ErrorCode::Timeout);
-    assert!(
-        error
-            .message
-            .contains("To keep a long-running process such as a server"),
-        "a moved job's timeout names the way out: {}",
-        error.message
+    assert_eq!(
+        error.message,
+        "Timed out after 5000 ms; Fiber stopped the whole process group. To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`."
     );
+}
+
+#[test]
+fn monitor_timeout_names_no_hint() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-timeout-no-hint");
+    let path = dir.path().join("out");
+    std::fs::write(&path, "partial\n").unwrap();
+    let end = to_completed(
+        JobId("j_1".into()),
+        &path,
+        finished(None, Some(StopKind::Timeout), false, true, false),
+        Some(Limit {
+            ms: 5_000,
+            monitor: true,
+        }),
+    );
+    assert_eq!(end.status, Outcome::Failed);
+    let error = end.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert_eq!(
+        error.message,
+        "The monitor's deadline of 5000 ms passed; start it again if you still need it."
+    );
+}
+
+#[test]
+fn deadline_note_names_the_stop_wall_and_timeout() {
+    // A wall a minute past the fake clock's 2023-11-14T22:13:20Z origin.
+    let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_060);
+    assert_eq!(
+        deadline_note(60_000, wall),
+        "Fiber stops it at 2023-11-14T22:14:20Z (timeout_ms 60000). To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`."
+    );
+}
+
+#[test]
+fn terminal_receipt_with_a_timeout_names_the_stop_time() {
+    let dir = fakes::TempDir::new("fiber-shell-terminal-receipt-deadline");
+    let (text, job) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Members("sleep (12)".to_owned()),
+        Some(Duration::from_secs(30)),
+        Some(Limit {
+            ms: 60_000,
+            monitor: false,
+        }),
+        true,
+    );
+    let path = dir.path().join("j_0000000000000001.log");
+    assert_eq!(
+        text,
+        format!(
+            "The shell exited with code 3, leaving sleep (12) running, so it moved to the background.\nJob {job}. Output: {path}. Type into it with `jobs write`; `jobs wait` waits for it.\nFiber stops it at 2023-11-14T22:13:50Z (timeout_ms 60000). To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`.\n",
+            path = path.display(),
+        )
+    );
+}
+
+#[test]
+fn moved_receipt_with_no_timeout_names_no_deadline() {
+    let dir = fakes::TempDir::new("fiber-shell-moved-receipt-no-timeout");
+    // No limit: nothing to name.
+    let (text, _) =
+        hand_off_with_timeout(dir.path(), 3, GroupMembers::Unavailable, None, None, false);
+    assert!(!text.contains("Fiber stops it at"), "{text}");
+    assert!(!text.contains("timeout_ms"), "{text}");
+    // A limit with no deadline in hand: still nothing to name.
+    let (text, _) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Unavailable,
+        None,
+        Some(Limit {
+            ms: 5_000,
+            monitor: false,
+        }),
+        false,
+    );
+    assert!(!text.contains("Fiber stops it at"), "{text}");
+    assert!(!text.contains("timeout_ms"), "{text}");
 }
 
 const DEADLINE: Duration = Duration::from_secs(10);
