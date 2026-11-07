@@ -394,3 +394,10 @@ crates/main/src/delegates.rs	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook
 crates/main/src/delegates_tests.rs	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/tool.rs	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/delegates.md	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/src/changes.rs	fiber-4244	plan	2026-11-07T05:53:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+crates/loop/prompt/messages.md	fiber-4244	plan	2026-11-07T05:53:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+crates/loop/src/changes_tests.rs	fiber-4244	plan	2026-11-07T05:53:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+crates/loop/src/prompt_tests.rs	fiber-4244	plan	2026-11-07T05:53:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+crates/loop/tests/changes.rs	fiber-4244	plan	2026-11-07T05:53:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+docs/events.md	fiber-4244	plan	2026-11-07T05:53:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
+docs/errors.md	fiber-4244	plan	2026-11-07T05:53:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
