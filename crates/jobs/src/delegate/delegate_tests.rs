@@ -50,7 +50,9 @@ fn resolve() -> Resolve {
             "deep" => Ok("fake/m:high".to_owned()),
             _ => Err(format!("Unknown delegate model {model:?}.")),
         }),
-        catalogue: Arc::from("Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m"),
+        catalogue: Arc::from(
+            "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m:high\nReferences:\nfake (1):\nfiber:fake/m",
+        ),
         credential: Arc::new(|_| Ok(None)),
     }
 }
@@ -75,7 +77,7 @@ fn arguments(model: &str) -> serde_json::Map<String, serde_json::Value> {
 
 /// The stub catalogue, shared with the refusal tests below: every
 /// model refusal lists it after its reason.
-const CATALOGUE: &str = "Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/m";
+const CATALOGUE: &str = "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m:high\nReferences:\nfake (1):\nfiber:fake/m";
 
 #[test]
 fn sandbox_snapshot_failure_creates_no_worktree_or_child() {
@@ -339,6 +341,13 @@ fn the_schema_leaves_model_optional_and_untyped() {
     use contract::tool::Tool as _;
     let rig = rig();
     let definition = tool(&rig).definition();
+    assert!(
+        definition
+            .description
+            .contains("A bare `provider/model` resolves to `fiber:provider/model`."),
+        "{}",
+        definition.description
+    );
     assert_eq!(
         definition.input_schema["required"],
         serde_json::json!(["description", "prompt"])
