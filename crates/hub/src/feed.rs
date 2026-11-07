@@ -743,7 +743,7 @@ pub(crate) fn answer(
         Ok(Some(result)) => accept_result(writer, hub, id, result),
         Ok(None) => {
             let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
-            send_line(writer, hub, "command_accepted", payload);
+            send_line(writer, hub, HubEventKind::CommandAccepted, payload);
         }
         Err(refused) => reject(writer, hub, Some(id), &refused.code, &refused.message),
     }
