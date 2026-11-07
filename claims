@@ -165,3 +165,5 @@ crates/jobs/src/registry_tests.rs	fiber-4248	plan	2026-11-07T17:26:27Z	Amoghs-Ma
 crates/main/tests/delegate_final_message.rs	fiber-4248	plan	2026-11-07T17:27:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/delegates/4248-final-message-file	
 crates/tui/examples/paging.rs	fiber-4059	plan	2026-11-07T17:44:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/item_views_look.rs	fiber-4378	plan	2026-11-07T17:48:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+xtask/src/main.rs	fiber-4178	plan	2026-11-07T18:25:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4377
+xtask/src/main_tests.rs	fiber-4178	plan	2026-11-07T18:25:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4377
