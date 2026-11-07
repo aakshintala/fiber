@@ -162,10 +162,11 @@ fn usable_check(command: &str) -> Option<String> {
     ) {
         return None;
     }
-    if lines[1..]
-        .iter()
-        .any(|line| matches!(line.chars().next(), Some('&' | '|' | ';')))
-    {
+    if lines.get(1..).is_some_and(|later| {
+        later
+            .iter()
+            .any(|line| matches!(line.chars().next(), Some('&' | '|' | ';')))
+    }) {
         return None;
     }
     Some(lines.join("\n"))
