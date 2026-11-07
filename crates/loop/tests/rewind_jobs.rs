@@ -1397,6 +1397,8 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
     let outputs = fakes::TempDir::new("fiber-rewind-output");
     let output = outputs.path().join("out.log");
     std::fs::write(&output, "shell output\n").unwrap();
+    // The delegate's session directory, as `finish_run` names it.
+    let final_file = outputs.path().join("artifacts/final.md");
     let hooks = StopHooks::redacting();
     let mut looped = session.looped.take().unwrap();
     looped
@@ -1441,8 +1443,8 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
         DelegateFinished {
             job_id: JobId("j_1".into()),
             text: long.clone(),
-            artifact: None,
-            artifact_absolute: None,
+            artifact: Some("artifacts/final.md".into()),
+            artifact_absolute: Some(final_file.display().to_string()),
             questions: None,
             usage: no_usage(),
             worktree: None,
@@ -1462,7 +1464,7 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
         .find(|(delivery, _)| *delivery == Some(JobDelivery::Delegate))
         .expect("the delegate dispatch ran");
     assert_large_str_eq(&delegate.1, &long);
-    // The finish is cut with the hook's text in the artifact.
+    // The finish is cut, and the hook's text is whole in the final-message file.
     let lines = log::read(&dir).unwrap();
     let finish = lines
         .iter()
@@ -1470,11 +1472,13 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
         .find(|line| line.kind() == EventKind::DelegateFinished)
         .expect("the delegate finish is written");
     assert_eq!(finish.payload["changed_by"], json!(["redactor"]));
-    let artifact = finish.payload["artifact"]
-        .as_str()
-        .expect("a long finish writes an artifact");
-    let held = std::fs::read(dir.join(artifact)).unwrap();
+    assert_eq!(finish.payload["artifact"], "artifacts/final.md");
+    assert_eq!(
+        finish.payload["artifact_absolute"],
+        final_file.display().to_string()
+    );
+    let held = std::fs::read(&final_file).unwrap();
     let held = String::from_utf8_lossy(&held);
     assert!(held.contains("[redacted]"));
-    assert!(!held.contains("TOKEN-1234"), "the artifact holds no token");
+    assert!(!held.contains("TOKEN-1234"), "the file holds no token");
 }

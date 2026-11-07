@@ -5813,6 +5813,7 @@ fn a_settled_large_message_cuts_text_and_records_artifact() {
     delegate
         .append(&settle_exit(0, Some(&full), None), None, None)
         .unwrap();
+    let final_file = delegate.dir().join("artifacts/final.md");
     drop(delegate);
     history.freeze();
 
@@ -5827,10 +5828,18 @@ fn a_settled_large_message_cuts_text_and_records_artifact() {
     assert!(text.len() < full.len(), "the text is cut: {}", text.len());
     assert!(text.starts_with(&"x".repeat(16_384)));
     assert!(text.contains("bytes cut"), "{text}");
-    assert_eq!(lines[0].payload["artifact"], "artifacts/j_big.txt");
+    assert_eq!(lines[0].payload["artifact"], "artifacts/final.md");
+    assert_eq!(
+        lines[0].payload["artifact_absolute"],
+        final_file.display().to_string()
+    );
+    assert!(
+        text.contains(&final_file.display().to_string()),
+        "the cut notice names the file: {text}"
+    );
     assert_eq!(lines[1].payload["status"], "completed");
-    // The full text survives in the parent's artifacts.
-    let saved = std::fs::read(history.dir.join("artifacts").join("j_big.txt")).unwrap();
+    // The full text survives in the delegate's own final-message file.
+    let saved = std::fs::read(&final_file).unwrap();
     assert_eq!(saved, full.as_bytes());
 }
 
