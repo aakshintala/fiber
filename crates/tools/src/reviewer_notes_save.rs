@@ -32,7 +32,7 @@ struct DraftLine {
     text: String,
 }
 
-/// Saves confirmed reviewer notes to both layers' files. It declares no
+/// Saves confirmed reviewer notes to the files of the layers that change. It declares no
 /// effects of its own: every write goes through the person's confirm,
 /// which the session suspends on never (`docs/tools.md`, "Asking the
 /// person"), so the tool is sent with `strict: false`.
@@ -55,7 +55,7 @@ impl Tool for ReviewerNotesSave {
             description: "Saves reviewer notes the person confirms: draft the notes as lines \
                 with a topic, a layer and text, and read-only command lines as entries. The \
                 call shows the person the diff and the entries it would write; on yes it \
-                writes both layers' files. It needs the person's confirm, so it refuses in \
+                writes each changed layer's file. It needs the person's confirm, so it refuses in \
                 a program-driven session."
                 .to_owned(),
             input_schema: json!({
@@ -145,9 +145,11 @@ impl Tool for ReviewerNotesSave {
             Err(error) => return errored(error),
         };
         let staged = [global, project];
-        let entries = staged_entries(&staged);
         let preview = match config::preview_read_only_changes(
-            &self.home, &self.key, &entries.0, &entries.1,
+            &self.home,
+            &self.key,
+            &staged[0].2.entries,
+            &staged[1].2.entries,
         ) {
             Ok(preview) => preview,
             Err(error) => return errored(ReviewerNotesError::Config(error)),
@@ -295,38 +297,25 @@ fn stage_layer(
     })
 }
 
-/// Both layers' staged read-only entries, global first.
-fn staged_entries(
-    staged: &[(config::EntryLayer, &config::NotesFile, StagedLayer)],
-) -> (Vec<config::ReadOnlyFlags>, Vec<config::ReadOnlyFlags>) {
-    let mut global = Vec::new();
-    let mut project = Vec::new();
-    for (layer, _, staged) in staged {
-        match layer {
-            config::EntryLayer::Global => global.extend(staged.entries.iter().cloned()),
-            config::EntryLayer::Project => project.extend(staged.entries.iter().cloned()),
-        }
-    }
-    (global, project)
-}
-
 /// One changed file's confirm section: its path header and its rows.
 struct ConfirmSection {
+    layer: config::EntryLayer,
     file: String,
     rows: Vec<String>,
 }
 
-/// One section per changed file: the path header plus that layer's diff
-/// rows, plus the layer's entry additions rendered as `+` lines from the
-/// staged preview. Identical entries never reach the preview, so unchanged
-/// layers have no rows.
+/// One section per changed file (`docs/tools.md`, "Saving reviewer
+/// notes"): the path header plus that layer's diff rows, plus the layer's
+/// entry additions rendered as `+` lines from the staged preview. Identical
+/// entries never reach the preview, so an unchanged layer has no rows and
+/// no section.
 fn confirm_sections(
     staged: &[(config::EntryLayer, &config::NotesFile, StagedLayer)],
     preview: &[config::EntryPreview],
 ) -> Vec<ConfirmSection> {
     staged
         .iter()
-        .map(|(layer, notes, staged)| {
+        .filter_map(|(layer, notes, staged)| {
             let mut rows = Vec::new();
             for row in diff(&notes.text, &staged.text) {
                 rows.push(match row {
@@ -341,35 +330,38 @@ fn confirm_sections(
                     render_read_only_entry(&entry.command, &entry.flags)
                 ));
             }
-            ConfirmSection {
+            (!rows.is_empty()).then(|| ConfirmSection {
+                layer: *layer,
                 file: notes.file.display().to_string(),
                 rows,
-            }
+            })
         })
         .collect()
 }
 
 impl ReviewerNotesSave {
-    /// Writes the staged save the person confirmed: both layers through
-    /// the config writer, which re-validates under its locks, so a
-    /// concurrent write refuses stale instead of clobbering.
+    /// Writes the staged save the person confirmed: each changed layer
+    /// (one with a section) through the config writer, which re-validates
+    /// under its locks, so a concurrent write refuses stale instead of
+    /// clobbering. An unchanged layer is not sent, so its lock stays free.
     fn save(
         &self,
         staged: [(config::EntryLayer, &config::NotesFile, StagedLayer); 2],
         sections: &[ConfirmSection],
     ) -> Output {
-        let write = |notes: &config::NotesFile, staged: &StagedLayer| config::NotesWrite {
-            version: notes.version.clone(),
-            text: staged.text.clone(),
-            read_only: staged.entries.clone(),
-        };
+        let write =
+            |(layer, notes, staged): (config::EntryLayer, &config::NotesFile, StagedLayer)| {
+                sections
+                    .iter()
+                    .any(|section| section.layer == layer)
+                    .then(|| config::NotesWrite {
+                        version: notes.version.clone(),
+                        text: staged.text,
+                        read_only: staged.entries,
+                    })
+            };
         let [global, project] = staged;
-        match config::save_reviewer_notes(
-            &self.home,
-            &self.key,
-            Some(write(global.1, &global.2)),
-            Some(write(project.1, &project.2)),
-        ) {
+        match config::save_reviewer_notes(&self.home, &self.key, write(global), write(project)) {
             Err(error) => errored(ReviewerNotesError::Config(error)),
             Ok(config::NotesSaved::Stale) => text_output(STALE.to_owned()),
             Ok(config::NotesSaved::Written(files)) => {

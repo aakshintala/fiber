@@ -3831,6 +3831,7 @@ fn synopses_come_from_command_tables_only() {
 #[test]
 fn doc_synopses_are_the_commands_section() {
     let synopses = doc_synopses();
+    // One synopsis per row of `docs/invocation.md`, "Commands and flags".
     assert_eq!(synopses.len(), 48);
     assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
     assert_eq!(

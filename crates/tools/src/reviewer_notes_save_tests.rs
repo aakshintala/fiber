@@ -157,7 +157,8 @@ fn yes_saves_both_layers_with_per_file_counts_and_changes() {
     let ask = FakeAsk::answering(yes());
     let output = run_asking(&rig, &arguments, &ask);
     assert_eq!(output.error, None);
-    // One confirm, never suspending, carrying the diff and the entry.
+    // One confirm, never suspending, carrying the diff and the entry
+    // (`docs/tools.md`, "Saving reviewer notes": one `confirm`, never suspends).
     let asked = ask.asked();
     assert_eq!(asked.len(), 1);
     assert!(!asked[0].suspends, "the confirm never suspends");
@@ -308,6 +309,7 @@ fn no_reports_unchanged_and_writes_nothing() {
     let ask = FakeAsk::answering(no());
     let output = run_asking(&rig, &arguments, &ask);
     assert_eq!(text_of(&output), "unchanged");
+    // The one confirm still shows (`docs/tools.md`, "Saving reviewer notes").
     assert_eq!(ask.asked().len(), 1);
     assert!(read_file(&global_file(&rig)).is_none());
     assert_eq!(output.changes, None);
@@ -451,6 +453,75 @@ fn a_stale_save_reports_stale_and_writes_nothing() {
     assert_eq!(output.changes, None);
 }
 
+/// Writes the project layer's file with `context` as its notes.
+fn write_project(rig: &Rig, context: &str) {
+    let file = project_file(rig);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, json!({"reviewer": {"context": context}}).to_string()).unwrap();
+}
+
+#[test]
+fn a_one_layer_save_names_and_writes_only_the_changed_file() {
+    // One section per changed file: "unchanged layers get no section"
+    // (`docs/tools.md`, "Saving reviewer notes").
+    let rig = rig();
+    write_project(&rig, "prose the project already holds");
+    let before = read_file(&project_file(&rig)).expect("project seeded");
+    let arguments = args(vec![line("internal_hosts", "global", "corp.example")]);
+    let ask = FakeAsk::answering(yes());
+    let output = run_asking(&rig, &arguments, &ask);
+    assert_eq!(output.error, None);
+    let asked = ask.asked();
+    let prompt = &asked[0].prompt;
+    assert!(
+        prompt.contains(&global_file(&rig).display().to_string()),
+        "{prompt}"
+    );
+    assert!(
+        !prompt.contains(&project_file(&rig).display().to_string()),
+        "the unchanged layer is not named: {prompt}"
+    );
+    assert_eq!(read_file(&project_file(&rig)), Some(before));
+    assert_eq!(
+        output.changes,
+        Some(vec![FileChange {
+            path: global_file(&rig).display().to_string(),
+            added: 2,
+            removed: 0,
+        }])
+    );
+}
+
+#[test]
+fn an_edit_of_the_untouched_layer_does_not_stale_a_one_layer_save() {
+    // The save sends only the changed layer, so the other layer's version
+    // is never checked (`docs/tools.md`, "Saving reviewer notes").
+    let rig = rig();
+    write_project(&rig, "prose the project already holds");
+    let file = project_file(&rig);
+    let ask = FakeAsk::sabotaging(yes(), move || {
+        std::fs::write(&file, r#"{"reviewer": {"context": "edited meanwhile"}}"#).unwrap();
+    });
+    let arguments = args(vec![line("internal_hosts", "global", "corp.example")]);
+    let output = run_asking(&rig, &arguments, &ask);
+    assert_eq!(output.error, None);
+    assert!(
+        text_of(&output).starts_with("Saved the reviewer notes."),
+        "{}",
+        text_of(&output)
+    );
+    assert!(
+        read_file(&global_file(&rig))
+            .expect("global written")
+            .contains("- corp.example")
+    );
+    assert!(
+        read_file(&project_file(&rig))
+            .expect("project kept")
+            .contains("edited meanwhile")
+    );
+}
+
 #[test]
 fn an_io_failure_in_the_save_is_a_tool_error() {
     let rig = rig();
@@ -506,6 +577,7 @@ fn the_definition_names_the_tool_and_fits_the_budgets() {
     // Only the strict keywords: the definition fits the strict shape.
     strict_schema(&schema, true);
     let bytes = serde_json::to_string(&definition).expect("definition serializes");
+    // `docs/tools.md`, "Saving reviewer notes": under 1200 bytes.
     assert!(bytes.len() <= 1200, "definition is {} bytes", bytes.len());
 }
 

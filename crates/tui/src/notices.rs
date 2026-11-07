@@ -62,6 +62,7 @@ const KINDS: &[(ErrorCode, Kind)] = &[
     (ErrorCode::ProtectedPathsRestored, Kind::Event),
     (ErrorCode::RepositoryCodeSkipped, Kind::Event),
     (ErrorCode::ReviewerSelectionFailed, Kind::Event),
+    (ErrorCode::ReviewerSetup, Kind::Event),
     (ErrorCode::Sandbox, Kind::Event),
     (ErrorCode::SessionHeld, Kind::Event),
     (ErrorCode::SessionNotFound, Kind::Event),

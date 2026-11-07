@@ -1316,7 +1316,7 @@ Before anything is written, the call reads both layers and raises one
 identical to the layer's own table converge and are left out; a changed
 entry, an unparseable read-only line or a malformed table fails before the
 confirm. The confirm never suspends: the person is already deciding. On yes
-the call writes both layers' files and names each written file with its
+the call writes the files of the layers that changed and names each written file with its
 added and removed counts; on no, or when nothing changed, it reports
 `unchanged` and writes nothing. A declined confirm is the single line
 `declined`.

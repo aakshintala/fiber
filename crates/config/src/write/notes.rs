@@ -443,23 +443,7 @@ fn existing_keys(root: &Value) -> Result<HashMapFlags, ReadOnlyEntryProblem> {
         return Ok(HashMapFlags::new());
     };
     let entries = node.as_object().ok_or(ReadOnlyEntryProblem::Malformed)?;
-    let mut table = HashMapFlags::new();
-    for (command, value) in entries {
-        let flags = value
-            .get("flags")
-            .and_then(Value::as_array)
-            .ok_or(ReadOnlyEntryProblem::Malformed)?;
-        let mut taken = Vec::new();
-        for flag in flags {
-            taken.push(
-                flag.as_str()
-                    .ok_or(ReadOnlyEntryProblem::Malformed)?
-                    .to_owned(),
-            );
-        }
-        table.insert(command.clone(), taken);
-    }
-    Ok(table)
+    entry_table(entries).ok_or(ReadOnlyEntryProblem::Malformed)
 }
 
 /// The configured `shell.read_only` entries in `file`, read unlocked: a

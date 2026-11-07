@@ -888,10 +888,7 @@ impl App {
         if !(notes.global.text.trim().is_empty() && notes.project.text.trim().is_empty()) {
             return;
         }
-        self.push_notice(
-            ErrorCode::Other("reviewer-setup".to_owned()),
-            FIRST_BLOCK_NOTICE.to_owned(),
-        );
+        self.push_notice(ErrorCode::ReviewerSetup, FIRST_BLOCK_NOTICE.to_owned());
     }
 
     /// The workspace of `session`'s own row on home's list, and nothing

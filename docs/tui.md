@@ -1528,6 +1528,7 @@ and an expiry wakes the loop even with no input.
 | `no_model` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
 | `reviewer_selection_failed` | event | Fades 10 s after it shows. |
+| `reviewer_setup` | event | Fades 10 s after it shows. |
 | `session_held` | event | Fades 10 s after it shows. |
 | `session_not_found` | event | Fades 10 s after it shows. |
 | `skill_invalid` | event | Fades 10 s after it shows. |

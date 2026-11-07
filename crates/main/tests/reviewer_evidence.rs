@@ -279,6 +279,8 @@ fn evidence_json_matches_gather_with_credentials_removed() {
             .any(|text| text.contains("gh.example.com") && !text.contains("person:secret@")),
         "the escalation prefix shows stripped: {found:?}"
     );
+    // A subject needs at least 5 allows (`docs/permissions.md`, "Setting up
+    // the notes"), so four stay out.
     assert!(
         !found.iter().any(|text| text.contains("other-cli")),
         "four allows stay below the threshold: {found:?}"

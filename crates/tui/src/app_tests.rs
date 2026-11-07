@@ -2424,6 +2424,18 @@ fn first_block_notice_deny_names_the_skill() {
             .is_some_and(|text| text.contains("reviewer-setup")),
         "the notice names the skill"
     );
+    // The row shows the registry code (`docs/errors.md`, "Registry").
+    assert!(
+        matches!(
+            app.notices().as_slice(),
+            [crate::app::NoticeLine::Notice {
+                code: ErrorCode::ReviewerSetup,
+                ..
+            }]
+        ),
+        "the notice carries the reviewer_setup code: {:?}",
+        app.notices()
+    );
 }
 
 #[test]
@@ -2432,6 +2444,7 @@ fn first_block_notice_second_block_stays_silent() {
     app.on_line(notice_verdict("reviewer", "deny"));
     assert!(app.notice().is_some());
     app.on_line(notice_verdict("reviewer", "deny"));
+    // One notice per session (`docs/permissions.md`, "Setting up the notes").
     assert_eq!(app.notices().len(), 1, "no second notice");
 }
 
