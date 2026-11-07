@@ -121,11 +121,11 @@ the code and the list disagree.
 | `tools` | `crates/tools/src/shell/command.rs` | on Linux, `pre_exec` installs the prepared Landlock and seccomp policy between fork and exec; success runs only syscalls, failure aborts spawn |
 | `support` | `crates/support/src/peer.rs` | on macOS, `getsockopt` with `LOCAL_PEERPID` reads the socket peer's pid from a borrowed fd, `proc_pidinfo` with `PROC_PIDT_SHORTBSDINFO` reads one process's parent pid and effective uid, and `sysctl` with `KERN_PROCARGS2` reads its argument vector into a caller-sized buffer |
 | `fakes` | `crates/fakes/src/crash_ports.rs` | on macOS, `pre_exec` calls `task_set_exception_ports` so a re-run child's deliberate `abort()` writes no ReportCrash report; its test reads the port back with `task_get_exception_ports` |
-| `log` | `crates/log/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `resources` line |
+| `diag` | `crates/diag/src/diag/memory.rs` | on macOS, `proc_pid_rusage` reads the peak physical footprint for a `resources` line |
 | `cli` | `crates/cli/src/stop_tests.rs` | the close-wait test wraps a write-only file fd as a `UnixStream`, forcing the read error the wait reports as lost |
 | `fakes` | `crates/fakes/src/alloc.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
 | `main` | `crates/main/src/alloc_stats.rs` | the counting allocator implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System` |
-| `log` | `crates/log/src/alloc_stats_tests.rs` | the test-only counting mirror implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System`; the test calls it explicitly, never installing it |
+| `diag` | `crates/diag/src/alloc_stats_tests.rs` | the test-only counting mirror implements `GlobalAlloc`, an unsafe trait, and forwards every call to `System`; the test calls it explicitly, never installing it |
 | `fakes` | `crates/fakes/examples/process-extension.rs` | the SIGTERM marker handler registers with `signal-hook` and writes its file with async-signal-safe `libc` calls |
 | `main` | `crates/main/tests/support/mod.rs` | the test-only hub-log wait registers its `kqueue` vnode watch and parks for a hub.log write on macOS; the vnode fd is the watch's own open file and each event buffer is stack-owned |
 

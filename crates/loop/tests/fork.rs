@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use contract::events::{CacheLifetime, LoadedExtension};
+use contract::events::{CacheLifetime, EventKind, LoadedExtension};
 use contract::events::{Event, JobStarted, Parent, SessionNamed, TurnOutcome};
 use contract::hook::{BeforeMessageAnswer, BeforeMessageOutcome, Hooks, Replaced};
 use contract::inbox::{Ack, Delivery};
@@ -31,19 +31,19 @@ use r#loop::{
 use serde_json::{Value, json};
 use support::{
     DEADLINE, MODEL, Session, StartHooks, TestTool, calls_reply, delivery, kinds, paris,
-    start_added,
+    start_added, with_tokens,
 };
 
 const FORK: &str = "s_fork";
-const FORK_TURN: &[&str] = &[
-    "session_started",
-    "turn_started",
-    "step_started",
-    "assistant_message_started",
-    "text_completed",
-    "usage_recorded",
-    "assistant_message_completed",
-    "turn_completed",
+const FORK_TURN: &[EventKind] = &[
+    EventKind::SessionStarted,
+    EventKind::TurnStarted,
+    EventKind::StepStarted,
+    EventKind::AssistantMessageStarted,
+    EventKind::TextCompleted,
+    EventKind::UsageRecorded,
+    EventKind::AssistantMessageCompleted,
+    EventKind::TurnCompleted,
 ];
 
 fn task() -> String {
@@ -76,7 +76,7 @@ fn point(dir: &std::path::Path, request: usize) -> Point {
     let lines = log::read(dir).unwrap();
     let line = lines
         .iter()
-        .filter(|line| line.kind == "assistant_message_started")
+        .filter(|line| line.kind() == EventKind::AssistantMessageStarted)
         .nth(request)
         .unwrap();
     Point {
@@ -201,7 +201,7 @@ fn an_isolated_fork_records_its_effective_worktree_instead_of_the_inherited_one(
     )
     .unwrap();
     let lines = log::read(&dir).unwrap();
-    assert_eq!(kinds(&lines), ["session_started"]);
+    assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
     assert_eq!(
         lines[0].payload["worktree"],
         serde_json::to_value(effective).unwrap()
@@ -263,7 +263,7 @@ fn definitions(dir: &std::path::Path, reason: &str) -> Vec<serde_json::Map<Strin
     lines
         .iter()
         .rev()
-        .find(|line| line.kind == "preamble_built" && line.payload["reason"] == reason)
+        .find(|line| line.kind() == EventKind::PreambleBuilt && line.payload["reason"] == reason)
         .unwrap()
         .payload["tools"]
         .as_array()
@@ -311,7 +311,7 @@ fn a_fork_writes_parent_and_forked_from_and_no_rewind_before_its_prompt() {
             vec![Scripted::text("fork-done")],
         );
         let lines = log::read(&dir).unwrap();
-        assert_eq!(kinds(&lines), ["session_started"]);
+        assert_eq!(kinds(&lines), ["session_started"].map(EventKind::from_name));
         assert_eq!(
             lines[0].payload["parent"],
             json!({"session_id":"s_test", "delegate_id":"j_fork"})
@@ -339,6 +339,7 @@ fn a_fork_writes_parent_and_forked_from_and_no_rewind_before_its_prompt() {
                 "assistant_message_completed",
                 "turn_completed"
             ]
+            .map(EventKind::from_name)
         );
         assert!(
             lines
@@ -401,7 +402,7 @@ fn a_forks_first_request_is_the_parents_through_its_history_then_its_first_turn(
     assert_eq!(kinds(&lines), FORK_TURN);
     let input = &lines
         .iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .unwrap()
         .payload["input"];
     assert_eq!(input[0]["content"][0]["text"], task());
@@ -467,6 +468,7 @@ fn a_session_start_context_sits_between_the_prefix_and_fork_task() {
             "assistant_message_completed",
             "turn_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines[1].payload["hook"], "session_start");
     assert_eq!(lines[1].payload["text"], "hook says hi");
@@ -509,6 +511,7 @@ fn an_isolated_forks_workspace_notice_follows_start_context_without_changing_the
             "assistant_message_completed",
             "turn_completed"
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(lines[2].payload["input"][0]["content"][0]["text"], task);
 }
@@ -610,7 +613,7 @@ fn a_before_message_replacement_replaces_the_fork_task() {
     assert_eq!(kinds(&lines), FORK_TURN);
     let input = &lines
         .iter()
-        .find(|line| line.kind == "turn_started")
+        .find(|line| line.kind() == EventKind::TurnStarted)
         .unwrap()
         .payload["input"];
     assert_eq!(input.as_array().unwrap().len(), 1);
@@ -671,7 +674,10 @@ fn a_before_message_refusal_sends_nothing_and_logs_nothing() {
             .unwrap(),
         None
     );
-    assert_eq!(kinds(&log::read(&dir).unwrap()), ["session_started"]);
+    assert_eq!(
+        kinds(&log::read(&dir).unwrap()),
+        ["session_started"].map(EventKind::from_name)
+    );
     assert!(provider.requests().is_empty());
 }
 
@@ -705,11 +711,18 @@ fn a_job_the_parent_left_running_is_no_orphan_in_the_fork() {
         Vec::new(),
         vec![Scripted::text("fork-done")],
     );
-    assert_eq!(kinds(&log::read(&dir).unwrap()), ["session_started"]);
+    assert_eq!(
+        kinds(&log::read(&dir).unwrap()),
+        ["session_started"].map(EventKind::from_name)
+    );
     let _b = turn(b, &tx, &task());
     let lines = log::read(&dir).unwrap();
     assert_eq!(kinds(&lines), FORK_TURN);
-    assert!(!lines.iter().any(|line| line.kind == "job_completed"));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.kind() == EventKind::JobCompleted)
+    );
     assert!(!format!("{:?}", provider.requests()[0].conversation).contains("j_orphan"));
     assert_eq!(provider.requests().len(), 1);
 }
@@ -845,11 +858,85 @@ fn a_fork_after_a_reload_sends_the_reloaded_tools_and_runs_one() {
                 "assistant_message_completed",
                 "turn_completed",
             ]
+            .map(EventKind::from_name)
         );
         let completion = lines
             .iter()
-            .find(|line| line.kind == "tool_call_completed")
+            .find(|line| line.kind() == EventKind::ToolCallCompleted)
             .unwrap();
         assert_eq!(completion.payload["status"], "completed");
     }
+}
+
+/// The text every rendered input carries, joined: model-visible words
+/// without the request scaffolding around them.
+fn texts(conversation: &[Input]) -> String {
+    let mut out = String::new();
+    for input in conversation {
+        match input {
+            Input::User { text, .. }
+            | Input::Assistant { text, .. }
+            | Input::Reasoning { text, .. }
+            | Input::ToolResult { text, .. } => {
+                out.push_str(text);
+                out.push('\n');
+            }
+            Input::ToolCall { .. } | Input::ToolSearchResult { .. } => {}
+        }
+    }
+    out
+}
+
+/// A fork past the nudge threshold names its own log in the nudge and in
+/// the handoff note request, not its parent's (`docs/handoff.md`,
+/// "Looking back").
+#[test]
+fn a_forked_nudge_and_note_name_the_forks_own_log() {
+    let session = parent();
+    let (b, tx, provider, dir) = fork(
+        &session,
+        point(&session.dir, 1),
+        vec![tool("test_tool")],
+        vec![
+            with_tokens(calls_reply("", &[("test_tool", paris())]), 266_666, 0),
+            with_tokens(calls_reply("", &[("test_tool", paris())]), 399_999, 0),
+            Scripted::text("The note."),
+            Scripted::text("fork-done"),
+        ],
+    );
+    let expected = dir.join("events.jsonl").display().to_string();
+    let _b = turn(b, &tx, &task());
+    let requests = provider.requests();
+    // All four scripted replies run in the one fork turn.
+    assert_eq!(requests.len(), 4);
+    // The fork's first request carries the pre-point parent turn ("one" was
+    // answered before the point) and not the past-point reply ("two-done"
+    // answers the request after the point).
+    let first = texts(&requests[0].conversation);
+    assert!(first.contains("one-done"), "{first:?}");
+    assert!(!first.contains("two-done"), "{first:?}");
+    // The nudge names the fork's own log: 266_666 measured tokens plus the
+    // one-token tool result trips the two-thirds check at 266_667.
+    let nudge = user(requests[1].conversation.last().unwrap());
+    assert!(
+        nudge.starts_with("Fiber: your context holds 266667 tokens. At 400000 tokens"),
+        "{nudge:?}"
+    );
+    assert!(nudge.contains(&expected), "{nudge:?}");
+    assert!(
+        nudge.ends_with(&format!("{FORK}/events.jsonl.")),
+        "{nudge:?}"
+    );
+    assert!(!nudge.contains("s_test"), "{nudge:?}");
+    // The automatic handoff at 400_000 tokens asks for the note against
+    // the fork's own log too.
+    let asked = user(requests[2].conversation.last().unwrap());
+    assert!(
+        asked.starts_with("Fiber is about to restart your context."),
+        "{asked:?}"
+    );
+    assert!(
+        asked.contains(&format!("The session log is at {expected}.")),
+        "{asked:?}"
+    );
 }

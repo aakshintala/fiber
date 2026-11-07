@@ -19,7 +19,7 @@ use support::{completed_event, requested, standing_request, started, user_turn};
 use std::collections::BTreeMap;
 use std::sync::{Arc, mpsc};
 
-use contract::events::{Empty, Event, FiberExited, FiberStarted, TurnOutcome};
+use contract::events::{Empty, Event, EventKind, FiberExited, FiberStarted, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::{Input, Provider};
 use contract::shapes::{Tokens, Usage};
@@ -261,7 +261,7 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
     // action id outside the history: the fresh call.
     let starts: Vec<&str> = new
         .iter()
-        .filter(|line| line.kind == "tool_call_started")
+        .filter(|line| line.kind() == EventKind::ToolCallStarted)
         .map(|line| line.action_id.as_ref().unwrap().0.as_str())
         .collect();
     for id in &starts {
@@ -317,51 +317,51 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
     }
 
     // The complete, ordered list of durable kinds the resume wrote.
-    let kinds: Vec<&str> = new.iter().map(|line| line.kind.as_str()).collect();
-    let (expected, statuses): (&[&str], &[&str]) = match tail {
+    let kinds: Vec<EventKind> = new.iter().map(|line| line.kind()).collect();
+    let (expected, statuses): (&[EventKind], &[&str]) = match tail {
         Tail::Suspended => (
             &[
-                "preamble_built",
-                "opening_message",
-                "permission_requested",
-                "permission_resolved",
-                "tool_call_completed",
-                "step_started",
-                "assistant_message_started",
-                "text_completed",
-                "tool_call_requested",
-                "usage_recorded",
-                "assistant_message_completed",
-                "tool_call_started",
-                "tool_call_completed",
-                "step_started",
-                "assistant_message_started",
-                "text_completed",
-                "usage_recorded",
-                "assistant_message_completed",
-                "turn_completed",
+                EventKind::PreambleBuilt,
+                EventKind::OpeningMessage,
+                EventKind::PermissionRequested,
+                EventKind::PermissionResolved,
+                EventKind::ToolCallCompleted,
+                EventKind::StepStarted,
+                EventKind::AssistantMessageStarted,
+                EventKind::TextCompleted,
+                EventKind::ToolCallRequested,
+                EventKind::UsageRecorded,
+                EventKind::AssistantMessageCompleted,
+                EventKind::ToolCallStarted,
+                EventKind::ToolCallCompleted,
+                EventKind::StepStarted,
+                EventKind::AssistantMessageStarted,
+                EventKind::TextCompleted,
+                EventKind::UsageRecorded,
+                EventKind::AssistantMessageCompleted,
+                EventKind::TurnCompleted,
             ],
             &["denied", "completed"],
         ),
         Tail::Crash => (
             &[
-                "preamble_built",
-                "opening_message",
-                "turn_started",
-                "step_started",
-                "assistant_message_started",
-                "text_completed",
-                "tool_call_requested",
-                "usage_recorded",
-                "assistant_message_completed",
-                "tool_call_started",
-                "tool_call_completed",
-                "step_started",
-                "assistant_message_started",
-                "text_completed",
-                "usage_recorded",
-                "assistant_message_completed",
-                "turn_completed",
+                EventKind::PreambleBuilt,
+                EventKind::OpeningMessage,
+                EventKind::TurnStarted,
+                EventKind::StepStarted,
+                EventKind::AssistantMessageStarted,
+                EventKind::TextCompleted,
+                EventKind::ToolCallRequested,
+                EventKind::UsageRecorded,
+                EventKind::AssistantMessageCompleted,
+                EventKind::ToolCallStarted,
+                EventKind::ToolCallCompleted,
+                EventKind::StepStarted,
+                EventKind::AssistantMessageStarted,
+                EventKind::TextCompleted,
+                EventKind::UsageRecorded,
+                EventKind::AssistantMessageCompleted,
+                EventKind::TurnCompleted,
             ],
             &["completed"],
         ),
@@ -369,7 +369,7 @@ fn check(steps: Steps, tail: Tail) -> Result<(), TestCaseError> {
     prop_assert_eq!(kinds, expected);
     let ran_statuses: Vec<&str> = new
         .iter()
-        .filter(|line| line.kind == "tool_call_completed")
+        .filter(|line| line.kind() == EventKind::ToolCallCompleted)
         .map(|line| line.payload["status"].as_str().unwrap())
         .collect();
     prop_assert_eq!(ran_statuses, statuses);

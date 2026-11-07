@@ -18,10 +18,12 @@ CI is GitHub Actions on GitHub-hosted runners: `ubuntu-24.04` for Linux
 x86_64, `ubuntu-24.04-arm` for Linux arm64, and a macOS arm64 runner. The
 repository is public, so minutes cost nothing. The account is on GitHub Pro,
 which runs at most 40 jobs at once and at most 5 macOS jobs at once, shared
-by every repository on the account. A draft skips `release`, `test` and
-`stress`, so it uses no macOS job unless it is a bug pull request, which uses
-one (`bug_red_macos`). A ready pull request uses one (`test`), and a ready bug
-pull request two. The 40-job cap is the one CI reaches: from 2026-10-07 to
+by every repository on the account. A pull request runs Linux x86_64 jobs
+alone: `lint` and `test_linux`, plus the two `bug_red` legs when an issue its
+body resolves carries the `bug` label. Draft and ready pull requests select
+the same jobs. The Linux arm64 and macOS arm64 test legs, `stress` and
+`release` run on the backstop, which is a push to `main`. A bug pull request
+is the only pull request that uses a macOS job (`bug_red_macos`). The 40-job cap is the one CI reaches: from 2026-10-07 to
 2026-10-09 every job that queued for more than 15 minutes waited while 38 or
 more jobs ran, and the macOS cap held jobs back for 85 of 3,250 queued
 minutes. A change that saves jobs, such as fewer mutants shards, shortens the
@@ -36,9 +38,9 @@ One check is required to merge: `CI`. It passes only when every job the
 selection chose succeeded and every job it did not choose was skipped. If
 the selection itself fails, `CI` fails. On a draft pull request the verdict
 job reports as `CI (draft)`, so the required `CI` check stays pending. A
-draft does not select `release`. Marking the pull request ready runs every
-job the draft skipped. A ready run whose mutants already passed at that head
-reuses the pass instead of starting shards ("On every pull request that changes code").
+draft selects the same jobs as a ready pull request, so marking it ready
+starts nothing new: the Linux jobs already ran, and the `bug_red` legs run
+on drafts too.
 The owner can merge without a green `CI` only by a break-glass merge
 (`docs/workflow.md`, "Break-glass merge").
 
@@ -119,31 +121,61 @@ A pull request runs only what its diff can affect.
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).
   Binary-level tests depend on every crate that ships, so any change to one
   runs them. `xtask` ships in no binary, so a change to it alone runs its
-  own tests.
-- On a ready pull request, every diff that runs the binary-level tests also
-  runs the release-profile job, `release` ("On every pull request that changes
-  code"), and `fiber extension test` for every first-party package that has
-  cases, not only the changed ones ("Testing an extension"). A change to
-  Fiber's own code can break a package that did not change.
-- On a ready pull request, a diff that touches the code the release job runs
-  or the table it judges against, `crates/bench`, `xtask/src/bench*`,
-  `scripts/release-size`, `scripts/stored-results` or `docs/performance.md`
-  also runs `release`, so a broken harness or judge fails the pull request
-  instead of waiting for the backstop. A draft that touches
-  `scripts/release-size` or `crates/bench` first sees size and benchmark
-  failures when marked ready.
-- A diff that touches `crates/loop`, `crates/bench` or `xtask/src/bench*` also runs the "Session, memory kept after 10 busy turns" workload (`docs/performance.md`) in `release`. Any other pull request skips it, and the job summary says so. The loop holds the session's state, so a diff elsewhere rarely moves the row, and the backstop catches one that does.
-- On a pull request, the head and base binaries run only the timing rows the diff selects (`docs/performance.md`). A diff touching one of a row's crates runs it, and the job summary names each skipped row on both passes. `session start` runs on `crates/contract`, `crates/support`, `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`, `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`, `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or `crates/main`; `sessions list` on `crates/config`, `crates/cli`, `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`, `crates/log`, `crates/worktree` or `crates/main`; the terminal rows (`terminal first frame`, `terminal attach`, `terminal wheel`) on the session-start crates plus `crates/tui` or `crates/cli`; `paging` on `crates/tui`, `crates/contract`, `crates/support` or `crates/log`; `sandbox setup` on `crates/tools/`. Every other path runs every row, and a `.md` file under `crates/` counts as code. A diff touching only `docs/performance.md` selects no row, since the selector treats a docs file as selecting nothing: none of the seven timing rows is measured on either pass, and the pull request is gated by the table checks and the `main` backstop alone. A regression that reaches a row through a dependency the mapping misses surfaces at the backstop, the same as the 10-busy-turns row above.
+  own tests. A changed file that is documentation, under `providers/` or
+  `extensions/`, or a file a crate compiles in is not a candidate — docs
+  files do not own a crate, and listed files run their crate without
+  dependents. For each crate the diff touches, when every candidate file in
+  that crate is a test file — under `tests/`, named `tests.rs` or ending
+  `_tests.rs`, or under a `snapshots/` directory — the diff runs that crate
+  without the crates that depend on it, except the crates that depend on it
+  only through a development-dependency, which run one hop with no further
+  fan-out; a crate with any other candidate file runs with its dependents,
+  where development-edges propagate one hop and normal edges transitively.
+  Run-everything paths and diffs touching the prototype directory keep their
+  rules above and below.
+- Every diff that runs the binary-level tests also runs `fiber extension
+  test` for every first-party package that has cases, not only the changed
+  ones ("Testing an extension"). A change to Fiber's own code can break a
+  package that did not change. The release-profile job, `release`, never runs
+  on a pull request; the backstop measures it on every push ("The backstop
+  on `main`").
+- No diff selects `release` on a pull request, whatever it touches: not the
+  binary-level tests, not the code the release job runs or the table it
+  judges against (`crates/bench`, `xtask/src/bench*`, `scripts/release-size`,
+  `scripts/stored-results`, `docs/performance.md`). A broken harness or judge
+  fails the backstop, which files an issue, instead of failing the pull
+  request.
+- `release` always runs the "Session, memory kept after 10 busy turns"
+  workload (`docs/performance.md`): a push measures every workload. The loop
+  holds the session's state, so a diff elsewhere rarely moves the row.
+- The backstop measures every timing row on its release binary
+  (`docs/performance.md`), whatever the diff touches; the selector still maps
+  each diff to rows for the record, but no pull request runs the head or base
+  passes. `session start` maps to `crates/contract`, `crates/support`,
+  `crates/log`, `crates/loop`, `crates/doors`, `crates/provider`,
+  `crates/routing`, `crates/tools`, `crates/mcp`, `crates/jobs`, `crates/net`,
+  `crates/worktree`, `crates/extensions`, `crates/config`, `crates/hub` or
+  `crates/main`; `sessions list` to `crates/config`, `crates/cli`,
+  `crates/doors`, `crates/hub`, `crates/contract`, `crates/support`,
+  `crates/log`, `crates/worktree` or `crates/main`; the terminal rows
+  (`terminal first frame`, `terminal attach`, `terminal wheel`) to the
+  session-start crates plus `crates/tui` or `crates/cli`; `paging` to
+  `crates/tui`, `crates/contract`, `crates/support` or `crates/log`;
+  `sandbox setup` to `crates/tools/`. Every other path maps to every row, and
+  a `.md` file under `crates/` counts as code. A regression that reaches a
+  row through a dependency the mapping misses surfaces at the backstop.
 
 The selector has its own tests.
 
 ## On every pull request that changes code
 
-On a ready pull request, one job on each of Linux x86_64, Linux arm64 and
-macOS arm64 runs `scripts/check`, the gate CI applies (`docs/workflow.md`,
-"The gate"). A draft pull request skips the jobs "Runners" names; marking it
-ready runs every job it skipped. Marking it ready still reuses a same-head
-mutants pass instead of rerunning those shards ("On every pull request that changes code"). Each job:
+On every pull request, ready or draft, one Linux x86_64 job (`test_linux`)
+runs `scripts/check`, the gate CI applies (`docs/workflow.md`, "The gate").
+A pull request fails only on the tests it newly broke against its base. The
+Linux arm64 and macOS arm64 test legs (the `test` job), the release build
+and size check, and the stress run move to the post-merge run on `main`
+("The backstop on `main`"). `test_linux` runs on the backstop too.
+Each job:
 
 - first checks free space in the scratch directory and on the `target`
   filesystem (`scripts/check-resources preflight`), and exits 75 without
@@ -164,6 +196,29 @@ mutants pass instead of rerunning those shards ("On every pull request that chan
 The debug profile sets `panic = "abort"`, as the release profile does, so
 the `fiber` binary that binary-level tests start behaves like the one that
 ships. Cargo ignores the setting when it builds the test harness.
+
+When the Linux run fails, the job compares against the base commit before
+the verdict runs. It writes the failed tests to a file as exact nextest ids,
+one per line, then checks out the base commit in a scratch worktree and
+reruns exactly those tests there, under the same retry profile the head ran
+under. A base pass on retry still counts as a pass, so a retry never masks a
+head break. The scratch checkout never touches the job's own checkout,
+target directory or caches.
+
+The verdict fails only the newly broken tests: an id that fails at the head
+and passes at the base, or that the base list does not name because the pull
+request added the test. An id that also fails at the base does not fail the
+pull request, and an id the base lists but never runs is dropped and named. A
+base that does not build, or whose test list fails, proves nothing old, so
+every head failure fails the pull request. Both files travel to the verdict
+as an artifact; a missing file fails closed there too.
+
+### The one-week trial
+
+For one week after this gate lands, count pull-request CI failures where
+`scripts/check` passed on the same head, and record the count on
+[#4272](https://github.com/aakshintala/fiber/issues/4272). Near zero means a
+follow-up can drop pull-request CI and keep the post-merge run.
 
 A failed binary-level test retries once. A pass on retry does not fail the
 run, except for a test the pull request touched (below): CI opens a flake
@@ -215,7 +270,7 @@ each test the linked flake issue names runs 100 times, in every binary
 that compiles it. One failure fails the run. The retry above applies only
 to tests the pull request did not touch.
 
-The `stress` job runs on a ready pull request on Linux x86_64 beside the
+The `stress` job runs on the backstop on Linux x86_64 beside the
 test jobs and builds from the same restored cache. The tests it runs are
 the test functions the diff adds or changes, found by
 `cargo xtask stress-plan`. An empty plan skips the run unless a changed
@@ -236,11 +291,11 @@ variable or command-line argument. Linux caps each argument and environment
 string at 128 KiB (`MAX_ARG_STRLEN`). The run step annotates an
 `Argument list too long` failure as `Stress run could not start`. The
 always-run cost step annotates a failed run step that never wrote its start
-marker as `Stress step did not start`; no test ran. Both are job failures and stop the merge like any other; the annotation says only why no test result exists. A touched test the runner
+marker as `Stress step did not start`; no test ran. Both are job failures; the annotation says only why no test result exists. A touched test the runner
 does not compile, such as
 `cfg(target_os = "macos")` on this Linux x86_64 job, is dropped from the
 plan, named in the job output and not stressed. It still runs in the
-macOS `scripts/check` leg. A plan left empty by that intersection skips
+macOS leg on the backstop. A plan left empty by that intersection skips
 the run. A run whose
 filter matches no test, or whose iteration runs a different number of tests
 than the plan names, fails the job. The count is read from the linked issue's
@@ -248,8 +303,8 @@ labels, which decide whether the pull request fixes a flaky test. Which tests
 run 100 times is decided by the names: each test the linked flake issue names
 runs 100 times and every other selected test runs 30; when the issue names no
 test, every selected test runs 30 times. Nothing caps the test set: the job stresses
-every test the plan selects. The job is in `ci`'s `needs`,
-so one failure stops the merge. It writes its wall
+every test the plan selects. The job is in `ci`'s `needs`; on the backstop
+a failure files an issue instead of stopping a merge. It writes its wall
 time, runner minutes and selected tests to its job summary. A touched
 test still gets nextest's one retry but a pass on that retry fails the
 test job (`cargo xtask touched-retries`).
@@ -391,8 +446,9 @@ On Linux x86_64 alone:
   the red commit. The check passes only when at least one test fails on at
   least one leg; a test may pass or have no match on the other. Every test
   the pull request adds or changes must pass at its head on both platforms.
-  The two red-test legs report nextest's status class to a collector, which
-  keeps one required check named `Bug fix fails at the red commit`
+  The two red-test legs report nextest's status class to a `bug_red`
+  collector job, which is in the verdict's `needs`, so the proof gates the
+  merge through the `CI` check; `CI` stays the only required check
   (`docs/workflow.md`, "The pull request"). A pull request whose every
   changed file is a docs file, as "Selection" defines it, passes the check
   with a message saying so: the doc was wrong and the code was right, so no
@@ -413,41 +469,19 @@ On Linux x86_64 alone:
 - each profiling feature built once, without running it:
   `cargo check -p main --bins --tests --features alloc-stats` and
   `cargo check -p main --bins --tests --features dhat-heap`, so neither
-  stops compiling unnoticed. The job's `timeout-minutes` is 10 to leave
+  stops compiling unnoticed. The job's `timeout-minutes` is 12 to leave
   room for the two uncached checks alongside `scripts/check`.
 
-A draft never runs `release`; a ready pull request runs it when the
-selection chooses it. The backstop still runs it on every push to `main`
-("The backstop on `main`").
+No pull request runs `release`. The backstop measures the release build on
+every push ("The backstop on `main`").
 
 One more Linux x86_64 job builds the release profile for the target that
-ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull
-request's head and at its base commit (`scripts/release-size`). The base
-binary comes from the build cache when the backstop stored one for that
-commit, and is built otherwise. The scripts that build and measure both
-binaries are the head's, so a base older than a script still compares. It checks that the stripped head binary is
-under 26 MiB and runs the benchmarks that gate each pull request, the rows the selection above chooses (the 10-busy-turns workload only when the selection chooses it),
-(`docs/performance.md`), timing-only workloads and the `paging` jig at 3 runs and the rest at 5. The head and base
-binaries run only the timing benchmarks the selection chooses, in the same job on the same runner, so a
-timing comparison never crosses runners: one harness process alternates head and base timings,
-by sample for every timing row. When a gated timing row breaches, the job runs a second harness process for that row alone, 4 more samples per side, and judges all samples. The `terminal attach` row and `session_list_ms` never remeasure: the first already takes 5 samples and the second maps to no row. A row the selection does not choose runs on neither side while the budgets it feeds read skipped. Memory and
-exact rows no skipped row feeds still run on the head and compare
-against the backstop's stored results for the base commit, the
-`benchmarks-<sha>` artifact, and a memory or exact budget the base fails
-there does not fail the pull request.
-
-A base that does not build, because `main` is red, does not fail the job. The
-job compares against the nearest first-parent ancestor of the base that has a
-stored binary, looked up among the 9 nearest ancestors. If none has one, it
-skips the base comparison and the timing gates. In both cases the job
-summary names the base, says it does not build, and names the commit it
-compared against or says the comparison was skipped. The head's size check and
-benchmarks still gate the pull request, and a head that does not build still
-fails the job. The paging jig and the benchmarks follow the same rule: the jig is built at
-the commit the base binary is from, and a base with no binary has no base
-timings, and the comment says so. Stored results follow the same lookup;
-with none among the 9 ancestors, memory and exact rows are judged against
-the table alone, and the comment says so.
+ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pushed
+commit (`scripts/release-size`). It checks that the stripped binary is
+under 26 MiB and runs the benchmarks that judge each push, every row at 5
+runs including the 10-busy-turns workload (`docs/performance.md`). A breach
+fails the backstop, which files an issue instead of stopping a merge. A
+commit that does not build fails the job the same way.
 
 The release profile sets `lto = "fat"` and `codegen-units = 1`, which
 shrinks the binary and lengthens the release build. Fiber's own crates, except
@@ -503,8 +537,8 @@ opened.
 
 ## The backstop on `main`
 
-Every push to `main` runs the backstop. It runs the lint, test and
-release jobs the selection chooses from the diff
+Every push to `main` runs the backstop. It runs the lint, test_linux, test,
+stress and release jobs the selection chooses from the diff
 since the last `main` commit whose backstop passed. The tests run on all
 three platforms, and it compiles
 the whole workspace. That is the parent
@@ -724,10 +758,10 @@ Node.js version GitHub currently supports. An action still on a deprecated
 Node.js version is moved to its newest major before it is pinned.
 
 No job polls the Actions API in a loop. The backstop's one lookup of the
-last passing `main` commit, the release job's stored-results lookup (one
-artifact listing per commit, at most 10, and one download), and the select
-job's same-head reuse lookup are the Actions API calls a workflow makes to
-find a run; the backstop's cache pruning also lists and deletes cache entries.
+last passing `main` commit and the release job's stored-results lookup (one
+artifact listing per commit, at most 10, and one download) are the Actions
+API calls a workflow makes to find a run; the backstop's cache pruning also
+lists and deletes cache entries.
 Agents wait on the `CI` check with `gh-ci`, never with a `gh run watch`
 loop, because such loops have tripped GitHub's Actions rate limit. `gh-ci` is
 a small `gh` wrapper that waits with few API calls; it lives in the owner's

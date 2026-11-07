@@ -13,7 +13,7 @@
 mod support;
 
 use contract::ProviderCallId;
-use contract::events::{CallStatus, TextCompleted, ToolCallCompleted, TurnOutcome};
+use contract::events::{CallStatus, EventKind, TextCompleted, ToolCallCompleted, TurnOutcome};
 use contract::provider::{Finish, Input, ReplyAction};
 use fakes::{Scripted, call_usage};
 use serde_json::{Value, json};
@@ -78,14 +78,16 @@ fn stub(id: &str, result: Value) -> ReplyAction {
 fn text_count(lines: &[contract::Envelope], text: &str) -> usize {
     lines
         .iter()
-        .filter(|line| line.kind == "text_completed" && line.payload["text"].as_str() == Some(text))
+        .filter(|line| {
+            line.kind() == EventKind::TextCompleted && line.payload["text"].as_str() == Some(text)
+        })
         .count()
 }
 
 fn turn(lines: &[contract::Envelope]) -> &contract::Envelope {
     lines
         .iter()
-        .find(|line| line.kind == "turn_completed")
+        .find(|line| line.kind() == EventKind::TurnCompleted)
         .unwrap()
 }
 
@@ -307,46 +309,46 @@ fn a_result_split_from_its_call_by_a_pause_joins_in_the_continuation() {
     let lines = session.lines();
     // The pair is logged under the continuation's message with the paused
     // call's block as `provider_item`, before its text.
-    let order: Vec<&str> = lines
+    let order: Vec<EventKind> = lines
         .iter()
         .filter(|line| {
             matches!(
-                line.kind.as_str(),
-                "text_completed"
-                    | "assistant_message_completed"
-                    | "assistant_message_started"
-                    | "tool_call_requested"
-                    | "tool_call_started"
-                    | "tool_call_completed"
+                line.kind(),
+                EventKind::TextCompleted
+                    | EventKind::AssistantMessageCompleted
+                    | EventKind::AssistantMessageStarted
+                    | EventKind::ToolCallRequested
+                    | EventKind::ToolCallStarted
+                    | EventKind::ToolCallCompleted
             )
         })
-        .map(|line| line.kind.as_str())
+        .map(|line| line.kind())
         .collect();
     assert_eq!(
         order,
         [
-            "assistant_message_started",
-            "text_completed",
-            "assistant_message_completed",
-            "assistant_message_started",
-            "tool_call_requested",
-            "tool_call_started",
-            "tool_call_completed",
-            "text_completed",
-            "assistant_message_completed",
+            EventKind::AssistantMessageStarted,
+            EventKind::TextCompleted,
+            EventKind::AssistantMessageCompleted,
+            EventKind::AssistantMessageStarted,
+            EventKind::ToolCallRequested,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::TextCompleted,
+            EventKind::AssistantMessageCompleted,
         ]
     );
     let requested = lines
         .iter()
-        .find(|line| line.kind == "tool_call_requested")
+        .find(|line| line.kind() == EventKind::ToolCallRequested)
         .unwrap();
     let completed = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     let started = lines
         .iter()
-        .find(|line| line.kind == "tool_call_started")
+        .find(|line| line.kind() == EventKind::ToolCallStarted)
         .unwrap();
     assert_eq!(requested.payload["provider_item"], call);
     assert_eq!(completed.payload["provider_item"], result);
@@ -399,15 +401,12 @@ fn a_stub_with_no_paused_call_writes_nothing() {
         assert_eq!(session.turn(), Some(TurnOutcome::Completed));
         let lines = session.lines();
         assert!(
-            lines.iter().all(|line| line.kind != "tool_call_requested"),
-            "no hosted line is written"
-        );
-        all_kinds.push(
             lines
                 .iter()
-                .map(|line| line.kind.clone())
-                .collect::<Vec<_>>(),
+                .all(|line| line.kind() != EventKind::ToolCallRequested),
+            "no hosted line is written"
         );
+        all_kinds.push(lines.iter().map(|line| line.kind()).collect::<Vec<_>>());
         conversations.push(session.requests()[1].conversation.clone());
     }
     assert_eq!(all_kinds[0], all_kinds[1]);
@@ -444,7 +443,9 @@ fn a_stub_with_a_different_id_than_the_paused_call_is_dropped() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     assert!(
-        lines.iter().all(|line| line.kind != "tool_call_requested"),
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::ToolCallRequested),
         "no hosted line is written"
     );
     assert_eq!(text_count(&lines, "B"), 1);
@@ -496,13 +497,13 @@ fn two_pauses_log_the_pair_once_and_resend_both_replies() {
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.kind == "tool_call_requested")
+            .filter(|line| line.kind() == EventKind::ToolCallRequested)
             .count(),
         1
     );
     let requested = lines
         .iter()
-        .find(|line| line.kind == "tool_call_requested")
+        .find(|line| line.kind() == EventKind::ToolCallRequested)
         .unwrap();
     assert_eq!(requested.payload["provider_item"], call);
 }

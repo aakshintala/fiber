@@ -23,8 +23,11 @@ no bubblewrap. A confined call takes the confined fast path unless the destructi
 the sandbox off. A `detach: true` call runs outside the sandbox and is
 reviewed as an unconfined call; it takes no protected-path transaction.
 A confined call whose sandbox cannot be applied fails;
-Fiber never reruns it unconfined. This slice adds no
-`/sandbox` toggle. Each Fiber delegate inherits the parent's effective sandbox
+Fiber never reruns it unconfined. `/sandbox on` turns the sandbox on for the
+running session only, until `/reload` drops it; `/sandbox off` turns it back
+off. Turning it on while the sandbox is unavailable sets the setting on
+anyway: no call is confined, every call is reviewed, and the session says so
+once. Each Fiber delegate inherits the parent's effective sandbox
 settings at launch, including changes made during the session. Fresh spawns,
 forks and resumes all take a new snapshot.
 

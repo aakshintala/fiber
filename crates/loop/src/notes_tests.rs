@@ -1,7 +1,7 @@
 use super::*;
 use crate::inbox::{TurnInput, Waited};
 use crate::{Loop, Model};
-use contract::events::{CacheLifetime, CommandResult, Event};
+use contract::events::{CacheLifetime, CommandResult, Event, EventKind};
 use contract::inbox::{Ack, Answer, Delivery};
 use contract::notes::{AllowsTally, Evidence, NotesAsk, ProposeNotesArgs, SessionTally, Topic};
 use contract::provider::{Input, Provider};
@@ -175,8 +175,8 @@ fn idle_notes_send_only_evidence_and_write_usage_before_answering() {
     assert_eq!(&request.conversation[..], vec![Input::User { text: "Evidence:\n1 [files] | remote evidence\n2 [answer] | person answer\n\nEarlier lines:\n- earlier line\n".into(), images: Vec::new() }]);
     let lines = new_lines(&log, before);
     assert_eq!(
-        lines.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
-        ["usage_recorded"]
+        lines.iter().map(|e| e.kind()).collect::<Vec<_>>(),
+        ["usage_recorded"].map(EventKind::from_name)
     );
     assert_eq!(lines[0].turn_id, None);
     assert_eq!(lines[0].action_id, None);
@@ -257,8 +257,8 @@ fn failed_and_cancelled_calls_write_usage_then_accept_with_an_error() {
         assert_eq!(provider.requests().len(), 1);
         let lines = new_lines(&log, before);
         assert_eq!(
-            lines.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
-            ["usage_recorded"]
+            lines.iter().map(|e| e.kind()).collect::<Vec<_>>(),
+            ["usage_recorded"].map(EventKind::from_name)
         );
         assert_eq!(lines[0].turn_id, None);
         assert_eq!(lines[0].action_id, None);
@@ -594,11 +594,8 @@ fn a_late_cost_replaces_the_notes_calls_usage_without_a_turn_or_action() {
     ));
     let first = new_lines(&log, before);
     assert_eq!(
-        first
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["usage_recorded"]
+        first.iter().map(|line| line.kind()).collect::<Vec<_>>(),
+        ["usage_recorded"].map(EventKind::from_name)
     );
     let deadline = Deadline::after(DEADLINE);
     let mark =
@@ -610,11 +607,8 @@ fn a_late_cost_replaces_the_notes_calls_usage_without_a_turn_or_action() {
     looped.write_settled().unwrap();
     let lines = new_lines(&log, before);
     assert_eq!(
-        lines
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["usage_recorded", "usage_recorded"]
+        lines.iter().map(|line| line.kind()).collect::<Vec<_>>(),
+        ["usage_recorded", "usage_recorded"].map(EventKind::from_name)
     );
     assert_eq!(
         lines[1].payload["generation_id"],
@@ -780,9 +774,9 @@ fn an_offer_wait_defers_notes_without_sending_a_request() {
     assert_eq!(
         new_lines(&log, before)
             .iter()
-            .map(|line| line.kind.as_str())
+            .map(|line| line.kind())
             .collect::<Vec<_>>(),
-        ["repository_code_offered"]
+        ["repository_code_offered"].map(EventKind::from_name)
     );
 }
 

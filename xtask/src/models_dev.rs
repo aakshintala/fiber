@@ -11,9 +11,9 @@ use serde_json::{Map, Value};
 use crate::models_dev_table::{PACKAGES, Package, ProtocolRule};
 
 /// The models.dev catalog the generator reads when `--from` is absent.
-pub(crate) const MODELS_DEV_URL: &str = "https://models.dev/api.json";
+const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 /// The checked-in, trimmed models.dev catalog: the drift test's input.
-pub(crate) const SNAPSHOT: &str = "xtask/tests/models-dev.json";
+const SNAPSHOT: &str = "xtask/tests/models-dev.json";
 
 /// One file the generator writes: its path from the repository root, its
 /// full text, and how many models it lists.

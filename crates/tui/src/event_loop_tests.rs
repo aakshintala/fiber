@@ -3394,10 +3394,10 @@ fn the_signal_thread_sends_each_taken_signal() {
 fn attached_frame_waits_for_a_completed_tail_read() {
     let home = fakes::TempDir::new("event-loop-attached-frame");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let diag = Arc::new(log::diag::Diag::new(
+    let diag = Arc::new(diag::diag::Diag::new(
         home.path(),
-        log::diag::Process::Tui,
-        log::diag::Level::Debug,
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
         clock,
     ));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
@@ -3429,10 +3429,10 @@ fn attached_frame_waits_for_a_completed_tail_read() {
 fn attached_frame_waits_for_an_attached_session() {
     let home = fakes::TempDir::new("event-loop-attached-frame-home");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let diag = Arc::new(log::diag::Diag::new(
+    let diag = Arc::new(diag::diag::Diag::new(
         home.path(),
-        log::diag::Process::Tui,
-        log::diag::Level::Debug,
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
         clock,
     ));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
@@ -3461,10 +3461,10 @@ fn attached_frame_waits_for_an_attached_session() {
 fn attached_frame_is_discarded_without_a_stream() {
     let home = fakes::TempDir::new("event-loop-attached-frame-no-stream");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let diag = Arc::new(log::diag::Diag::new(
+    let diag = Arc::new(diag::diag::Diag::new(
         home.path(),
-        log::diag::Process::Tui,
-        log::diag::Level::Debug,
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
         clock,
     ));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);

@@ -215,6 +215,8 @@ codes! {
     RepositoryCodeSkipped = "repository_code_skipped",
     /// The reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one.
     ReviewerSelectionFailed = "reviewer_selection_failed",
+    /// `/sandbox` reports the session sandbox switch.
+    Sandbox = "sandbox",
     /// A delete names a session that forks or rewinds point at.
     SessionHasDependents = "session_has_dependents",
     /// Another process holds the session.

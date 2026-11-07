@@ -15,7 +15,7 @@ mod support;
 use std::sync::Arc;
 
 use contract::Envelope;
-use contract::events::TurnOutcome;
+use contract::events::{EventKind, TurnOutcome};
 use contract::tool::{Bound, Tool};
 use fakes::Scripted;
 use r#loop::{ResultCaps, capped};
@@ -54,7 +54,7 @@ fn turn(
     assert_eq!(
         kinds(&lines)
             .into_iter()
-            .filter(|kind| *kind != "tool_call_delta")
+            .filter(|kind| *kind != EventKind::ToolCallDelta)
             .collect::<Vec<_>>(),
         [
             "session_started",
@@ -80,6 +80,7 @@ fn turn(
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     (session, lines)
 }

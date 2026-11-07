@@ -13,10 +13,10 @@ mod support;
 
 use contract::clock::Clock as _;
 use contract::events::{
-    Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, HandoffCompleted,
-    InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome, PermissionRequested,
-    PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef, RuleScope,
-    SessionStarted, StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted,
+    Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, EventKind,
+    HandoffCompleted, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
+    PermissionRequested, PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef,
+    RuleScope, SessionStarted, StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted,
     ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::{Input, ModelRequest};
@@ -871,7 +871,7 @@ fn completed_handoffs(dir: &Path) -> Vec<u64> {
     log::read(dir)
         .unwrap()
         .iter()
-        .filter(|line| line.kind == "handoff_completed")
+        .filter(|line| line.kind() == EventKind::HandoffCompleted)
         .filter(|line| line.payload.get("outcome").and_then(Value::as_str) == Some("completed"))
         .filter_map(|line| line.seq.map(|seq| seq.0))
         .collect()
@@ -1963,4 +1963,125 @@ fn stalled_start_keeps_the_exchange_deadline_whole() {
     let lines = stdout_lines(&held.finish());
     assert_eq!(lines.len(), 5);
     assert!(lines[0].get("stages").is_some());
+}
+
+/// The widened-scope person-input fixture, compiled in: an `ask_user`
+/// form, an elicitation-style select, a `host.ask` text input, a
+/// fiber-declined confirm, and the shell call they precede.
+const PERSON_INPUT_FIXTURE: &str = include_str!("fixtures/review_person_input/events.jsonl");
+
+/// The fixture's session directory, staged in a temporary directory from
+/// the compiled-in file.
+fn person_input_dir() -> (fakes::TempDir, PathBuf) {
+    let home = fakes::TempDir::new("fiber-review-person-input");
+    let dir = home.path().join("review_person_input");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("events.jsonl"), PERSON_INPUT_FIXTURE).unwrap();
+    (home, dir)
+}
+
+/// Each person answer replays with its eliciting reply before the shell
+/// call it precedes: the `ask_user` questions as asked, fiber's own
+/// channel description otherwise.
+#[test]
+fn person_input_fixture_session_replays_answer() {
+    let (_home, dir) = person_input_dir();
+    let args = ReviewArgs {
+        dir,
+        notes: None,
+        keep_all: false,
+    };
+    let outcome = replay(&args, Cursor::new(""), Vec::new()).unwrap();
+    let stages: Vec<&ModelRequest> = outcome
+        .requests
+        .iter()
+        .filter_map(|(kind, request)| match kind {
+            RequestKind::Stage => Some(request),
+            RequestKind::Selection => None,
+        })
+        .collect();
+    // `docs/permissions.md`, "How it runs": "Two stages." — the replay
+    // holds the first and second reviewer stages.
+    assert_eq!(stages.len(), 2);
+    let first_texts = texts(stages[0]);
+    let call_at = first_texts
+        .iter()
+        .position(|text| text.starts_with("Tool call: ") && text.contains("\"shell\""))
+        .unwrap_or_else(|| panic!("the shell call renders: {first_texts:?}"));
+    // `docs/testing.md`, "Event streams": where the doc leaves the order
+    // open, the test asserts the lines as a set — the answers' order
+    // against the call is open, so existence (the positions below and the
+    // shell-call shape check) is the assertion, never an order pin.
+    assert!(
+        first_texts
+            .get(call_at)
+            .is_some_and(|text| text.contains("\"shell\"")),
+        "the shell call renders: {first_texts:?}"
+    );
+    for (reply, answer) in [
+        ("The agent: Which pipeline should run?", "Deploy: nightly"),
+        ("A question from a server elicitation", "The person: cherry"),
+        ("garden-helper", "The person: \"fig-harvest\""),
+    ] {
+        let reply_at = first_texts
+            .iter()
+            .position(|text| text.contains(reply))
+            .unwrap_or_else(|| panic!("{reply:?} replays: {first_texts:?}"));
+        let answer_at = first_texts
+            .iter()
+            .position(|text| text.contains(answer))
+            .unwrap_or_else(|| panic!("{answer:?} replays: {first_texts:?}"));
+        // `docs/permissions.md`, "What it is shown": "The reply a human
+        // message answers is the model's text directly before it."
+        assert_eq!(
+            reply_at + 1,
+            answer_at,
+            "{reply:?} answers {answer:?}: {first_texts:?}"
+        );
+    }
+    // The submitted prompt words stay out: the reviewer learns the
+    // channel, never an extension's or server's words, and a fiber
+    // decline renders nothing at all.
+    for banned in [
+        "Which fruit should garnish the tart?",
+        "Which bed should the seedlings move to?",
+        "Should the scarecrow stay out overnight?",
+    ] {
+        assert!(
+            first_texts.iter().all(|text| !text.contains(banned)),
+            "{banned:?} stays out: {first_texts:?}"
+        );
+    }
+}
+
+/// The built binary prints the same answers over the committed fixture
+/// directory: stdout holds the answers, the asked questions and the
+/// channel descriptions, never the submitted prompt words.
+#[test]
+fn person_input_fixture_binary_prints_answer() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/review_person_input");
+    let output = run_jig(&dir, "", false, &[]);
+    assert!(
+        output.status.success(),
+        "the jig exits 0: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for marker in [
+        "Deploy: nightly",
+        "Which pipeline should run?",
+        "The person: cherry",
+        "A question from a server elicitation",
+        "garden-helper",
+        "The person: \\\"fig-harvest\\\"",
+    ] {
+        assert!(stdout.contains(marker), "{marker:?} prints: {stdout}");
+    }
+    for banned in [
+        "Which fruit should garnish the tart?",
+        "Which bed should the seedlings move to?",
+        "Should the scarecrow stay out overnight?",
+    ] {
+        assert!(!stdout.contains(banned), "{banned:?} stays out");
+    }
 }

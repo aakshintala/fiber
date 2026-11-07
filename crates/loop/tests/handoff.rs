@@ -19,7 +19,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use contract::ThinkingLevel;
-use contract::events::{CacheLifetime, Control, TextCompleted, TurnOutcome};
+use contract::events::{CacheLifetime, Control, EventKind, TextCompleted, TurnOutcome};
 use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::{Finish, Input, Provider, ReplyAction};
 use contract::shapes::Failure;
@@ -532,6 +532,7 @@ fn a_cancel_during_the_note_request_ends_the_turn_interrupted() {
             "handoff_completed",
             "turn_completed"
         ]
+        .map(EventKind::from_name)
     );
     let done = of_kind(&lines, "handoff_completed");
     assert_eq!(
@@ -3183,7 +3184,7 @@ fn a_blocking_session_start_failure_at_an_overflow_handoff_fails_context_overflo
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "hook_failed");
     let last = lines.last().unwrap();
-    assert_eq!(last.kind, "turn_completed");
+    assert_eq!(last.kind(), EventKind::TurnCompleted);
     assert_eq!(last.payload["outcome"], "failed");
     assert_eq!(last.payload["error"]["code"], "context_overflow");
 }

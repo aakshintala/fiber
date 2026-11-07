@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
-use contract::events::{Answer, Control, Event, Interaction, TurnOutcome};
+use contract::events::{Answer, Control, Event, EventKind, Interaction, TurnOutcome};
 use contract::inbox::{Ack, Delivery};
 use contract::jobs::Jobs;
 use contract::provider::Input;
@@ -302,7 +302,7 @@ fn no_resolution(tap: &Tap) {
     assert!(
         tap.pending()
             .iter()
-            .all(|line| line.kind != "interaction_resolved"),
+            .all(|line| line.kind() != EventKind::InteractionResolved),
         "the form is still pending"
     );
 }
@@ -318,7 +318,7 @@ fn exit(session: &mut Session, signal: Option<i32>) -> Vec<Envelope> {
         signal,
     )
     .unwrap();
-    session.events_until("fiber_exited", |line| line.kind == "fiber_exited")
+    session.events_until("fiber_exited", |line| line.kind() == EventKind::FiberExited)
 }
 
 /// The first reply's one tool call: the tail after [`support::OPENING`]
@@ -987,7 +987,7 @@ fn suspended_on_form(former: &Arc<Former>) -> (Session, Envelope) {
     );
     assert_eq!(finish(&mut session, &finished), None);
     session.events_until("the form's request", |line| {
-        line.kind == "interaction_requested"
+        line.kind() == EventKind::InteractionRequested
     });
     (session, requested)
 }
@@ -1245,8 +1245,14 @@ fn a_headless_resume_declines_the_form_and_runs_its_prompt_next() {
         Some(TurnOutcome::Completed)
     );
     let lines = session.lines();
-    assert_eq!(kinds(&lines)[0], "turn_started");
-    assert_eq!(kinds(&lines)[1..], *DONE);
+    assert_eq!(kinds(&lines)[0], EventKind::TurnStarted);
+    assert_eq!(
+        kinds(&lines)[1..]
+            .iter()
+            .map(|kind| kind.name())
+            .collect::<Vec<_>>(),
+        DONE
+    );
     assert_eq!(former.runs().len(), 2);
 }
 
@@ -1315,7 +1321,7 @@ fn resumes_as_cut_short(edit: impl FnOnce(&Session, &Envelope) -> String) {
     let mut like = requested.clone();
     like.turn_id = None;
     append(&session, &like, "fiber_exited", exited, None);
-    session.events_until("fiber_exited", |line| line.kind == "fiber_exited");
+    session.events_until("fiber_exited", |line| line.kind() == EventKind::FiberExited);
     session.resume(vec![former.clone()]);
     session.inbox.send(delivery("next")).unwrap();
     let finished = run_turn(&mut session);
@@ -1436,7 +1442,9 @@ fn a_request_whose_call_never_started_is_not_raised_again() {
 /// the shutdown ends the step suspended.
 #[test]
 fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action_and_turn() {
-    use contract::events::{DelegateFinished, DelegateStarted, JobCompleted, JobStarted, Outcome};
+    use contract::events::{
+        DelegateFinished, DelegateStarted, EventKind, JobCompleted, JobStarted, Outcome,
+    };
     use contract::inbox::JobNotice;
     use contract::jobs::{JobRecord, Taken};
     use contract::shapes::{Tokens, Usage};
@@ -1537,7 +1545,7 @@ fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action
     assert!(run.result.is_ok(), "{run:?}");
     // The run consumed the loop, so the exit reads its summary.
     r#loop::fiber_exited(&session.log, &run.summary, Ok(()), false, Some(143)).unwrap();
-    let lines = session.events_until("fiber_exited", |line| line.kind == "fiber_exited");
+    let lines = session.events_until("fiber_exited", |line| line.kind() == EventKind::FiberExited);
     // No `tool_call_completed`: the output was dropped.
     assert_kinds(
         &lines,

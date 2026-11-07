@@ -15,8 +15,8 @@ mod support;
 use std::sync::Arc;
 
 use contract::events::{
-    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested, TurnOutcome,
-    UsageRecorded,
+    CacheLifetime, EventKind, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
+    TurnOutcome, UsageRecorded,
 };
 use contract::inbox::Delivery;
 use contract::provider::{Cost, Delta, Input, InputSize, ReplyAction};
@@ -47,10 +47,10 @@ fn assistant(text: &str) -> Input {
 }
 
 /// The durable kinds of `lines`, in order.
-fn durable(lines: &[contract::Envelope]) -> Vec<&str> {
+fn durable(lines: &[contract::Envelope]) -> Vec<EventKind> {
     kinds(lines)
         .into_iter()
-        .filter(|k| !k.ends_with("_delta"))
+        .filter(|k| !k.name().ends_with("_delta"))
         .collect()
 }
 
@@ -81,6 +81,7 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let input: Vec<&str> = lines[3].payload["input"]
         .as_array()
@@ -118,11 +119,11 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     let turn = lines[3].turn_id.clone().unwrap();
     let action = lines[5].action_id.clone().unwrap();
     for line in &lines[3..] {
-        assert_eq!(line.turn_id.as_ref(), Some(&turn), "{}", line.kind);
+        assert_eq!(line.turn_id.as_ref(), Some(&turn), "{}", line.kind().name());
     }
     let deltas: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "assistant_message_delta")
+        .filter(|l| l.kind() == EventKind::AssistantMessageDelta)
         .collect();
     let text: String = deltas
         .iter()
@@ -133,16 +134,22 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
         assert_eq!(delta.seq, None);
         assert_eq!(delta.action_id.as_ref(), Some(&action));
     }
-    let part = lines.iter().find(|l| l.kind == "text_completed").unwrap();
+    let part = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::TextCompleted)
+        .unwrap();
     assert_eq!(part.action_id.as_ref(), Some(&action));
     assert_eq!(part.payload["text"], "Hello there.");
     let completed = lines
         .iter()
-        .find(|l| l.kind == "assistant_message_completed")
+        .find(|l| l.kind() == EventKind::AssistantMessageCompleted)
         .unwrap();
     assert_eq!(completed.action_id.as_ref(), Some(&action));
     assert_eq!(completed.payload["outcome"], "completed");
-    let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let usage = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert_eq!(usage.action_id.as_ref(), Some(&action));
     assert_eq!(usage.payload["model"], MODEL);
     assert_eq!(usage.payload["generation_id"], "gen_1");
@@ -187,8 +194,12 @@ fn a_call_that_sent_media_records_input_media() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let usage = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert_eq!(usage.payload["input_bytes"], 2048);
     assert_eq!(usage.payload["input_media"], true);
 }
@@ -224,8 +235,12 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let steering = lines.iter().find(|l| l.kind == "steering_applied").unwrap();
+    let steering = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::SteeringApplied)
+        .unwrap();
     assert_eq!(steering.payload["content"][0]["text"], "also this");
     assert_eq!(steering.payload["command_id"], "c_also this");
     assert_eq!(steering.payload["source"], "driver");
@@ -250,12 +265,18 @@ fn a_message_waiting_at_a_step_boundary_is_applied_by_that_step() {
     session.turn();
     let lines = session.lines();
     let kinds = kinds(&lines);
-    let second_step = kinds.iter().rposition(|k| *k == "step_started").unwrap();
-    assert_eq!(kinds[second_step + 1], "steering_queue");
-    assert_eq!(kinds[second_step + 2], "steering_queue");
-    assert_eq!(kinds[second_step + 3], "steering_applied");
+    let second_step = kinds
+        .iter()
+        .rposition(|k| *k == EventKind::StepStarted)
+        .unwrap();
+    assert_eq!(kinds[second_step + 1], EventKind::SteeringQueue);
+    assert_eq!(kinds[second_step + 2], EventKind::SteeringQueue);
+    assert_eq!(kinds[second_step + 3], EventKind::SteeringApplied);
     assert_eq!(
-        kinds.iter().filter(|k| **k == "steering_applied").count(),
+        kinds
+            .iter()
+            .filter(|k| **k == EventKind::SteeringApplied)
+            .count(),
         1
     );
 }
@@ -392,12 +413,15 @@ fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
     let lines = session.lines();
     let started = lines
         .iter()
-        .find(|l| l.kind == "reasoning_started")
+        .find(|l| l.kind() == EventKind::ReasoningStarted)
         .unwrap();
-    let delta = lines.iter().find(|l| l.kind == "reasoning_delta").unwrap();
+    let delta = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::ReasoningDelta)
+        .unwrap();
     let completed = lines
         .iter()
-        .find(|l| l.kind == "reasoning_completed")
+        .find(|l| l.kind() == EventKind::ReasoningCompleted)
         .unwrap();
     assert_eq!(delta.seq, None);
     assert_eq!(delta.payload["text"], "Think.");
@@ -452,7 +476,7 @@ fn each_reasoning_action_keeps_the_id_it_was_first_seen_with() {
     let ids = |kind: &str| -> Vec<ActionId> {
         lines
             .iter()
-            .filter(|l| l.kind == kind)
+            .filter(|l| l.kind() == EventKind::from_name(kind))
             .map(|l| l.action_id.clone().unwrap())
             .collect()
     };
@@ -472,7 +496,7 @@ fn each_reasoning_action_keeps_the_id_it_was_first_seen_with() {
     );
     let texts: Vec<&str> = lines
         .iter()
-        .filter(|l| l.kind == "reasoning_completed")
+        .filter(|l| l.kind() == EventKind::ReasoningCompleted)
         .map(|l| l.payload["text"].as_str().unwrap())
         .collect();
     assert_eq!(texts, ["", "First.", "Second."]);
@@ -510,20 +534,21 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let arguments = lines
         .iter()
-        .find(|l| l.kind == "tool_call_arguments_delta")
+        .find(|l| l.kind() == EventKind::ToolCallArgumentsDelta)
         .unwrap();
     assert_eq!(arguments.action_id, lines[5].action_id);
     assert_eq!(arguments.seq, None);
     let requested = lines
         .iter()
-        .find(|l| l.kind == "tool_call_requested")
+        .find(|l| l.kind() == EventKind::ToolCallRequested)
         .unwrap();
     let completed = lines
         .iter()
-        .find(|l| l.kind == "tool_call_completed")
+        .find(|l| l.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     assert_eq!(requested.payload["name"], "get_weather");
     assert_ne!(requested.action_id, lines[5].action_id);
@@ -575,6 +600,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let call = &lines[7].payload;
     assert_eq!(call["outcome"], "failed");
@@ -634,7 +660,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
     let started: Vec<usize> = lines
         .iter()
         .enumerate()
-        .filter(|(_, l)| l.kind == "assistant_message_started")
+        .filter(|(_, l)| l.kind() == EventKind::AssistantMessageStarted)
         .map(|(i, _)| i)
         .collect();
     let span = &lines[started[0]..started[1]];
@@ -652,10 +678,11 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
             "tool_call_completed",
             "step_started",
         ]
+        .map(EventKind::from_name)
     );
     let texts: Vec<&str> = span
         .iter()
-        .filter(|l| l.kind == "text_completed")
+        .filter(|l| l.kind() == EventKind::TextCompleted)
         .map(|l| {
             assert_eq!(l.action_id, message_id);
             l.payload["text"].as_str().unwrap()
@@ -667,7 +694,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
     let logged = log::read(&session.dir).unwrap();
     let opened = logged
         .iter()
-        .rposition(|l| l.kind == "assistant_message_started")
+        .rposition(|l| l.kind() == EventKind::AssistantMessageStarted)
         .unwrap();
     assert_eq!(sent[1], user("hi"));
     assert_eq!(sent[2], assistant("A"));
@@ -684,7 +711,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
     )
     .unwrap();
     let exited = log::read(&session.dir).unwrap();
-    assert_eq!(exited.last().unwrap().kind, "fiber_exited");
+    assert_eq!(exited.last().unwrap().kind(), EventKind::FiberExited);
     assert_eq!(exited.last().unwrap().payload["text"], "AB");
 
     let rebuilt = session.rebuilt();
@@ -693,7 +720,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
     // rebuild carries after the sent conversation.
     let after: Vec<&str> = logged[opened..]
         .iter()
-        .filter(|l| l.kind == "text_completed")
+        .filter(|l| l.kind() == EventKind::TextCompleted)
         .map(|l| l.payload["text"].as_str().unwrap())
         .collect();
     assert_eq!(after, ["A", "B"]);
@@ -777,7 +804,7 @@ fn a_priced_model_logs_the_cost_its_prices_give() {
     let usage = session
         .lines()
         .into_iter()
-        .find(|line| line.kind == "usage_recorded")
+        .find(|line| line.kind() == EventKind::UsageRecorded)
         .unwrap();
     assert_eq!(usage.payload["cost"].as_f64(), Some(tier_cost()));
     assert!(usage.payload.get("subscription").is_none());
@@ -796,7 +823,7 @@ fn a_subscription_model_logs_an_estimate_apart_from_billed_spend() {
     let usage = session
         .lines()
         .into_iter()
-        .find(|line| line.kind == "usage_recorded")
+        .find(|line| line.kind() == EventKind::UsageRecorded)
         .unwrap();
     assert_eq!(usage.payload["subscription"], true);
     assert_eq!(usage.payload["cost"].as_f64(), Some(tier_cost()));
@@ -904,11 +931,11 @@ fn spend_at_the_budget_refuses_the_next_request() {
     assert_eq!(
         kinds(&lines)
             .iter()
-            .filter(|kind| **kind == "assistant_message_started")
+            .filter(|kind| **kind == EventKind::AssistantMessageStarted)
             .count(),
         1
     );
-    assert!(kinds(&lines).contains(&"steering_applied"));
+    assert!(kinds(&lines).contains(&EventKind::SteeringApplied));
     let completed = lines.last().unwrap();
     assert_eq!(completed.payload["outcome"], "failed");
     assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
@@ -937,14 +964,14 @@ fn a_call_that_crosses_the_budget_completes_and_the_next_is_refused() {
     assert_eq!(
         kinds(&lines)
             .iter()
-            .filter(|kind| **kind == "usage_recorded")
+            .filter(|kind| **kind == EventKind::UsageRecorded)
             .count(),
         2
     );
     assert_eq!(
         kinds(&lines)
             .iter()
-            .filter(|kind| **kind == "assistant_message_started")
+            .filter(|kind| **kind == EventKind::AssistantMessageStarted)
             .count(),
         2
     );
@@ -1029,6 +1056,7 @@ fn a_zero_budget_refuses_the_first_request() {
             "step_started",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(
         lines.last().unwrap().payload["error"]["message"],
@@ -1118,10 +1146,15 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     // The failed turn ends without a last drain, so the steer is still
     // waiting: no `steering_applied` names it.
-    assert!(failed.iter().all(|l| l.kind != "steering_applied"));
+    assert!(
+        failed
+            .iter()
+            .all(|l| l.kind() != EventKind::SteeringApplied)
+    );
     // The next turn starts without a new prompt, carrying the steer on its
     // `turn_started`.
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
@@ -1139,8 +1172,12 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
+    let started = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::TurnStarted)
+        .unwrap();
     let input: Vec<&str> = started.payload["input"]
         .as_array()
         .unwrap()
@@ -1200,16 +1237,17 @@ fn queued_steers_are_each_applied_in_order_and_listed_while_queued() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let queues: Vec<Vec<&str>> = lines
         .iter()
-        .filter(|l| l.kind == "steering_queue")
+        .filter(|l| l.kind() == EventKind::SteeringQueue)
         .map(queued)
         .collect();
     assert_eq!(queues, [vec!["one"], vec!["one", "two"], Vec::new()]);
     let applied: Vec<&str> = lines
         .iter()
-        .filter(|l| l.kind == "steering_applied")
+        .filter(|l| l.kind() == EventKind::SteeringApplied)
         .map(|l| l.payload["content"][0]["text"].as_str().unwrap())
         .collect();
     assert_eq!(applied, ["one", "two"]);
@@ -1272,10 +1310,11 @@ fn a_dropped_steer_leaves_the_queue_listing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let queues: Vec<Vec<&str>> = lines
         .iter()
-        .filter(|l| l.kind == "steering_queue")
+        .filter(|l| l.kind() == EventKind::SteeringQueue)
         .map(queued)
         .collect();
     assert_eq!(
@@ -1284,7 +1323,7 @@ fn a_dropped_steer_leaves_the_queue_listing() {
     );
     let applied: Vec<&str> = lines
         .iter()
-        .filter(|l| l.kind == "steering_applied")
+        .filter(|l| l.kind() == EventKind::SteeringApplied)
         .map(|l| l.payload["content"][0]["text"].as_str().unwrap())
         .collect();
     assert_eq!(applied, ["keep"]);
@@ -1316,8 +1355,12 @@ fn a_reply_reporting_searches_records_their_count() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let usage = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert_eq!(usage.payload["web_searches"], 3);
 
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
@@ -1340,8 +1383,12 @@ fn a_reply_reporting_searches_records_their_count() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let usage = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert!(usage.payload.get("web_searches").is_none());
 }
 
@@ -1384,10 +1431,11 @@ fn a_reply_carrying_an_inline_cost_records_it_instead_of_the_declared_price() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let usages: Vec<_> = lines
         .iter()
-        .filter(|line| line.kind == "usage_recorded")
+        .filter(|line| line.kind() == EventKind::UsageRecorded)
         .collect();
     assert_eq!(usages.len(), 1);
     assert_eq!(usages[0].payload["cost"], json!(0.000123));
@@ -1572,11 +1620,13 @@ fn a_copy_replaying_a_ledgered_line_counts_nothing_again() {
     .unwrap();
     let all = log::read(&session.dir).unwrap();
     let exited = all.last().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.kind(), EventKind::FiberExited);
     // Unnamed own calls share one fold bucket; the replay adds nothing.
     let one = all
         .iter()
-        .find(|l| l.kind == "usage_recorded" && l.payload.get("origin_session_id").is_none())
+        .find(|l| {
+            l.kind() == EventKind::UsageRecorded && l.payload.get("origin_session_id").is_none()
+        })
         .map(|l| l.payload["cost"].as_f64().unwrap_or(0.0))
         .unwrap_or(0.0);
     let spent = exited.payload["usage"]["cost"].as_f64().unwrap_or(0.0);
@@ -1696,7 +1746,7 @@ fn a_copy_without_its_job_lines_still_counts() {
     let all = log::read(&session.dir).unwrap();
     assert!(
         all.iter()
-            .all(|l| l.kind != "job_started" && l.kind != "job_completed"),
+            .all(|l| l.kind() != EventKind::JobStarted && l.kind() != EventKind::JobCompleted),
         "no job lines at all"
     );
     let exited = all.last().unwrap();
@@ -1741,7 +1791,7 @@ fn a_restored_copy_without_a_job_end_counts_once_with_its_origin() {
     let all = log::read(&session.dir).unwrap();
     let copies: Vec<_> = all
         .iter()
-        .filter(|l| l.kind == "usage_recorded" && l.payload["generation_id"] == "g_child")
+        .filter(|l| l.kind() == EventKind::UsageRecorded && l.payload["generation_id"] == "g_child")
         .collect();
     assert_eq!(copies.len(), 1);
     assert_eq!(copies[0].payload["origin_session_id"], "s_child");
@@ -1777,7 +1827,7 @@ fn a_late_cost_for_a_copy_applies_only_its_delta() {
     .unwrap();
     let all = log::read(&session.dir).unwrap();
     let exited = all.last().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.kind(), EventKind::FiberExited);
     assert_eq!(exited.payload["usage"]["cost"], 0.05);
 }
 
@@ -1789,7 +1839,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
     // (`docs/delegates.md`, "Lifetime").
     // Overbuild finding 2 is subsumed here: a `Session::blocking` scaffold
     // cannot prove a mid-`jobs wait` cancel, so this keeps its own wait tool.
-    use contract::events::Outcome;
+    use contract::events::{EventKind, Outcome};
     use contract::jobs::{Jobs, Opening, Stop};
     use contract::shapes::{DeclaredEffects, Effect};
     use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
@@ -1974,6 +2024,7 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             "tool_call_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert_eq!(cut.last().unwrap().payload["outcome"], "interrupted");
     // No stop reached the registry: neither the delegates nor the job.
@@ -2007,10 +2058,11 @@ fn cancelling_the_turn_leaves_its_delegates_running() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let done = lines
         .iter()
-        .find(|line| line.kind == "job_completed")
+        .find(|line| line.kind() == EventKind::JobCompleted)
         .expect("the later turn claims the delegate's end");
     assert_eq!(done.payload["job_id"], job_id.0);
     assert_eq!(done.payload["status"], "completed");

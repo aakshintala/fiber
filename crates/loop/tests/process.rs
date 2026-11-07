@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 
 use contract::SessionId;
+use contract::events::EventKind;
 use log::Log;
 use r#loop::fiber_started;
 
@@ -45,8 +46,8 @@ fn fiber_started_is_the_first_line_and_names_the_version() {
 
     let lines = log::read(&session.dir).unwrap();
     assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        ["fiber_started"]
+        lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        ["fiber_started"].map(EventKind::from_name)
     );
     assert_eq!(lines[0].payload["version"], "1.2.3");
     assert_eq!(lines[0].payload["resumed"], false);
@@ -60,8 +61,8 @@ fn a_resumed_fiber_started_marks_the_session_resumed() {
 
     let lines = log::read(&session.dir).unwrap();
     assert_eq!(
-        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
-        ["fiber_started"]
+        lines.iter().map(|l| l.kind()).collect::<Vec<_>>(),
+        ["fiber_started"].map(EventKind::from_name)
     );
     assert_eq!(lines[0].payload["resumed"], true);
 }

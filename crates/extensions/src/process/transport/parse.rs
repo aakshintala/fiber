@@ -111,6 +111,7 @@ pub(crate) fn parse_line(line: &[u8]) -> ParsedLine {
         | contract::commands::Command::Model(_)
         | contract::commands::Command::Credential(_)
         | contract::commands::Command::Name(_)
+        | contract::commands::Command::Sandbox(_)
         | contract::commands::Command::Handoff(_)
         | contract::commands::Command::Rewind(_)
         | contract::commands::Command::ChangeWorkspace(_)

@@ -103,7 +103,9 @@ pub(crate) const TUI: Isolation = Isolation {
 const CONTRACT_QUOTE: &str =
     "`contract` depends on nothing and everything but `picture` depends on it.";
 const PICTURE_QUOTE: &str = "`picture` depends on nothing in the workspace.";
-const CONTRACT_ONLY_QUOTE: &str = "`log` and `config` depend only on `contract`.";
+const CONTRACT_ONLY_QUOTE: &str = "`config` depends only on `contract`.";
+const DIAG_CONTRACT_QUOTE: &str = "`diag` depends only on `contract`.";
+const LOG_DEPS_QUOTE: &str = "`log` depends on `contract` and `diag`.";
 const CORE_DEPENDENTS_QUOTE: &str = "`provider`, `tools`, `mcp`, `jobs` and `extensions` depend on `contract` and never on `loop`, on each other, or on `tui`.";
 const EXTENSIONS_CONFIG_QUOTE: &str =
     "`extensions` also depends on `config`, for what an extension reads while it runs";
@@ -111,10 +113,11 @@ const TOOLS_CONFIG_QUOTE: &str = "`tools` also depends on `config`, for where a 
 const EXTENSIONS_LOG_QUOTE: &str = "`extensions` also depends on `log`'s reading side, to replay the log to watchers at session end and to derive the project key.";
 const LOOP_QUOTE: &str = "`loop` depends on `contract`, `log` and the three seams, and never on `tui`, `doors` or `main`.";
 const SHARED_LOG_READ_QUOTE: &str =
-    "`tui`, `hub` and `doors` depend on `contract` and on `log`'s reading side";
+    "`hub` and `doors` depend on `contract` and on `log`'s reading side";
 const DOORS_CONFIG_NET_QUOTE: &str =
     "`doors` also depends on `config` and `net` for the hub client.";
-const TUI_LOG_QUOTE: &str = "`tui` also depends on `log` for the diagnostic writer.";
+const TUI_DIAG_QUOTE: &str =
+    "`tui` depends on `contract` and on `diag`, which holds the diagnostic writer";
 const CLI_QUOTE: &str =
     "`cli` depends on `contract`, `log`, `config`, `doors` and `extensions`, and never on `loop`.";
 const WORKTREE_QUOTE: &str = "`worktree` depends only on `contract`";
@@ -158,9 +161,19 @@ pub(crate) const CALLS: &[Calls] = &[
         quote: PICTURE_QUOTE,
     },
     Calls {
+        krate: "diag",
+        depends_on: &["contract"],
+        quote: DIAG_CONTRACT_QUOTE,
+    },
+    Calls {
         krate: "log",
         depends_on: &["contract"],
-        quote: CONTRACT_ONLY_QUOTE,
+        quote: LOG_DEPS_QUOTE,
+    },
+    Calls {
+        krate: "log",
+        depends_on: &["diag"],
+        quote: LOG_DEPS_QUOTE,
     },
     Calls {
         krate: "config",
@@ -214,8 +227,8 @@ pub(crate) const CALLS: &[Calls] = &[
     },
     Calls {
         krate: "tui",
-        depends_on: &["contract", "log"],
-        quote: SHARED_LOG_READ_QUOTE,
+        depends_on: &["contract"],
+        quote: TUI_DIAG_QUOTE,
     },
     Calls {
         krate: "hub",
@@ -234,8 +247,8 @@ pub(crate) const CALLS: &[Calls] = &[
     },
     Calls {
         krate: "tui",
-        depends_on: &["log"],
-        quote: TUI_LOG_QUOTE,
+        depends_on: &["diag"],
+        quote: TUI_DIAG_QUOTE,
     },
     Calls {
         krate: "cli",
@@ -944,7 +957,7 @@ const HOME_ALLOWANCES: &[SourceAllowance] = &[
     source_allowance!("crates/hub/src/sessions_stop.rs", "fn connect_now|root:hub.home", "join:run", "#2959"),
     source_allowance!("crates/hub/src/sessions_stop.rs", "fn connect_session|root:hub.home", "join:run", "#2959"),
     source_allowance!("crates/hub/src/start.rs", "fn run|root:hub.home", "join:run", "#1720"),
-    source_allowance!("crates/log/src/diag.rs", "fn new|root:home", "join:logs", "#1720"),
+    source_allowance!("crates/diag/src/diag.rs", "fn new|root:home", "join:logs", "#1720"),
     source_allowance!("crates/log/src/lib.rs", "fn session_dir|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/lib.rs", "fn sessions_dir|root:home", "join:projects", "#1720"),
     source_allowance!("crates/log/src/name.rs", "fn session_name|root:home", "join:projects", "#1720"),

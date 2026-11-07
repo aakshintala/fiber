@@ -10,7 +10,7 @@ use contract::provider::Input;
 use contract::shapes::Question;
 
 use crate::prompt::{fill, message};
-use crate::reviewer::{Reviewed, Shown, render_reviewed};
+use crate::reviewer::{PendingAsks, Reviewed, Shown, render_reviewed};
 
 /// The render state a handoff reads: the same fold in the live loop and in a
 /// rebuild, so the two never differ (`docs/loop.md`, "What the model is
@@ -35,6 +35,10 @@ pub(crate) struct Carry {
     pub(crate) extension_jobs: HashSet<String>,
     /// The session log's path, from the latest opening message.
     pub(crate) session_log: String,
+    /// Whether the session log's path is an authoritative continuation
+    /// override: a fork or rewind pinned the seed to its own log, so no
+    /// later opening moves it back to the parent's.
+    pub(crate) session_log_pinned: bool,
     /// Whether this context was nudged.
     pub(crate) nudged: bool,
     /// The text parts the actions of a handoff window completed, by action:
@@ -79,6 +83,11 @@ pub(crate) struct Carry {
     /// The messages and replies the reviewer still holds, rendered by the
     /// same fold. Tool-call entries are discarded after they break links.
     pub(crate) reviewed: Vec<Reviewed>,
+    /// The eliciting requests a person's answer resolves, staged by
+    /// request id for the renderer's resolve arm. Each reviewed list
+    /// keeps its own store, so a request staged for one list never feeds
+    /// another's resolve.
+    pub(crate) pending_asks: PendingAsks,
     /// The number of person occurrences before this turn: its input is
     /// carried whole, so a kept message at or after it is not inserted
     /// again. A position, never a key: a fork's log counts `seq` from its
@@ -208,7 +217,13 @@ impl Carry {
         } else {
             None
         };
-        render_reviewed(&mut self.reviewed, event, action, seq);
+        render_reviewed(
+            &mut self.reviewed,
+            event,
+            action,
+            seq,
+            &mut self.pending_asks,
+        );
         self.reviewed
             .retain(|entry| !matches!(entry.shown, Shown::Call(_)));
         if let Some(prior_kept) = prior_kept {

@@ -553,6 +553,48 @@ impl Setup {
     }
 }
 
+/// Plans and commits `request` at `version` against `home`, retrying a
+/// transient [`extensions::Error::Busy`] on the test deadline instead
+/// of failing at once: under the fake clock's instant sleep a
+/// same-home process briefly holding the extensions lock fails `plan`
+/// at once, so the helper yields and retries while `wait` has time
+/// left. Each retried `Busy` sends on `probe` when one is given, so a
+/// test holding the lock knows its hold is what the retry waits out. A
+/// lock held past the deadline still fails naming it, keeping the
+/// helper-unwrap style. An uncontended install never waits.
+pub(crate) fn install_with_retry(
+    home: &Path,
+    wait: Deadline,
+    request: &extensions::Request,
+    version: &str,
+    probe: Option<mpsc::Sender<()>>,
+) {
+    loop {
+        let clock = fakes::clock::FakeClock::new();
+        match extensions::plan(
+            home,
+            request,
+            version,
+            &extensions::Origin::github(),
+            &*clock,
+        ) {
+            Err(extensions::Error::Busy) if !wait.left().is_zero() => {
+                if let Some(probe) = probe.as_ref() {
+                    let _ = probe.send(()).ok();
+                }
+                std::thread::yield_now();
+            }
+            Err(extensions::Error::Busy) => {
+                panic!("waited until the deadline for the extensions lock");
+            }
+            plan => {
+                plan.unwrap().commit().unwrap();
+                return;
+            }
+        }
+    }
+}
+
 /// How the last park inside a wait ended. `NeverParked` means a reread
 /// satisfied `ready` before any park ran.
 // No `#[must_use]`: both existing callers drop this in statement position.
@@ -3661,9 +3703,9 @@ fn held_wait_outer_bound_is_three_inner_budgets() {
     assert_eq!(OUTER_BUDGET_FACTOR, 3);
 }
 
-/// Runs a held-then-released wait once, for the four
-/// `*_fails_fast_while_held_and_passes_after_release` tests: the waiter
-/// signals `entered`, the test runs `release`, and the released wait's
+/// Runs a held-then-released wait once, for the six tests on the
+/// entered/release skeleton: the waiter signals `entered`, the test runs
+/// `release`, and the released wait's
 /// report arrives first, under `inner * OUTER_BUDGET_FACTOR`, so a stall
 /// fails naming `what`, the waiter's own step, with whether the waiter is
 /// still running. The inner deadline is made before the waiter spawns, so
@@ -3672,7 +3714,7 @@ fn held_wait_outer_bound_is_three_inner_budgets() {
 /// after its report arrived, so no join is unbounded (`docs/testing.md`,
 /// "Waits and timeouts").
 #[track_caller]
-fn held_wait_passes_after_release<R: Send + 'static>(
+pub(crate) fn held_wait_passes_after_release<R: Send + 'static>(
     what: &str,
     inner: Duration,
     waiter: impl FnOnce(Deadline) -> R + Send + 'static,
@@ -3847,25 +3889,19 @@ fn effect_after_accept_ignores_other_ids_and_passes_on_its_own() {
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&accepted)
         .expect("the parked command was accepted");
-    let (entered_tx, entered) = mpsc::channel::<()>();
-    let (done_tx, done) = mpsc::channel::<Vec<Value>>();
-    thread::spawn(move || {
-        entered_tx.send(()).unwrap_or(());
-        let lines = wait_for_effect_after_accept(
-            "the c_1 answer",
-            "c_1",
-            |what, got| client.next(what, got),
-            |line| line["payload"].get("result").is_some(),
-        );
-        done_tx.send(lines).unwrap_or(());
-    });
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&entered)
-        .expect("the waiter entered its wait");
-    release.send(()).unwrap_or(());
-    let lines = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&done)
-        .expect("the wait answers once released");
+    let lines = held_wait_passes_after_release(
+        "the c_1 answer",
+        fakes::MUST_SUCCEED_WITHIN,
+        move |deadline| {
+            wait_for_effect_after_accept(
+                "the c_1 answer",
+                "c_1",
+                |what, got| client.next_through(&deadline, what, got),
+                |line| line["payload"].get("result").is_some(),
+            )
+        },
+        move || release.send(()).unwrap_or(()),
+    );
     assert!(
         lines
             .iter()
@@ -3984,10 +4020,9 @@ fn refresh_exit_fails_fast_while_held_and_passes_after_release() {
     fakes::wait_until(
         "the parked refresh child to list",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || {
-            fakes::matching(&listed, wait.left() / 2)
-                .unwrap_or_default()
-                .contains(&pid)
+        move || match fakes::matching(&listed, wait.left() / 2) {
+            Ok(pids) => pids.contains(&pid),
+            Err(error) => panic!("listing the parked refresh child: {error}"),
         },
     );
     // The old wait checks the match at once: the parked child is still
@@ -4200,10 +4235,9 @@ fn holder_dies_with_the_test_process_that_parked_it() {
     fakes::wait_until(
         "the parked holder to list",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        move || {
-            fakes::matching(&listed, wait.left() / 2)
-                .unwrap_or_default()
-                .contains(&holder)
+        move || match fakes::matching(&listed, wait.left() / 2) {
+            Ok(pids) => pids.contains(&holder),
+            Err(error) => panic!("listing the parked holder: {error}"),
         },
     );
     // The holder lives in another group, so this SIGKILL reaches only the

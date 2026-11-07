@@ -45,6 +45,7 @@ fn members() -> Members {
         dir: dir.to_owned(),
         version: "0.0.0".to_owned(),
         deps: Vec::new(),
+        normal_deps: Vec::new(),
         library: true,
         unrun_tests,
     };

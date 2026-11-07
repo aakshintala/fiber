@@ -1,12 +1,16 @@
 use super::*;
 
 pub(super) fn members() -> Members {
-    let member = |dir: &str, deps: &[&str]| Member {
-        dir: dir.to_owned(),
-        version: "0.0.0".to_owned(),
-        deps: deps.iter().map(|d| (*d).to_owned()).collect(),
-        library: true,
-        unrun_tests: Vec::new(),
+    let member = |dir: &str, deps: &[&str]| {
+        let deps: Vec<String> = deps.iter().map(|d| (*d).to_owned()).collect();
+        Member {
+            dir: dir.to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: deps.clone(),
+            normal_deps: deps,
+            library: true,
+            unrun_tests: Vec::new(),
+        }
     };
     BTreeMap::from([
         ("contract".to_owned(), member("crates/contract", &[])),
@@ -227,7 +231,6 @@ fn a_prototype_diff_selects_lint_and_no_tests() {
             false,
             false,
             0,
-            &[],
         );
         assert!(plan.jobs["lint"], "{files:?}");
         assert!(!plan.jobs["test"], "{files:?}");
@@ -246,7 +249,6 @@ fn another_research_path_stays_docs_only_and_skips_lint() {
         false,
         false,
         0,
-        &[],
     );
     assert!(!plan.jobs["lint"]);
 }
@@ -282,6 +284,7 @@ fn dependents_follow_a_chain_of_any_length() {
         dir: format!("crates/{dep}-user"),
         version: "0.0.0".to_owned(),
         deps: vec![dep.to_owned()],
+        normal_deps: vec![dep.to_owned()],
         library: true,
         unrun_tests: Vec::new(),
     };
@@ -326,6 +329,286 @@ fn a_file_under_crates_extensions_is_not_a_package_file() {
         &["config", "main"],
     );
     assert_eq!(selection, Selection::Crates(strings(&["extensions"])));
+}
+
+/// `members_with_tools()` where `loop` also depends on `jobs` through a
+/// development edge only, and `tui` normally depends on `loop`: a test-only
+/// `jobs` change reaches `loop` but never `tui`.
+fn members_with_dev_jobs() -> Members {
+    let mut members = members_with_tools();
+    members.insert(
+        "jobs".to_owned(),
+        Member {
+            dir: "crates/jobs".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            normal_deps: Vec::new(),
+            library: true,
+            unrun_tests: Vec::new(),
+        },
+    );
+    if let Some(loop_member) = members.get_mut("loop") {
+        loop_member.deps.push("jobs".to_owned());
+    }
+    if let Some(tui) = members.get_mut("tui") {
+        tui.deps = vec!["loop".to_owned()];
+        tui.normal_deps = vec!["loop".to_owned()];
+    }
+    members
+}
+
+/// Three fixture crates where `b` depends on `a` through a development edge
+/// only and `c` normally depends on `b`: a source change to `a` reaches `b`
+/// but never `c`.
+fn members_with_dev_chain() -> Members {
+    let member = |dir: &str, deps: &[&str], normal: &[&str]| Member {
+        dir: dir.to_owned(),
+        version: "0.0.0".to_owned(),
+        deps: deps.iter().map(|d| (*d).to_owned()).collect(),
+        normal_deps: normal.iter().map(|d| (*d).to_owned()).collect(),
+        library: true,
+        unrun_tests: Vec::new(),
+    };
+    BTreeMap::from([
+        ("a".to_owned(), member("crates/a", &[], &[])),
+        ("b".to_owned(), member("crates/b", &["a"], &[])),
+        ("c".to_owned(), member("crates/c", &["b"], &["b"])),
+    ])
+}
+
+#[test]
+fn a_test_only_change_selects_its_own_crate_without_dependents() {
+    let selection = classify(
+        &strings(&[
+            "crates/log/src/x_tests.rs",
+            "crates/tui/src/app/snapshots/x.snap",
+        ]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log", "tui"])));
+    // A crate holding a test-only file beside a source file still expands.
+    let selection = classify(
+        &strings(&["crates/log/src/x_tests.rs", "crates/log/src/lib.rs"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log", "loop"])));
+    // A near-miss of the `snapshots/` segment is a source change.
+    for path in [
+        "crates/contract/src/snapshot/y.snap",
+        "crates/contract/src/snapshots_old/y.snap",
+    ] {
+        let selection = classify(&strings(&[path]), &members_with_tools());
+        assert_eq!(
+            selection,
+            Selection::Crates(strings(&["config", "contract", "log", "loop"])),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+fn a_test_only_change_follows_one_dev_hop_and_stops() {
+    let selection = classify(
+        &strings(&["crates/jobs/src/x_tests.rs"]),
+        &members_with_dev_jobs(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["jobs", "loop"])));
+}
+
+/// A test-only pair still follows each crate's own dev hop: `loop`
+/// dev-depends on `jobs` and normally depends on `log`
+/// (`crates/loop/Cargo.toml`), so a test-only `jobs` file plus a test-only
+/// `log` file selects `loop` through the `jobs` hop, while `tui` — which
+/// normally depends on `loop`, not on either narrow crate — stays out.
+#[test]
+fn a_test_only_pair_with_a_mixed_edge_still_follows_the_dev_hop() {
+    let selection = classify(
+        &strings(&["crates/jobs/src/x_tests.rs", "crates/log/src/x_tests.rs"]),
+        &members_with_dev_jobs(),
+    );
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["jobs", "log", "loop"]))
+    );
+}
+
+/// The same per-crate partition with `main`'s shape from
+/// `crates/main/Cargo.toml`: `main` dev-depends on `fakes` and normally
+/// depends on `log`, so a test-only `fakes` file plus a test-only `log`
+/// file selects `main`.
+#[test]
+fn a_test_only_fakes_plus_log_pair_selects_main() {
+    let member = |dir: &str, deps: &[&str], normal: &[&str]| Member {
+        dir: dir.to_owned(),
+        version: "0.0.0".to_owned(),
+        deps: deps.iter().map(|d| (*d).to_owned()).collect(),
+        normal_deps: normal.iter().map(|d| (*d).to_owned()).collect(),
+        library: true,
+        unrun_tests: Vec::new(),
+    };
+    let members = BTreeMap::from([
+        ("fakes".to_owned(), member("crates/fakes", &[], &[])),
+        ("log".to_owned(), member("crates/log", &[], &[])),
+        (
+            "main".to_owned(),
+            member("crates/main", &["fakes", "log"], &["log"]),
+        ),
+        ("tui".to_owned(), member("crates/tui", &["main"], &["main"])),
+    ]);
+    let selection = classify(
+        &strings(&["crates/fakes/src/x_tests.rs", "crates/log/src/x_tests.rs"]),
+        &members,
+    );
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["fakes", "log", "main"]))
+    );
+}
+
+/// The crate-relative slice starts past the `/` after the crate dir, so a
+/// test file that is test-only only by its `tests/` directory still
+/// narrows. An off-by-one in either direction reads it as a source file
+/// and expands to dependents.
+#[test]
+fn a_tests_dir_helper_with_a_plain_name_still_narrows() {
+    let selection = classify(&strings(&["crates/log/tests/helper.rs"]), &members());
+    assert_eq!(selection, Selection::Crates(strings(&["log"])));
+}
+
+/// `members_from` reads the normal-edge subset from cargo metadata's
+/// `kind`: a missing or null `kind` is a normal edge, anything else is
+/// not. (Lives beside the selector tests because the gate counts it with
+/// them; `main_tests.rs` only pins the `test = false` shape.)
+#[test]
+fn members_from_treats_a_missing_or_null_kind_as_a_normal_edge() {
+    let package = |name: &str, deps: Vec<serde_json::Value>| {
+        serde_json::json!({
+            "name": name,
+            "version": "0.0.0",
+            "manifest_path": format!("/ws/crates/{name}/Cargo.toml"),
+            "dependencies": deps,
+            "targets": [],
+        })
+    };
+    let dep = |path: &str| serde_json::json!({"path": path, "name": path});
+    let mut null_kind = dep("/ws/crates/contract");
+    null_kind["kind"] = serde_json::Value::Null;
+    let mut dev_kind = dep("/ws/crates/jobs");
+    dev_kind["kind"] = serde_json::json!("dev");
+    // The third edge omits `kind` entirely: cargo metadata leaves it out
+    // the same way for some path dependencies, and the rule treats a
+    // missing `kind` like a null one.
+    let packages = vec![
+        package("loop", vec![null_kind, dev_kind, dep("/ws/crates/support")]),
+        package("contract", vec![]),
+        package("jobs", vec![]),
+        package("support", vec![]),
+    ];
+    let members = crate::members_from("/ws", &packages);
+    assert_eq!(
+        members["loop"].deps,
+        vec![
+            "contract".to_owned(),
+            "jobs".to_owned(),
+            "support".to_owned()
+        ]
+    );
+    assert_eq!(
+        members["loop"].normal_deps,
+        vec!["contract".to_owned(), "support".to_owned()]
+    );
+}
+
+/// The `## Selection` section of `docs/ci.md`, which the test below pins
+/// against `classify_with` clause by clause: not whole-file bytes, so
+/// unrelated `docs/ci.md` edits never red it.
+fn selection_section() -> String {
+    let doc = include_str!("../../docs/ci.md").to_owned();
+    let heading = "## Selection\n";
+    let start = doc
+        .find(heading)
+        .expect("docs/ci.md has a Selection section");
+    let rest = &doc[start + heading.len()..];
+    let end = rest
+        .find("\n## ")
+        .map(|i| start + heading.len() + i)
+        .unwrap_or(doc.len());
+    // One space per whitespace run, so a promise matches however the doc
+    // wraps its lines.
+    doc[start..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[test]
+fn a_selection_sentence_matches_classify_with() {
+    let section = selection_section();
+    for phrase in [
+        "is not a candidate",
+        "every candidate file in that crate is a test file",
+        "under a `snapshots/` directory",
+        "one hop with no further fan-out",
+        "development-edges propagate one hop and normal edges transitively",
+        "keep their rules above and below",
+    ] {
+        assert!(
+            section.contains(phrase),
+            "the Selection section says: {phrase}"
+        );
+    }
+    // The per-crate partition: the test-only log file narrows while the
+    // source-changed config file expands.
+    let selection = classify(
+        &strings(&["crates/log/src/x_tests.rs", "crates/config/src/lib.rs"]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["config", "log"])));
+    // The three candidate exclusions: docs, listed and package files.
+    let selection = classify(
+        &strings(&["crates/log/tests/x_tests.rs", "crates/log/README.md"]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log"])));
+    let selection = classify(
+        &strings(&["crates/picture/tests/fixtures/cmyk.jpg"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["main"])));
+    let selection = classify_with(
+        &strings(&[
+            "providers/opencode/extension.json",
+            "crates/log/src/x_tests.rs",
+        ]),
+        &members(),
+        COMPILED_IN,
+        &["config"],
+    );
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["config", "log", "main"]))
+    );
+    // The snapshots rule: a tui snapshot is a test-only file of tui.
+    let selection = classify(
+        &strings(&["crates/tui/src/app/snapshots/x.snap"]),
+        &members_with_tools(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["tui"])));
+    // The one dev hop: a source change to `a` reaches `b`, never `c`.
+    let selection = classify(
+        &strings(&["crates/a/src/lib.rs"]),
+        &members_with_dev_chain(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["a", "b"])));
+    // The prototype exclusion: the whole diff takes the old path.
+    let selection = classify(
+        &strings(&[
+            "crates/log/tests/x_tests.rs",
+            "research/tui-prototype/src/main.rs",
+        ]),
+        &members(),
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["log", "loop"])));
 }
 
 #[test]
@@ -603,6 +886,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/tools".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -613,6 +897,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/tui".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -623,6 +908,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/provider".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -633,6 +919,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "xtask".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -643,6 +930,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/picture".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -653,6 +941,7 @@ pub(super) fn members_with_tools() -> Members {
             dir: "crates/hub".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },
@@ -669,6 +958,7 @@ pub(super) fn package_members() -> Members {
             dir: "crates/cli".to_owned(),
             version: "0.0.0".to_owned(),
             deps: Vec::new(),
+            normal_deps: Vec::new(),
             library: true,
             unrun_tests: Vec::new(),
         },

@@ -13,7 +13,7 @@ mod support;
 
 use std::sync::Arc;
 
-use contract::events::{TurnOutcome, UsageRecorded};
+use contract::events::{EventKind, TurnOutcome, UsageRecorded};
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, SessionId};
 use fakes::{Scripted, call_usage, unnamed_usage};
@@ -59,12 +59,16 @@ fn a_call_failed_after_its_generation_writes_its_usage_before_failing() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines
         .iter()
-        .find(|l| l.kind == "assistant_message_started")
+        .find(|l| l.kind() == EventKind::AssistantMessageStarted)
         .unwrap();
-    let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let recorded = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert_eq!(recorded.action_id, started.action_id);
     assert_eq!(recorded.payload["generation_id"], "gen_failed");
     assert_eq!(recorded.payload["tokens"]["input"], 7);
@@ -74,7 +78,7 @@ fn a_call_failed_after_its_generation_writes_its_usage_before_failing() {
     assert!(recorded.payload.get("cost").unwrap().is_null());
     let completed = lines
         .iter()
-        .find(|l| l.kind == "assistant_message_completed")
+        .find(|l| l.kind() == EventKind::AssistantMessageCompleted)
         .unwrap();
     assert_eq!(completed.payload["outcome"], "failed");
     assert_eq!(lines.last().unwrap().payload["outcome"], "failed");
@@ -102,13 +106,17 @@ fn a_call_cancelled_after_its_generation_writes_its_usage_before_the_turn_ends()
             "usage_recorded",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     assert!(
         lines
             .iter()
-            .all(|l| l.kind != "assistant_message_completed")
+            .all(|l| l.kind() != EventKind::AssistantMessageCompleted)
     );
-    let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let recorded = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert_eq!(recorded.payload["generation_id"], "gen_cancelled");
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
@@ -150,12 +158,16 @@ fn a_call_failed_before_any_generation_writes_a_minted_usage() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines
         .iter()
-        .find(|l| l.kind == "assistant_message_started")
+        .find(|l| l.kind() == EventKind::AssistantMessageStarted)
         .unwrap();
-    let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let recorded = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert_minted(recorded);
     assert_eq!(recorded.action_id, started.action_id);
     assert_eq!(recorded.payload["tokens"]["input"], 0);
@@ -182,12 +194,16 @@ fn a_call_cancelled_before_its_generation_writes_a_minted_usage() {
             "usage_recorded",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let started = lines
         .iter()
-        .find(|l| l.kind == "assistant_message_started")
+        .find(|l| l.kind() == EventKind::AssistantMessageStarted)
         .unwrap();
-    let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let recorded = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert_minted(recorded);
     assert_eq!(recorded.action_id, started.action_id);
     assert_eq!(recorded.payload["tokens"]["input"], 0);
@@ -313,9 +329,10 @@ fn a_failed_review_after_its_generation_writes_its_usage() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
     let review = &lines[11];
-    assert_eq!(review.kind, "usage_recorded");
+    assert_eq!(review.kind(), EventKind::UsageRecorded);
     assert!(review.action_id.is_none());
     assert_eq!(review.payload["generation_id"], "gen_review");
     assert_eq!(review.payload["model"], REVIEWER_MODEL);
@@ -366,10 +383,16 @@ fn only_record(session: &mut Session, expected: &[&str]) -> UsageRecorded {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
-    assert_eq!(kinds(&lines), expected);
+    assert_eq!(
+        kinds(&lines),
+        expected
+            .iter()
+            .map(|name| EventKind::from_name(name))
+            .collect::<Vec<_>>()
+    );
     let recorded: Vec<_> = lines
         .iter()
-        .filter(|l| l.kind == "usage_recorded")
+        .filter(|l| l.kind() == EventKind::UsageRecorded)
         .collect();
     assert_eq!(recorded.len(), 1);
     assert_minted(recorded[0]);
@@ -398,7 +421,7 @@ fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
     let lines = parent.lines();
     let own: UsageRecorded = lines
         .iter()
-        .filter(|line| line.kind == "usage_recorded")
+        .filter(|line| line.kind() == EventKind::UsageRecorded)
         .map(|line| serde_json::from_value(Value::Object(line.payload.clone())).unwrap())
         .find(|recorded: &UsageRecorded| recorded.generation_id != copied_id)
         .unwrap();
@@ -430,6 +453,7 @@ fn a_delegate_s_unnamed_call_copied_into_its_parent_is_counted_once() {
             "turn_completed",
             "fiber_exited",
         ]
+        .map(EventKind::from_name)
     );
     let exited = all.last().unwrap();
     // The parent's call and the delegate's, each once.
@@ -483,7 +507,9 @@ fn turned(session: &mut Session, send: impl FnOnce(&Session)) -> Vec<Envelope> {
 fn copies<'a>(lines: &'a [Envelope], generation: &str) -> Vec<&'a Envelope> {
     lines
         .iter()
-        .filter(|l| l.kind == "usage_recorded" && l.payload["generation_id"] == generation)
+        .filter(|l| {
+            l.kind() == EventKind::UsageRecorded && l.payload["generation_id"] == generation
+        })
         .collect()
 }
 
@@ -510,7 +536,7 @@ fn a_direct_child_s_usage_is_copied_with_the_child_as_origin() {
     let all = log::read(&session.dir).unwrap();
     let records: Vec<UsageRecorded> = all
         .iter()
-        .filter(|l| l.kind == "usage_recorded")
+        .filter(|l| l.kind() == EventKind::UsageRecorded)
         .map(|l| serde_json::from_value(Value::Object(l.payload.clone())).unwrap())
         .collect();
     assert_eq!(records.len(), 2);
@@ -562,11 +588,11 @@ fn a_duplicate_copy_counts_once() {
     let all = log::read(&session.dir).unwrap();
     let written = all
         .iter()
-        .filter(|l| l.kind == "usage_recorded" && l.payload["generation_id"] == "g_child")
+        .filter(|l| l.kind() == EventKind::UsageRecorded && l.payload["generation_id"] == "g_child")
         .count();
     assert_eq!(written, 2);
     let exited = all.last().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.kind(), EventKind::FiberExited);
     assert_eq!(exited.payload["usage"]["tokens"]["input"], 20);
     assert_eq!(exited.payload["usage"]["tokens"]["output"], 6);
     assert_eq!(exited.payload["usage"]["cost"], 0.01);
@@ -596,7 +622,7 @@ fn an_extension_s_model_call_counts_once_in_the_exit() {
     let all = log::read(&session.dir).unwrap();
     assert_eq!(copies(&all, "g_ext").len(), 1);
     let exited = all.last().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.kind(), EventKind::FiberExited);
     // The extension's call and the turn's own, each once.
     assert_eq!(exited.payload["usage"]["tokens"]["input"], 20);
     assert_eq!(exited.payload["usage"]["cost"], 0.01);
@@ -629,7 +655,7 @@ fn a_correction_applies_only_its_delta() {
     .unwrap();
     let all = log::read(&session.dir).unwrap();
     let exited = all.last().unwrap();
-    assert_eq!(exited.kind, "fiber_exited");
+    assert_eq!(exited.kind(), EventKind::FiberExited);
     assert_eq!(exited.payload["usage"]["cost"], 0.18);
 }
 
@@ -700,7 +726,11 @@ fn a_one_hour_write_costs_twice_input_through_the_session() {
             "assistant_message_completed",
             "turn_completed",
         ]
+        .map(EventKind::from_name)
     );
-    let recorded = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    let recorded = lines
+        .iter()
+        .find(|l| l.kind() == EventKind::UsageRecorded)
+        .unwrap();
     assert_eq!(recorded.payload["cost"].as_f64(), Some(4.0));
 }

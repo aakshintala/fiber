@@ -470,6 +470,80 @@ pub(crate) fn same_frame(a: &Grid, b: &Grid) -> bool {
     true
 }
 
+/// Every reversed cell of `grid`, as (column, row): the focus look's
+/// snapshot, so a step can wait for it to move.
+pub(crate) fn reversed_cells(grid: &Grid) -> Vec<(u16, u16)> {
+    let (cols, rows) = grid.size();
+    let mut cells = Vec::new();
+    for y in 0..rows {
+        for x in 0..cols {
+            if grid.cell(x, y).inverse {
+                cells.push((x, y));
+            }
+        }
+    }
+    cells
+}
+
+/// The walk's step for a notice row's reversed cells, left to right:
+/// done when the box itself has focus (its run starts the row past the
+/// grip), Up from the dismiss cross's focused cell, Down otherwise. The
+/// cross sits at the conversation column's right edge, not the screen's,
+/// so any focused cell past the box's start means the cross.
+pub(crate) fn notice_step(row: &[bool]) -> Option<&'static [u8]> {
+    if row.get(1).is_some_and(|cell| *cell) {
+        None
+    } else if row.iter().any(|cell| *cell) {
+        Some(b"\x1b[A")
+    } else {
+        Some(b"\x1b[B")
+    }
+}
+
+/// Walks keyboard focus to the notice row carrying `code`
+/// (conversation door): Shift+Tab enters navigate mode, then each step
+/// writes Up from the notice's own dismiss cross and Down otherwise,
+/// waiting for the focus look to move each time. Returns only when the
+/// row carrying `code` has its second cell reversed, so the box spans
+/// the row past the grip and Enter opens it; never writes Enter, so it
+/// never dismisses. Every wait goes through `wait_screen` under the
+/// run's one deadline.
+#[track_caller]
+pub(crate) fn focus_notice(run: &mut Run, code: &str) {
+    assert!(
+        !code.is_empty(),
+        "focus_notice needs a non-empty notice code"
+    );
+    run.write(b"\x1b[Z");
+    let mut grid = run.wait_screen("a focused row", |grid| {
+        let (cols, rows) = grid.size();
+        (0..rows).any(|y| (0..cols).any(|x| grid.cell(x, y).inverse))
+    });
+    let (_, rows) = grid.size();
+    for _ in 0..=rows {
+        let y = u16::try_from(
+            grid.rows
+                .iter()
+                .position(|row| row.contains(code))
+                .expect("the notice row"),
+        )
+        .expect("the notice row fits in u16");
+        // Done only on the box, so Enter never dismisses.
+        let (cols, _) = grid.size();
+        let row: Vec<bool> = (0..cols).map(|x| grid.cell(x, y).inverse).collect();
+        let Some(key) = notice_step(&row) else {
+            return;
+        };
+        run.write(key);
+        let before = reversed_cells(&grid);
+        grid = run.wait_screen("the focus moved", |next| reversed_cells(next) != before);
+    }
+    panic!(
+        "the focus walk reached no notice row carrying {code}; screen:\n{}",
+        grid.contents
+    );
+}
+
 /// What the reader shares with the test: every byte read from the master
 /// since spawn, the parser and grid rebuilt from it, the tail of a query
 /// still arriving, a resize the next chunk has not applied yet, and

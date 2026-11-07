@@ -79,6 +79,7 @@ mod resume;
 mod retry;
 mod reviewer;
 mod rewind;
+mod sandbox;
 mod schema;
 mod shutdown;
 mod skill_header;
@@ -123,12 +124,14 @@ pub use reload::{
 pub use resume::{Resumed, resumed};
 pub use retry::{Decision, Retry};
 pub use reviewer::{
-    BlockLimits, NO_MODEL_MESSAGE, Reviewed, Reviewer, Shown, render_reviewed, summary_skips,
+    BlockLimits, NO_MODEL_MESSAGE, PendingAsks, Reviewed, Reviewer, Shown, render_reviewed,
+    summary_skips,
 };
 pub use rewind::{
     Continuation, Rewound, fork_task, fork_workspace, latest_name, rewind_note,
     rewind_note_with_jobs, rewound_from,
 };
+pub use sandbox::{ApplySandbox, Availability, Cause};
 pub use skill_reader::SkillReader;
 pub use skill_set::SkillSet;
 pub use skills::personal_source_paths;
@@ -314,6 +317,9 @@ pub struct Loop {
     /// reviewer input a source log's line had (`docs/testing.md`,
     /// "Jigs"); the loop itself renders it as its lines are written.
     pub reviewed: Vec<reviewer::Reviewed>,
+    /// The eliciting requests a person's answer resolves, staged by
+    /// request id for the renderer's resolve arm.
+    pub(crate) pending_asks: PendingAsks,
     /// The reviewer's cache key: the session's id plus `reviewer`
     /// (`docs/prompt-cache.md`, "Rules for other areas").
     reviewer_key: String,
@@ -414,6 +420,8 @@ pub struct Loop {
     switcher: Option<(Prepare, Switchable)>,
     /// Prepares a replacement configuration without changing the route.
     reloader: Option<PrepareReload>,
+    /// Flips the session sandbox on or off; without it the toggle is refused.
+    sandbox_apply: Option<ApplySandbox>,
     /// Restarts one failed MCP server; absent this, reconnect is unsupported.
     reconnector: Option<ReconnectServer>,
     /// A reload built before the process's post-offer load was due.
@@ -787,6 +795,7 @@ impl Loop {
             limits: BlockLimits::default(),
             reviewer_notes: String::new(),
             reviewed,
+            pending_asks: carry.pending_asks.clone(),
             reviewer_sent: None,
             decision_buffer: None,
             consecutive: 0,
@@ -823,6 +832,7 @@ impl Loop {
             warming: warm::Warming::default(),
             switcher: None,
             reloader: None,
+            sandbox_apply: None,
             reconnector: None,
             load_after_reload: false,
             pending: Vec::new(),

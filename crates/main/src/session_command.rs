@@ -923,6 +923,7 @@ pub(crate) fn assemble_session(
                 &session,
                 host_model,
                 Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>,
+                Arc::clone(&delegates),
                 session_servers,
                 answerable,
                 log.clone(),
@@ -937,7 +938,10 @@ pub(crate) fn assemble_session(
             // drops the ones it would repeat and keeps the new ones.
             let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
             let providers = reload.mcp_providers(&server_failures);
-            let (reloader, late) = reload.preparers(written);
+            let sandbox = reload.sandbox.clone();
+            let workspace = reload.sources.workspace.clone();
+            let ((reloader, late), latch) = reload.preparers_with_latch(written);
+            let sandbox_apply = crate::settings::sandbox_toggle(&sandbox, &workspace, latch);
             session.mcp_servers(providers.refresh);
             session.mcp_login(providers.login);
             session.personal_source_check(crate::prompt_files::personal_source_check(
@@ -1059,6 +1063,7 @@ pub(crate) fn assemble_session(
                                 .on_handoff(forget)
                                 .switcher(switcher, switchable)
                                 .reloader(reloader)
+                                .sandbox_apply(sandbox_apply)
                                 .reconnector(providers.reconnect)
                                 .late_extensions(late)
                                 .repository_code(offer)
@@ -1434,6 +1439,7 @@ pub(crate) fn assemble_session(
                 &session,
                 host_model,
                 Arc::clone(&delegates) as Arc<dyn contract::extension::HostDelegate>,
+                Arc::clone(&delegates),
                 session_servers,
                 answerable,
                 log.clone(),
@@ -1448,7 +1454,10 @@ pub(crate) fn assemble_session(
             // drops the ones it would repeat and keeps the new ones.
             let written = crate::session_extensions::startup_written(&current.get(), &mcp.notices);
             let providers = reload.mcp_providers(&server_failures);
-            let (reloader, late) = reload.preparers(written);
+            let sandbox = reload.sandbox.clone();
+            let workspace = reload.sources.workspace.clone();
+            let ((reloader, late), latch) = reload.preparers_with_latch(written);
+            let sandbox_apply = crate::settings::sandbox_toggle(&sandbox, &workspace, latch);
             session.mcp_servers(providers.refresh);
             session.mcp_login(providers.login);
             session.personal_source_check(crate::prompt_files::personal_source_check(
@@ -1615,6 +1624,7 @@ pub(crate) fn assemble_session(
                                 .on_handoff(forget)
                                 .switcher(switcher, switchable)
                                 .reloader(reloader)
+                                .sandbox_apply(sandbox_apply)
                                 .reconnector(providers.reconnect)
                                 .late_extensions(late)
                                 .repository_code(offer)

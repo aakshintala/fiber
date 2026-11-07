@@ -140,17 +140,47 @@ pub struct ProcessWalk {
 /// PID 1 is treated as root if its effective uid cannot be read. An
 /// unreadable effective uid for any other pid or unreadable parent pid ends
 /// the walk naming that pid, as does a repeated pid (a kernel-data cycle) or
-/// a 4097th ancestor before PID 1 (an unbounded walk). PID 1 itself always
-/// terminates the walk.
+/// a 4097th ancestor before PID 1 (an unbounded walk), except that a
+/// just-read parent that exits mid-walk re-reads the child's parent once
+/// and continues only from a changed parent, which proves the child was
+/// reparented (`docs/permissions.md`, "Sessions on the sockets"). PID 1
+/// itself always terminates the walk.
 pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, IncompleteWalk> {
     let mut ancestors = Vec::new();
     let mut seen = HashSet::new();
     seen.insert(pid);
     let mut child = pid;
+    // The pid whose parent read produced `child`: re-reading its parent
+    // observes a reparenting when `child` itself has since exited.
+    let mut predecessor: Option<Pid> = None;
     loop {
-        let parent = read
-            .parent(child)
-            .map_err(|_| IncompleteWalk { pid: child })?;
+        let mut parent = match read.parent(child) {
+            Ok(parent) => parent,
+            Err(_) => {
+                // `child` exited after it was recorded as its
+                // predecessor's parent: drop it and re-read the
+                // predecessor's parent once, continuing only from a
+                // changed parent, which proves the reparenting. With
+                // no predecessor there is nothing to compare, so the
+                // walk stays incomplete naming `child`.
+                let Some(previous) = predecessor else {
+                    return Err(IncompleteWalk { pid: child });
+                };
+                ancestors.pop();
+                let reread = read
+                    .parent(previous)
+                    .map_err(|_| IncompleteWalk { pid: previous })?;
+                if reread == child {
+                    return Err(IncompleteWalk { pid: child });
+                }
+                // The re-read observes `previous`'s current parent, so the
+                // walk continues from there: restore `child` to the
+                // surviving predecessor, or a second exit would re-read
+                // the vanished pid's parent and refuse.
+                child = previous;
+                reread
+            }
+        };
         if parent == Pid(0) {
             return Ok(ancestors);
         }
@@ -160,7 +190,29 @@ pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
         let euid = match read.euid(parent) {
             Ok(euid) => euid,
             Err(_) if parent == Pid(1) => EffectiveUid(0),
-            Err(_) => return Err(IncompleteWalk { pid: parent }),
+            Err(_) => {
+                // The just-read parent exited mid-walk: re-read the
+                // child's parent once and continue only from a changed
+                // parent, which proves the child was reparented.
+                let reread = read
+                    .parent(child)
+                    .map_err(|_| IncompleteWalk { pid: child })?;
+                if reread == parent {
+                    return Err(IncompleteWalk { pid: parent });
+                }
+                parent = reread;
+                if parent == Pid(0) {
+                    return Ok(ancestors);
+                }
+                if !seen.insert(parent) {
+                    return Err(IncompleteWalk { pid: parent });
+                }
+                match read.euid(parent) {
+                    Ok(euid) => euid,
+                    Err(_) if parent == Pid(1) => EffectiveUid(0),
+                    Err(_) => return Err(IncompleteWalk { pid: parent }),
+                }
+            }
         };
         if parent == Pid(1) {
             ancestors.push(ProcessInfo { pid: parent, euid });
@@ -170,6 +222,7 @@ pub fn ancestors(pid: Pid, read: &dyn ProcessRead) -> Result<Vec<ProcessInfo>, I
             return Err(IncompleteWalk { pid: parent });
         }
         ancestors.push(ProcessInfo { pid: parent, euid });
+        predecessor = Some(child);
         child = parent;
     }
 }

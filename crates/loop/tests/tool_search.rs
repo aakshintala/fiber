@@ -19,7 +19,7 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, mpsc};
 
 use contract::emit::Emit;
-use contract::events::{CacheLifetime, TurnOutcome};
+use contract::events::{CacheLifetime, EventKind, TurnOutcome};
 use contract::hook::{
     AfterToolAnswer, AfterToolOutcome, BeforeHandoffAnswer, BeforeHandoffOutcome,
     BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolOutcome, CheckAnswer,
@@ -626,12 +626,12 @@ impl Harness {
     fn lines(&mut self) -> Vec<Envelope> {
         let watcher = self.lines.take().unwrap();
         let (watcher, lines) = read_until(watcher, "a turn_completed line", |line| {
-            line.kind == "turn_completed"
+            line.kind() == EventKind::TurnCompleted
         });
         self.lines = Some(watcher);
         lines
             .into_iter()
-            .filter(|line| line.kind != "session_status")
+            .filter(|line| line.kind() != EventKind::SessionStatus)
             .collect()
     }
 }
@@ -639,7 +639,7 @@ impl Harness {
 /// The kinds of a first turn whose reply calls once with no text and whose
 /// continuation says "Done.": `middle` stands in for the decision and
 /// completion lines.
-fn kinds_with(middle: &[&'static str]) -> Vec<&'static str> {
+fn kinds_with(middle: &[&'static str]) -> Vec<EventKind> {
     let mut kinds = vec![
         "session_started",
         "preamble_built",
@@ -668,7 +668,7 @@ fn kinds_with(middle: &[&'static str]) -> Vec<&'static str> {
         .iter()
         .copied(),
     );
-    kinds
+    kinds.into_iter().map(EventKind::from_name).collect()
 }
 
 fn search_arguments(query: &str) -> Value {
@@ -721,9 +721,9 @@ fn a_search_call_completes_loaded_and_the_next_request_carries_it_natively() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -855,9 +855,9 @@ fn a_handoff_after_a_search_leaves_no_search_result_for_the_next_request() {
     // The first turn loads `a` through the search.
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let first = harness.lines();
-    assert_kinds(
-        &first,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&first),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     // The second turn hands off on `wrap` with no search in the step: the
     // handoff drops the earlier search with the turn's conversation.
@@ -1008,9 +1008,9 @@ fn a_rewritten_search_keeps_its_loaded_set_and_native_form() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     // The hook's text wins in the log, while the loaded set survives.
     let done = completed(&lines);
@@ -1054,9 +1054,9 @@ fn a_withheld_search_renders_as_a_plain_result() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -1108,9 +1108,9 @@ fn a_failed_search_renders_as_an_ordinary_error_result() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -1397,9 +1397,9 @@ fn a_denied_search_renders_as_a_plain_result() {
     });
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
-    assert_kinds(
-        &lines,
-        &[&kinds_with(&["permission_resolved", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"])
     );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
@@ -1554,7 +1554,7 @@ fn a_rewound_session_matches_the_parent_request_bytes() {
 
     let at = a_lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .map(|line| line.seq.unwrap().0)
         .next()
         .unwrap()
@@ -1646,7 +1646,7 @@ fn a_rewound_session_matches_the_parent_request_bytes() {
         .expect("the turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let (_, b_lines) = read_until(watcher, "a turn_completed line", |line| {
-        line.kind == "turn_completed"
+        line.kind() == EventKind::TurnCompleted
     });
 
     let b_requests = b_scripted.requests();
@@ -1708,9 +1708,9 @@ fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
     );
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let first_lines = harness.lines();
-    assert_kinds(
-        &first_lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&first_lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     // A registered name sorting after the search name: the build merges
     // the search ahead of it.
@@ -1741,7 +1741,7 @@ fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
 
     let at = a_lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .map(|line| line.seq.unwrap().0)
         .next()
         .unwrap()
@@ -1845,7 +1845,7 @@ fn a_rewound_session_orders_the_rebuilt_search_and_reports_its_inputs() {
         .expect("the turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let (_, b_lines) = read_until(watcher, "a turn_completed line", |line| {
-        line.kind == "turn_completed"
+        line.kind() == EventKind::TurnCompleted
     });
     assert_kinds(
         &b_lines,
@@ -1976,9 +1976,9 @@ fn a_rewound_session_off_deferral_renders_the_logged_search_as_text() {
     // Turn 1 defers: the search loads `a`.
     assert_eq!(harness.turn("hi"), Some(TurnOutcome::Completed));
     let first_lines = harness.lines();
-    assert_kinds(
-        &first_lines,
-        &[&kinds_with(&["tool_call_started", "tool_call_completed"])],
+    assert_eq!(
+        support::kinds(&first_lines),
+        kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     assert_eq!(deferred_names(&first_lines), ["a"]);
 
@@ -2018,7 +2018,7 @@ fn a_rewound_session_off_deferral_renders_the_logged_search_as_text() {
 
     let at = a_lines
         .iter()
-        .filter(|line| line.kind == "turn_started")
+        .filter(|line| line.kind() == EventKind::TurnStarted)
         .map(|line| line.seq.unwrap().0)
         .next()
         .unwrap()
@@ -2110,7 +2110,7 @@ fn a_rewound_session_off_deferral_renders_the_logged_search_as_text() {
         .expect("the turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let (_, b_lines) = read_until(watcher, "a turn_completed line", |line| {
-        line.kind == "turn_completed"
+        line.kind() == EventKind::TurnCompleted
     });
     assert_kinds(
         &b_lines,
@@ -2433,26 +2433,29 @@ fn an_oversize_notice_on_a_deferring_model_leaves_the_off_sentence_out() {
     let lines = harness.lines();
     // The full stream as a multiset, so a missing or duplicated
     // non-notice event fails (`docs/testing.md`, "Event streams").
-    let mut stream: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
-    stream.sort_unstable();
+    let mut stream: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    stream.sort_by(|a, b| a.name().cmp(b.name()));
     let mut expected = vec![
-        "session_started",
-        "preamble_built",
-        "opening_message",
-        "turn_started",
-        "step_started",
-        "assistant_message_started",
-        "assistant_message_delta",
-        "assistant_message_delta",
-        "text_completed",
-        "usage_recorded",
-        "assistant_message_completed",
-        "turn_completed",
-        "notice",
+        EventKind::SessionStarted,
+        EventKind::PreambleBuilt,
+        EventKind::OpeningMessage,
+        EventKind::TurnStarted,
+        EventKind::StepStarted,
+        EventKind::AssistantMessageStarted,
+        EventKind::AssistantMessageDelta,
+        EventKind::AssistantMessageDelta,
+        EventKind::TextCompleted,
+        EventKind::UsageRecorded,
+        EventKind::AssistantMessageCompleted,
+        EventKind::TurnCompleted,
+        EventKind::Notice,
     ];
-    expected.sort_unstable();
+    expected.sort_by(|a, b| a.name().cmp(b.name()));
     assert_eq!(stream, expected);
-    let notices: Vec<&Envelope> = lines.iter().filter(|line| line.kind == "notice").collect();
+    let notices: Vec<&Envelope> = lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::Notice)
+        .collect();
     assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].payload["code"], "tool_definitions_large");
     let text = notices[0].payload["message"].as_str().unwrap();

@@ -78,8 +78,10 @@ pub(crate) struct Delegates {
     /// The session clock.
     clock: Arc<dyn Clock>,
     /// Resolves a `delegate_spawn` `model` argument, and lists the
-    /// catalogue every refusal carries.
-    resolve: jobs::Resolve,
+    /// catalogue every refusal carries. The reload install swaps the
+    /// whole snapshot at once, so the stored one and the installed
+    /// tools never disagree.
+    resolve: Mutex<jobs::Resolve>,
     /// Builds the child's command.
     launch: jobs::Launch,
     /// Watches the child's socket.
@@ -136,7 +138,7 @@ impl Delegates {
             sessions,
             jobs,
             clock,
-            resolve,
+            resolve: Mutex::new(resolve),
             launch,
             watch,
             steer,
@@ -170,10 +172,42 @@ impl Delegates {
 
     /// The `delegate_spawn` tool this session declares.
     pub(crate) fn tool(&self) -> jobs::DelegateSpawn {
-        jobs::DelegateSpawn {
+        self.tools_with(&self.resolve_snapshot()).0
+    }
+
+    /// Replaces the stored resolver snapshot: the reload install calls
+    /// this before it publishes the rebuilt tools, so the stored
+    /// snapshot and the installed tools never disagree.
+    pub(crate) fn set_resolve(&self, resolve: jobs::Resolve) {
+        *support::lock(&self.resolve) = resolve;
+    }
+
+    /// The stored resolver snapshot: `tool()` and `models()` build from
+    /// it, so both tools read one snapshot.
+    pub(crate) fn resolve_snapshot(&self) -> jobs::Resolve {
+        support::lock(&self.resolve).clone()
+    }
+
+    /// Both delegate tools built from one resolver snapshot: the reload
+    /// publishes the pair, so a fresh spawn tool never meets a stale
+    /// models text, or the reverse.
+    pub(crate) fn tools_with(
+        &self,
+        resolve: &jobs::Resolve,
+    ) -> (jobs::DelegateSpawn, jobs::DelegateModels) {
+        let spawn = jobs::DelegateSpawn {
             wiring: self.wiring(),
-            resolve: self.resolve.clone(),
-        }
+            resolve: resolve.clone(),
+        };
+        let quota = self.quota.clone();
+        let models = jobs::DelegateModels {
+            catalogue: Arc::clone(&resolve.catalogue),
+            quota: Arc::new(move || match quota {
+                Some(ref reader) => quota_text(&reader()),
+                None => String::from("Quota: none"),
+            }),
+        };
+        (spawn, models)
     }
 
     fn wiring(&self) -> jobs::DelegateWiring {
@@ -276,14 +310,7 @@ impl Delegates {
     /// The `delegate_models` tool this session declares: the catalogue
     /// built with the session's resolver, with the quota section appended.
     pub(crate) fn models(&self) -> jobs::DelegateModels {
-        let quota = self.quota.clone();
-        jobs::DelegateModels {
-            catalogue: Arc::clone(&self.resolve.catalogue),
-            quota: Arc::new(move || match quota {
-                Some(ref reader) => quota_text(&reader()),
-                None => String::from("Quota: none"),
-            }),
-        }
+        self.tools_with(&self.resolve_snapshot()).1
     }
 }
 
@@ -295,6 +322,11 @@ impl Delegates {
 /// role's target is resolved as a reference only: roles never chain. Both
 /// the lookup and the catalogue are built from one providers and
 /// configuration snapshot, so they never disagree within a session.
+/// A reload rebuilds the snapshot from the reloaded providers and
+/// swaps it onto the session whole: the lookup and the catalogue the
+/// reloaded tools check against never disagree either, while a running
+/// delegate keeps the model it started with (`docs/delegates.md`,
+/// "Choosing a model").
 pub(crate) fn resolver(
     providers: &extensions::Providers,
     config: &config::Config,
@@ -782,7 +814,7 @@ fn steerer(home: &Path) -> jobs::Steer {
 /// launches, so an addition between wiring and launch is captured. A
 /// fold that cannot be read yields no roots: fewer roots only ever deny,
 /// so an unreadable parent log cannot widen the child.
-pub(crate) fn inherited_roots_reader(sessions: &Path, parent: &SessionId) -> jobs::InheritedRoots {
+fn inherited_roots_reader(sessions: &Path, parent: &SessionId) -> jobs::InheritedRoots {
     let sessions = sessions.to_owned();
     let parent = parent.clone();
     Arc::new(move || {

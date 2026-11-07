@@ -803,6 +803,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "diag"
+version = "0.0.0"
+dependencies = [
+ "contract",
+ "fakes",
+ "libc",
+ "serde",
+ "serde_json",
+ "support",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1632,11 +1644,11 @@ name = "log"
 version = "0.0.0"
 dependencies = [
  "contract",
+ "diag",
  "fakes",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",
- "libc",
  "proptest",
  "rustix",
  "serde",
@@ -3475,11 +3487,11 @@ version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
  "contract",
+ "diag",
  "fakes",
  "ignore",
  "insta",
  "jiff",
- "log 0.0.0",
  "proptest",
  "pulldown-cmark",
  "ratatui",

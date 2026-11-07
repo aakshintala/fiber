@@ -11,16 +11,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use contract::commands::SandboxArgs;
 use contract::events::{
     Event, ExtensionStateSet, JobCompleted, JobStarted, OnFork, Outcome, SessionStarted,
     TurnCompleted, Variables, VariablesSource,
 };
+use contract::inbox::{Ack, Delivery};
 use contract::shapes::Failure;
 use contract::{ErrorCode, JobId, Seq, SessionId};
+use fakes::{Deadline, NoRules};
 use log::Log;
 
 use super::{StoppedJob, stopped_jobs};
 use crate::rewind::{rewind_note, rewind_note_with_jobs};
+use crate::{Loop, Model};
 
 fn session_start() -> Event {
     Event::SessionStarted(SessionStarted {
@@ -396,4 +400,73 @@ fn with_an_ancestor_point_the_section_comes_from_the_old_log() {
     let section = jobs_section(&note);
     assert!(section.contains("- j_old: old work"), "{note}");
     assert!(!section.contains("j_decoy"), "{note}");
+}
+
+/// A loop with no jobs wired, enough to drive the stop wait's delivery
+/// step: the refused-closing path writes nothing and needs no inbox line.
+fn transition_loop() -> (Loop, fakes::TempDir) {
+    let home = fakes::TempDir::new("fiber-loop-stop-one");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(home.path().join("credentials")).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log =
+        Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
+    let (_inbox, inbox_rx) = std::sync::mpsc::channel::<Delivery>();
+    let looped = Loop::start(
+        crate::Session {
+            log,
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new())),
+            model: Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: inbox_rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(NoRules),
+            },
+        },
+        None,
+    )
+    .unwrap();
+    (looped, home)
+}
+
+/// The stop wait refuses a `sandbox` toggle `closing`: the ack runs, so
+/// replacing the whole delivery step with `Ok(())` leaves the ack
+/// unanswered and this receive times out.
+#[test]
+fn stop_one_refuses_a_sandbox_toggle_closing() {
+    let (mut looped, _home) = transition_loop();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ack = Ack(Box::new(move |answer| {
+        let _sent = tx.send(answer);
+    }));
+    let wait = Deadline::after(std::time::Duration::from_secs(10));
+    looped
+        .stop_one(
+            Delivery::Sandbox(SandboxArgs { enabled: false }, ack),
+            false,
+        )
+        .unwrap();
+    let answer = wait.recv_or_fail(&rx, "the sandbox refusal during the stop wait");
+    assert!(
+        matches!(&answer, Err(rejection) if rejection.code == ErrorCode::Closing),
+        "a sandbox toggle during the stop wait is refused closing: {answer:?}"
+    );
 }

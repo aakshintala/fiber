@@ -670,7 +670,10 @@ fn probe_live_holder_is_named() {
     let wait = setup.deadline.start_wait();
     fakes::wait_until("the marked shell to list", setup.deadline, {
         let marker = marker.clone();
-        move || fakes::matching(&marker, wait.left() / 2).is_ok_and(|pids| pids.contains(&id))
+        move || match fakes::matching(&marker, wait.left() / 2) {
+            Ok(pids) => pids.contains(&id),
+            Err(error) => panic!("listing the marked shell: {error}"),
+        }
     });
     // A spent expiry still names the live holder: the holder listing
     // takes its own budget, so the expiry names the holder without

@@ -8,7 +8,7 @@ publish.workspace = true
 [dependencies]
 base64.workspace = true
 contract = { path = "../contract" }
-log = { path = "../log" }
+diag = { path = "../diag" }
 jiff = { version = "0.2", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 ignore.workspace = true
 pulldown-cmark.workspace = true

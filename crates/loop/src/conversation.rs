@@ -657,7 +657,11 @@ pub(crate) fn render(
                  images: Vec::new(),},
             );
             carry.opened();
-            carry.session_log.clone_from(&message.environment.session_log);
+            // A pinned continuation keeps the seed's own log: a parent
+            // opening must not move it back to the parent's.
+            if !carry.session_log_pinned {
+                carry.session_log.clone_from(&message.environment.session_log);
+            }
             crate::changes::apply(had, event);
         }
         // An instruction file change appends what the model was sent:

@@ -21,6 +21,7 @@ pub(crate) use changed_tests::{
 use compiled_in::{COMPILED_IN, PACKAGE_READERS};
 pub(crate) use compiled_in::{compiled_in_mismatches, package_reader_mismatches};
 use plan::BINARY_TESTS;
+pub(crate) use plan::{BaseOutcome, BaseResults, classify_base, new_breaks, parse_head_failures};
 pub(crate) use plan::{base_rows_skipped, plan, shard_timeout_minutes, ten_turns_runs, verdict};
 pub(crate) use reuse::{
     CommitSha as ReuseCommitSha, Current as ReuseCurrent,
@@ -37,6 +38,10 @@ pub(crate) struct Member {
     pub(crate) dir: String,
     pub(crate) version: String,
     pub(crate) deps: Vec<String>,
+    /// The normal-edge subset of `deps`: development-only edges propagate
+    /// one hop while normal edges propagate transitively (`docs/ci.md`,
+    /// "Selection"), so fan-out reads this, not `deps`.
+    pub(crate) normal_deps: Vec<String>,
     pub(crate) library: bool,
     /// The integration-test files, relative to the workspace root, whose
     /// `[[test]]` target declares `test = false`: only an explicit
@@ -144,21 +149,52 @@ pub(crate) fn owner<'a>(path: &str, members: &'a Members) -> Option<&'a str> {
         .map(|(name, _)| name.as_str())
 }
 
-/// `touched` plus every member that depends on one of them, transitively.
+/// Whether `rel`, a path relative to its crate, holds only tests: a test
+/// file, or anything under a `snapshots/` directory.
+fn is_test_only(rel: &str) -> bool {
+    is_test_file(rel) || rel.split('/').any(|segment| segment == "snapshots")
+}
+
+/// The members that depend on one of `targets` only through a development
+/// edge — an edge in `deps` but not in `normal_deps` — and are not selected
+/// yet. Each target is judged on its own edges: a normal edge into one
+/// target never cancels a development-only edge into another. One hop: the
+/// reached members fan out no further.
+fn dev_only_dependents(
+    targets: &BTreeSet<String>,
+    selected: &BTreeSet<String>,
+    members: &Members,
+) -> Vec<String> {
+    members
+        .iter()
+        .filter(|(name, m)| {
+            !selected.contains(*name)
+                && m.deps
+                    .iter()
+                    .any(|d| targets.contains(d) && !m.normal_deps.contains(d))
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
+/// `touched` plus every member that depends on one of them: normal edges
+/// propagate transitively, development-only edges one hop from the touched
+/// set with no further fan-out.
 pub(crate) fn dependents(touched: BTreeSet<String>, members: &Members) -> BTreeSet<String> {
-    let mut selected = touched;
-    // Each round adds one more link of the dependency chain; no chain is
-    // longer than the member count.
+    let mut selected = touched.clone();
+    // Each round adds one more link of the normal-dependency chain; no chain
+    // is longer than the member count.
     for _ in 0..members.len() {
         let more: Vec<String> = members
             .iter()
             .filter(|(name, m)| {
-                !selected.contains(*name) && m.deps.iter().any(|d| selected.contains(d))
+                !selected.contains(*name) && m.normal_deps.iter().any(|d| selected.contains(d))
             })
             .map(|(name, _)| name.clone())
             .collect();
         selected.extend(more);
     }
+    selected.extend(dev_only_dependents(&touched, &selected, members));
     selected
 }
 
@@ -257,13 +293,47 @@ fn classify_with(
     // Docs files do not own a crate; listed files run their crate without
     // dependents (`docs/ci.md`, "Selection"). Package files own no crate;
     // they run the package readers and the binary-level tests, below.
-    let touched = files
+    let touched: BTreeSet<String> = files
         .iter()
         .filter(|f| !is_package_file(f) && !is_docs_file(f) && !is_listed(f))
         .filter_map(|f| owner(f, members))
         .map(str::to_owned)
         .collect();
-    let mut selected = dependents(touched, members);
+    // A prototype file forces the old path for the whole diff: every
+    // touched crate expands through its dependents.
+    let mut selected = if has_prototype {
+        dependents(touched, members)
+    } else {
+        // Each touched crate narrows to itself when every candidate file
+        // in that crate is a test file; the rest expand with dependents.
+        let mut test_only: BTreeMap<&str, bool> =
+            touched.iter().map(|krate| (krate.as_str(), true)).collect();
+        for file in files {
+            if is_package_file(file) || is_docs_file(file) || is_listed(file) {
+                continue;
+            }
+            if let Some(krate) = owner(file, members)
+                && let Some(narrow) = test_only.get_mut(krate)
+                && let Some(member) = members.get(krate)
+            {
+                let rel = file.get(member.dir.len() + 1..).unwrap_or_default();
+                *narrow &= is_test_only(rel);
+            }
+        }
+        let mut narrow = BTreeSet::new();
+        let mut wide = BTreeSet::new();
+        for (krate, only) in &test_only {
+            if *only {
+                narrow.insert((*krate).to_owned());
+            } else {
+                wide.insert((*krate).to_owned());
+            }
+        }
+        let mut selected = dependents(wide, members);
+        selected.extend(dev_only_dependents(&narrow, &selected, members));
+        selected.extend(narrow);
+        selected
+    };
     selected.extend(compiled);
     if has_package {
         selected.extend(readers.iter().map(|name| (*name).to_owned()));

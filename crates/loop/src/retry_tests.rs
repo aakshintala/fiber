@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::{Loop, Model};
 use contract::ErrorCode;
 use contract::clock::{Clock, Wake};
+use contract::events::EventKind;
 use contract::inbox::{Ack, Delivery, Message};
 use contract::rules::Rules;
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
@@ -469,7 +470,7 @@ impl RetryRun {
                 loop {
                     match watcher.recv() {
                         Ok(Some(line)) => {
-                            let reached = line.kind == kind;
+                            let reached = line.kind() == EventKind::from_name(kind);
                             lines.push(line);
                             if reached {
                                 return (watcher, lines);
@@ -515,7 +516,7 @@ impl RetryRun {
     }
 
     fn note(&mut self, line: &contract::Envelope) {
-        if line.kind == "assistant_message_started" {
+        if line.kind() == EventKind::AssistantMessageStarted {
             self.starts += 1;
         }
     }
@@ -555,7 +556,7 @@ impl AdvanceOnScheduledClock {
         loop {
             match watcher.try_recv() {
                 Ok(Some(line)) => {
-                    if line.kind == "retry_scheduled" {
+                    if line.kind() == EventKind::RetryScheduled {
                         self.scheduled.store(true, Ordering::SeqCst);
                         return;
                     }

@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::handoff::Carry;
 use crate::resume::Resumed;
-use crate::reviewer::render_reviewed;
+use crate::reviewer::{PendingAsks, render_reviewed};
 
 /// The kinds the fold reads a payload of. Every other line's envelope is
 /// read and its payload never parsed, except the three request kinds the
@@ -31,6 +31,8 @@ const FOLDED: &[EventKind] = &[
     EventKind::PreambleBuilt,
     EventKind::ModelChanged,
     EventKind::PermissionResolved,
+    EventKind::InteractionRequested,
+    EventKind::InteractionResolved,
     EventKind::TurnStarted,
     EventKind::SteeringApplied,
     EventKind::TextCompleted,
@@ -98,6 +100,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     };
     let mut pass = Pass {
         own_segment: false,
+        continues: false,
         index: 0,
         workspace: None,
         previous_workspace: None,
@@ -105,6 +108,7 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         // there keeps the model its call was first recorded at, as the
         // ledger does for the own segment. Never written anywhere.
         parent_ledger: crate::usage::Ledger::default(),
+        asks: PendingAsks::default(),
         // The jobs running and the session log's path as of the line read.
         running: Carry::default(),
         // Each turn's latest `turn_started` since the last completed
@@ -159,6 +163,20 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
         return Err(Error::NoSessionStarted);
     };
     resumed.workspace = workspace;
+    // An unresolved eliciting request survives a resume only through the
+    // persisted store: the fold's running store rides the seed carry, so
+    // the resumed loop stages no request twice and answers what is pending.
+    resumed.seed.pending_asks = pass.asks.clone();
+    // A continuing chain never adopted a parent opening, so an empty seed
+    // names no log yet: it defaults to the own log, pinned, so the nudge
+    // and the note request name the session's own log from the first
+    // opening on. A plain resume keeps whatever its latest opening left.
+    if pass.continues {
+        if resumed.seed.session_log.is_empty() {
+            resumed.seed.session_log = own_session_log(last)?;
+        }
+        resumed.seed.session_log_pinned = true;
+    }
     // Every request the own segment left open belongs to an earlier process.
     resumed.exit.carry();
     resumed.orphans = pass.orphans.finish();
@@ -167,16 +185,31 @@ pub(crate) fn fold(segments: &[Segment]) -> Result<Resumed, Error> {
     Ok(resumed)
 }
 
+/// The continuing chain's own session log: `events.jsonl` in the
+/// `sessions/` directory holding the own segment, built the one way the log
+/// crate allows (`SessionDir`), never a bare join.
+fn own_session_log(own: &Segment) -> Result<String, Error> {
+    let sessions = own.dir.parent().ok_or(Error::NoSessionStarted)?;
+    Ok(log::SessionDir::new(sessions, &own.session_id)
+        .events()
+        .display()
+        .to_string())
+}
+
 /// What [`fold_line`] carries through the pass besides the [`Resumed`] it
 /// builds: the own segment's workspace until it moves, the workspace of
 /// the previously read `session_started`, and the state that only exists
 /// mid-pass. Every field is owned.
 struct Pass {
     own_segment: bool,
+    continues: bool,
     index: usize,
     workspace: Option<String>,
     previous_workspace: Option<String>,
     parent_ledger: crate::usage::Ledger,
+    // The eliciting requests a person's answer resolves, staged by
+    // request id for the fold's own reviewed list.
+    asks: PendingAsks,
     running: Carry,
     starts: HashMap<TurnId, ((usize, u64), Carry)>,
     orphans: crate::jobs::Orphans,
@@ -204,18 +237,20 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     let kind = line.kind();
     // The requests an earlier process left open are read from the raw
     // payload: a line outside the handoff window never has to parse for the
-    // exit to report them.
-    if pass.own_segment
-        && line.is_durable()
-        && matches!(
+    // exit to report them. Interaction lines seed the exit the same way,
+    // then fall through to the typed parse below, so the reviewer reads
+    // the person's answers with what they answer.
+    if pass.own_segment && line.is_durable() {
+        if kind == EventKind::PermissionRequested {
+            resumed.exit.seed_raw(&line.kind, &line.payload);
+            return Ok(());
+        }
+        if matches!(
             kind,
-            EventKind::PermissionRequested
-                | EventKind::InteractionRequested
-                | EventKind::InteractionResolved
-        )
-    {
-        resumed.exit.seed_raw(&line.kind, &line.payload);
-        return Ok(());
+            EventKind::InteractionRequested | EventKind::InteractionResolved
+        ) {
+            resumed.exit.seed_raw(&line.kind, &line.payload);
+        }
     }
     // Process starts close the reviewer's summary window even though the
     // fold itself does not use them. Leave every other unused payload unread.
@@ -272,6 +307,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             &event,
             line.action_id.as_ref(),
             line.seq,
+            &mut pass.asks,
         );
     }
     resumed.known_hosts.fold(&event);
@@ -332,6 +368,12 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             resumed.offers = crate::offer::Folded::default();
         }
         pass.previous_workspace = Some(started.workspace.clone());
+        // A fork or rewind continues its parent's log: its seed defaults
+        // to the own log below, pinned, so the nudge and the note request
+        // name the session's own log.
+        if pass.own_segment && (started.forked_from.is_some() || started.rewind.is_some()) {
+            pass.continues = true;
+        }
         if pass.own_segment && pass.workspace.is_none() {
             pass.workspace = Some(started.workspace.clone());
             resumed.worktree = started.worktree.clone();
@@ -400,9 +442,14 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
             resumed.session_blocks += 1;
         }
     } else if let Event::OpeningMessage(message) = &event {
-        pass.running
-            .session_log
-            .clone_from(&message.environment.session_log);
+        // Only the own log's openings seed the running path: a parent
+        // segment's openings belong to the parent's session log, and the
+        // fold end pins a continuing chain to the own log instead.
+        if pass.own_segment {
+            pass.running
+                .session_log
+                .clone_from(&message.environment.session_log);
+        }
     } else if let Event::TurnStarted(_) = &event {
         if let (Some(turn), Some(seq)) = (&line.turn_id, line.seq) {
             let state = Carry {
@@ -411,6 +458,7 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
                 session_log: pass.running.session_log.clone(),
                 skills: pass.running.skills.clone(),
                 reviewed: pass.running.reviewed.clone(),
+                pending_asks: pass.asks.clone(),
                 ..Carry::default()
             };
             pass.starts
@@ -499,6 +547,7 @@ pub(crate) fn read_window(
         } else {
             for mut line in segment.lines(from)? {
                 rewrite_images(&mut line, &segment.dir);
+                absolutize_artifact(&mut line, &segment.dir);
                 lines.push(line);
             }
         }
@@ -558,6 +607,31 @@ fn rewrite_parts(parts: &mut [Value], dir: &Path) {
                 make_absolute(page, dir);
             }
         }
+    }
+}
+
+/// Makes a parent segment's tool result `artifact` absolute against that
+/// segment's directory when it is relative: the artifact names a file in
+/// the artifacts directory of the session that wrote it, and the handoff
+/// note resolves it under the session log's directory (`docs/handoff.md`,
+/// "Overflow"). Own lines and absolute paths pass through untouched. In
+/// memory only; nothing is written or copied.
+fn absolutize_artifact(line: &mut Envelope, dir: &Path) {
+    if line.kind() != EventKind::ToolCallCompleted {
+        return;
+    }
+    let artifact = line
+        .payload
+        .get("artifact")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    if let Some(artifact) = artifact
+        && Path::new(&artifact).is_relative()
+    {
+        line.payload.insert(
+            "artifact".to_owned(),
+            Value::String(dir.join(artifact).display().to_string()),
+        );
     }
 }
 

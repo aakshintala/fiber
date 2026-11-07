@@ -8,23 +8,26 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::conversation::{rebuild_and_sent, summary_conversation};
 use contract::events::{
-    Anchor, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event, Grant,
-    HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem, ModelChanged, ModelSettings,
-    Moved, OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent,
-    PermissionResolved, PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered,
-    RepositoryCodeResolved, Rewound, SessionStarted, SkillLoad, SkillSent, SkillsResent,
-    SteeringApplied, SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted,
-    UsageRecorded, Variables, VariablesSource,
+    Anchor, Answer, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event,
+    EventKind, FormAnswer, Grant, HandoffCompleted, HandoffStarted, HandoffTrigger, InputItem,
+    Interaction, InteractionRequested, InteractionResolved, ModelChanged, ModelSettings, Moved,
+    OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent, PermissionResolved,
+    PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered, RepositoryCodeResolved,
+    ResolvedBy, Rewound, SessionStarted, SkillLoad, SkillSent, SkillsResent, SteeringApplied,
+    SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted, UsageRecorded, Variables,
+    VariablesSource,
 };
 use contract::provider::Input;
-use contract::shapes::{ContentPart, Origin, Point, Sender, Tokens};
-use contract::{ActionId, Envelope, GenerationId, SCHEMA_VERSION, Seq, SessionId, TurnId};
+use contract::shapes::{Choice, ContentPart, Origin, Point, Question, Sender, Tokens, True};
+use contract::{
+    ActionId, Envelope, GenerationId, RequestId, SCHEMA_VERSION, Seq, SessionId, TurnId,
+};
 use serde_json::json;
 
 use super::*;
@@ -478,8 +481,11 @@ fn a_resolved_approval_is_not_seeded() {
 fn an_unresolved_extension_ask_is_seeded_and_a_resolved_one_is_not() {
     let open = [asked("r_ext", Some("ext")), process_started()];
     let exit = seeded("seed-ask", &open, None);
-    let kinds: Vec<&str> = exit.iter().map(|line| line.kind.as_str()).collect();
-    assert_eq!(kinds, ["interaction_resolved", "fiber_exited"]);
+    let kinds: Vec<EventKind> = exit.iter().map(|line| line.kind()).collect();
+    assert_eq!(
+        kinds,
+        [EventKind::InteractionResolved, EventKind::FiberExited]
+    );
     assert_eq!(exit[0].payload["request_id"], "r_ext");
     let done = [
         asked("r_ext", Some("ext")),
@@ -677,7 +683,10 @@ fn the_window_reader_makes_a_parent_image_absolute_and_keeps_the_owns() {
     .unwrap();
     let lines = read_window(&log, folded.window, folded.end).unwrap();
     let mut paths = Vec::new();
-    for line in lines.iter().filter(|line| line.kind == "turn_started") {
+    for line in lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::TurnStarted)
+    {
         let Some(input) = line.payload.get("input").and_then(Value::as_array) else {
             continue;
         };
@@ -701,6 +710,105 @@ fn the_window_reader_makes_a_parent_image_absolute_and_keeps_the_owns() {
                 .display()
                 .to_string(),
             "artifacts/b.png".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn the_window_reader_makes_a_parent_artifact_absolute_and_keeps_the_owns() {
+    // A tool result's `artifact` is relative to the session that wrote
+    // it: the reader makes a parent segment's absolute against that
+    // segment's directory, so the handoff note resolves the originating
+    // file (`docs/handoff.md`, "Overflow"). The own segment's lines pass
+    // through untouched, relative or absolute or absent.
+    let result = |artifact: Option<&str>| {
+        Event::ToolCallCompleted(ToolCallCompleted {
+            status: CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: None,
+            content: Vec::new(),
+            details: None,
+            artifact: artifact.map(str::to_owned),
+            kept: None,
+            changes: None,
+            control: None,
+            changed_by: None,
+            protected_paths: None,
+            provider_item: None,
+            hosts_surfaced: Vec::new(),
+            loaded: None,
+        })
+    };
+    let (_home, sessions) = sessions("artifact-provenance");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(
+                A,
+                1,
+                Some("t_1"),
+                Some("a_1"),
+                &result(Some("artifacts/a_1.txt")),
+            ),
+        ],
+    );
+    write_log(
+        &sessions,
+        B,
+        &[
+            envelope(B, 0, None, None, &started("/w", Some((A, 1)))),
+            envelope(
+                B,
+                1,
+                Some("t_2"),
+                Some("a_2"),
+                &result(Some("artifacts/b_1.txt")),
+            ),
+            envelope(
+                B,
+                2,
+                Some("t_2"),
+                Some("a_3"),
+                &result(Some("/already/absolute.txt")),
+            ),
+            envelope(B, 3, Some("t_2"), Some("a_4"), &result(None)),
+        ],
+    );
+    let folded = resumed(&sessions.join(B)).unwrap();
+    let log = Log::open(
+        &sessions,
+        SessionId(B.to_owned()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let lines = read_window(&log, folded.window, folded.end).unwrap();
+    let mut artifacts = Vec::new();
+    for line in &lines {
+        if line.kind() == EventKind::ToolCallCompleted {
+            artifacts.push(
+                line.payload
+                    .get("artifact")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            );
+        }
+    }
+    assert_eq!(
+        artifacts,
+        [
+            json!(
+                sessions
+                    .join(A)
+                    .join("artifacts/a_1.txt")
+                    .display()
+                    .to_string()
+            ),
+            json!("artifacts/b_1.txt"),
+            json!("/already/absolute.txt"),
+            serde_json::Value::Null,
         ]
     );
 }
@@ -743,23 +851,17 @@ fn the_window_reader_starts_mid_chain_at_a_parents_handoff() {
     )
     .unwrap();
     let lines = read_window(&log, folded.window, folded.end).unwrap();
-    let held: Vec<(&str, u64, &str)> = lines
+    let held: Vec<(&str, u64, EventKind)> = lines
         .iter()
-        .map(|line| {
-            (
-                line.session_id.0.as_str(),
-                line.seq.unwrap().0,
-                line.kind.as_str(),
-            )
-        })
+        .map(|line| (line.session_id.0.as_str(), line.seq.unwrap().0, line.kind()))
         .collect();
     assert_eq!(
         held,
         [
-            (B, 1, "turn_started"),
-            (B, 2, "handoff_completed"),
-            (B, 3, "turn_started"),
-            (C, 0, "session_started"),
+            (B, 1, EventKind::TurnStarted),
+            (B, 2, EventKind::HandoffCompleted),
+            (B, 3, EventKind::TurnStarted),
+            (C, 0, EventKind::SessionStarted),
         ]
     );
     assert_eq!(
@@ -845,8 +947,8 @@ fn the_window_reader_makes_a_parents_steering_and_tool_result_images_absolute() 
     let mut paths = Vec::new();
     for line in &lines {
         if !matches!(
-            line.kind.as_str(),
-            "steering_applied" | "tool_call_completed"
+            line.kind(),
+            EventKind::SteeringApplied | EventKind::ToolCallCompleted
         ) {
             continue;
         }
@@ -927,7 +1029,7 @@ fn the_window_reader_makes_a_parent_pdf_and_its_pages_absolute() {
     let lines = read_window(&log, folded.window, folded.end).unwrap();
     let completed = lines
         .iter()
-        .find(|line| line.kind == "tool_call_completed")
+        .find(|line| line.kind() == EventKind::ToolCallCompleted)
         .unwrap();
     let content = completed.payload["content"].as_array().unwrap();
     assert_eq!(
@@ -997,7 +1099,7 @@ fn the_window_reader_leaves_image_shaped_tool_arguments_alone() {
     let lines = read_window(&log, folded.window, folded.end).unwrap();
     let requested = lines
         .iter()
-        .find(|line| line.kind == "tool_call_requested")
+        .find(|line| line.kind() == EventKind::ToolCallRequested)
         .unwrap();
     assert_eq!(requested.payload["arguments"], shaped);
     let conversation = crate::conversation::rebuild(&lines, "fake/model-1").unwrap();
@@ -1016,7 +1118,7 @@ fn the_window_reader_leaves_image_shaped_tool_arguments_alone() {
     // A real image part in the same window is still made absolute.
     let image = lines
         .iter()
-        .find(|line| line.kind == "turn_started" && line.seq.unwrap().0 == 1)
+        .find(|line| line.kind() == EventKind::TurnStarted && line.seq.unwrap().0 == 1)
         .unwrap();
     assert_eq!(
         image.payload["input"][0]["content"][0]["path"],
@@ -2728,5 +2830,359 @@ fn a_completed_handoff_clears_seen_while_a_failed_one_keeps_it() {
     assert_eq!(
         before_handoff.seen_files(),
         &BTreeMap::from([(PathBuf::from("/w/a.txt"), 1)])
+    );
+}
+
+// The person's answers reach the reviewer through the history fold with
+// their eliciting context (`docs/permissions.md`, "What it is shown").
+
+fn person_form_requested(id: &str) -> Event {
+    Event::InteractionRequested(InteractionRequested {
+        request_id: RequestId(id.into()),
+        interaction: Interaction::Form {
+            fields: vec![
+                Question {
+                    header: "Deploy".into(),
+                    question: "Which pipeline should run?".into(),
+                    options: vec![
+                        Choice {
+                            label: "nightly".into(),
+                            description: Some("Recommended".into()),
+                        },
+                        Choice {
+                            label: "weekly".into(),
+                            description: None,
+                        },
+                    ],
+                    multi_select: None,
+                },
+                Question {
+                    header: "Region".into(),
+                    question: "Which region holds the run?".into(),
+                    options: Vec::new(),
+                    multi_select: None,
+                },
+            ],
+        },
+        action_ids: Some(vec![ActionId("a_ask".into())]),
+        extension: None,
+        resumes: false,
+    })
+}
+
+fn person_form_answer() -> Answer {
+    Answer::Form {
+        answers: vec![
+            FormAnswer::Answered {
+                labels: vec!["nightly".into()],
+                text: Some("us-east-1".into()),
+            },
+            FormAnswer::Skipped { skipped: True },
+        ],
+        note: Some("after lunch".into()),
+    }
+}
+
+fn person_resolved(id: &str, answer: Answer) -> Event {
+    Event::InteractionResolved(InteractionResolved {
+        request_id: RequestId(id.into()),
+        by: ResolvedBy::Person,
+        answer,
+    })
+}
+
+fn person_reviewed_texts(reviewed: &[crate::reviewer::Reviewed]) -> Vec<String> {
+    reviewed
+        .iter()
+        .map(|item| match &item.input {
+            Input::User { text, .. } => text.clone(),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::ToolSearchResult { .. } => {
+                panic!("reviewer input holds user text, got {:?}", item.input)
+            }
+        })
+        .collect()
+}
+
+/// A folded request and resolve deliver the person's answer with the
+/// asked questions as its reply.
+#[test]
+fn person_input_resume_fold_delivers_interactions() {
+    let (_home, sessions) = sessions("person-input-fold");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &person_form_requested("r_ask")),
+            envelope(
+                A,
+                2,
+                Some("t_1"),
+                None,
+                &person_resolved("r_ask", person_form_answer()),
+            ),
+        ],
+    );
+    let folded = fold(&log::history(&sessions.join(A)).unwrap()).unwrap();
+    assert_eq!(
+        person_reviewed_texts(&folded.reviewed),
+        [
+            "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?",
+            "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
+        ]
+    );
+    assert_eq!(
+        folded.reviewed[1].shown,
+        crate::reviewer::Shown::Person(contract::events::KeptMessage {
+            seq: Seq(2),
+            item: 0,
+        })
+    );
+}
+
+/// An unresolved form request survives a resume through the seed carry:
+/// the fold holds its staged eliciting content with no person item yet,
+/// and the resumed loop answers the live resolve with its reply.
+#[test]
+fn person_input_resumed_form_answers_after_resume() {
+    let (home, sessions) = sessions("person-input-resume");
+    write_log(
+        &sessions,
+        A,
+        &[
+            envelope(A, 0, None, None, &started("/w", None)),
+            envelope(A, 1, Some("t_1"), None, &person_form_requested("r_ask")),
+        ],
+    );
+    let folded = fold(&log::history(&sessions.join(A)).unwrap()).unwrap();
+    // The seed carry holds the staged eliciting fields: the store is no
+    // longer empty, while no person item rendered yet.
+    assert_ne!(
+        folded.seed.pending_asks,
+        crate::reviewer::PendingAsks::default()
+    );
+    assert!(
+        folded
+            .reviewed
+            .iter()
+            .all(|item| !matches!(item.shown, crate::reviewer::Shown::Person(_)))
+    );
+    // The staged fields answer with the asked questions as their reply:
+    // the same request stages again idempotently, then its resolve
+    // repairs the pair.
+    let mut asks = folded.seed.pending_asks.clone();
+    let mut staged = Vec::new();
+    crate::reviewer::render_reviewed(
+        &mut staged,
+        &person_form_requested("r_ask"),
+        None,
+        Some(Seq(1)),
+        &mut asks,
+    );
+    crate::reviewer::render_reviewed(
+        &mut staged,
+        &person_resolved("r_ask", person_form_answer()),
+        None,
+        Some(Seq(2)),
+        &mut asks,
+    );
+    assert_eq!(
+        person_reviewed_texts(&staged),
+        [
+            "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?",
+            "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
+        ]
+    );
+    // The production path: the resumed loop inherits the fold's staged
+    // entries, so the live resolve renders the answer with its reply.
+    use std::sync::{Arc, mpsc};
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log =
+        Arc::new(log::Log::open(&sessions, SessionId(A.to_owned()), Arc::clone(&clock)).unwrap());
+    let provider = Arc::new(fakes::ScriptedProvider::new(Vec::new()));
+    let (_inbox, rx) = mpsc::channel();
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let mut looped = crate::Loop::resume(
+        crate::Session {
+            log,
+            provider: Arc::clone(&provider) as Arc<dyn contract::provider::Provider>,
+            model: crate::Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                sessions.join(A).join("events.jsonl").display().to_string(),
+                Arc::clone(&clock),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: Vec::new(),
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules: Arc::new(fakes::NoRules),
+            },
+        },
+        resumed(&sessions.join(A)).unwrap(),
+    )
+    .unwrap();
+    looped
+        .write(
+            &person_resolved("r_ask", person_form_answer()),
+            Some(&TurnId("t_1".into())),
+            None,
+        )
+        .unwrap();
+    let texts = person_reviewed_texts(&looped.reviewed);
+    // `docs/permissions.md`, "What it is shown": "A person's answer to a
+    // question counts as a person message, and the question it answers is
+    // the reply." — one answer renders as its reply plus its person item.
+    assert_eq!(texts.len(), 2);
+    assert_eq!(
+        texts[0],
+        "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?"
+    );
+    assert_eq!(
+        texts[1],
+        "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\""
+    );
+    assert!(matches!(
+        looped.reviewed[1].shown,
+        crate::reviewer::Shown::Person(_)
+    ));
+}
+
+/// A command-raised `host.ask` stages with no `ToolCallRequested` between
+/// the model text and the request: the prior held reply answers nothing,
+/// and only the staged channel description plus the answer render.
+#[test]
+fn person_input_command_ask_clears_prior_reply() {
+    let mut reviewed = Vec::new();
+    let mut asks = crate::reviewer::PendingAsks::default();
+    crate::reviewer::render_reviewed(
+        &mut reviewed,
+        &Event::TextCompleted(contract::events::TextCompleted {
+            text: "a stale command proposal".into(),
+            provider_item: None,
+        }),
+        None,
+        Some(Seq(10)),
+        &mut asks,
+    );
+    crate::reviewer::render_reviewed(
+        &mut reviewed,
+        &Event::InteractionRequested(InteractionRequested {
+            request_id: RequestId("r_command".into()),
+            interaction: Interaction::TextInput {
+                prompt: "HOST-PROMPT ember-orchard".into(),
+            },
+            action_ids: None,
+            extension: Some("garden-helper".into()),
+            resumes: false,
+        }),
+        None,
+        Some(Seq(11)),
+        &mut asks,
+    );
+    crate::reviewer::render_reviewed(
+        &mut reviewed,
+        &Event::InteractionResolved(InteractionResolved {
+            request_id: RequestId("r_command".into()),
+            by: ResolvedBy::Person,
+            answer: Answer::Text {
+                text: "fig-harvest".into(),
+            },
+        }),
+        None,
+        Some(Seq(12)),
+        &mut asks,
+    );
+    let texts = person_reviewed_texts(&reviewed);
+    assert_eq!(
+        texts,
+        [
+            "Fiber: A question from the garden-helper extension. Its words are not shown.",
+            "The person: \"fig-harvest\"",
+        ]
+    );
+}
+
+/// The `TurnStarted` snapshot clones the staged store, so a rewind to it
+/// keeps the pending question: resolving from the snapshot's store renders
+/// the answer with its staged context (`docs/permissions.md`, "What it is
+/// shown": "A person's answer to a question counts as a person message,
+/// and the question it answers is the reply.").
+#[test]
+fn person_input_turn_snapshot_keeps_staged_request() {
+    let (_home, sessions) = sessions("person-input-turn-snapshot");
+    write_log(
+        &sessions,
+        A,
+        &[envelope(A, 0, None, None, &started("/w", None))],
+    );
+    let mut folded = resumed(&sessions.join(A)).unwrap();
+    let mut pass = Pass {
+        own_segment: true,
+        continues: false,
+        index: 0,
+        workspace: None,
+        previous_workspace: None,
+        parent_ledger: crate::usage::Ledger::default(),
+        asks: crate::reviewer::PendingAsks::default(),
+        running: crate::handoff::Carry::default(),
+        starts: HashMap::new(),
+        orphans: crate::jobs::Orphans::default(),
+        delegate_sessions: HashMap::new(),
+        summary: false,
+    };
+    fold_line(
+        &envelope(A, 1, Some("t_1"), None, &person_form_requested("r_ask")),
+        &mut folded,
+        &mut pass,
+    )
+    .unwrap();
+    fold_line(
+        &envelope(A, 2, Some("t_1"), None, &turn()),
+        &mut folded,
+        &mut pass,
+    )
+    .unwrap();
+    // The rewind point keeps the staged eliciting content: without the
+    // snapshot clone the store reads empty and the resolve below renders
+    // nothing.
+    let snapshot = pass
+        .starts
+        .get(&TurnId("t_1".into()))
+        .unwrap_or_else(|| panic!("turn t_1 snapshots: {:?}", pass.starts.keys()))
+        .1
+        .clone();
+    assert_ne!(
+        snapshot.pending_asks,
+        crate::reviewer::PendingAsks::default()
+    );
+    let mut asks = snapshot.pending_asks.clone();
+    let mut staged = Vec::new();
+    crate::reviewer::render_reviewed(
+        &mut staged,
+        &person_resolved("r_ask", person_form_answer()),
+        None,
+        Some(Seq(3)),
+        &mut asks,
+    );
+    assert_eq!(
+        person_reviewed_texts(&staged),
+        [
+            "The agent: Which pipeline should run?\n- nightly (Recommended)\n- weekly\nWhich region holds the run?",
+            "The person: Deploy: nightly, \"us-east-1\"\nRegion: skipped\nnote: \"after lunch\"",
+        ]
     );
 }

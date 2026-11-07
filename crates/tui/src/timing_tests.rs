@@ -22,10 +22,10 @@ use crate::pty_watch::{watch, watched};
 #[test]
 fn an_info_level_run_writes_no_diagnostic_line() {
     let home = fakes::TempDir::new("tui-timing-info");
-    let diag = Arc::new(log::diag::Diag::new(
+    let diag = Arc::new(diag::diag::Diag::new(
         home.path(),
-        log::diag::Process::Tui,
-        log::diag::Level::Info,
+        diag::diag::Process::Tui,
+        diag::diag::Level::Info,
         FakeClock::new(),
     ));
     let mut pair = open();
@@ -152,11 +152,11 @@ fn dyn_clock(clock: &Arc<FakeClock>) -> Arc<dyn contract::clock::Clock> {
 fn debug_diag(
     home: &std::path::Path,
     clock: Arc<dyn contract::clock::Clock>,
-) -> Arc<log::diag::Diag> {
-    Arc::new(log::diag::Diag::new(
+) -> Arc<diag::diag::Diag> {
+    Arc::new(diag::diag::Diag::new(
         home,
-        log::diag::Process::Tui,
-        log::diag::Level::Debug,
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
         clock,
     ))
 }
@@ -1098,8 +1098,8 @@ fn attach_draw_emits_the_stamped_end_after_later_clock_reads() {
 /// separate from the diagnostic writer's, so the stamped span is exact.
 fn refused_run_with_startup(
     home: &std::path::Path,
-    diag: Arc<log::diag::Diag>,
-    startup: Option<log::diag::Timer>,
+    diag: Arc<diag::diag::Diag>,
+    startup: Option<diag::diag::Timer>,
 ) -> Vec<Value> {
     let mut pair = open();
     let slave = pair
@@ -1161,7 +1161,7 @@ fn entry_guard_drops_first_with_the_stamped_start() {
         .checked_sub(Duration::from_millis(41))
         .expect("41 ms before the frozen start");
     let diag = debug_diag(home.path(), dyn_clock(&diag_clock));
-    let startup = log::diag::timed(&diag, contract::diag::Op::TuiStartup, None, Some(t0));
+    let startup = diag::diag::timed(&diag, contract::diag::Op::TuiStartup, None, Some(t0));
     let lines = refused_run_with_startup(home.path(), diag, startup);
     // The entry drop writes before any first-render or attach span opens.
     let first = lines.first().expect("the entry drop writes first");

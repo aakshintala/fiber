@@ -7,7 +7,7 @@ use crate::theme::Role;
 use contract::Envelope;
 use contract::events::EventKind;
 use contract::{ActionId, SCHEMA_VERSION, SessionId};
-use log::{Rate, RateFold};
+use diag::{Rate, RateFold};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use serde_json::{Value, json};

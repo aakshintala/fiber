@@ -11,6 +11,12 @@ blocking links, and carries the `ready-for-agent` label. Turning a design
 into tickets is not part of it. What must pass to merge is set in `docs/ci.md`,
 `docs/testing.md`, `docs/code-quality.md` and `docs/dependencies.md`.
 
+A ticket that leaves design choices open swaps out of `ready-for-agent`
+for `needs-plan` first; see `docs/agents/triage-labels.md`. Only needs-plan
+tickets get a Verifier-checked plan (aakshintala/switchyard#1262): that rule
+is decided harness-side, so fiber documents it here and builds no enforcement
+for it.
+
 No harness is assumed. Any agent harness can fill any role below.
 
 ## Roles
@@ -311,6 +317,8 @@ done; marking it ready starts CI's full run (`docs/ci.md`). When `CI` is
 green, the full run passed on the exact head, and every review finding is
 resolved, the orchestrator squash-merges the pull request, deletes its
 branch and checks the ticket closed.
+
+A red nightly pauses merges, except for fix pull requests, until a nightly rerun passes (`docs/releasing.md`, "Nightly pre-releases"). A fix pull request is one that fixes the nightly failure; the orchestrator holds merges human-side through the pause — no script enforces it — and reads a fix pull request against the failure before merging it through the pause. Lanes keep planning and building during the pause. A red post-merge backstop does not pause merges (`docs/ci.md`, "The backstop on `main`"): the backstop never blocks a merge.
 
 ### Break-glass merge
 

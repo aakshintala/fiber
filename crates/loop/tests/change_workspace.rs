@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use contract::commands::{ChangeWorkspaceArgs, RewindArgs};
-use contract::events::{CommandResult, JobCompleted, Outcome, Parent};
+use contract::events::{CommandResult, EventKind, JobCompleted, Outcome, Parent};
 use contract::inbox::{Ack, Answer, Claim, Delivery, JobNotice, Rejection};
 use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::shapes::Failure;
@@ -220,7 +220,7 @@ impl FakeJobs {
     /// loop's stop wait wrote the end this `end` sent.
     fn wait_written(log: &log::Log, id: &str) {
         fn is_end(line: &contract::Envelope, id: &str) -> bool {
-            line.kind == "job_completed"
+            line.kind() == EventKind::JobCompleted
                 && line.payload.get("job_id").and_then(|value| value.as_str()) == Some(id)
         }
         let id = id.to_owned();
@@ -458,7 +458,7 @@ fn a_move_writes_moved_at_the_tip_with_no_summary() {
     assert_eq!(lines.len() as u64, moved_seq + 1);
     assert_eq!(&log_bytes(&dir)[..before.len()], &before[..]);
     let last = lines.last().unwrap();
-    assert_eq!(last.kind, "moved");
+    assert_eq!(last.kind(), EventKind::Moved);
     assert_eq!(last.payload["new_session_id"], child.0.as_str());
     assert_eq!(last.payload["seq"], moved_seq - 1);
     assert_eq!(
@@ -529,7 +529,7 @@ fn a_move_during_a_turn_is_busy() {
         log::read(&session.dir)
             .unwrap()
             .iter()
-            .all(|line| line.kind != "moved"),
+            .all(|line| line.kind() != EventKind::Moved),
         "the refused move closes nothing"
     );
 }
@@ -604,7 +604,7 @@ fn a_move_with_admitted_job_news_is_busy() {
         log::read(&dir)
             .unwrap()
             .iter()
-            .all(|line| line.kind != "moved"),
+            .all(|line| line.kind() != EventKind::Moved),
         "nothing is moved"
     );
     assert!(stops.try_recv().is_err(), "no stop was sent");
@@ -651,7 +651,7 @@ fn a_second_transition_during_the_stop_is_busy_then_the_move_is_terminal() {
             log::read(&dir)
                 .unwrap()
                 .iter()
-                .all(|line| line.kind != "moved"),
+                .all(|line| line.kind() != EventKind::Moved),
             "no moved while the job runs"
         );
         inbox.send(rw).unwrap();
@@ -668,7 +668,7 @@ fn a_second_transition_during_the_stop_is_busy_then_the_move_is_terminal() {
             log::read(&dir)
                 .unwrap()
                 .iter()
-                .all(|line| line.kind != "moved"),
+                .all(|line| line.kind() != EventKind::Moved),
             "competitors write nothing"
         );
         release.send(()).expect("the held end is released");
@@ -681,10 +681,10 @@ fn a_second_transition_during_the_stop_is_busy_then_the_move_is_terminal() {
     assert_eq!(outcome, None, "the moved session starts no turn");
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
-    let kinds: Vec<&str> = lines.iter().map(|line| line.kind.as_str()).collect();
-    assert_eq!(*kinds.last().unwrap(), "moved");
+    let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
+    assert_eq!(*kinds.last().unwrap(), EventKind::Moved);
     assert!(
-        !kinds[..kinds.len() - 1].contains(&"moved"),
+        !kinds[..kinds.len() - 1].contains(&EventKind::Moved),
         "moved is the last line"
     );
 }
@@ -750,14 +750,16 @@ fn job_ends_are_written_before_moved_in_order() {
     assert_eq!(outcome, None);
     accepted(answer_of(answered));
     let lines = log::read(&dir).unwrap();
-    let tail: Vec<&str> = lines
-        .iter()
-        .rev()
-        .take(3)
-        .map(|line| line.kind.as_str())
-        .collect();
+    let tail: Vec<EventKind> = lines.iter().rev().take(3).map(|line| line.kind()).collect();
     // docs/events.md:1606: each running job ends before `moved`.
-    assert_eq!(tail, ["moved", "job_completed", "job_completed"]);
+    assert_eq!(
+        tail,
+        [
+            EventKind::Moved,
+            EventKind::JobCompleted,
+            EventKind::JobCompleted
+        ]
+    );
     let moved = lines.last().unwrap();
     assert_eq!(moved.payload["seq"], (lines.len() - 2) as u64);
 }
@@ -805,11 +807,13 @@ fn a_disconnected_inbox_fails_the_move_without_moved_or_fabrication() {
     );
     let lines = log::read(&dir).unwrap();
     assert!(
-        lines.iter().all(|line| line.kind != "moved"),
+        lines.iter().all(|line| line.kind() != EventKind::Moved),
         "no moved hides the unfinished job"
     );
     assert!(
-        lines.iter().all(|line| line.kind != "job_completed"),
+        lines
+            .iter()
+            .all(|line| line.kind() != EventKind::JobCompleted),
         "no end is invented for the job that never ended"
     );
 }
@@ -829,7 +833,7 @@ fn a_failed_append_ends_without_moved_and_without_an_answer() {
         log::read(&dir)
             .unwrap()
             .iter()
-            .all(|line| line.kind != "moved"),
+            .all(|line| line.kind() != EventKind::Moved),
         "no moved is written"
     );
     assert!(

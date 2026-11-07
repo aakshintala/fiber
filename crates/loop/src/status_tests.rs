@@ -1562,7 +1562,7 @@ fn a_clients_line_reads_the_count_and_leaves_since() {
 /// every `session_status` payload a second watcher saw.
 #[track_caller]
 fn session_statuses_with_a_held_clients_read(counts: &[u32]) -> Vec<Value> {
-    use contract::events::{Clients, Empty, Event, InputItem, TurnStarted};
+    use contract::events::{Clients, Empty, Event, EventKind, InputItem, TurnStarted};
     use contract::shapes::{ContentPart, Origin, Sender};
     use contract::{CommandId, TurnId};
 
@@ -1647,7 +1647,7 @@ fn session_statuses_with_a_held_clients_read(counts: &[u32]) -> Vec<Value> {
 
     let mut statuses = Vec::new();
     while let Ok(Some(line)) = seen.try_recv() {
-        if line.kind == "session_status" {
+        if line.kind() == EventKind::SessionStatus {
             statuses.push(Value::Object(line.payload));
         }
     }

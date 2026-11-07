@@ -27,7 +27,9 @@ use std::thread;
 
 use fakes::{ProviderServer, Response, fingerprint};
 use serde_json::{Value, json};
-use support::pty::{FINISHED_TITLE, KITTY_PUSH, TITLE, WAITING_TITLE};
+use support::pty::{
+    FINISHED_TITLE, KITTY_PUSH, TITLE, WAITING_TITLE, focus_notice, notice_step, reversed_cells,
+};
 use support::{Deadline, PIXEL, hello, text_reply, write_json};
 
 /// Installs a provider `fake` with model `m` on `openai-responses` at the
@@ -1526,7 +1528,11 @@ fn journey_quit_resume_answer_again() {
     let mut run = terminal(&setup, 120, 32, &["resume"], &[]);
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
-    run.wait_screen("the session list", |grid| grid.contents.contains("first"));
+    run.wait_screen_reporting(
+        "the session list",
+        |grid| grid.contents.contains("first"),
+        || resume_list_state(&setup),
+    );
     // The drawn list is the terminal's own view, so Enter follows the
     // grid; the attached session's title proves the open before the
     // next prompt goes out.
@@ -1811,42 +1817,6 @@ fn resumed_turn_kinds() -> Vec<&'static str> {
     ]
 }
 
-/// Whether row `y` of `grid` carries any reversed cell: the focus look.
-fn has_focus_look(grid: &support::pty::Grid, y: u16) -> bool {
-    let (cols, _) = grid.size();
-    (0..cols).any(|x| grid.cell(x, y).inverse)
-}
-
-/// Every reversed cell of `grid`, as (column, row): the focus look's
-/// snapshot, so a step can wait for it to move.
-fn reversed_cells(grid: &support::pty::Grid) -> Vec<(u16, u16)> {
-    let (cols, rows) = grid.size();
-    let mut cells = Vec::new();
-    for y in 0..rows {
-        for x in 0..cols {
-            if grid.cell(x, y).inverse {
-                cells.push((x, y));
-            }
-        }
-    }
-    cells
-}
-
-/// The walk's step for a notice row's reversed cells, left to right:
-/// done when the box itself has focus (its run starts the row past the
-/// grip), Up from the dismiss cross's focused cell, Down otherwise. The
-/// cross sits at the conversation column's right edge, not the screen's,
-/// so any focused cell past the box's start means the cross.
-fn notice_step(row: &[bool]) -> Option<&'static [u8]> {
-    if row.get(1).is_some_and(|cell| *cell) {
-        None
-    } else if row.iter().any(|cell| *cell) {
-        Some(b"\x1b[A")
-    } else {
-        Some(b"\x1b[B")
-    }
-}
-
 #[test]
 fn notice_step_heads_back_up_from_the_dismiss_cross() {
     // The box spans its row past the grip: its run starts the row's
@@ -1864,46 +1834,6 @@ fn notice_step_heads_back_up_from_the_dismiss_cross() {
     row[90] = true;
     assert_eq!(notice_step(&row), Some(b"\x1b[A".as_slice()));
     assert_eq!(notice_step(&[false; 120]), Some(b"\x1b[B".as_slice()));
-}
-
-/// Walks keyboard focus to the notice row carrying `code`
-/// (conversation door): Shift+Tab enters navigate mode, then each step
-/// writes Up from the notice's own dismiss cross and Down otherwise,
-/// waiting for the focus look to move each time. Returns only when the
-/// row carrying `code` has its second cell reversed, so the box spans
-/// the row past the grip and Enter opens it; never writes Enter, so it
-/// never dismisses. Every wait goes through `wait_screen` under the
-/// run's one deadline.
-#[track_caller]
-fn focus_notice(run: &mut support::pty::Run, code: &str) {
-    run.write(b"\x1b[Z");
-    let mut grid = run.wait_screen("a focused row", |grid| {
-        let (_, rows) = grid.size();
-        (0..rows).any(|y| has_focus_look(grid, y))
-    });
-    let (_, rows) = grid.size();
-    for _ in 0..=rows {
-        let y = u16::try_from(
-            grid.rows
-                .iter()
-                .position(|row| row.contains(code))
-                .expect("the notice row"),
-        )
-        .expect("the notice row fits in u16");
-        // Done only on the box, so Enter never dismisses.
-        let (cols, _) = grid.size();
-        let row: Vec<bool> = (0..cols).map(|x| grid.cell(x, y).inverse).collect();
-        let Some(key) = notice_step(&row) else {
-            return;
-        };
-        run.write(key);
-        let before = reversed_cells(&grid);
-        grid = run.wait_screen("the focus moved", |next| reversed_cells(next) != before);
-    }
-    panic!(
-        "the focus walk reached no notice row carrying {code}; screen:\n{}",
-        grid.contents
-    );
 }
 
 /// Spawns `fiber resume <id> --credential <label>` on a terminal.
@@ -2703,6 +2633,83 @@ fn session_model_changed(setup: &support::Setup) -> String {
         }
     }
     format!("session model_changed: {switches:?}")
+}
+
+/// The resume run's list state for a stall report, so a no-row expiry
+/// says whether the row was never written or the feed never reached
+/// it: the session dir entries prove the row's source on disk, and the
+/// hub socket proves the hub bound its socket (it binds before its
+/// feed starts). The recent names say whether `recent.jsonl` at the top
+/// of Fiber home (`docs/state.md`) holds the exited row: only the
+/// `name` field is read, never any prompt text beside it. The hub log
+/// says how far the hub got. Reads under construction are absent,
+/// never failures: a missing dir, recent file or log reads as empty.
+fn resume_list_state(setup: &support::Setup) -> String {
+    let mut entries: Vec<String> = fs::read_dir(sessions(setup))
+        .map(|dirs| {
+            dirs.filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    let recent = match fs::read_to_string(setup.home().join("recent.jsonl")) {
+        Err(_) => "absent (no recent.jsonl)".to_owned(),
+        Ok(text) => {
+            let mut names: Vec<String> = text
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|row| row.get("name")?.as_str().map(str::to_owned))
+                .filter(|name| !name.is_empty())
+                .collect();
+            names.sort();
+            if names.is_empty() {
+                "absent (no name in recent.jsonl)".to_owned()
+            } else {
+                format!("{names:?}")
+            }
+        }
+    };
+    format!(
+        "hub socket present: {}; sessions: {entries:?}; recent names: {recent}; hub log:\n{}",
+        setup.hub_socket().exists(),
+        setup.hub_log(),
+    )
+}
+
+#[test]
+fn resume_list_state_reports_recent_names() {
+    let setup = support::Setup::new();
+    fs::write(
+        setup.home().join("recent.jsonl"),
+        "{\"session_id\":\"s1\",\"name\":\"first\",\"content\":\"secret-prompt-text\"}\n",
+    )
+    .unwrap();
+    let report = resume_list_state(&setup);
+    assert!(
+        report.contains("first"),
+        "the report names the recent row: {report}"
+    );
+    assert!(
+        !report.contains("secret-prompt-text"),
+        "the report reads only the name field: {report}"
+    );
+}
+
+#[test]
+fn resume_list_state_reports_absent_recent() {
+    let setup = support::Setup::new();
+    let report = resume_list_state(&setup);
+    assert!(
+        report.contains("no recent.jsonl"),
+        "the report says the file is absent: {report}"
+    );
+    fs::write(setup.home().join("recent.jsonl"), "{}\n").unwrap();
+    let report = resume_list_state(&setup);
+    assert!(
+        report.contains("no name"),
+        "the report says no name is present: {report}"
+    );
 }
 
 /// The Session card keeps the old chips through the send: some row still

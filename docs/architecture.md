@@ -48,7 +48,8 @@ ephemeral event where it is display-only.
 |---|---|
 | `contract` | The vocabulary every other module speaks: what an event looks like, what a command looks like, and what a tool, a provider and a hook must each be able to do, and the clock seam and the `Cancel` trait, re-exported from `support`. It contains no behaviour beyond checking that a value fits the vocabulary, and pure conversions of its own values, such as a wall time to milliseconds or to a UTC date. Parsing a command line (`CommandLine::deserialize`) and matching an answer to an interaction (`Interaction::fit`) count as checking that a value fits. |
 | `support` | Small shared mechanisms with no domain knowledge: the `Clock` and `Wake` traits, which `contract::clock` re-exports, the `Cancel` trait, which `contract::tool` re-exports, and its token, the process clock, the manual clock, the test deadline, the clock-parked wait, the process-group guard, the process ancestry reader (a socket's peer pid, and a process's parent and arguments), the poison-ignoring `lock`, the admission lock, the stoppable read, the line framing, the lowercase `hex` and the SHA-256 `sha256_hex`, and the `mint` id, the atomic file write `write_atomic`, and the scrubbed `git` command builder. |
-| `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching, and writes the diagnostic files in `logs/`. Its `diag` module holds the operation timer (`log::diag::timed`) every timed place goes through. |
+| `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching. |
+| `diag` | The diagnostics leaf: the writer behind the per-process files in `logs/`, the operation timer (`diag::timed`) every timed place goes through, and the usage, rate and allocation folds. `log` re-exports its paths, and `tui` depends on it instead of on `log`. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
 | `tools` | Runs the built-in tools that act on the workspace and the session: shell, file edits, search, web fetch, `ask_user`, session messaging and `tool_search`. Reached only through the tool seam. |
@@ -81,8 +82,9 @@ extension talks to `contract`, not to `loop`.
 `support` depends on nothing in the workspace, and every crate may depend on
 it; the rules below leave it out because it holds no domain knowledge.
 `contract` depends on nothing and everything but `picture` depends on it.
-`picture` depends on nothing in the workspace. `log` and
-`config` depend only on `contract`. `provider`, `tools`, `mcp`, `jobs` and
+`picture` depends on nothing in the workspace. `config`
+depends only on `contract`. `diag` depends only on `contract`. `log` depends
+on `contract` and `diag`. `provider`, `tools`, `mcp`, `jobs` and
 `extensions` depend on `contract` and never on `loop`, on each other, or on
 `tui`. `extensions` also depends on `config`, for what an extension reads
 while it runs; `tools` also depends on `config`, for where a project's
@@ -90,11 +92,13 @@ protected-path state lives in Fiber home. `extensions` also depends on
 `log`'s reading side, to replay the log to watchers at session end and to
 derive the project key. `loop`
 depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
-or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
+or `main`. `hub` and `doors` depend on `contract` and on `log`'s reading
 side, the functions `log` exports for reading (taking the lock, deleting a
 log and opening a file by path stay in `log`), and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
-`extensions`. `doors` also depends on `config` and `net` for the hub client.
-`tui` also depends on `log` for the diagnostic writer. `cli` depends on `contract`, `log`, `config`, `doors` and
+`extensions`. `tui` depends on `contract` and on `diag`, which holds the
+diagnostic writer, and never on `loop`, `provider`, `tools`, `mcp`, `jobs`,
+`extensions` or `log`. `doors` also depends on `config` and `net` for the hub client.
+`cli` depends on `contract`, `log`, `config`, `doors` and
 `extensions`, and never on `loop`. `worktree` depends only on `contract`, and
 `jobs`, `doors` and `cli` may depend on it. `net` depends only on `contract`
 and ureq's TLS stack, the crates already in its tree through ureq included,

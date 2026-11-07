@@ -410,6 +410,10 @@ pub(crate) fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::AddDirectory(args, ack));
         }
+        Command::Sandbox(args) => {
+            let ack = inbox_ack(conn, id);
+            conn.gate.deliver(Delivery::Sandbox(args, ack));
+        }
         Command::Handoff(args) => {
             let ack = inbox_ack(conn, id.clone());
             conn.gate.deliver(Delivery::Handoff(id, args, ack));
@@ -1212,6 +1216,7 @@ pub(crate) fn session_command_refusal(
         Command::Prompt(_) => "prompt",
         Command::Steer(_) => "steer",
         Command::Reply(_) => "reply",
+        Command::Sandbox(_) => "sandbox",
         Command::Subscribe(_)
         | Command::SteerDrop(_)
         | Command::Message(_)
