@@ -641,9 +641,9 @@ fn a_non_model_key_skips_the_model_check() {
     setup.set(Layer::Global, "roles.fast", "zz/top").unwrap();
 }
 
-/// The edit-count pins moved with the shared `distance` helper they pin
-/// (`extensions::providers::suggest`); the closest-model pins above keep
-/// covering the CLI's own ranking through it.
+// The edit-count pins moved with the shared `distance` helper they pin
+// (`extensions::providers::suggest`); the closest-model pins above keep
+// covering the CLI's own ranking through it.
 
 /// As [`install`], with model `m` at `https://{workspace}/v1` read through
 /// `placeholders`: no `env` naming means the process environment can never
