@@ -2203,29 +2203,28 @@ fn refreshed_tools_share_one_resolve() {
     delegates.set_resolve(resolve);
     // The stored snapshot is what the declared tools read: a fresh
     // spawn tool never meets a stale models text, or the reverse.
-    let snapshot = delegates.resolve_snapshot();
-    let (spawn, models) = delegates.tools_with(&snapshot);
+    let (spawn, models) = delegates.tools_with();
     assert_eq!(
-        spawn.resolve.catalogue.to_string(),
+        spawn.resolve().catalogue.to_string(),
         "Roles: none\nReferences:\nfiber:fake/m (thinking: high)"
     );
     assert_eq!(
-        models.catalogue.to_string(),
-        spawn.resolve.catalogue.to_string()
+        models.catalogue().to_string(),
+        spawn.resolve().catalogue.to_string()
     );
     assert_eq!(
-        (spawn.resolve.lookup)("fiber:fake/m:high"),
+        (spawn.resolve().lookup)("fiber:fake/m:high"),
         Ok("fake/m:high".to_owned())
     );
     // The declared tools read the same snapshot: both carry the fresh
     // catalogue, and neither holds the wired-in stub.
     assert_eq!(
         delegates.tool().resolve().catalogue.to_string(),
-        models.catalogue.to_string()
+        models.catalogue().to_string()
     );
     assert_eq!(
         delegates.models().catalogue().to_string(),
-        models.catalogue.to_string()
+        models.catalogue().to_string()
     );
 }
 

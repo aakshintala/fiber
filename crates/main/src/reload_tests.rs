@@ -685,6 +685,49 @@ fn provider_reload_refreshes_the_spawn_catalogue() {
     );
 }
 
+/// A reload installs live delegate tools, so a later switch moves the
+/// already-installed pair: the installed models text leads with the
+/// switched session model, not the reload-time one. Snapshot-bound
+/// tools would still name the reload-time model here.
+#[test]
+fn reload_then_switch_moves_the_installed_models_tool() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    fixture.rewrite_fake_models(fake_models_with_levels());
+    fixture.touch_fake_source();
+    let prepared = fixture.prepare();
+    // The installed set holds the reload's pair before it runs, as the
+    // loop adopts it.
+    let models = Arc::clone(prepared_tool(&prepared.tools, "delegate_models"));
+    (prepared.installed)();
+    // The reload-time session model leads the installed text.
+    let text = tool_text(&models, &serde_json::Map::new());
+    assert!(
+        text.starts_with("Session model: fiber:scripted/s.json\n"),
+        "{text}"
+    );
+    // The switch rebuilds the resolver around the new model and swaps
+    // the stored snapshot whole, as `publish_resolve` does.
+    let config = crate::test_support::load(
+        &fixture.rig.home,
+        &fixture.rig.workspace,
+        "test",
+        Vec::<String>::new(),
+    );
+    let (providers, _) = extensions::Providers::load(&fixture.rig.home).unwrap();
+    fixture.delegates.set_resolve(crate::delegates::resolver(
+        &providers,
+        &config,
+        "fake/plain",
+    ));
+    // The already-installed tool follows the switch.
+    let text = tool_text(&models, &serde_json::Map::new());
+    assert!(
+        text.starts_with("Session model: fiber:fake/plain\n"),
+        "{text}"
+    );
+}
+
 #[test]
 fn provider_reload_failure_keeps_the_old_catalogue() {
     let mut fixture = Fixture::new();

@@ -198,26 +198,12 @@ impl Delegates {
         support::lock(&self.resolve).clone()
     }
 
-    /// Both delegate tools built from one resolver snapshot: the reload
-    /// publishes the pair, so a fresh spawn tool never meets a stale
-    /// models text, or the reverse.
-    pub(crate) fn tools_with(
-        &self,
-        resolve: &jobs::Resolve,
-    ) -> (jobs::DelegateSpawn, jobs::DelegateModels) {
-        let spawn = jobs::DelegateSpawn {
-            wiring: self.wiring(),
-            resolve: resolve.clone(),
-        };
-        let quota = self.quota.clone();
-        let models = jobs::DelegateModels {
-            catalogue: Arc::clone(&resolve.catalogue),
-            quota: Arc::new(move || match quota {
-                Some(ref reader) => quota_text(&reader()),
-                None => String::from("Quota: none"),
-            }),
-        };
-        (spawn, models)
+    /// Both delegate tools live over the stored snapshot: the reload
+    /// publishes the pair, and the install's `set_resolve` moves both
+    /// at once, so a fresh spawn tool never meets a stale models text,
+    /// or the reverse — and a later switch moves them again.
+    pub(crate) fn tools_with(&self) -> (LiveSpawn, LiveModels) {
+        (self.tool(), self.models())
     }
 
     fn wiring(&self) -> jobs::DelegateWiring {
