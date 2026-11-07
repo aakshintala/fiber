@@ -18,6 +18,10 @@ cd "$(git rev-parse --show-toplevel)"
 top=$PWD
 
 tmp=$(mktemp -d)
+# mktemp keeps the logical spelling of a symlinked TMPDIR while git
+# rev-parse reports the physical path, so resolve the fixture dir once
+# here and compare physical against physical below.
+tmp=$(cd "$tmp" && pwd -P)
 trap 'rm -rf "$tmp"' EXIT
 
 fail() {
