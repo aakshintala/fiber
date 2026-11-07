@@ -696,7 +696,6 @@ line = json.loads(sys.argv[2])
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 s.connect(path)
 f = s.makefile("r")
-f.readline()
 
 
 def wait_for(cid):
