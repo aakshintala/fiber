@@ -668,7 +668,7 @@ fn a_written_but_undrained_answer_waits_out_the_bound() {
                     &hub,
                     &writer,
                     &web,
-                    "command_accepted",
+                    contract::HubEventKind::CommandAccepted,
                     serde_json::Map::from_iter([(
                         "command_id".to_owned(),
                         Value::String("c_1".to_owned()),
@@ -745,7 +745,7 @@ fn an_unwritten_answer_with_a_drained_web_still_waits() {
                     &hub,
                     &writer,
                     &web,
-                    "command_accepted",
+                    contract::HubEventKind::CommandAccepted,
                     serde_json::Map::from_iter([(
                         "command_id".to_owned(),
                         Value::String("c_2".to_owned()),

@@ -66,13 +66,13 @@ fn app_with_files() -> App {
     app.attach(SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.set_size(80, 24);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     }));
     app.on_line(Line::Session(Envelope {
-        kind: EventKind::ToolCallCompleted.name().to_owned(),
+        kind: EventKind::ToolCallCompleted,
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: SCHEMA_VERSION,
@@ -112,7 +112,7 @@ fn app_with_diff() -> App {
     let request: serde_json::Value = serde_json::from_str(&lines[0])
         .unwrap_or_else(|error| panic!("shell request JSON: {error}"));
     app.on_line(Line::Session(Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: SCHEMA_VERSION,

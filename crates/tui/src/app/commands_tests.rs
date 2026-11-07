@@ -38,7 +38,7 @@ fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
         assert_eq!(app.draft(), "keep this draft");
         assert!(app.home_screen().unwrap().picker.is_some());
         app.on_line(Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: contract::HubEventKind::HubHello,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -670,7 +670,7 @@ fn report_keys_keep_the_held_conversation_position() {
     app.set_size(80, 24);
     // One durable row for the held anchor to name.
     let held = Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: contract::events::EventKind::TurnStarted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -986,7 +986,7 @@ fn a_rejected_close_gives_only_its_notice_on_the_home_draft() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/close"));
     let rejected = contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: contract::HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": lines[0]["id"], "code": "busy", "message": "Busy."})

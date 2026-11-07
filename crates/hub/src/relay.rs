@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use contract::diag::DebugLog;
-use contract::{CommandId, ErrorCode, SessionId};
+use contract::{CommandId, ErrorCode, HubEventKind, SessionId};
 use serde_json::{Map, Value};
 
 mod ack;
@@ -1001,7 +1001,7 @@ fn replay_exited_delegate(
     let mut payload = Map::new();
     payload.insert("command_id".into(), Value::String(id.0.clone()));
     payload.insert("result".into(), Value::Object(result));
-    let mut preloaded = crate::connection::line(hub, "command_accepted", payload);
+    let mut preloaded = crate::connection::line(hub, HubEventKind::CommandAccepted, payload);
     preloaded.push(b'\n');
     for line in &fold {
         let Ok(bytes) = serde_json::to_vec(line) else {
@@ -1693,7 +1693,12 @@ fn relay(
                             if let Some(last_seq) = ack.last_seq {
                                 payload.insert("last_seq".into(), Value::from(last_seq));
                             }
-                            crate::connection::send(writer, hub, "stream_reopened", payload);
+                            crate::connection::send(
+                                writer,
+                                hub,
+                                HubEventKind::StreamReopened,
+                                payload,
+                            );
                         }
                     }
                     // The filter hook above already ran: waiting on the
@@ -1780,7 +1785,7 @@ fn relay(
                                 if let Some(id) = answered.clone() {
                                     let mut rejection = crate::connection::line(
                                         hub,
-                                        "command_rejected",
+                                        HubEventKind::CommandRejected,
                                         crate::connection::rejection(
                                             Some(&CommandId(id.clone())),
                                             &refused.code,
@@ -1810,7 +1815,7 @@ fn relay(
                         // below writes the rejection in command order.
                         let mut rejection = crate::connection::line(
                             hub,
-                            "command_rejected",
+                            HubEventKind::CommandRejected,
                             crate::connection::rejection(
                                 Some(&CommandId(id.clone())),
                                 &ErrorCode::Indeterminate,

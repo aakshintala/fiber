@@ -241,7 +241,7 @@ fn frame_backend_flush_drains_buffered_bytes() {
 /// One session line of `kind`, numbered `seq`.
 fn envelope(kind: &str, action: Option<&str>, payload: serde_json::Value, seq: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

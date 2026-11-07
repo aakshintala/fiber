@@ -14,7 +14,7 @@ use crate::feed::{Closer, Fanout, WriterEnd, close_connections};
 
 use contract::clock::{Clock, wall_ms};
 use contract::events::{SessionState, SessionStatus};
-use contract::{HubLine, RequestId, SCHEMA_VERSION};
+use contract::{HubEventKind, HubLine, RequestId, SCHEMA_VERSION};
 use serde_json::{Map, Value};
 use support::lock;
 
@@ -323,7 +323,7 @@ fn line_for(session: &str, now: &SessionStatus, reason: Reason, ts: u64) -> crat
     }
     payload.insert("workspace".to_owned(), Value::String(now.workspace.clone()));
     crate::feed::to_line(&HubLine {
-        kind: "attention".to_owned(),
+        kind: HubEventKind::Attention,
         ts,
         schema_version: SCHEMA_VERSION,
         payload,

@@ -58,7 +58,7 @@ fn homed(width: u16, height: u16) -> App {
 /// One session envelope.
 fn envelope(kind: &str, payload: Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -207,7 +207,7 @@ fn linked(app: &mut App) -> (String, String) {
 /// A hub `command_accepted` for `id` with `result`.
 fn accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -418,7 +418,7 @@ fn alt_0_goes_home_on_the_on_screen_sessions_row() {
 /// A `session_left` hub line for `session`, exited.
 fn left(session: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::SessionLeft.name().to_owned(),
+        kind: HubEventKind::SessionLeft,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session, "how": "exited"})

@@ -90,7 +90,7 @@ fn keyed(app: &mut App, entries: &[(&str, Value)]) {
 /// One session envelope on [`SESSION`].
 fn envelope(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

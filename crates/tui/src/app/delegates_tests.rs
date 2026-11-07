@@ -42,7 +42,7 @@ fn panel_app(names: &[&str]) -> App {
 /// One envelope of the attached session.
 fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -245,7 +245,7 @@ fn home() -> App {
 /// A `hub_hello` this terminal reads.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -290,7 +290,7 @@ fn live(session: &str, state: Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -316,7 +316,7 @@ fn delegate_status(session: &str, parent: &str, state: Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -421,7 +421,7 @@ fn session_accepted(session: &str, id: &str) -> Line {
     let mut payload = serde_json::Map::new();
     payload.insert("command_id".to_owned(), Value::String(id.to_owned()));
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -440,7 +440,7 @@ fn session_refused(session: &str, id: &str) -> Line {
 /// A session `command_rejected` for `id` from `session` with `code`.
 fn session_refused_with(session: &str, id: &str, code: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandRejected.name().to_owned(),
+        kind: EventKind::CommandRejected,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -193,7 +193,7 @@ fn attached() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(100, 24);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::default(),
@@ -205,7 +205,7 @@ fn attached() -> App {
 /// A `notice` line for `session`.
 fn notice(session: &str, message: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::Notice.name().to_owned(),
+        kind: EventKind::Notice,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -245,7 +245,7 @@ fn hub_refused(id: &str, code: Option<&str>, message: &str) -> Line {
         serde_json::Value::String(message.to_owned()),
     );
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload,
@@ -255,7 +255,7 @@ fn hub_refused(id: &str, code: Option<&str>, message: &str) -> Line {
 /// A session `command_rejected` for `id` on `session` with `code`.
 fn session_refused(session: &str, id: &str, code: &str, message: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandRejected.name().to_owned(),
+        kind: EventKind::CommandRejected,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -385,7 +385,7 @@ fn a_history_refusal_keeps_its_code() {
     app.set_size(100, 24);
     app.set_project("key".to_owned());
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::default(),

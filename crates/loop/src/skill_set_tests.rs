@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, OnceLock, mpsc};
 
 use contract::ErrorCode;
 use contract::events::{
-    Environment, Event, Notice, OpeningMessage, SkillListed, SkillSource, SkillsChanged,
+    Environment, Event, EventKind, Notice, OpeningMessage, SkillListed, SkillSource, SkillsChanged,
 };
 use contract::skills::Skills;
 use contract::{Envelope, Seq, SessionId};
@@ -301,7 +301,7 @@ fn shared_reader(disabled: Arc<Mutex<Vec<String>>>) -> DisabledReader {
 /// A `skills_changed` line for `event`, as the log holds it.
 fn line(kind: &str, event: &Event) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_test".into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,

@@ -39,7 +39,7 @@ fn home(attention: Attention) -> App {
 /// One waiting `attention` line for `s_aaaaaaaaaaaaaaaa`.
 fn waiting() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::Attention.name().to_owned(),
+        kind: HubEventKind::Attention,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({
@@ -95,7 +95,7 @@ fn settings_come_from_home() {
 fn a_line_that_does_not_parse_queues_nothing() {
     let mut app = home(Attention::default());
     let broken = Line::Hub(contract::HubLine {
-        kind: HubEventKind::Attention.name().to_owned(),
+        kind: HubEventKind::Attention,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": "s_aaaaaaaaaaaaaaaa"})
@@ -123,7 +123,7 @@ fn live(session: &str, state: serde_json::Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -165,7 +165,7 @@ fn attention(session: &str, reason: &str) -> Line {
         payload["summary"] = serde_json::json!("approval: Run cargo test");
     }
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::Attention.name().to_owned(),
+        kind: HubEventKind::Attention,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().cloned().unwrap_or_default(),
@@ -175,7 +175,7 @@ fn attention(session: &str, reason: &str) -> Line {
 /// A hub `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::SessionLeft.name().to_owned(),
+        kind: HubEventKind::SessionLeft,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session, "how": how})

@@ -115,7 +115,7 @@ fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 24);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -132,7 +132,7 @@ fn started_with_image(app: &mut App, path: &str) {
 /// Folds a turn on `session` whose prompt carried an image at `path`.
 fn started_with_image_in(app: &mut App, session: &str, path: &str) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: contract::events::EventKind::TurnStarted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -169,7 +169,7 @@ fn inline_app() -> App {
         ..Default::default()
     });
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -228,7 +228,7 @@ fn click(app: &mut App) -> String {
 /// Answers `read_file` `id` with `result`.
 fn accept(app: &mut App, id: &str, result: Value) -> Vec<String> {
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "result": result})
@@ -241,7 +241,7 @@ fn accept(app: &mut App, id: &str, result: Value) -> Vec<String> {
 /// Rejects `read_file` `id` with `message`.
 fn reject(app: &mut App, id: &str, message: &str) -> Vec<String> {
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: contract::HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "code": "not_found", "message": message})
@@ -505,7 +505,7 @@ fn a_fetch_blocks_only_its_own_session_and_path() {
 /// pages, as paged history would.
 fn ancestor_image(app: &mut App, path: &str) {
     let envelope = contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: contract::events::EventKind::TurnStarted,
         session_id: contract::SessionId(OTHER.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1054,7 +1054,7 @@ fn start_fiber_delegate(app: &mut App, job: &str, delegate: &str) {
         ),
     ] {
         app.on_line(Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: contract::events::EventKind::from_name(kind),
             session_id: contract::SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -1312,7 +1312,7 @@ fn a_redraw_after_a_dropped_transmit_reasks_with_one_tag() {
 fn a_non_png_draw_asks_for_no_bytes() {
     let mut app = inline_app();
     app.on_line(Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: contract::events::EventKind::TurnStarted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1351,7 +1351,7 @@ fn converting_app() -> App {
         ..Default::default()
     });
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1364,7 +1364,7 @@ fn converting_app() -> App {
 /// Folds a turn on `session` whose prompt carried a JPEG image at `path`.
 fn started_with_jpeg_in(app: &mut App, session: &str, path: &str) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: contract::events::EventKind::TurnStarted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

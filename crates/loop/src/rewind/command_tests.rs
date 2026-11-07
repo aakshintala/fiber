@@ -9,13 +9,14 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use contract::events::EventKind;
 use contract::{ActionId, Envelope, Seq, SessionId};
 
 use super::{Target, point_for, valid_session_id};
 
 fn line(kind: &str, seq: u64, action: Option<&str>) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_0123456789abcdef".into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,

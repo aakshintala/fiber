@@ -829,7 +829,7 @@ pub(crate) fn envelope_line(
         .to_vec(),
         context::ProcessRun::Session { session_id, .. } => {
             let envelope = contract::Envelope {
-                kind: kind.name().to_owned(),
+                kind: contract::events::EventKind::from_name(kind.name()),
                 session_id,
                 ts: contract::clock::wall_ms(shared.clock.wall()),
                 schema_version: contract::SCHEMA_VERSION,

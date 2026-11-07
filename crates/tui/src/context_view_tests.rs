@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 fn envelope(kind: &str, action: Option<&str>, payload: Value) -> Envelope {
     Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_1".to_owned()),
         ts: 0,
         schema_version: SCHEMA_VERSION,

@@ -173,7 +173,7 @@ struct AuthenticationAnswer {
 impl From<HubLine> for AuthenticationAnswer {
     fn from(line: HubLine) -> Self {
         Self {
-            kind: HubEventKind::from(line.kind),
+            kind: line.kind,
             payload: line.payload,
         }
     }
