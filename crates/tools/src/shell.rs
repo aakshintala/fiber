@@ -599,8 +599,9 @@ impl Shell {
             (Some(_), Mode::Terminal { .. }) => command::MovePolicy::Terminal,
             (Some(_), Mode::Monitor) => command::MovePolicy::Monitor,
         };
-        // `None` only for an `in_background()` call with no `timeout_ms`,
-        // which has no timeout.
+        // `None` is a call with no timeout: an `in_background()` call with
+        // no `timeout_ms`, or a person's own foreground call with no
+        // `timeout_ms`.
         let limit: Option<Limit> = parsed.timeout_ms.map(|ms| Limit {
             ms,
             monitor: parsed.mode == Mode::Monitor,
@@ -735,7 +736,8 @@ struct Parsed {
     command: String,
     workdir: PathBuf,
     /// The command's timeout: `timeout_ms`, or a monitor's deadline. `None`
-    /// is a background call with no `timeout_ms`, which has no timeout.
+    /// is a call with no timeout: a background call with no `timeout_ms`,
+    /// or a person's own foreground call with no `timeout_ms`.
     timeout_ms: Option<u64>,
     mode: Mode,
     /// Whether the call leaves the OS sandbox: only a literal
@@ -787,9 +789,10 @@ impl Mode {
 
 /// How long a command may run, and whether it is a monitor's deadline,
 /// which a timeout names as such (`docs/tools.md`, "Background jobs").
-/// `None` in place of a limit is a background call with no `timeout_ms`,
-/// which has no timeout: the drive never stops it, so a stop always has a
-/// limit in hand.
+/// `None` in place of a limit is a call with no timeout: a background
+/// call with no `timeout_ms`, or a person's own foreground call with no
+/// `timeout_ms`. The drive never stops it, so a stop always has a limit in
+/// hand.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limit {
     /// Milliseconds.

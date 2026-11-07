@@ -1,11 +1,13 @@
-//! The person's `!` command has no timeout while the agent's `shell` keeps
-//! its own (`docs/testing.md`, "Levels"): a socket-level combined proof on
-//! the built `fiber` (an agent `sleep 5` with `timeout_ms: 1000` fails
-//! `timeout` while a driver `sleep 5` completes), plus a literal pty test
-//! typing `!sleep 5` and asserting the sent row. Reuses the `fiber session`
-//! patterns of `driver_shell_sent.rs`: the fixture, the held provider, one
+//! The person's driver command has no timeout while the agent's `shell`
+//! keeps its own (`docs/testing.md`, "Levels"): a socket-level combined
+//! proof on the built `fiber`, plus a literal pty test typing `!sleep 5`
+//! under a 1 s agent timeout and asserting the sent row. The agent blocks
+//! on a fifo nothing releases, so only its `timeout_ms: 1000` can end it;
+//! the driver blocks on a fifo the test releases after that timeout fires,
+//! then completes. Reuses the `fiber session` patterns of
+//! `driver_shell_sent.rs`: the fixture, the held provider, one
 //! [`Deadline`], no sleeps and no env vars; and the pty `Run`/`wait_screen`
-//! sent-row pattern of `shell_look.rs`. `sleep 5` sits below the 25-second
+//! sent-row pattern of `shell_look.rs`. `!sleep 5` sits below the 25-second
 //! bare-wait refusal, so the guard is not in play for any test here.
 
 #![allow(
@@ -19,7 +21,7 @@
 mod support;
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
@@ -27,8 +29,8 @@ use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::pty::Run;
 use support::{
-    Running, Setup, Socket, TRUECOLOUR, expired, function_call, hello, recv_answer, stream,
-    subscribe_direct, until_after, until_close, write_json,
+    Running, Setup, Socket, TRUECOLOUR, expired, function_call, hello, stream, subscribe_direct,
+    until_after, until_close, write_json,
 };
 
 #[track_caller]
@@ -109,16 +111,41 @@ fn exit_cleanly(running: Running) {
     watchdog.stand_down(deadline.cleanup_phase());
 }
 
+/// Single-quotes `path` for a shell command, as in `driver_shell_sent.rs`.
+fn shell_quote(path: &std::path::Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\"'\"'"))
+}
+
 #[test]
 fn agent_shell_timeout_stands_while_driver_shell_has_none() {
     let setup = Setup::new();
+    // Two blocked reads, no sleeps: the agent call blocks on a fifo nothing
+    // ever releases, so only its 1 s timeout can end it; the driver call
+    // blocks on a fifo the test holds open and releases after that timeout
+    // fires (`docs/testing.md`, "Waits and timeouts").
+    let agent_fifo = setup.workspace().join("agent-block");
+    let driver_fifo = setup.workspace().join("driver-block");
+    fakes::fifo(&agent_fifo);
+    fakes::fifo(&driver_fifo);
+    // Held open for reading and writing: the open never blocks, and the
+    // held writer lets the driver's later reader open succeed at once, so
+    // the test releases the driver call with a line whenever it chooses.
+    // `read` returns after one line with no EOF, so the hold stays open
+    // past the release (`docs/testing.md`, "Waits and timeouts").
+    let mut driver_hold = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&driver_fifo)
+        .unwrap();
+    let agent_command = format!("cat {}", shell_quote(&agent_fifo));
+    let driver_command = format!("read -r _ < {}", shell_quote(&driver_fifo));
     let server = ProviderServer::start([
         // A pending approval lets the loop drain shell deliveries without
         // ending the turn (docs/testing.md, "Waits and timeouts").
         stream(&[function_call(
             "call_1",
             "shell",
-            &json!({"command": "sleep 5", "timeout_ms": 1000}),
+            &json!({"command": agent_command, "timeout_ms": 1000}),
         )]),
         hello(),
     ])
@@ -128,7 +155,7 @@ fn agent_shell_timeout_stands_while_driver_shell_has_none() {
         setup.home().join("rules"),
         format!(
             "{}\n",
-            json!({"decision": "ask", "tool": "shell", "prefix": "sleep"})
+            json!({"decision": "ask", "tool": "shell", "prefix": "cat"})
         ),
     )
     .unwrap();
@@ -162,32 +189,18 @@ fn agent_shell_timeout_stands_while_driver_shell_has_none() {
     });
     let request = asked.last().unwrap()["payload"]["request_id"].clone();
 
-    // The person's `!sleep 5` travels the exact bytes the terminal sends
+    // The person's command travels the exact shape the terminal sends
     // for it (`crates/tui/src/shell.rs`, `command()`). It runs while the
     // turn waits for the approval, exactly as in `driver_shell_sent.rs`.
     client.send(
         &json!({"id": "c_bang", "command": "shell",
-            "args": {"command": "sleep 5", "send": true}})
+            "args": {"command": driver_command.as_str(), "send": true}})
         .to_string(),
     );
-    let lines = until_after(&client, &sub, "the live shell delivery", |line| {
-        line["kind"] == "shell_command" && line["payload"]["command"] == json!("sleep 5")
-    });
-    let logged = lines.last().unwrap();
-    assert_eq!(logged["payload"]["command"], json!("sleep 5"));
-    assert_eq!(logged["payload"]["process"]["exit_code"], 0);
-    let output = logged["payload"]["output"].as_str().unwrap();
-    assert!(
-        output.ends_with("Exit code 0.\n"),
-        "the driver output ends with its closing line: {output}"
-    );
-
-    let ack = recv_answer(&client, "c_bang", "the shell acknowledgement");
-    assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    assert!(
-        ack["payload"].get("result").is_none(),
-        "a sent shell answers with no result: {ack}"
-    );
+    // Sent before the allow below, so the session admits it before the
+    // agent call starts; it then blocks on its fifo, outliving the agent's
+    // bound. Its answer arrives with its delivery, read in the compound
+    // wait below.
 
     // The agent call runs under its own 1 s timeout and fails there.
     client.send(
@@ -221,10 +234,55 @@ fn agent_shell_timeout_stands_while_driver_shell_has_none() {
         "the agent timeout names its bound: {agent_text}"
     );
 
+    // The agent's bound fired while the driver call stayed blocked. Release
+    // it with a line: `read` with exit 0 proves it read that line, so the
+    // call completes on this release — admitted before the timeout,
+    // completed after.
+    writeln!(driver_hold, "go").unwrap();
+
     server.release();
-    until_after(&client, &sub, "the turn completed", |line| {
-        line["kind"] == "turn_completed"
-    });
+    // One wait takes all three lines: each `until_after` consumes every
+    // line it reads, so separate waits would eat each other's evidence.
+    let mut delivered: Option<Value> = None;
+    let mut ended = false;
+    let mut answered: Option<Value> = None;
+    until_after(
+        &client,
+        &sub,
+        "the driver delivery, its answer and the turn end",
+        |line| {
+            if line["kind"] == "shell_command"
+                && line["payload"]["command"].as_str() == Some(driver_command.as_str())
+            {
+                delivered = Some(line.clone());
+            }
+            if line["kind"] == "turn_completed" {
+                ended = true;
+            }
+            if line["kind"] == "command_accepted"
+                && line["payload"]["command_id"].as_str() == Some("c_bang")
+            {
+                answered = Some(line.clone());
+            }
+            delivered.is_some() && ended && answered.is_some()
+        },
+    );
+    let logged = delivered.expect("the driver delivery arrives with the turn");
+    assert_eq!(logged["payload"]["command"], json!(driver_command.as_str()));
+    assert_eq!(logged["payload"]["process"]["exit_code"], 0);
+    let output = logged["payload"]["output"].as_str().unwrap();
+    assert!(
+        output.ends_with("Exit code 0.\n"),
+        "the driver output ends with its closing line: {output}"
+    );
+
+    let ack = answered.expect("the sent shell is answered with its delivery");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    assert!(
+        ack["payload"].get("result").is_none(),
+        "a sent shell answers with no result: {ack}"
+    );
+
     // The connection is already subscribed (`subscribe_direct` above: a
     // second subscribe is rejected as already-subscribed), so close on it
     // directly and drain to the exit.
@@ -234,34 +292,42 @@ fn agent_shell_timeout_stands_while_driver_shell_has_none() {
     exit_cleanly(running);
 }
 
-/// The scripted turn behind the pty test: one instant reply, so the
-/// session idles with an empty draft.
-fn script(setup: &Setup) {
+/// The scripted turns behind the pty test: an instant reply idling the
+/// fresh session; then one agent `shell` call with a 1 s timeout, blocked
+/// on a fifo nothing releases, so only that timeout can end its turn; then
+/// an instant reply ending it.
+fn script(setup: &Setup, agent_command: &str) {
     write_json(
         &setup.workspace().join("s.json"),
-        &json!({"steps": [{"text": ["ready"]}]}),
+        &json!({"steps": [{"text": ["ready"]}, {"tool_calls": [
+            {"name": "shell", "arguments": {"command": agent_command, "timeout_ms": 1000}},
+        ]}, {"text": ["ready"]}]}),
     );
 }
 
-/// An attached idle session: started with `go`, settled on its closing
-/// line, the draft empty.
-fn attached(setup: &Setup) -> Run {
+/// An attached session: the first frame's end proves the input reader
+/// runs before any prompt goes out, so no later output gates what the test
+/// types. Returns the run and the offset the turn finished title is waited
+/// from.
+fn attached(setup: &Setup) -> (Run, usize) {
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
     );
+    // A standing allow for the agent's blocking call: it runs unattended,
+    // and only its 1 s timeout can end it (`call_view.rs` pins home/rules
+    // for an attached run).
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "cat"})
+        ),
+    )
+    .unwrap();
     let mut run = Run::spawn(setup, 160, 48, &[], &TRUECOLOUR);
-    run.ready();
-    run.write(b"go\r");
-    run.wait_screen("the idle session", |grid| {
-        grid.rows.iter().any(|row| row.contains("▣ completed"))
-    });
-    run
-}
-
-/// The first row holding `needle`.
-fn find_row(rows: &[String], needle: &str) -> Option<usize> {
-    rows.iter().position(|row| row.contains(needle))
+    let from = run.ready();
+    (run, from)
 }
 
 /// Quits the binary, successfully.
@@ -274,13 +340,33 @@ fn quit(mut run: Run) {
 #[test]
 fn bang_sleep_five_draws_the_sent_row() {
     let setup = Setup::new();
-    script(&setup);
-    let mut run = attached(&setup);
+    // The agent call blocks on a fifo nothing releases: only its 1 s
+    // timeout can end its turn. The person's `!sleep 5` runs past it.
+    let agent_fifo = setup.workspace().join("agent-block");
+    fakes::fifo(&agent_fifo);
+    script(&setup, &format!("cat {}", shell_quote(&agent_fifo)));
+    let (mut run, from) = attached(&setup);
+    // The first prompt idles the fresh session fast: its text step ends
+    // the turn at once. `ready` in `attached` covers `go`, and the turn
+    // finished title gates the person's command, never a grid match alone
+    // (`docs/testing/screens.md`, "Screens").
+    run.write(b"go\r");
+    run.turn_finished(from);
+    // The person's command runs while the prompt stays free, its output
+    // going with the next prompt (`docs/tui.md`, "The input box").
     run.write(b"!sleep 5\r");
+    // The next prompt starts the scripted turn while the person's command
+    // runs. The offset follows the first turn's title, so the wait below
+    // gates this turn's end, never the earlier one (`support/pty.rs`,
+    // `Run::turn_finished`).
+    let from = run.output().len();
+    run.write(b"go\r");
+    // The 1 s agent timeout ends the turn while the person's command runs
+    // on past it.
+    run.turn_finished(from);
     // The sent row: the command, the sent note, then the exit status, in
     // that order. `sleep` prints nothing, so no output row sits between
     // the note and the exit.
-    let mut snapshot: Vec<String> = Vec::new();
     run.wait_screen("the sent shell row", |grid| {
         let rows = grid.rows.clone();
         let command = rows.iter().position(|row| row.contains("! sleep 5"));
@@ -293,24 +379,7 @@ fn bang_sleep_five_draws_the_sent_row() {
             _ => false,
         };
         let settled = !rows.iter().any(|row| row.trim_end().ends_with("shell"));
-        let done = ordered && settled;
-        if done {
-            snapshot = rows;
-        }
-        done
+        ordered && settled
     });
-    let at =
-        |needle: &str| find_row(&snapshot, needle).unwrap_or_else(|| panic!("the {needle} row"));
-    let command = at("! sleep 5");
-    let note = at("sent with your next prompt");
-    let exit = at("exit 0");
-    assert!(
-        command < note && note < exit,
-        "the row reads in order: {snapshot:?}"
-    );
-    assert!(
-        !snapshot.iter().any(|row| row.trim_end().ends_with("shell")),
-        "the marker left with the draft"
-    );
     quit(run);
 }

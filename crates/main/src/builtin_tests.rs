@@ -1412,7 +1412,6 @@ fn driver_shell_has_no_foreground_default() {
         "command".to_owned(),
         serde_json::Value::String("true; sleep 60".to_owned()),
     );
-    let t0 = fake.now();
     let cancel = fakes::CancelToken::new();
     let run_cancel = cancel.clone();
     let (done, finished) = std::sync::mpsc::channel();
@@ -1425,19 +1424,49 @@ fn driver_shell_has_no_foreground_default() {
         Ok(handle) => handle.thread().id(),
         Err(err) => panic!("could not start a thread for the driver call: {err}"),
     };
-    // The agent's foreground default parks exactly one default past start;
-    // a driver call parks with no deadline, so this advance takes nothing.
+    // The start marker: the driver waits on the clock with no deadline. A
+    // parked caller alone never moves the clock (`docs/testing.md`, "Waits
+    // and timeouts"); the park is the signal the assertions below read.
+    let (parked_tx, parked_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("fiber-driver-parked".to_owned())
+        .spawn({
+            let fake = fake.clone();
+            move || {
+                while !fake.parked().contains(&None) {
+                    std::thread::yield_now();
+                }
+                parked_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    Deadline::after(CALL_WITHIN)
+        .recv_or_fail(&parked_rx, "the driver call to wait with no deadline");
+    // The 10-minute foreground default parks nowhere: the driver's only
+    // park carries no deadline. A moved default parks at some instant and
+    // fails the second assertion.
+    let parked = fake.parked();
+    assert!(
+        parked.contains(&None),
+        "the driver call waits with no deadline: {parked:?}"
+    );
+    assert!(
+        !parked.iter().any(|until| until.is_some()),
+        "no foreground default parks the driver call: {parked:?}"
+    );
+    // Advancing past the agent's default moves nothing: the call stays
+    // parked until the cancel below stops it.
     let advance = Duration::from_millis(600_000);
-    match fake.try_advance_when_parked(
-        Some(t0 + advance),
+    fake.advance_when_parked(
+        None,
         Some(driver_thread),
         advance,
-        CALL_WITHIN,
-    ) {
-        Ok(_) => {}
-        Err(fakes::clock::Miss::NoPark) => {}
-        Err(fakes::clock::Miss::Mismatch { .. }) => {}
-    }
+        &Deadline::after(CALL_WITHIN),
+    );
+    assert!(
+        finished.try_recv().is_err(),
+        "the driver call returned after a clock advance with no deadline"
+    );
     cancel.cancel();
     let output =
         Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "the driver call");
