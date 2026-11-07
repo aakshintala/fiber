@@ -6572,22 +6572,27 @@ fn a_completed_wait_on_a_real_registry_returns_the_stored_tail() {
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
-    std::fs::write(dir.path().join(&opened.path), "one\ntwo\nthree\n").unwrap();
+    let printed = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("printf 'one\\ntwo\\nthree\\n'")
+        .output()
+        .unwrap();
+    assert!(printed.status.success());
+    let output_path = dir.path().join(&opened.path);
+    std::fs::write(&output_path, &printed.stdout).unwrap();
+    let tail = String::from_utf8(printed.stdout).unwrap();
     (opened.end.0)(JobCompleted {
         job_id: JobId(id.clone()),
         status: Outcome::Completed,
         error: None,
         process: None,
-        output_tail: Some("one\ntwo\nthree\n".into()),
+        output_tail: Some(tail),
         notice: None,
         changed_by: None,
         protected_paths: None,
     });
     let tool = jobs::JobsTool::new(Arc::clone(&registry));
-    let mut arguments = Map::new();
-    arguments.insert("action".into(), json!("wait"));
-    arguments.insert("job_id".into(), json!(id.clone()));
-    arguments.insert("timeout_ms".into(), json!(0));
+    let arguments = fakes::tool_args(json!({"action": "wait", "job_id": id, "timeout_ms": 0}));
     let output = tool.run(
         &arguments,
         &fakes::CancelToken::new(),

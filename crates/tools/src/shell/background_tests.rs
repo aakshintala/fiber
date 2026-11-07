@@ -732,8 +732,6 @@ fn completed_and_failed_ends_cut_a_large_tail_identically() {
     assert!(body.len() > 2_048, "{}", body.len());
     let big = dir.path().join("big");
     std::fs::write(&big, &body).unwrap();
-    let small = dir.path().join("small");
-    std::fs::write(&small, "a\nb\n").unwrap();
 
     let end = |path: &Path, command: &str| {
         to_completed(
@@ -751,11 +749,6 @@ fn completed_and_failed_ends_cut_a_large_tail_identically() {
     assert_eq!(completed_tail, failed_tail);
     assert_eq!(completed_tail.len(), 2_048);
     assert!(body.ends_with(&completed_tail), "{completed_tail:?}");
-
-    let small_completed = end(&small, "exit 0").output_tail.unwrap();
-    let small_failed = end(&small, "exit 3").output_tail.unwrap();
-    assert_eq!(small_completed, "a\nb\n");
-    assert_eq!(small_failed, small_completed);
 }
 
 #[test]

@@ -14,24 +14,14 @@ use contract::JobId;
 use contract::clock::Clock;
 use contract::events::{JobCompleted, Outcome};
 use contract::jobs::{End, JobRecord, Opening, Stop, Taken};
-use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output, Tool};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, MUST_SUCCEED_WITHIN, Recorder, TempDir};
-use serde_json::{Map, Value, json};
+use fakes::{CancelToken, MUST_SUCCEED_WITHIN, Recorder, TempDir, text_of, tool_args};
+use serde_json::{Value, json};
 
 use super::JobsTool;
 use crate::Registry;
-
-fn args(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
-            panic!("arguments are an object")
-        }
-    }
-}
 
 /// What the output's `Settle` takes: the run's news through its end
 /// mark, once, in queue order.
@@ -39,15 +29,8 @@ fn settled(output: &Output) -> Vec<Taken> {
     (output.settle.clone().expect("an ended answer settles").0)()
 }
 
-fn text_of(output: &Output) -> &str {
-    match output.content.first() {
-        Some(ContentPart::Text { text }) => text,
-        other => panic!("expected text, got {other:?}"),
-    }
-}
-
 fn run(tool: &JobsTool, value: Value, cancel: &dyn Cancel) -> Output {
-    tool.run(&args(value), cancel, &Recorder::default())
+    tool.run(&tool_args(value), cancel, &Recorder::default())
 }
 
 fn setup(clock: Arc<dyn Clock>) -> (TempDir, Arc<Registry>, JobsTool) {
