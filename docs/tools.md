@@ -608,10 +608,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - A call with `run_in_background` true and no `timeout_ms` has no timeout.
   It runs until it exits, until `jobs stop`, or until the session shuts
   down.
-- Any other call with no `timeout_ms` gets 600,000 (10 minutes), except
-  a person's own command. A `!` or `!!` command, or the `shell` driver
-  command, has no timeout: it runs until it exits, until `cancel` stops
-  it, or until the session shuts down. A
+- Any other call with no `timeout_ms` gets 600,000 (10 minutes). A
   foreground command's timeout stays with it after the command moves to the
   background.
 - A detached call takes no `timeout_ms` and has no timeout: neither the

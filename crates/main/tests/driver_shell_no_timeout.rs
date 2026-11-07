@@ -364,22 +364,19 @@ fn bang_sleep_five_draws_the_sent_row() {
     // The 1 s agent timeout ends the turn while the person's command runs
     // on past it.
     run.turn_finished(from);
-    // The sent row: the command, the sent note, then the exit status, in
-    // that order. `sleep` prints nothing, so no output row sits between
-    // the note and the exit.
+    // The sent row: the command, the sent note and the exit status, as a
+    // set. `docs/tui.md` "The input box" promises no order for these
+    // rows, so none is asserted (`docs/testing.md`, "Event streams").
+    // `sleep` prints nothing, so no output row joins the set.
     run.wait_screen("the sent shell row", |grid| {
         let rows = grid.rows.clone();
-        let command = rows.iter().position(|row| row.contains("! sleep 5"));
+        let command = rows.iter().any(|row| row.contains("! sleep 5"));
         let note = rows
             .iter()
-            .position(|row| row.contains("sent with your next prompt"));
-        let exit = rows.iter().position(|row| row.contains("exit 0"));
-        let ordered = match (command, note, exit) {
-            (Some(command), Some(note), Some(exit)) => command < note && note < exit,
-            _ => false,
-        };
+            .any(|row| row.contains("sent with your next prompt"));
+        let exit = rows.iter().any(|row| row.contains("exit 0"));
         let settled = !rows.iter().any(|row| row.trim_end().ends_with("shell"));
-        ordered && settled
+        command && note && exit && settled
     });
     quit(run);
 }

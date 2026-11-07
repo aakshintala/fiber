@@ -1616,7 +1616,9 @@ fn with_no_timeout_parks_without_a_deadline() {
             }
         })
         .unwrap();
-    fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    // The observer above waits up to MUST_SUCCEED_WITHIN itself, so this
+    // outer wait gets twice that budget (docs/testing.md, "Waits and timeouts").
+    fakes::Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&parked_rx, "the no-timeout call to wait with no deadline");
     // No deadline parks anywhere: deleting the flag parks the agent
     // default instead and fails here.

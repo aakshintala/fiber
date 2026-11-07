@@ -1448,7 +1448,9 @@ fn driver_shell_has_no_foreground_default() {
             }
         })
         .unwrap();
-    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    // The observer above waits up to MUST_SUCCEED_WITHIN itself, so this
+    // outer wait gets twice that budget (docs/testing.md, "Waits and timeouts").
+    Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&parked_rx, "the driver call to wait with no deadline");
     // The 10-minute foreground default parks nowhere: the driver's only
     // park carries no deadline. A moved default parks at some instant and
