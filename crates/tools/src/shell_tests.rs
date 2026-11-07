@@ -584,10 +584,128 @@ fn a_bare_wait_never_starts() {
     arguments.insert("timeout_ms".into(), json!(1));
     let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
-    assert!(text(&output).contains("run_in_background"));
-    assert!(text(&output).contains("jobs wait"));
-    assert!(text(&output).contains("until"));
+    let refused = text(&output);
+    assert!(refused.contains("run_in_background"), "{refused}");
+    assert!(refused.contains("jobs wait"), "{refused}");
+    assert!(refused.contains("until"), "{refused}");
+    assert!(
+        refused.contains(&format!("`{command}`")),
+        "quotes the refused command: {refused}"
+    );
+    assert!(
+        refused.contains(&format!("and the command `{command}`")),
+        "reuses the refused command in the background rewrite: {refused}"
+    );
+    assert!(
+        refused.contains(&format!(
+            "until touch {}; do sleep 5; done",
+            marker.display()
+        )),
+        "names the check command: {refused}"
+    );
     assert!(!marker.exists());
+    assert!(output.process.is_none());
+}
+
+#[test]
+fn a_bare_wait_short_sleep_still_runs() {
+    assert!(
+        !bare_wait("sleep 5; echo hi"),
+        "a short sleep is not a bare wait"
+    );
+    let shell = shell();
+    let output = shell.run(
+        &args("sleep 0; echo hi"),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(text(&output).contains("hi"), "{}", text(&output));
+}
+
+#[test]
+fn a_bare_wait_sleep_plus_check_names_the_check_command() {
+    let dir = fakes::TempDir::new("fiber-bare-wait-check");
+    let marker = dir.path().join("marker");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let command = format!("sleep 30; grep -q READY {}", marker.display());
+    // A one-millisecond timeout, so a command that wrongly starts stops at
+    // once and the assertions below fail, where it would otherwise run for
+    // 30 seconds.
+    let mut arguments = args(&command);
+    arguments.insert("timeout_ms".into(), json!(1));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    let refused = text(&output);
+    assert!(
+        refused.contains(&format!("`{command}`")),
+        "quotes the refused command: {refused}"
+    );
+    assert!(
+        refused.contains(&format!(
+            "until grep -q READY {}; do sleep 5; done",
+            marker.display()
+        )),
+        "names the check command: {refused}"
+    );
+    assert!(!marker.exists());
+    assert!(output.process.is_none());
+}
+
+#[test]
+fn a_bare_wait_loop_rest_falls_back_to_a_generic_until() {
+    let dir = fakes::TempDir::new("fiber-bare-wait-loop");
+    let marker = dir.path().join("marker");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let command = format!("sleep 30; while true; do touch {}; done", marker.display());
+    // A one-millisecond timeout, so a command that wrongly starts stops at
+    // once and the assertions below fail, where it would otherwise run for
+    // 30 seconds.
+    let mut arguments = args(&command);
+    arguments.insert("timeout_ms".into(), json!(1));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    let refused = text(&output);
+    assert!(
+        refused.contains(&format!("`{command}`")),
+        "quotes the refused command: {refused}"
+    );
+    assert!(
+        refused.contains("until <check command>; do sleep 5; done"),
+        "falls back to the generic until shape: {refused}"
+    );
+    assert!(
+        !refused.contains("until while"),
+        "a loop rest is not a check command: {refused}"
+    );
+    assert!(!marker.exists());
+    assert!(output.process.is_none());
+}
+
+#[test]
+fn a_bare_wait_without_rest_falls_back_to_a_generic_until() {
+    let shell = shell();
+    let command = "sleep 60";
+    // A one-millisecond timeout, so a command that wrongly starts stops at
+    // once and the assertion below fails, where it would otherwise run for
+    // a minute.
+    let mut arguments = args(command);
+    arguments.insert("timeout_ms".into(), json!(1));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    let refused = text(&output);
+    assert!(
+        refused.contains("`sleep 60`"),
+        "quotes the refused command: {refused}"
+    );
+    assert!(
+        refused.contains("until <check command>; do sleep 5; done"),
+        "falls back to the generic until shape: {refused}"
+    );
+    assert!(
+        !refused.contains("until ; do"),
+        "never emits an empty command: {refused}"
+    );
     assert!(output.process.is_none());
 }
 
@@ -967,11 +1085,24 @@ fn a_bare_wait_is_refused_for_a_monitor() {
     let jobs = fakes::jobs::FakeJobs::new(dir.path());
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
     // A one-millisecond limit, so a command that wrongly starts stops at once.
-    let mut arguments = monitor_args(&format!("sleep 30; touch {}", marker.display()));
+    let command = format!("sleep 30; touch {}", marker.display());
+    let mut arguments = monitor_args(&command);
     arguments.insert("timeout_ms".into(), json!(1));
     let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
-    assert!(text(&output).contains("jobs wait"), "{}", text(&output));
+    let refused = text(&output);
+    assert!(refused.contains("jobs wait"), "{refused}");
+    assert!(
+        refused.contains(&format!("`{command}`")),
+        "quotes the refused command: {refused}"
+    );
+    assert!(
+        refused.contains(&format!(
+            "until touch {}; do sleep 5; done",
+            marker.display()
+        )),
+        "names the check command: {refused}"
+    );
     assert!(!marker.exists());
     assert!(jobs.started().is_empty());
 }

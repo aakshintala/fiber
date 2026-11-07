@@ -437,3 +437,48 @@ fn keeper_end_maps_every_process_failure_without_a_tail() {
         assert!(kept.protected_paths.is_none());
     }
 }
+
+#[test]
+fn a_hosted_background_receipt_names_the_kept_timeout_stop() {
+    // The fake clock's wall starts at 2023-11-14T22:13:20Z, so a keeper-held
+    // 60 s timeout stops the job at 2023-11-14T22:14:20Z. The drive keeps no
+    // local deadline for a hosted command, so the receipt reads the wall the
+    // host handoff stored.
+    let dir = fakes::TempDir::new("fiber-hosted-receipt-deadline");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let (calls, started) = mpsc::channel();
+    let host = Arc::new(Host {
+        calls,
+        stops: Mutex::new(Vec::new()),
+        stopped: None,
+        adopted: None,
+    });
+    let clock = fakes::clock::FakeClock::new();
+    let shell = Shell::new(dir.path().to_path_buf(), clock)
+        .with_host(host)
+        .with_jobs(jobs.clone());
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(
+            shell.run(
+                serde_json::json!({"command":"held", "run_in_background":true, "timeout_ms":60000})
+                    .as_object()
+                    .expect("object"),
+                &CancelToken::default(),
+                &Recorder::default(),
+            ),
+        )
+        .expect("result");
+    });
+    let (spec, events) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&started, "start");
+    assert_eq!(spec.timeout_ms, Some(60_000));
+    let output = Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "receipt");
+    let text = format!("{:?}", output.content);
+    assert!(
+        text.contains("Fiber stops it at 2023-11-14T22:14:20Z (timeout_ms 60000)"),
+        "{text}"
+    );
+    assert!(text.contains("run_in_background"), "{text}");
+    events.send(HostEvent::Exit(end())).expect("exit");
+    drop(events);
+}

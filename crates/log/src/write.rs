@@ -2,7 +2,6 @@
 //! durable lines, fsyncs them in the order `docs/events.md`, "Writing", sets,
 //! and fans every event out to watchers.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
@@ -716,12 +715,13 @@ impl Inner {
 
 /// The two fields `Log::open` reads from every line: what decides
 /// whether the line is fully parsed. Every other field is skipped, but
-/// its JSON syntax is still checked. `kind` borrows the line's bytes and
-/// allocates only for an escaped kind; `seq` is required.
+/// its JSON syntax is still checked. `kind` parses once through the
+/// typed vocabulary, borrowing the line's bytes and allocating only
+/// for an escaped kind or an unrecognized name; `seq` is required.
 #[derive(serde::Deserialize)]
-struct Head<'a> {
-    #[serde(borrow)]
-    kind: Cow<'a, str>,
+struct Head {
+    #[serde(deserialize_with = "crate::escalations::kind_field")]
+    kind: contract::events::EventKind,
     seq: u64,
 }
 
@@ -740,10 +740,10 @@ fn latest_wins(kind: &contract::events::EventKind) -> bool {
 }
 
 /// Whether `Log::open` fully parses a line of this kind: the kinds a fold
-/// reads.
-fn folded(kind: &str) -> bool {
-    let parsed = contract::events::EventKind::from_name(kind);
-    latest_wins(&parsed) || offer_kind(&parsed) || RateFold::reads(kind)
+/// reads. An unfamiliar kind parses to its retained variant and is never
+/// folded, so it skips the full parse exactly as an unfolded kind does.
+fn folded(kind: &contract::events::EventKind) -> bool {
+    latest_wins(kind) || offer_kind(kind) || RateFold::reads(kind.name())
 }
 
 /// The event kinds that maintain the pending repository offer.
