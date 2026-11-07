@@ -626,7 +626,7 @@ fn output_tail_starts_on_a_character_boundary() {
 }
 
 #[test]
-fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
+fn the_end_maps_like_a_foreground_result_and_tails_every_outcome() {
     let dir = fakes::TempDir::new("fiber-shell-end");
     let path = dir.path().join("out");
     std::fs::write(&path, "partial\n").unwrap();
@@ -656,7 +656,7 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
     let process = ok.process.unwrap();
     assert_eq!(process.exit_code, Some(0));
     assert!(!process.timed_out);
-    assert!(ok.output_tail.is_none());
+    assert_eq!(ok.output_tail.as_deref(), Some("partial\n"));
 
     let nonzero = end(
         finished(Some(status_of("exit 3")), None, false, false, true),
@@ -697,7 +697,7 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
     );
     assert_eq!(stopped.status, Outcome::Cancelled);
     assert!(stopped.error.is_none());
-    assert!(stopped.output_tail.is_none());
+    assert_eq!(stopped.output_tail.as_deref(), Some("partial\n"));
 
     let unknown = end(finished(None, Some(StopKind::Cancel), true, true, false), 1);
     assert_eq!(unknown.status, Outcome::Failed);
@@ -718,6 +718,44 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
     assert_eq!(timed_unknown.status, Outcome::Failed);
     assert_eq!(timed_unknown.error.unwrap().code, ErrorCode::Indeterminate);
     assert!(timed_unknown.process.unwrap().timed_out);
+}
+
+#[test]
+fn completed_and_failed_ends_cut_a_large_tail_identically() {
+    let dir = fakes::TempDir::new("fiber-shell-tail-identity");
+    let id = JobId("j_tail".into());
+    // Over 2 KiB with line structure, so the window cuts mid-body.
+    let mut body = String::new();
+    for line in 0..300 {
+        body.push_str(&format!("line {line:04}\n"));
+    }
+    assert!(body.len() > 2_048, "{}", body.len());
+    let big = dir.path().join("big");
+    std::fs::write(&big, &body).unwrap();
+    let small = dir.path().join("small");
+    std::fs::write(&small, "a\nb\n").unwrap();
+
+    let end = |path: &Path, command: &str| {
+        to_completed(
+            id.clone(),
+            path,
+            finished(Some(status_of(command)), None, false, false, true),
+            Some(Limit {
+                ms: 1,
+                monitor: false,
+            }),
+        )
+    };
+    let completed_tail = end(&big, "exit 0").output_tail.unwrap();
+    let failed_tail = end(&big, "exit 3").output_tail.unwrap();
+    assert_eq!(completed_tail, failed_tail);
+    assert_eq!(completed_tail.len(), 2_048);
+    assert!(body.ends_with(&completed_tail), "{completed_tail:?}");
+
+    let small_completed = end(&small, "exit 0").output_tail.unwrap();
+    let small_failed = end(&small, "exit 3").output_tail.unwrap();
+    assert_eq!(small_completed, "a\nb\n");
+    assert_eq!(small_failed, small_completed);
 }
 
 #[test]
