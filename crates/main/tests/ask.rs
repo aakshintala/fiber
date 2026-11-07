@@ -4200,3 +4200,52 @@ fn a_per_run_credential_label_is_the_diagnosed_one() {
         "{message}"
     );
 }
+
+/// An `openai-responses` stream calling `reviewer_notes_save`.
+fn reviewer_notes_save_call() -> Response {
+    let arguments =
+        json!({"lines": [{"topic": "internal_hosts", "layer": "global", "text": "corp.example"}]})
+            .to_string();
+    let events = [
+        json!({"type": "response.output_item.done", "item": {
+            "type": "function_call", "id": "fc_1", "call_id": "call_1",
+            "name": "reviewer_notes_save", "arguments": arguments}}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+#[test]
+fn reviewer_notes_save_in_an_ask_session_refuses_naming_fiber_ask() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([reviewer_notes_save_call(), hello()]).unwrap();
+    setup.provider(&server);
+
+    let before = std::fs::read(setup.home().join("config.json")).ok();
+
+    let run = setup.run_with_stdin(&["ask", "save the notes"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the save runs and refuses");
+    let rendered = serde_json::to_string(completed).unwrap();
+    assert!(
+        rendered.contains("reviewer_notes_save"),
+        "the refused call is the save: {rendered}"
+    );
+    assert!(
+        rendered.contains("fiber ask"),
+        "the refusal names fiber ask: {rendered}"
+    );
+    // Nothing written: the refused save leaves the global file's bytes alone.
+    assert_eq!(std::fs::read(setup.home().join("config.json")).ok(), before);
+}
