@@ -364,3 +364,8 @@ crates/log/src/escalations.rs	fiber-4160	plan	2026-11-07T02:11:54Z	Amoghs-MacBoo
 crates/log/src/escalations/reviewer_shell_calls.rs	fiber-4160	plan	2026-11-07T02:11:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/write.rs	fiber-4160	plan	2026-11-07T02:11:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/check	fiber-4160	plan	2026-11-07T02:11:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/shell.rs	fiber-4252	plan	2026-11-07T02:15:19Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4252-bang-no-timeout	
+crates/tools/src/shell_tests.rs	fiber-4252	plan	2026-11-07T02:15:19Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4252-bang-no-timeout	
+crates/main/src/builtin.rs	fiber-4252	plan	2026-11-07T02:15:19Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4252-bang-no-timeout	
+crates/main/src/builtin_tests.rs	fiber-4252	plan	2026-11-07T02:15:19Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4252-bang-no-timeout	
+crates/main/tests/driver_shell_no_timeout.rs	fiber-4252	plan	2026-11-07T02:15:19Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4252-bang-no-timeout	
