@@ -4160,27 +4160,29 @@ mod session_refusal_tests {
                 "{command}"
             );
         }
-        // Near misses and session-unrelated commands reach the session:
-        // a name the shared set does not hold is never refused.
+        // Near misses and other commands reach the session even under full
+        // refusal pressure: the target is on the caller's walk, so a name
+        // the shared set does not hold is never refused.
         let probes: [(&str, Value); 6] = [
-            ("message", message("c_1")),
-            ("cancel", json!({"command": "cancel", "id": "c_1"})),
-            ("subscribe", full_subscribe("c_1")),
+            ("message", message("c_message")),
+            ("cancel", json!({"command": "cancel", "id": "c_cancel"})),
+            ("subscribe", full_subscribe("c_subscribe")),
             (
                 "shell",
-                json!({"command": "shell", "args": {"command": "echo hi"}, "id": "c_1"}),
+                json!({"command": "shell", "args": {"command": "echo hi"}, "id": "c_shell"}),
             ),
             (
                 "sandboxx",
-                json!({"command": "sandboxx", "args": {"enabled": true}, "id": "c_1"}),
+                json!({"command": "sandboxx", "args": {"enabled": true}, "id": "c_sandboxx"}),
             ),
-            ("", json!({"command": "", "id": "c_1"})),
+            ("", json!({"command": "", "id": "c_empty"})),
         ];
         for (name, line) in probes {
+            let id = line["id"].as_str().unwrap().to_owned();
             let mut rig = Rig::new(plain_target());
             let (peer, _tx) =
-                rig.push_entry(OTHER, crate::relay::RelayTarget::Live { pid: TARGET });
-            rig.relay("c_1", OTHER, line, &session_caller(&[CALLER_HOST]));
+                rig.push_entry(OWNED, crate::relay::RelayTarget::Live { pid: TARGET });
+            rig.relay(&id, OWNED, line, &session_caller(&[TARGET]));
             let mut forwarded = String::new();
             std::io::BufReader::new(peer)
                 .read_line(&mut forwarded)
