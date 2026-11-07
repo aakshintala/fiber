@@ -10,8 +10,8 @@ mod extension_harness;
 mod support;
 
 use contract::events::{
-    Event, ExtensionStateSet, ExtensionStateUnset, OnFork, Parent, Rewound, SessionStarted,
-    Variables, VariablesSource,
+    Event, EventKind, ExtensionStateSet, ExtensionStateUnset, OnFork, Parent, Rewound,
+    SessionStarted, Variables, VariablesSource,
 };
 use contract::shapes::Point;
 use contract::{JobId, Seq, SessionId};
@@ -90,7 +90,7 @@ fn seen(setup: &Setup, id: &str) -> Value {
     lines
         .iter()
         .rev()
-        .find(|line| line.kind == "extension_state_set" && line.payload["key"] == "seen")
+        .find(|line| line.kind() == EventKind::ExtensionStateSet && line.payload["key"] == "seen")
         .expect("the first hook wrote seen")
         .payload["value"]
         .clone()
@@ -164,15 +164,17 @@ fn a_loaded_extension_without_hooks_still_drains_init_state() {
     let lines = log::read(&support::session_dir(&setup, PARENT)).unwrap();
     let boot = lines
         .iter()
-        .position(|line| line.kind == "extension_state_set" && line.payload["key"] == "boot")
+        .position(|line| {
+            line.kind() == EventKind::ExtensionStateSet && line.payload["key"] == "boot"
+        })
         .unwrap();
     assert_eq!(lines[boot].payload["value"], 1);
-    assert_eq!(lines.last().unwrap().kind, "fiber_exited");
+    assert_eq!(lines.last().unwrap().kind(), EventKind::FiberExited);
     assert!(boot < lines.len() - 1);
     assert!(
         boot < lines
             .iter()
-            .position(|line| line.kind == "turn_started")
+            .position(|line| line.kind() == EventKind::TurnStarted)
             .unwrap()
     );
 }
@@ -255,7 +257,7 @@ fn live_rewind_and_its_resume_use_the_same_parent_point_seed() {
     let parent_lines = log::read(&support::session_dir(&setup, PARENT)).unwrap();
     let point = parent_lines
         .iter()
-        .find(|line| line.kind == "step_started")
+        .find(|line| line.kind() == EventKind::StepStarted)
         .unwrap()
         .seq
         .unwrap()

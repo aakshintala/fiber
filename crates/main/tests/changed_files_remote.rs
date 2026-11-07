@@ -33,6 +33,8 @@
 mod hub_start;
 mod support;
 
+use contract::HubEventKind;
+
 /// A completed frame's end: synchronized output's close marker, which the
 /// TUI brackets every frame with. Waiting for it after an input proves the
 /// frame drew after that input instead of matching a stale grid
@@ -203,7 +205,7 @@ fn world(default: bool) -> World {
     );
     let port = served.port;
     let (hub, process) = (served.hub, served.process);
-    assert_eq!(hub.1.kind, "hub_hello");
+    assert_eq!(hub.1.kind(), HubEventKind::HubHello);
     let address = format!("ws://127.0.0.1:{port}");
     let code = run(&a, &["hub", "pair", "laptop"]);
     succeeds(&code);

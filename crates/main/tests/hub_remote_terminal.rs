@@ -19,6 +19,8 @@
 
 mod support;
 
+use contract::HubEventKind;
+
 use contract::clock::Clock;
 use fakes::ProviderServer;
 use serde_json::{Value, json};
@@ -368,7 +370,7 @@ fn world_with(default: bool, ports: &mut dyn FnMut() -> u16) -> World {
             }
         }
     };
-    assert_eq!(hub.1.kind, "hub_hello");
+    assert_eq!(hub.1.kind(), HubEventKind::HubHello);
     let address = format!("ws://127.0.0.1:{port}");
     let code = run(&a, &["hub", "pair", "laptop"]);
     succeeds(&code);

@@ -13,9 +13,10 @@ use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
 use contract::events::{
-    AssistantMessageCompleted, CallStatus, Class, Empty, Event, InputItem, MessageOutcome,
-    SessionStarted, TextCompleted, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
-    TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded, Variables, VariablesSource,
+    AssistantMessageCompleted, CallStatus, Class, Empty, Event, EventKind, InputItem,
+    MessageOutcome, SessionStarted, TextCompleted, ToolCallCompleted, ToolCallRequested,
+    ToolCallStarted, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded, Variables,
+    VariablesSource,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Origin, Sender, Tokens};
 use contract::{ActionId, CommandId, Envelope, GenerationId, SessionId, TurnId};
@@ -159,9 +160,9 @@ type Typed = Option<(Event, Option<TurnId>, Option<ActionId>)>;
 /// the kind and line.
 fn typed(line: &Envelope, n: usize) -> Result<Typed, String> {
     let failure = |why: &str| format!("session line {n} ({}): {why}", line.kind);
-    match line.kind.as_str() {
-        "fiber_started" | "session_started" => Ok(None),
-        "tool_call_started" => Ok(Some((
+    match line.kind() {
+        EventKind::FiberStarted | EventKind::SessionStarted => Ok(None),
+        EventKind::ToolCallStarted => Ok(Some((
             Event::ToolCallStarted(ToolCallStarted {
                 always_reviewed: false,
                 declared: DeclaredEffects {
@@ -176,7 +177,7 @@ fn typed(line: &Envelope, n: usize) -> Result<Typed, String> {
             line.turn_id.clone(),
             line.action_id.clone(),
         ))),
-        "usage_recorded" => Ok(Some((
+        EventKind::UsageRecorded => Ok(Some((
             Event::UsageRecorded(UsageRecorded {
                 generation_id: GenerationId(format!("g_{n}")),
                 model: "fake/m".to_owned(),
@@ -199,7 +200,74 @@ fn typed(line: &Envelope, n: usize) -> Result<Typed, String> {
             line.turn_id.clone(),
             line.action_id.clone(),
         ))),
-        _ => match Event::from_envelope(line) {
+        EventKind::FiberExited
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::PermissionRequested
+        | EventKind::PermissionResolved
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => match Event::from_envelope(line) {
             Err(err) => Err(failure(&err.to_string())),
             Ok(None) => Err(failure("the build does not know this kind")),
             Ok(Some(event)) => {
@@ -293,7 +361,7 @@ fn write_paging_log(home: &Home, id: &str) -> Result<(), String> {
     for (n, line) in tui::paging_session(1).lines().enumerate() {
         let envelope: Envelope = serde_json::from_str(line)
             .map_err(|err| format!("session line {n} is not an envelope ({err})"))?;
-        if envelope.kind == "turn_started" {
+        if envelope.kind() == EventKind::TurnStarted {
             turns += 1;
         }
         if turns > 10 {

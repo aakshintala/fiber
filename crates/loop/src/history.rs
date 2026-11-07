@@ -242,14 +242,14 @@ fn fold_line(line: &Envelope, resumed: &mut Resumed, pass: &mut Pass) -> Result<
     // the person's answers with what they answer.
     if pass.own_segment && line.is_durable() {
         if kind == EventKind::PermissionRequested {
-            resumed.exit.seed_raw(&line.kind, &line.payload);
+            resumed.exit.seed_raw(line.kind(), &line.payload);
             return Ok(());
         }
         if matches!(
             kind,
             EventKind::InteractionRequested | EventKind::InteractionResolved
         ) {
-            resumed.exit.seed_raw(&line.kind, &line.payload);
+            resumed.exit.seed_raw(line.kind(), &line.payload);
         }
     }
     // Process starts close the reviewer's summary window even though the

@@ -20,6 +20,8 @@
 mod hub_start;
 mod support;
 
+use contract::HubEventKind;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::os::unix::process::CommandExt as _;
@@ -944,7 +946,7 @@ fn hub_hello_past_a_self_selecting_git_wrapper() {
             command
         },
     );
-    assert_eq!(served.hub.1.kind, "hub_hello");
+    assert_eq!(served.hub.1.kind(), HubEventKind::HubHello);
     served.process.kill("TERM");
     assert_eq!(served.process.wait().code(), Some(143));
     drop(served.hub);

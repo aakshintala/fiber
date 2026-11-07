@@ -45,7 +45,7 @@ fn routes_each_answer_once_and_forgets_it() {
     let (client, hub) = UnixStream::pair().unwrap();
     router.attach(client);
     let lines = read(hub);
-    for kind in ["command_accepted", "command_rejected"] {
+    for kind in [HubEventKind::CommandAccepted, HubEventKind::CommandRejected] {
         let pending = router
             .send("configure", json!({"operation":"settings"}))
             .unwrap();
@@ -53,7 +53,7 @@ fn routes_each_answer_once_and_forgets_it() {
         assert_eq!(line["command"], "configure");
         assert_eq!(line["args"], json!({"operation":"settings"}));
         assert_eq!(router.registered(), 1);
-        let response = answer(line["id"].as_str().unwrap(), kind);
+        let response = answer(line["id"].as_str().unwrap(), kind.name());
         assert!(router.route(&response));
         assert!(!router.route(&response));
         assert_eq!(router.registered(), 0);
@@ -61,7 +61,7 @@ fn routes_each_answer_once_and_forgets_it() {
             deadline
                 .recv_or_fail(&wait(pending), "answer")
                 .unwrap()
-                .kind,
+                .kind(),
             kind
         );
     }

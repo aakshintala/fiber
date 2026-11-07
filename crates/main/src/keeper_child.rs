@@ -161,9 +161,7 @@ impl Runtime {
                                 .map_err(|error| io::Error::other(error.to_string()))?;
                             *lock(&self.logged) = completed
                                 .into_iter()
-                                .filter(|line| {
-                                    EventKind::from_name(&line.kind) == EventKind::JobCompleted
-                                })
+                                .filter(|line| line.kind() == EventKind::JobCompleted)
                                 .filter_map(|line| {
                                     line.payload
                                         .get("job_id")

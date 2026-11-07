@@ -9,7 +9,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
-use contract::events::{CacheLifetime, UsageRecorded};
+use contract::events::{CacheLifetime, EventKind, UsageRecorded};
 use contract::model::{Bound, HostMessage, HostModel, HostModelReply, HostModelRequest, HostRole};
 use contract::provider::{CallError, CallUsage, Delta, ImageRef, Input, ModelCall, ModelRequest};
 use contract::shapes::{ContentPart, Failure};
@@ -262,7 +262,7 @@ impl ModelHost {
         })?;
         let mut by_id: BTreeMap<GenerationId, UsageRecorded> = BTreeMap::new();
         for (number, envelope) in envelopes.iter().enumerate() {
-            if envelope.kind != "usage_recorded" {
+            if envelope.kind() != EventKind::UsageRecorded {
                 continue;
             }
             let line: UsageRecorded = serde_json::from_value(serde_json::Value::Object(

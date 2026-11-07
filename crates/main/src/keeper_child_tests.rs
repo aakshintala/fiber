@@ -3,6 +3,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
+use contract::events::EventKind;
 use contract::keeper::{FromKeeper, HostStdin, Spawn, ToKeeper};
 use contract::{JobId, SessionId};
 use fakes::Deadline;
@@ -278,7 +279,7 @@ fn job_completed_lines(keeper: &Keeper) -> Vec<contract::Envelope> {
     log::read(&session_dir(keeper))
         .expect("log lines")
         .into_iter()
-        .filter(|line| line.kind == "job_completed")
+        .filter(|line| line.kind() == EventKind::JobCompleted)
         .collect()
 }
 

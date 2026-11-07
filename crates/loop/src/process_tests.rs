@@ -1077,8 +1077,8 @@ fn a_signalled_exit_over_the_seed_alone_names_the_approval_and_declines_the_ask(
     earlier.append(&permission("r_old"), None);
     earlier.append(&asked("r_ask"), None);
     let mut seed = Summary::default();
-    seed.seed_raw("permission_requested", &payload(&earlier, 1));
-    seed.seed_raw("interaction_requested", &payload(&earlier, 2));
+    seed.seed_raw(EventKind::PermissionRequested, &payload(&earlier, 1));
+    seed.seed_raw(EventKind::InteractionRequested, &payload(&earlier, 2));
     seed.carry();
     let session = Session::new();
     let exited = fiber_exited(&session.log, &seed, Ok(()), false, Some(143)).unwrap();
@@ -1105,8 +1105,8 @@ fn a_raw_line_without_a_string_request_id_seeds_nothing() {
     let mut number = serde_json::Map::new();
     number.insert("request_id".into(), Value::from(7));
     for payload in [&none, &number] {
-        seed.seed_raw("permission_requested", payload);
-        seed.seed_raw("interaction_requested", payload);
+        seed.seed_raw(EventKind::PermissionRequested, payload);
+        seed.seed_raw(EventKind::InteractionRequested, payload);
     }
     assert!(seed.open.is_empty() && seed.open_extension.is_empty());
 }
@@ -1117,14 +1117,14 @@ fn a_raw_interaction_names_an_extension_ask_only_when_extension_is_a_string() {
     let mut ask = serde_json::Map::new();
     ask.insert("request_id".into(), Value::from("r_1"));
     ask.insert("extension".into(), Value::Null);
-    seed.seed_raw("interaction_requested", &ask);
+    seed.seed_raw(EventKind::InteractionRequested, &ask);
     assert_eq!(seed.open.len(), 1);
     assert!(seed.open_extension.is_empty());
     ask.insert("request_id".into(), Value::from("r_2"));
     ask.insert("extension".into(), Value::from("ext"));
-    seed.seed_raw("interaction_requested", &ask);
+    seed.seed_raw(EventKind::InteractionRequested, &ask);
     assert_eq!(seed.open_extension, [RequestId("r_2".into())]);
-    seed.seed_raw("interaction_resolved", &ask);
+    seed.seed_raw(EventKind::InteractionResolved, &ask);
     assert!(seed.open_extension.is_empty());
     assert_eq!(seed.open.len(), 1);
 }

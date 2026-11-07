@@ -16,6 +16,8 @@
 mod hub_start;
 mod support;
 
+use contract::HubEventKind;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -104,7 +106,7 @@ fn world(default: bool) -> World {
             a.fiber(&["hub", "serve", "--installed"])
         },
     );
-    assert_eq!(served.hub.1.kind, "hub_hello");
+    assert_eq!(served.hub.1.kind(), HubEventKind::HubHello);
     let address = format!("ws://127.0.0.1:{}", served.port);
     let code = run(&a, &["hub", "pair", "laptop"]);
     succeeds(&code);

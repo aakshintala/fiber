@@ -12,8 +12,8 @@ use std::thread::{Builder, JoinHandle};
 
 use contract::emit::Emit;
 use contract::events::{
-    CacheLifetime, ContextFill, Event, Git, InputItem, Interaction, PreambleReason, SentTool,
-    SessionState, SessionStatus, Waiting, WaitingKind,
+    CacheLifetime, ContextFill, Event, EventKind, Git, InputItem, Interaction, PreambleReason,
+    SentTool, SessionState, SessionStatus, Waiting, WaitingKind,
 };
 use contract::shapes::{ContentPart, Origin, Tokens, Usage};
 use contract::{ActionId, Envelope, JobId, SessionId};
@@ -253,9 +253,9 @@ impl Fold {
         // connection count, and the output deltas the `output_at` and
         // `tool_output_at` facts fold.
         if !line.is_durable()
-            && line.kind != "retry_scheduled"
-            && line.kind != "clients"
-            && !is_output_delta(&line.kind)
+            && line.kind() != EventKind::RetryScheduled
+            && line.kind() != EventKind::Clients
+            && !is_output_delta(line.kind())
         {
             return false;
         }
@@ -267,7 +267,7 @@ impl Fold {
         self.apply(&event, line);
         // The connection count moves only on a `clients` line: a
         // streaming reply does not re-read it per delta.
-        if self.live && !is_output_delta(&line.kind) {
+        if self.live && !is_output_delta(line.kind()) {
             self.clients = (self.read_clients)();
         }
         if self.since.is_none() || self.key() != key {
@@ -724,13 +724,13 @@ impl Fold {
 /// Whether `kind` is one of the four output deltas the fold admits: the
 /// model's text, reasoning and tool-argument fragments (`output_at`
 /// candidates) and a running tool's output (`tool_call_delta`).
-fn is_output_delta(kind: &str) -> bool {
+fn is_output_delta(kind: EventKind) -> bool {
     matches!(
         kind,
-        "assistant_message_delta"
-            | "reasoning_delta"
-            | "tool_call_arguments_delta"
-            | "tool_call_delta"
+        EventKind::AssistantMessageDelta
+            | EventKind::ReasoningDelta
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ToolCallDelta
     )
 }
 
@@ -1023,10 +1023,10 @@ struct Observer {
 
 impl Observer {
     fn line(&mut self, line: &Envelope) -> Flow {
-        let changed = match line.kind.as_str() {
-            STOP => return Flow::Stop,
-            SUBJECT => self.fold.subject(line),
-            CLOSING => {
+        let changed = match line.kind() {
+            EventKind::Unknown(name) if name == STOP => return Flow::Stop,
+            EventKind::Unknown(name) if name == SUBJECT => self.fold.subject(line),
+            EventKind::Unknown(name) if name == CLOSING => {
                 let changed = self.fold.close();
                 if self.live && changed && !self.emit() {
                     return Flow::Gone;
@@ -1038,12 +1038,83 @@ impl Observer {
                 }
                 return Flow::Go;
             }
-            LIVE => {
+            EventKind::Unknown(name) if name == LIVE => {
                 self.live = true;
                 self.fold.go_live();
                 true
             }
-            _ => self.fold.observe(line),
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::PermissionResolved
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => self.fold.observe(line),
         };
         if self.live && changed && !self.emit() {
             return Flow::Gone;

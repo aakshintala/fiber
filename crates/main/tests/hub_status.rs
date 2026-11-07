@@ -13,6 +13,8 @@
 
 mod support;
 
+use contract::HubEventKind;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -43,7 +45,7 @@ fn connect_when_bound(setup: &Setup) -> Socket {
             }
         }
     };
-    assert_eq!(hello.kind, "hub_hello");
+    assert_eq!(hello.kind(), HubEventKind::HubHello);
     Socket::from(deadline, stream)
 }
 

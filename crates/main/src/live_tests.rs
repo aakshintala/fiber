@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use contract::events::EventKind;
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Finish, InputSize, Provider, Reply, ReplyAction};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -332,17 +333,17 @@ fn live_reviewer() {
             .expect("a turn_completed line in time")
             .expect("the log outlives the turn")
             .expect("the log ended before turn_completed");
-        match line.kind.as_str() {
-            "tool_call_requested" => {
+        match line.kind() {
+            EventKind::ToolCallRequested => {
                 requested += 1;
             }
-            "permission_resolved" => {
+            EventKind::PermissionResolved => {
                 resolved += 1;
                 if line.payload["reviewer"]["stage"] == 2 {
                     second += 1;
                 }
             }
-            "usage_recorded" if line.payload["model"] == reference => {
+            EventKind::UsageRecorded if line.payload["model"] == reference => {
                 let tokens = &line.payload["tokens"];
                 input += tokens["input"].as_u64().unwrap_or(0);
                 cache_read += tokens["cache_read"].as_u64().unwrap_or(0);
@@ -351,9 +352,78 @@ fn live_reviewer() {
                     cache_write += written.values().filter_map(Value::as_u64).sum::<u64>();
                 }
             }
-            _ => {}
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionRequested
+            | EventKind::InteractionRequested
+            | EventKind::InteractionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
         }
-        if line.kind == "turn_completed" {
+        if line.kind() == EventKind::TurnCompleted {
             break;
         }
     }

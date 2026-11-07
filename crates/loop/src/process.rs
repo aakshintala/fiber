@@ -6,9 +6,9 @@
 use contract::ActionId;
 use contract::RequestId;
 use contract::events::{
-    Answer, Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, InteractionResolved,
-    LoadedExtension, McpServerFailed, MessageOutcome, Notice, ResolvedBy, TurnOutcome,
-    group_notices, grouped_lead,
+    Answer, Event, EventKind, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage,
+    InteractionResolved, LoadedExtension, McpServerFailed, MessageOutcome, Notice, ResolvedBy,
+    TurnOutcome, group_notices, grouped_lead,
 };
 use contract::shapes::{Failure, Question, True};
 use log::Log;
@@ -198,18 +198,86 @@ impl Summary {
     /// kinds the resume history pass would otherwise never parse: a
     /// `request_id` that is not a string skips the line, as a payload that
     /// does not read contributes nothing to the exit.
-    pub(crate) fn seed_raw(&mut self, kind: &str, payload: &serde_json::Map<String, Value>) {
+    pub(crate) fn seed_raw(&mut self, kind: EventKind, payload: &serde_json::Map<String, Value>) {
         let Some(id) = payload.get("request_id").and_then(Value::as_str) else {
             return;
         };
         let id = RequestId(id.to_owned());
         match kind {
-            "permission_requested" => self.raised(id, false),
-            "interaction_requested" => {
+            EventKind::PermissionRequested => self.raised(id, false),
+            EventKind::InteractionRequested => {
                 self.raised(id, payload.get("extension").is_some_and(Value::is_string));
             }
-            "interaction_resolved" => self.answered(&id),
-            _ => {}
+            EventKind::InteractionResolved => self.answered(&id),
+            EventKind::FiberStarted
+            | EventKind::FiberExited
+            | EventKind::SessionStarted
+            | EventKind::Rewound
+            | EventKind::Moved
+            | EventKind::TurnStarted
+            | EventKind::StepStarted
+            | EventKind::TurnCompleted
+            | EventKind::SteeringApplied
+            | EventKind::SteeringQueue
+            | EventKind::ShellCommand
+            | EventKind::DirectoryAdded
+            | EventKind::SessionNamed
+            | EventKind::Clients
+            | EventKind::SessionStatus
+            | EventKind::ContextAdded
+            | EventKind::AssistantMessageStarted
+            | EventKind::AssistantMessageDelta
+            | EventKind::AssistantMessageCompleted
+            | EventKind::TextCompleted
+            | EventKind::ToolCallArgumentsDelta
+            | EventKind::ReasoningStarted
+            | EventKind::ReasoningDelta
+            | EventKind::ReasoningCompleted
+            | EventKind::ToolCallRequested
+            | EventKind::ToolCallStarted
+            | EventKind::ToolCallDelta
+            | EventKind::ToolCallCompleted
+            | EventKind::PermissionResolved
+            | EventKind::RepositoryCodeOffered
+            | EventKind::RepositoryCodeResolved
+            | EventKind::UsageRecorded
+            | EventKind::QuotaNoticed
+            | EventKind::QuotaRearmed
+            | EventKind::RetryScheduled
+            | EventKind::Notice
+            | EventKind::PreambleBuilt
+            | EventKind::ModelChanged
+            | EventKind::OpeningMessage
+            | EventKind::InstructionFile
+            | EventKind::DateChanged
+            | EventKind::SkillsChanged
+            | EventKind::HandoffStarted
+            | EventKind::HandoffCompleted
+            | EventKind::SkillsResent
+            | EventKind::ContextNudged
+            | EventKind::ReviewerKept
+            | EventKind::McpServerFailed
+            | EventKind::McpServerReady
+            | EventKind::Reloaded
+            | EventKind::ExtensionsLoaded
+            | EventKind::ExtensionStateSet
+            | EventKind::ExtensionStateUnset
+            | EventKind::ExtensionUi
+            | EventKind::ExtensionMessage
+            | EventKind::ExtensionLog
+            | EventKind::ExtensionExec
+            | EventKind::ExtensionHello
+            | EventKind::ExtensionRequest
+            | EventKind::JobStarted
+            | EventKind::DelegateStarted
+            | EventKind::JobDelta
+            | EventKind::JobLine
+            | EventKind::DelegateFinished
+            | EventKind::JobCompleted
+            | EventKind::JobsPendingNotified
+            | EventKind::CommandAccepted
+            | EventKind::CommandRejected
+            | EventKind::Unknown(_) => {}
         }
     }
 

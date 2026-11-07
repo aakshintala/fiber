@@ -20,7 +20,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
-use contract::events::{TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
+use contract::events::{EventKind, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Provider, ReplyAction};
 use contract::rules::{Rules, RulesError, StandingRules};
@@ -325,7 +325,7 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
     // The elicitation's `until` equals the call's deadline: only one call
     // is in flight.
     let requested = tap.wait_until("the elicitation's interaction", |line| {
-        line.kind == "interaction_requested"
+        line.kind() == EventKind::InteractionRequested
     });
     let request_id = requested.payload["request_id"].as_str().unwrap().to_owned();
     assert_eq!(requested.payload["kind"], "text_input");
@@ -348,7 +348,7 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
     assert!(
         tap.pending()
             .iter()
-            .all(|line| line.kind != "interaction_resolved"),
+            .all(|line| line.kind() != EventKind::InteractionResolved),
         "nothing resolves before the deadline",
     );
     clock.advance_when_parked(
@@ -360,21 +360,23 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
     // Within one deadline: the fiber-resolved decline comes before the
     // call's failed `timeout` completion.
     let resolved = tap.wait_until("the elicitation's resolution", |line| {
-        line.kind == "interaction_resolved"
+        line.kind() == EventKind::InteractionResolved
     });
     assert_eq!(resolved.payload["request_id"], request_id);
     assert_eq!(resolved.payload["by"], "fiber");
     assert_eq!(resolved.payload["declined"], true);
     let completed = tap.wait_until("the call's completion", |line| {
-        line.kind == "tool_call_completed" && line.payload["status"] == "failed"
+        line.kind() == EventKind::ToolCallCompleted && line.payload["status"] == "failed"
     });
     assert_eq!(completed.payload["error"]["code"], "timeout");
     // The echo call is the log barrier: its completion proves the fixture
     // read the earlier `decline`.
     tap.wait_until("the echo's completion", |line| {
-        line.kind == "tool_call_completed" && line.payload["status"] == "completed"
+        line.kind() == EventKind::ToolCallCompleted && line.payload["status"] == "completed"
     });
-    tap.wait_until("the turn's end", |line| line.kind == "turn_completed");
+    tap.wait_until("the turn's end", |line| {
+        line.kind() == EventKind::TurnCompleted
+    });
     let log_text = std::fs::read_to_string(fixture.join("requests.log")).expect("requests");
     let decline = log_text
         .lines()
@@ -392,49 +394,49 @@ fn an_unanswered_elicitation_is_declined_at_the_calls_deadline_then_the_call_tim
     let lines = tap.pending();
     let start = lines
         .iter()
-        .position(|line| line.kind == "turn_started")
+        .position(|line| line.kind() == EventKind::TurnStarted)
         .expect("the turn started");
     let end = lines
         .iter()
-        .position(|line| line.kind == "turn_completed")
+        .position(|line| line.kind() == EventKind::TurnCompleted)
         .expect("the turn ended");
-    let kinds: Vec<&str> = lines[start..=end]
+    let kinds: Vec<EventKind> = lines[start..=end]
         .iter()
-        .filter(|line| line.kind != "session_status")
-        .map(|line| line.kind.as_str())
+        .filter(|line| line.kind() != EventKind::SessionStatus)
+        .map(|line| line.kind())
         .collect();
     assert_eq!(
         kinds,
         [
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "tool_call_arguments_delta",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "interaction_requested",
-            "interaction_resolved",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "tool_call_arguments_delta",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "tool_call_started",
-            "tool_call_completed",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
+            EventKind::TurnStarted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::ToolCallArgumentsDelta,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::InteractionRequested,
+            EventKind::InteractionResolved,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::ToolCallArgumentsDelta,
+            EventKind::ToolCallRequested,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::ToolCallStarted,
+            EventKind::ToolCallCompleted,
+            EventKind::StepStarted,
+            EventKind::AssistantMessageStarted,
+            EventKind::AssistantMessageDelta,
+            EventKind::AssistantMessageDelta,
+            EventKind::TextCompleted,
+            EventKind::UsageRecorded,
+            EventKind::AssistantMessageCompleted,
+            EventKind::TurnCompleted,
         ],
     );
     inbox.send(Delivery::Close(Ack(Box::new(|_| {})))).unwrap();

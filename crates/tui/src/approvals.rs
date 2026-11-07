@@ -27,12 +27,12 @@ mod one_question;
 mod text;
 
 /// The envelope kinds the queue folds, from any session.
-pub(crate) const KINDS: [&str; 5] = [
-    "tool_call_requested",
-    "permission_requested",
-    "permission_resolved",
-    "interaction_requested",
-    "interaction_resolved",
+pub(crate) const KINDS: [EventKind; 5] = [
+    EventKind::ToolCallRequested,
+    EventKind::PermissionRequested,
+    EventKind::PermissionResolved,
+    EventKind::InteractionRequested,
+    EventKind::InteractionResolved,
 ];
 
 /// One unanswered request in the queue: an approval, a question form or a
