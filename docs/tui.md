@@ -2050,7 +2050,9 @@ through the `input_status` slot ("Extension seams").
   draft is left as it is.
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
-  `send` false, `docs/invocation.md`).
+  `send` false, `docs/invocation.md`). A `!` or `!!` command has no
+  timeout: it runs until it exits, until `cancel` stops it, or until the
+  session shuts down.
 
 ### Bindings
 
