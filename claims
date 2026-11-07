@@ -376,3 +376,11 @@ docs/tui.md	fiber-4252	plan	2026-11-07T01:42:29Z	Amoghs-MacBook-Pro:/Users/aaksh
 docs/invocation.md	fiber-4252	plan	2026-11-07T01:42:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell/background.rs	fiber-4239	plan	2026-11-07T01:44:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4239	plan	2026-11-07T01:44:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/build/Cargo.toml	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
+crates/build/build.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
+crates/build/src/lib.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
+crates/build/src/lib_tests.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
+Cargo.toml	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
+crates/main/Cargo.toml	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
+Cargo.lock	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
+crates/main/tests/main_journeys.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
