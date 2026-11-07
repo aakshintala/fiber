@@ -665,7 +665,8 @@ pub(crate) fn line_text(line: &JobLine) -> String {
 }
 
 /// What a `delegate_finished` with no action tells the model: the
-/// delegate's final message, then its questions when it ended asking.
+/// delegate's final message, the file holding it whole when the line names
+/// one, then its questions when it ended asking.
 /// Read from the line alone, so a resume renders the same bytes.
 pub(crate) fn delegate_text(finished: &DelegateFinished) -> String {
     let mut text = fill(
@@ -675,6 +676,10 @@ pub(crate) fn delegate_text(finished: &DelegateFinished) -> String {
             ("text", finished.text.as_str()),
         ],
     );
+    if let Some(file) = &finished.artifact_absolute {
+        text.push_str("\nFull final message: ");
+        text.push_str(file);
+    }
     if let Some(questions) = finished
         .questions
         .as_ref()

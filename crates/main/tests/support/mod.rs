@@ -1927,8 +1927,19 @@ pub(crate) fn await_first_request(server: &ProviderServer, deadline: Deadline) {
 #[track_caller]
 pub(crate) fn close_session(socket: &Socket) {
     socket.send(r#"{"id":"c_close_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let ack = recv(socket, "the subscribe acknowledgement");
+    let ack = recv_answer(socket, "c_close_sub", "the subscribe acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    socket.send(r#"{"id":"c_close","command":"close"}"#);
+    until_close(socket);
+}
+
+/// Closes the session on a socket that already holds a `full` subscription,
+/// and waits for it to leave. The caller must already be subscribed at
+/// `full` on this socket: [`until_close`] needs the session's leaving event,
+/// which only a `full` subscription delivers. A socket that is not, or is
+/// subscribed lower, uses [`close_session`].
+#[track_caller]
+pub(crate) fn close_subscribed_session(socket: &Socket) {
     socket.send(r#"{"id":"c_close","command":"close"}"#);
     until_close(socket);
 }
