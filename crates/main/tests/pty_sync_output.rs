@@ -303,6 +303,18 @@ fn the_harness_joins_a_marker_split_across_reads() {
     }
 }
 
+/// The live grid's text.
+fn live(shared: &support::pty::Shared) -> String {
+    // settled: the caller's publish returned, so no reader thread races
+    shared.grid().contents
+}
+
+/// The retained frame's text, if one is kept.
+fn kept(shared: &support::pty::Shared) -> Option<String> {
+    // settled: the caller's publish returned, so no reader thread races
+    shared.retained().map(|grid| grid.contents)
+}
+
 /// One synchronized frame drawing `text` at the home position.
 fn frame(text: &str) -> Vec<u8> {
     [BEGIN, b"\x1b[H", text.as_bytes(), END].concat()
@@ -320,16 +332,15 @@ fn a_retained_frame_survives_a_later_frame_in_the_same_read() {
     let mut shared = support::pty::Shared::new(20, 5);
     shared.retain("notice");
     shared.publish(&[frame("notice"), clearing_frame()].concat());
+    let live = live(&shared);
     assert!(
-        !shared.grid().contents.contains("notice"),
-        "the live grid shows the clearing frame: {:?}",
-        shared.grid().contents,
+        !live.contains("notice"),
+        "the live grid shows the clearing frame: {live:?}",
     );
-    let retained = shared.retained().expect("the notice frame is retained");
+    let kept = kept(&shared).expect("the notice frame is retained");
     assert!(
-        retained.contents.contains("notice"),
-        "the retained grid is the notice frame: {:?}",
-        retained.contents,
+        kept.contains("notice"),
+        "the retained grid is the notice frame: {kept:?}",
     );
 }
 
@@ -338,19 +349,18 @@ fn a_retained_frame_survives_a_later_frame_in_the_same_read() {
 #[test]
 fn a_retained_frame_survives_the_next_frame_opening_in_the_same_read() {
     let mut shared = support::pty::Shared::new(20, 5);
-    let blank = shared.grid().contents.clone();
+    let blank = live(&shared);
     shared.retain("notice");
     shared.publish(&[frame("notice"), BEGIN.to_vec(), b"\x1b[2Jpart".to_vec()].concat());
     assert_eq!(
-        shared.grid().contents,
+        live(&shared),
         blank,
         "no live snapshot lands with a block open at the read's end"
     );
-    let retained = shared.retained().expect("the notice frame is retained");
+    let kept = kept(&shared).expect("the notice frame is retained");
     assert!(
-        retained.contents.contains("notice") && !retained.contents.contains("part"),
-        "the retained grid is the closed frame alone: {:?}",
-        retained.contents,
+        kept.contains("notice") && !kept.contains("part"),
+        "the retained grid is the closed frame alone: {kept:?}",
     );
 }
 
@@ -366,20 +376,18 @@ fn a_retained_frame_survives_a_closing_marker_split_across_reads() {
         let second = [&END[split..], &clearing_frame()].concat();
         shared.publish(&first);
         assert!(
-            shared.retained().is_none(),
+            kept(&shared).is_none(),
             "the frame is still open at split {split}"
         );
         shared.publish(&second);
-        let retained = shared
-            .retained()
+        let kept = kept(&shared)
             .unwrap_or_else(|| panic!("the notice frame is retained at split {split}"));
         assert!(
-            retained.contents.contains("notice"),
-            "the retained grid is the notice frame at split {split}: {:?}",
-            retained.contents,
+            kept.contains("notice"),
+            "the retained grid is the notice frame at split {split}: {kept:?}",
         );
         assert!(
-            !shared.grid().contents.contains("notice"),
+            !live(&shared).contains("notice"),
             "the live grid shows the clearing frame at split {split}"
         );
     }

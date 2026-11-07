@@ -254,6 +254,12 @@ impl Driver {
         }
     }
 
+    /// Whether the grid no longer holds `text`.
+    fn lacks(&self, text: &str) -> bool {
+        // settled: FRAME_END or the top-page request
+        !self.shared.lock().unwrap().grid().contents.contains(text)
+    }
+
     /// Waits after a batch of keys for a frame at or after `from`, or for
     /// the hub to record the top-page request. A batch that moves nothing
     /// draws no frame (`Screen::draw` writes nothing for equal cells), so
@@ -274,12 +280,9 @@ impl Driver {
     ) {
         let wait = self.deadline.start_wait();
         loop {
-            // settled: FRAME_END or the top-page request
-            let gone = || {
-                until_gone
-                    .is_none_or(|text| !self.shared.lock().unwrap().grid().contents.contains(text))
-            };
-            if self.holds_since(from, FRAME_END) || (top_page_requested(seen) && gone()) {
+            if self.holds_since(from, FRAME_END)
+                || (top_page_requested(seen) && until_gone.is_none_or(|text| self.lacks(text)))
+            {
                 return;
             }
             if wait.recv(&self.wakes).is_err() {
