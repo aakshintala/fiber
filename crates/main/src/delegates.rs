@@ -328,23 +328,21 @@ impl Delegates {
 /// reloaded tools check against never disagree either, while a running
 /// delegate keeps the model it started with (`docs/delegates.md`,
 /// "Choosing a model"). `session_model` is the session's own
-/// `provider/model` reference, printed verbatim as the catalogue's first
-/// line, never re-resolved.
+/// `provider/model` reference, printed after the `fiber:` prefix on the
+/// catalogue's `Session model:` first line, never re-resolved.
 pub(crate) fn resolver(
     providers: &extensions::Providers,
     config: &config::Config,
     session_model: &str,
 ) -> jobs::Resolve {
+    let catalogue = catalogue(providers, config, session_model);
     let providers = providers.clone();
     let config = config.clone();
-    let listed = providers.clone();
-    let read = config.clone();
     let credential_providers = providers.clone();
     let credential_config = config.clone();
-    let session_model = session_model.to_owned();
     jobs::Resolve {
         lookup: Arc::new(move |argument| lookup(&providers, &config, argument)),
-        catalogue: Arc::from(catalogue(&listed, &read, &session_model)),
+        catalogue: Arc::from(catalogue),
         credential: Arc::new(move |argument| {
             credential_for(&credential_providers, &credential_config, argument)
         }),
@@ -624,9 +622,7 @@ fn catalogue(
         .unwrap_or_default();
     roles.sort();
     let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
-    let mut names: Vec<&str> = providers.switched_on(config).collect();
-    names.sort();
-    for name in names {
+    for name in providers.switched_on(config) {
         if let Some(provider) = providers.get(name) {
             let mut entries: Vec<String> = Vec::new();
             for model in &provider.models {

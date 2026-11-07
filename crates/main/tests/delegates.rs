@@ -7486,6 +7486,14 @@ fn a_delegate_started_with_the_bare_session_model_runs() {
     running.wait_line("the spawn receipt", |line| {
         line["kind"] == "tool_call_completed"
     });
+    // The receipt proves the first two answers went out, not that the
+    // third call arrived: the hold parks it, and only its acknowledgement
+    // releases the script. A missing third call fails here, naming the
+    // wait, instead of racing the script silently.
+    assert!(
+        parent.await_requests(3, setup.deadline),
+        "the third provider call is parked"
+    );
     parent.release();
     running.wait_line("the delegate to finish", |line| {
         line["kind"] == "delegate_finished"

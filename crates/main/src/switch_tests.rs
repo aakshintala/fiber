@@ -597,6 +597,55 @@ fn another_installed_provider_reads_its_command_once() {
     );
 }
 
+/// A `/model` switch rebuilds the delegate resolver around the new model:
+/// applying it swaps the snapshot whole, so `delegate_models` leads with
+/// the switched model instead of the stale one.
+#[test]
+fn a_model_switch_rebuilds_the_delegate_resolver_around_the_new_model() {
+    let fixture = fixture("fiber-switch-delegates");
+    let present = stored_key(&fixture, "fake");
+    let switching = switching(&fixture, &[present.as_str()]);
+    let (providers, _) = Providers::load(&fixture.home).expect("providers load");
+    let config = config(&fixture, &[present.as_str()]);
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let delegates = Arc::new(crate::delegates::Delegates::new(
+        fixture.home.join("fiber-stub"),
+        fixture.home.clone(),
+        contract::SessionId("s_switch_delegates".into()),
+        fixture.workspace.clone(),
+        fixture.home.join("sessions"),
+        jobs::Registry::new(
+            fixture.home.join("artifacts"),
+            Arc::clone(&clock),
+            Arc::new(fakes::Recorder::default()),
+        ),
+        clock,
+        crate::delegates::resolver(&providers, &config, "fake/m"),
+        Arc::new(Mutex::new(tools::SandboxSettings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        })),
+    ));
+    switching.set_delegates(&delegates);
+    let before = delegates.resolve_snapshot().catalogue.to_string();
+    assert!(
+        before.starts_with("Session model: fiber:fake/m\n"),
+        "{before}"
+    );
+    let made = prepared(&switching, &args("other/m"), None);
+    assert_eq!(made.model.reference, "other/m");
+    made.applied.expect("a switch applies")();
+    // Without the rebuild the first line would still name `fake/m`.
+    let after = delegates.resolve_snapshot().catalogue.to_string();
+    assert!(
+        after.starts_with("Session model: fiber:other/m\n"),
+        "{after}"
+    );
+    assert!(after.contains("fake ("), "{after}");
+}
+
 /// A failed read rejects with the credential's own code, names the
 /// command by its program alone, and caches nothing: the next switch reads
 /// again.
