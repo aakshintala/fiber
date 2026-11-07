@@ -67,7 +67,6 @@ crates/routing/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-p
 crates/tools/Cargo.toml	fiber-4277	plan	2026-11-06T12:06:50Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/contract/src/steering_tests.rs	fiber-4277	plan	2026-11-06T12:12:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 xtask/src/rules_tests.rs	fiber-4277	plan	2026-11-06T12:19:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
-crates/main/tests/terminal.rs	tests/4318-terminal-resume-list	grant	2026-11-06T18:41:29Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4318-terminal-resume-list	
 crates/contract/src/events/delegate_finished.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
 crates/contract/src/events/delegate_finished_tests.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
 crates/contract/src/events.rs	loop/4250-settle-orphan-from-delegate-log	grant	2026-11-06T20:11:49Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4250-settle-orphan-from-delegate-log	
