@@ -35,7 +35,7 @@ seccompiler.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
-fakes = { path = "../fakes" }
+fakes = { package = "fakes-contract", path = "../fakes-contract" }
 proptest.workspace = true
 
 # The jig (docs/testing.md, "Jigs").

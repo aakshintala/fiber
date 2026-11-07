@@ -127,7 +127,8 @@ const NET_USERS_QUOTE: &str =
     "`provider`, `tools`, `mcp`, `extensions` and `doors` may depend on it";
 const ROUTING_QUOTE: &str = "`routing` depends on `contract`, `config`, `extensions` and `provider`, and is the only crate that depends on both `extensions` and `provider`; only `main` depends on it.";
 const MAIN_QUOTE: &str = "`main` depends on everything, and nothing depends on `main`.";
-const FAKES_QUOTE: &str = "It depends on `contract` and `support`.";
+const FAKES_QUOTE: &str = "`fakes` depends only on `support` in the workspace.";
+const FAKES_CONTRACT_QUOTE: &str = "`fakes-contract` depends on `contract`, `support` and `fakes`.";
 const BENCH_QUOTE: &str =
     "It takes the Fiber crates it measures through, plus `fakes`, as dev-dependencies only";
 
@@ -137,6 +138,10 @@ pub(crate) struct Calls {
     pub(crate) depends_on: &'static [&'static str],
     pub(crate) quote: &'static str,
 }
+
+/// Test-only workspace crates; additions need a surveyor ruling.
+#[cfg(test)]
+pub(crate) const TEST_ONLY_CRATES: &[&str] = &["support", "fakes", "xtask", "fakes-contract"];
 
 /// The quoted rules that grant each first-party crate's normal dependencies.
 pub(crate) const CALLS: &[Calls] = &[
@@ -330,8 +335,13 @@ pub(crate) const CALLS: &[Calls] = &[
     },
     Calls {
         krate: "fakes",
-        depends_on: &["contract"],
+        depends_on: &[],
         quote: FAKES_QUOTE,
+    },
+    Calls {
+        krate: "fakes-contract",
+        depends_on: &["contract", "fakes"],
+        quote: FAKES_CONTRACT_QUOTE,
     },
     Calls {
         krate: "bench",

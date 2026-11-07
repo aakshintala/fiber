@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, PoisonError};
 /// test thread that panicked has already failed its test.
 use support::lock;
 
-use contract::clock::Clock;
+use support::clock::Clock;
 
 use crate::clock::SystemClock;
 use crate::deadline::Deadline;
