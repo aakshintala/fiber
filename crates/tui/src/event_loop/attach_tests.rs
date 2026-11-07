@@ -7185,7 +7185,7 @@ fn serve_cold_resume(
                     continue;
                 }
                 if let Some(first) = first.take() {
-                    let _ = first.send(());
+                    first.send(()).unwrap_or(());
                 }
                 if let Some(go) = go.take() {
                     // The test's go-ahead; a dropped sender releases a
@@ -7287,7 +7287,6 @@ fn exited_prompt_keeps_transcript_and_keys() {
 
 /// Probe: the #4259 app-level refusal shape, driven here to bisect
 /// the loop-level silence.
-#[test]
 /// A refused resume surfaces its reason as a notice, returns the
 /// draft, and the loop still handles a follow-up input; a refusal for
 /// another session's id settles nothing on the attached session

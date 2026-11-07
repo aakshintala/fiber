@@ -215,17 +215,17 @@ fn still_needed_range_fails() {
     // Folds one durable line with its own seq and payload; a
     // `turn_started` answer the fold asks for is left pending, as the
     // attach harness does while it replays.
-    let mut fold = |app: &mut App,
-                    seq: &mut u64,
-                    kind: &str,
-                    action: Option<&str>,
-                    at: u64,
-                    payload: Value| {
+    let fold = |app: &mut App,
+                seq: &mut u64,
+                kind: &str,
+                action: Option<&str>,
+                at: u64,
+                payload: Value| {
         let mut line = envelope(seq, kind, action, payload);
         line.seq = Some(Seq(at));
         let _ = app.on_line(Line::Session(line));
     };
-    let mut turn = |app: &mut App, seq: &mut u64, at: &mut u64, nth: usize, text: &str| {
+    let turn = |app: &mut App, seq: &mut u64, at: &mut u64, nth: usize, text: &str| {
         let message = format!("a_m{nth}");
         let user = json!({"input": [{"type": "message", "source": "driver",
             "content": [{"type": "text", "text": text}]}]});
