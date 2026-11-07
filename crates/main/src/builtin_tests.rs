@@ -1416,35 +1416,40 @@ fn driver_shell_has_no_foreground_default() {
     let cancel = fakes::CancelToken::new();
     let run_cancel = cancel.clone();
     let (done, finished) = std::sync::mpsc::channel();
-    match std::thread::Builder::new()
+    let driver_thread = match std::thread::Builder::new()
         .name("fiber-driver-no-timeout".to_owned())
         .spawn(move || {
             let output = driver.run(&arguments, &run_cancel, &Quiet);
             done.send(output).unwrap_or(());
         }) {
-        Ok(_) => {}
+        Ok(handle) => handle.thread().id(),
         Err(err) => panic!("could not start a thread for the driver call: {err}"),
-    }
+    };
     // The agent's foreground default parks exactly one default past start;
     // a driver call parks with no deadline, so this advance takes nothing.
     let advance = Duration::from_millis(600_000);
-    match fake.try_advance_when_parked(Some(t0 + advance), None, advance, CALL_WITHIN) {
+    match fake.try_advance_when_parked(
+        Some(t0 + advance),
+        Some(driver_thread),
+        advance,
+        CALL_WITHIN,
+    ) {
         Ok(_) => {}
         Err(fakes::clock::Miss::NoPark) => {}
         Err(fakes::clock::Miss::Mismatch { .. }) => {}
     }
     cancel.cancel();
-    let output = Deadline::after(CALL_WITHIN).recv_or_fail(&finished, "the driver call");
+    let output =
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv_or_fail(&finished, "the driver call");
     let text = match output.content.first() {
         Some(contract::shapes::ContentPart::Text { text }) => text.clone(),
         _ => String::new(),
     };
-    let error = output.error.as_ref().expect("a cancelled error");
-    assert_eq!(error.code, contract::ErrorCode::Cancelled, "{text}");
     assert!(
-        text.contains("Cancelled and stopped."),
-        "cancel stops the driver call: {text}"
+        output.error.is_none(),
+        "cancel carries no error, only its closing line: {text}"
     );
+    assert_eq!(text, "Cancelled and stopped.\n");
     assert!(
         !text.contains("Timed out after"),
         "no foreground default reaches the driver call: {text}"

@@ -126,6 +126,11 @@ pub struct Shell {
     /// "Background jobs"). `None` in a session that offers no detached
     /// commands, such as the driver shell.
     detached: Option<PathBuf>,
+    /// The person's own commands run with no foreground timeout: a `!` or
+    /// `!!` command and the `shell` driver command run until they exit,
+    /// until `cancel` stops them, or until the session shuts down. The
+    /// agent's `shell` tool calls keep the 10-minute default.
+    no_timeout: bool,
     host: Option<Arc<dyn contract::keeper::CommandHost>>,
 }
 
@@ -154,6 +159,7 @@ impl Shell {
             spill_wrap: None,
             protection: None,
             detached: None,
+            no_timeout: false,
             host: None,
         }
     }
@@ -267,6 +273,17 @@ impl Shell {
         }
     }
 
+    /// Runs a foreground call with no `timeout_ms` under no timeout: it runs
+    /// until it exits, until `cancel` stops it, or until the session shuts
+    /// down. An explicit `timeout_ms` still bounds the call on every mode.
+    #[must_use]
+    pub fn with_no_timeout(self) -> Self {
+        Self {
+            no_timeout: true,
+            ..self
+        }
+    }
+
     /// The current sandbox settings. `effects` declares a call confined
     /// only when the platform can apply them; a call declared confined then
     /// fails closed if the policy becomes unavailable before spawn
@@ -375,7 +392,12 @@ impl Tool for Shell {
             .get("command")
             .and_then(Value::as_str)
             .is_some_and(review_when_confined);
-        let mut effects = match parse(arguments, &self.workspace, self.max_timeout_ms) {
+        let mut effects = match parse(
+            arguments,
+            &self.workspace,
+            self.max_timeout_ms,
+            self.no_timeout,
+        ) {
             Ok(parsed) => {
                 unconfined = parsed.unconfined;
                 detach = parsed.detach;
@@ -434,7 +456,12 @@ impl Tool for Shell {
         let settings = self.selected();
         if let Err(unavailable) = sandbox::check_available(&settings, &self.workspace) {
             let cause = unavailable.to_string();
-            return match parse(arguments, &self.workspace, self.max_timeout_ms) {
+            return match parse(
+                arguments,
+                &self.workspace,
+                self.max_timeout_ms,
+                self.no_timeout,
+            ) {
                 Ok(parsed) => {
                     let mut output = errored(ShellError::SandboxApply { cause });
                     output.details = Some(details(&parsed.command, None));
@@ -487,7 +514,13 @@ impl Tool for Shell {
     /// cloned under the lock and the lock released before classifying, so
     /// no filesystem read runs while it is held.
     fn review_note(&self, arguments: &Map<String, Value>) -> Option<String> {
-        let parsed = parse(arguments, &self.workspace, self.max_timeout_ms).ok()?;
+        let parsed = parse(
+            arguments,
+            &self.workspace,
+            self.max_timeout_ms,
+            self.no_timeout,
+        )
+        .ok()?;
         let entries = support::lock(&self.read_only).clone();
         classify::not_shown_read_only(&parsed.command, &self.workspace, &parsed.workdir, &entries)
     }
@@ -510,7 +543,12 @@ impl Shell {
         if cancel.is_cancelled() {
             return cancelled_before();
         }
-        let parsed = match parse(arguments, &self.workspace, self.max_timeout_ms) {
+        let parsed = match parse(
+            arguments,
+            &self.workspace,
+            self.max_timeout_ms,
+            self.no_timeout,
+        ) {
             Ok(parsed) => parsed,
             Err(error) => return errored(error),
         };
@@ -784,6 +822,7 @@ fn parse(
     arguments: &Map<String, Value>,
     workspace: &Path,
     max_timeout_ms: u64,
+    no_timeout: bool,
 ) -> Result<Parsed, ShellError> {
     let args: Args = crate::tool_util::parsed(arguments)?;
     let command = args.command;
@@ -829,8 +868,14 @@ fn parse(
     } else if mode.in_background() {
         // A background call with no `timeout_ms` has no timeout.
         given_timeout
+    } else if let Some(given) = given_timeout {
+        Some(given)
+    } else if no_timeout {
+        // The person's own commands run with no timeout: until they exit,
+        // until `cancel` stops them, or until the session shuts down.
+        None
     } else {
-        Some(given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS))
+        Some(DEFAULT_TIMEOUT_MS)
     };
     Ok(Parsed {
         command,

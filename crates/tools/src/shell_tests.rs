@@ -56,7 +56,7 @@ fn nullable_optional_arguments_parse_as_absent() {
     let dir = fakes::TempDir::new("fiber-shell-nullable");
     let arguments = fakes::tool_args(json!({"command": "ls", "workdir": null, "timeout_ms": null,
         "run_in_background": null, "tty": null, "monitor": null, "unconfined": null, "detach": null}));
-    let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+    let parsed = parse(&arguments, dir.path(), 600_000, false).unwrap();
     assert_eq!(parsed.command, "ls");
     assert_eq!(parsed.mode, Mode::Foreground);
     assert_eq!(parsed.workdir, dir.path());
@@ -128,14 +128,14 @@ fn nullable_optional_arguments_parse_as_absent() {
     ] {
         let mut args = arguments.clone();
         args.extend(overrides.as_object().unwrap().clone());
-        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        let parsed = parse(&args, dir.path(), 600_000, false).unwrap();
         assert_eq!(parsed.mode, mode);
         assert_eq!(parsed.timeout_ms, timeout);
     }
     let refused = |overrides: Value| {
         let mut args = arguments.clone();
         args.extend(overrides.as_object().unwrap().clone());
-        parse(&args, dir.path(), 600_000).err()
+        parse(&args, dir.path(), 600_000, false).err()
     };
     assert!(matches!(
         refused(json!({"monitor": true, "tty": true})),
@@ -154,7 +154,7 @@ fn nullable_optional_arguments_parse_as_absent() {
     for timeout in [Value::Null, json!(1), json!(1_000), json!(10_000_000)] {
         let mut args = arguments.clone();
         args.extend(json!({"timeout_ms": timeout}).as_object().unwrap().clone());
-        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        let parsed = parse(&args, dir.path(), 600_000, false).unwrap();
         assert_eq!(parsed.mode, Mode::Foreground);
         assert_eq!(parsed.timeout_ms, Some(timeout.as_u64().unwrap_or(600_000)));
     }
@@ -176,7 +176,7 @@ fn nullable_optional_arguments_parse_as_absent() {
                 .unwrap()
                 .clone(),
         );
-        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        let parsed = parse(&args, dir.path(), 600_000, false).unwrap();
         assert_eq!(parsed.mode, Mode::Monitor);
         assert_eq!(parsed.timeout_ms, limit);
     }
@@ -192,12 +192,12 @@ fn nullable_optional_arguments_parse_as_absent() {
     ] {
         let mut args = fakes::tool_args(json!({"command": "ls"}));
         args.extend(json!({"unconfined": given}).as_object().unwrap().clone());
-        let parsed = parse(&args, dir.path(), 600_000).unwrap();
+        let parsed = parse(&args, dir.path(), 600_000, false).unwrap();
         assert_eq!(parsed.unconfined, expected, "unconfined: {given}");
     }
     // `unconfined` combines with any mode: the mode checks are unchanged.
     let combined = fakes::tool_args(json!({"command": "ls", "monitor": true, "unconfined": true}));
-    let parsed = parse(&combined, dir.path(), 600_000).unwrap();
+    let parsed = parse(&combined, dir.path(), 600_000, false).unwrap();
     assert_eq!(parsed.mode, Mode::Monitor);
     assert!(parsed.unconfined);
 }
@@ -1015,7 +1015,7 @@ fn the_flags_parse_to_one_mode_and_only_run_in_background_skips_the_bare_wait() 
         arguments.insert("run_in_background".into(), json!(background));
         arguments.insert("tty".into(), json!(tty));
         arguments.insert("monitor".into(), json!(monitor));
-        let mode = parse(&arguments, Path::new("/"), 1_800_000)
+        let mode = parse(&arguments, Path::new("/"), 1_800_000, false)
             .ok()
             .map(|parsed| parsed.mode);
         assert_eq!(mode, expected, "{background} {tty} {monitor}");
@@ -1430,7 +1430,7 @@ fn non_boolean_unconfined_is_invalid_arguments() {
     for given in [json!("true"), json!(1), json!({})] {
         let mut arguments = args("echo hi");
         arguments.insert("unconfined".into(), given.clone());
-        let error = parse(&arguments, dir.path(), 600_000)
+        let error = parse(&arguments, dir.path(), 600_000, false)
             .err()
             .unwrap_or_else(|| panic!("unconfined:{given} parses"));
         assert!(
@@ -1525,34 +1525,66 @@ fn an_unknown_command_still_offers_its_subject_and_prefix() {
 fn background_without_timeout_has_none_while_foreground_keeps_default() {
     let dir = fakes::TempDir::new("fiber-shell-bg-none");
     let base = fakes::tool_args(json!({"command": "sleep 30"}));
-    let with = |overrides: Value| {
+    let with = |overrides: Value, no_timeout: bool| {
         let mut arguments = base.clone();
         arguments.extend(overrides.as_object().unwrap().clone());
-        parse(&arguments, dir.path(), 600_000).unwrap()
+        parse(&arguments, dir.path(), 600_000, no_timeout).unwrap()
     };
+    let agent = |overrides: Value| with(overrides, false);
+    let driver = |overrides: Value| with(overrides, true);
     // A background call with no `timeout_ms` has none.
-    assert_eq!(with(json!({"run_in_background": true})).timeout_ms, None);
+    assert_eq!(agent(json!({"run_in_background": true})).timeout_ms, None);
     // A terminal with `run_in_background` is a background call too.
     assert_eq!(
-        with(json!({"tty": true, "run_in_background": true})).timeout_ms,
+        agent(json!({"tty": true, "run_in_background": true})).timeout_ms,
         None
     );
     // A foreground call with no `timeout_ms` keeps the 600,000 default.
-    assert_eq!(with(json!({})).timeout_ms, Some(600_000));
+    assert_eq!(agent(json!({})).timeout_ms, Some(600_000));
     // A `tty` without `run_in_background` keeps the default.
-    assert_eq!(with(json!({"tty": true})).timeout_ms, Some(600_000));
+    assert_eq!(agent(json!({"tty": true})).timeout_ms, Some(600_000));
     // A monitor keeps its 300,000 default.
-    assert_eq!(with(json!({"monitor": true})).timeout_ms, Some(300_000));
+    assert_eq!(agent(json!({"monitor": true})).timeout_ms, Some(300_000));
     // An explicit timeout is kept on every mode.
     assert_eq!(
-        with(json!({"run_in_background": true, "timeout_ms": 5_000})).timeout_ms,
+        agent(json!({"run_in_background": true, "timeout_ms": 5_000})).timeout_ms,
         Some(5_000)
     );
-    assert_eq!(with(json!({"timeout_ms": 5_000})).timeout_ms, Some(5_000));
+    assert_eq!(agent(json!({"timeout_ms": 5_000})).timeout_ms, Some(5_000));
     assert_eq!(
-        with(json!({"monitor": true, "timeout_ms": 5_000})).timeout_ms,
+        agent(json!({"monitor": true, "timeout_ms": 5_000})).timeout_ms,
         Some(5_000)
     );
+    // A driver foreground call with no `timeout_ms` has no timeout.
+    assert_eq!(driver(json!({})).timeout_ms, None);
+    // An explicit timeout still bounds a driver call.
+    assert_eq!(driver(json!({"timeout_ms": 5_000})).timeout_ms, Some(5_000));
+    // The flag reaches no other mode: monitor, background and detached
+    // branches ignore it.
+    assert_eq!(driver(json!({"monitor": true})).timeout_ms, Some(300_000));
+    assert_eq!(
+        driver(json!({"monitor": true, "timeout_ms": 5_000})).timeout_ms,
+        Some(5_000)
+    );
+    assert_eq!(driver(json!({"run_in_background": true})).timeout_ms, None);
+}
+
+#[test]
+fn driver_shell_precancelled_is_cancelled_before_start() {
+    let dir = fakes::TempDir::new("fiber-shell-driver-pre-cancel");
+    let marker = dir.path().join("marker");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_no_timeout();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let output = shell.run(
+        &args(&format!("touch {}", marker.display())),
+        &cancel,
+        &Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    assert!(output.process.is_none());
+    assert_eq!(text(&output), "Cancelled before it started.\n");
+    assert!(!marker.exists());
 }
 
 #[test]
@@ -1600,7 +1632,7 @@ fn one_ms_is_accepted_on_every_mode() {
     ] {
         let mut arguments = args("exit 0");
         arguments.extend(overrides.as_object().unwrap().clone());
-        let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+        let parsed = parse(&arguments, dir.path(), 600_000, false).unwrap();
         assert_eq!(parsed.timeout_ms, Some(1), "{overrides}");
     }
 }
@@ -1612,7 +1644,7 @@ fn detached_arguments(command: &str) -> Map<String, Value> {
 }
 
 fn detach_error(arguments: &Map<String, Value>, dir: &Path) -> ShellError {
-    match parse(arguments, dir, 600_000) {
+    match parse(&arguments, dir, 600_000, false) {
         Ok(parsed) => panic!("a bad detach combination parsed: {}", parsed.command),
         Err(error) => error,
     }
@@ -1661,7 +1693,7 @@ fn detach_without_a_timeout_ms_parses_without_a_timeout() {
         if let Some(timeout) = given {
             arguments.insert("timeout_ms".into(), timeout);
         }
-        let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+        let parsed = parse(&arguments, dir.path(), 600_000, false).unwrap();
         assert!(parsed.detach);
         assert_eq!(parsed.timeout_ms, None);
         assert!(parsed.unconfined, "detach implies unconfined");
@@ -1685,7 +1717,7 @@ fn detach_with_unconfined_true_or_absent_parses_unconfined() {
         if let Some(unconfined) = given {
             arguments.insert("unconfined".into(), unconfined);
         }
-        let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+        let parsed = parse(&arguments, dir.path(), 600_000, false).unwrap();
         assert!(parsed.detach);
         assert!(parsed.unconfined);
     }
@@ -1699,7 +1731,7 @@ fn absent_detach_parses_as_an_ordinary_call() {
         if let Some(detach) = given {
             arguments.insert("detach".into(), detach);
         }
-        let parsed = parse(&arguments, dir.path(), 600_000).unwrap();
+        let parsed = parse(&arguments, dir.path(), 600_000, false).unwrap();
         assert!(!parsed.detach);
         assert_eq!(parsed.timeout_ms, Some(600_000));
         assert!(!parsed.unconfined);
