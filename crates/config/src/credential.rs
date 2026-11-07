@@ -17,7 +17,7 @@ use support::lock;
 
 use crate::credential_origin::Located;
 use crate::error::ConfigError;
-use crate::extension::ProviderData;
+use crate::extension::{CredentialFrom, ProviderData};
 use crate::secret::{CredentialSource, credential_labels, read_credential, read_secret};
 
 /// The label of the source a provider's data declares, and of the key
@@ -180,6 +180,7 @@ impl Credentials {
         let missing = |why: String| ConfigError::CredentialMissing {
             provider: name.clone(),
             why,
+            login_advice: matches!(provider.credential_from, CredentialFrom::Stored { .. }),
         };
         // The one precedence, shared with `credential_origins` and
         // `key_presence`: the stored credential owns the label, else the
@@ -203,6 +204,7 @@ impl Credentials {
                 .ok_or_else(|| ConfigError::CredentialFailed {
                     provider: name.clone(),
                     why: format!("credentials/{stored}/{label} is empty"),
+                    login_advice: matches!(provider.credential_from, CredentialFrom::Stored { .. }),
                 });
         }
         let from_config = sources_in(&self.providers, name)
