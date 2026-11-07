@@ -33,13 +33,6 @@ crates/doors/src/client/level_tests.rs	contract/4162-kind-private	grant	2026-11-
 crates/loop/src/process.rs	contract/4162-kind-private	grant	2026-11-06T20:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4162-kind-private	
 crates/loop/src/process_tests.rs	contract/4162-kind-private	grant	2026-11-06T20:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4162-kind-private	
 crates/tui/src/approvals.rs	contract/4162-kind-private	grant	2026-11-06T20:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/contract/4162-kind-private	
-crates/tools/src/shell.rs	fiber-4252	plan	2026-11-07T02:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/shell_tests.rs	fiber-4252	plan	2026-11-07T02:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/builtin.rs	fiber-4252	plan	2026-11-07T02:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/builtin_tests.rs	fiber-4252	plan	2026-11-07T02:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/driver_shell_no_timeout.rs	fiber-4252	plan	2026-11-07T02:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tui.md	fiber-4252	plan	2026-11-07T02:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/invocation.md	fiber-4252	plan	2026-11-07T02:32:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/tool.rs	fiber-4260	plan	2026-11-07T02:40:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/tool_tests.rs	fiber-4260	plan	2026-11-07T02:40:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/shell.rs	fiber-4260	plan	2026-11-07T02:40:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
