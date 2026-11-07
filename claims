@@ -364,3 +364,13 @@ crates/tools/src/reviewer_notes_save.rs	fiber-4237	plan	2026-11-07T05:29:35Z	Amo
 crates/tools/src/reviewer_notes_save_tests.rs	fiber-4237	plan	2026-11-07T05:29:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/reviewer_evidence.rs	fiber-4237	plan	2026-11-07T05:29:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/reviewer_evidence.rs	fiber-4237	plan	2026-11-07T05:29:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/notes.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/contract/src/notes_tests.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/loop/src/notes.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/doors/src/notes/read_only.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tools/src/ask_user.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/contract/src/events/action.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/contract/src/events/fit.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/config/src/settings.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/configure.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/slash.rs	fiber-4237	plan	2026-11-07T05:31:44Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
