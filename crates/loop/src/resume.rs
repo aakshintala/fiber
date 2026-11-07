@@ -662,8 +662,16 @@ impl Loop {
                 continue;
             };
             // debt: worktree is None on a settled finish; the live path sets it (run.rs:653). Fix is tracked in #4313: settle builds EndWorktree { path, branch, base: None, remove: false } from session_started.worktree and calls the injected FinishWorktree outside the pure fold. Keep remove: false: a resumed run reports only; its session process owns removal (crates/doors/src/isolation.rs:190).
-            let finished =
-                crate::delegated::bounded(&self.log, exited.delegate_finished(&orphan.job_id));
+            // No delivery hook runs on a settle, so the file holds the
+            // message as the delegate wrote it.
+            let mut finished = exited.delegate_finished(&orphan.job_id);
+            finished.artifact_absolute = Some(
+                dir.join(contract::events::FINAL_MESSAGE)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            crate::deliveries::write_final_file(&mut finished, false);
+            let finished = crate::delegated::bounded(&self.log, finished);
             settled.push(OrphanEnd::Settled(
                 finished,
                 Box::new(settle_completed(orphan, &exited)),

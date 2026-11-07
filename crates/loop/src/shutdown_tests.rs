@@ -138,6 +138,7 @@ impl Listed {
                 job_id: JobId(id.into()),
                 text: text.into(),
                 artifact: None,
+                artifact_absolute: None,
                 questions: None,
                 usage: Usage {
                     tokens: Tokens {
@@ -1006,6 +1007,7 @@ fn settle_writes_a_queued_delegate_finish_before_its_end() {
             job_id: JobId("j_1".into()),
             text: "Done.".into(),
             artifact: None,
+            artifact_absolute: None,
             questions: None,
             usage: Usage {
                 tokens: Tokens {
@@ -1655,6 +1657,7 @@ fn queued_notice(holds: bool, asked: &Arc<AtomicUsize>) -> crate::jobs::Queued {
             job_id: JobId("j_1".into()),
             text: "Done.".into(),
             artifact: None,
+            artifact_absolute: None,
             questions: None,
             usage: Usage {
                 tokens: Tokens {
@@ -1768,6 +1771,7 @@ fn queued_ahead_notice(
             job_id: JobId("j_1".into()),
             text: "Done.".into(),
             artifact: None,
+            artifact_absolute: None,
             questions: None,
             usage: Usage {
                 tokens: Tokens {
@@ -1874,6 +1878,7 @@ fn settle_writes_ahead_before_a_notice_delivered_while_settling() {
                 job_id: JobId("j_1".into()),
                 text: "Done.".into(),
                 artifact: None,
+                artifact_absolute: None,
                 questions: None,
                 usage: Usage {
                     tokens: Tokens {
@@ -2169,6 +2174,7 @@ fn settle_under_shutdown_runs_no_hook_and_writes_its_end_raw() {
             job_id: JobId("j_1".into()),
             text: "Done.".into(),
             artifact: None,
+            artifact_absolute: None,
             questions: None,
             usage: Usage {
                 tokens: Tokens {

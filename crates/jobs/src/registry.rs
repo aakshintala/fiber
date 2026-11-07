@@ -799,6 +799,11 @@ fn final_text(
         completed.job_id.0,
         status_word(completed.status)
     );
+    // Second, ahead of any error of unbounded length, so the 16 KiB a
+    // result keeps always holds it.
+    if let Some(file) = finished.and_then(|finished| finished.artifact_absolute.as_deref()) {
+        text.push_str(&format!("Full final message: {file}\n"));
+    }
     if let Some(code) = completed
         .process
         .as_ref()
