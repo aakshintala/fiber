@@ -153,3 +153,4 @@ crates/tui/src/view/panel.rs	fiber-4183	plan	2026-11-07T16:20:56Z	Amoghs-MacBook
 crates/tui/src/view/panel_tests.rs	fiber-4183	plan	2026-11-07T16:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4370
 crates/tui/src/view/status_rows.rs	fiber-4183	plan	2026-11-07T16:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4370
 docs/tui.md	fiber-4183	plan	2026-11-07T16:20:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4370
+crates/tui/src/scroll_stall_tests.rs	fiber-4059	grant	2026-11-07T16:24:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4059-scroll-up-stall	
