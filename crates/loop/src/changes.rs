@@ -13,11 +13,29 @@ use contract::events::{
     DateChanged, Event, InstructionFile, InstructionReason, InstructionSent, Notice, OpeningMessage,
 };
 use contract::shapes::{DeclaredEffects, Effect};
-use contract::{ActionId, Envelope};
+use contract::{ActionId, Envelope, ErrorCode};
 
 use crate::Error;
 use crate::opening;
 use crate::prompt::PromptInputs;
+
+/// A subdirectory instruction file over this many raw bytes is sent as
+/// a stub (path, size, headings) instead of its full text, the first
+/// time a call touches its directory. At or under the limit it is sent
+/// in full, as are all top-level files whatever their size.
+const SUBDIRECTORY_STUB_BYTES: u64 = 32768;
+
+/// The `instructions_large` notice for a stubbed subdirectory file: it
+/// names the path and size and says a stub was sent.
+fn stub_notice(path: &str, size: u64) -> Notice {
+    Notice {
+        code: ErrorCode::InstructionsLarge,
+        message: format!(
+            "Instruction file {path} is {size} bytes, over the 32 KiB subdirectory limit, so it was sent as a stub instead of the full text."
+        ),
+        extension: None,
+    }
+}
 
 /// A file's size and modification time when last read.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -89,6 +107,10 @@ pub(crate) struct State {
     /// The subdirectory lines a call queued, written at the next step
     /// start.
     queued: Vec<Event>,
+    /// Every path sent as a stub, in path order: a later send of one
+    /// stays a stub, whatever its size now. Only grows within a
+    /// context; restored from the log's stub lines on resume.
+    stubbed: BTreeSet<String>,
 }
 
 /// What one turn-start check found.
@@ -117,6 +139,7 @@ impl State {
             had: BTreeMap::new(),
             sections: Vec::new(),
             queued: Vec::new(),
+            stubbed: BTreeSet::new(),
         }
     }
 
@@ -213,6 +236,11 @@ impl State {
                 state.track_added(Path::new(&added.path));
             }
             if let Event::InstructionFile(file) = &event {
+                if file.sent == InstructionSent::Stub {
+                    // A stub stays a stub across the resume: a later send
+                    // of the path re-stubs by size through the same set.
+                    state.stubbed.insert(file.path.clone());
+                }
                 if file.extension.is_some() {
                     // A historical section file: only today's manifest
                     // tracks it, and its directory never becomes checked.
@@ -367,34 +395,56 @@ impl State {
                     return;
                 }
                 let extension = self.extension_of(path).map(str::to_owned);
-                out.files.push(match old {
-                    Some(old) => {
-                        let diff = unified_diff(&old, &content, path);
-                        // The full text when the diff is longer in bytes
-                        // than the new file.
-                        let sent = if diff.len() > content.len() {
-                            InstructionSent::Full
-                        } else {
-                            InstructionSent::Diff
-                        };
-                        InstructionFile {
-                            path: path.to_owned(),
-                            reason: InstructionReason::Changed,
-                            extension: extension.clone(),
-                            content: Some(content.clone()),
-                            sent,
-                            size: None,
-                        }
-                    }
-                    None => InstructionFile {
+                // The raw byte length read now, on every line carrying
+                // content; the stub renderer reads it back, falling back
+                // to the content's length on pre-change lines.
+                let size = Some(bytes.len() as u64);
+                // A path once sent as a stub stays a stub through growth,
+                // shrinkage and delete/recreate; the reason still follows
+                // what the model had.
+                if self.stubbed.contains(path) {
+                    out.files.push(InstructionFile {
                         path: path.to_owned(),
-                        reason: InstructionReason::Created,
+                        reason: if old.is_some() {
+                            InstructionReason::Changed
+                        } else {
+                            InstructionReason::Created
+                        },
                         extension,
                         content: Some(content),
-                        sent: InstructionSent::Full,
-                        size: None,
-                    },
-                });
+                        sent: InstructionSent::Stub,
+                        size,
+                    });
+                } else {
+                    out.files.push(match old {
+                        Some(old) => {
+                            let diff = unified_diff(&old, &content, path);
+                            // The full text when the diff is longer in bytes
+                            // than the new file.
+                            let sent = if diff.len() > content.len() {
+                                InstructionSent::Full
+                            } else {
+                                InstructionSent::Diff
+                            };
+                            InstructionFile {
+                                path: path.to_owned(),
+                                reason: InstructionReason::Changed,
+                                extension: extension.clone(),
+                                content: Some(content.clone()),
+                                sent,
+                                size,
+                            }
+                        }
+                        None => InstructionFile {
+                            path: path.to_owned(),
+                            reason: InstructionReason::Created,
+                            extension,
+                            content: Some(content),
+                            sent: InstructionSent::Full,
+                            size,
+                        },
+                    });
+                }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 self.track(path, None);
@@ -500,7 +550,7 @@ impl State {
                         extension: None,
                         content: Some(content),
                         sent: InstructionSent::Full,
-                        size: None,
+                        size: Some(bytes.len() as u64),
                     }),
                     None,
                 )
@@ -572,7 +622,7 @@ impl State {
                             extension,
                             content: Some(content),
                             sent: InstructionSent::None,
-                            size: None,
+                            size: Some(bytes.len() as u64),
                         });
                     }
                 }
@@ -692,10 +742,38 @@ impl State {
                         // An own edit already moved what the model had.
                         continue;
                     }
-                    out.push(Event::InstructionFile(InstructionFile {
-                        content: Some(content),
-                        ..file
-                    }));
+                    let raw = bytes.len() as u64;
+                    // The queued size holds unless the re-read content
+                    // differs, when the emit-time raw length replaces it.
+                    let size = if file.content.as_deref() == Some(content.as_str()) {
+                        file.size
+                    } else {
+                        Some(raw)
+                    };
+                    // A first touch over the limit goes out as a stub,
+                    // with the full content in the log and one
+                    // `instructions_large` notice naming it; anything
+                    // smaller, and any other reason, keeps today's
+                    // mapping.
+                    if file.reason == InstructionReason::Subdirectory
+                        && raw > SUBDIRECTORY_STUB_BYTES
+                    {
+                        let notice = stub_notice(&file.path, raw);
+                        self.stubbed.insert(file.path.clone());
+                        out.push(Event::InstructionFile(InstructionFile {
+                            content: Some(content),
+                            sent: InstructionSent::Stub,
+                            size,
+                            ..file
+                        }));
+                        out.push(Event::Notice(notice));
+                    } else {
+                        out.push(Event::InstructionFile(InstructionFile {
+                            content: Some(content),
+                            size,
+                            ..file
+                        }));
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                     self.track(&file.path, None);

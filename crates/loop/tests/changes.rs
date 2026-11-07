@@ -1228,6 +1228,81 @@ fn a_subdirectory_file_is_queued_for_the_next_step() {
 }
 
 #[test]
+fn a_large_subdirectory_file_is_sent_as_a_stub() {
+    let scan = Arc::new(support::TestTool::declaring(
+        "scan",
+        "Scanned.",
+        vec![Effect::Reads],
+        Some(vec!["sub/notes.txt".into()]),
+    ));
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("Working.", &[("scan", city())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![scan as Arc<dyn Tool>],
+    );
+    // Below the workspace: the opening message never reads it.
+    std::fs::create_dir_all(session.workspace.join("sub")).unwrap();
+    // 40 KiB: one heading plus padding.
+    let mut content = String::from("# Sub rules.\n");
+    content.push_str(&"x".repeat(40 * 1024 - content.len()));
+    assert_eq!(content.len(), 40 * 1024);
+    std::fs::write(session.workspace.join("sub/AGENTS.md"), &content).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The log holds the full content with `sent: stub` and the size.
+    let sub = lines
+        .iter()
+        .find(|line| line.kind() == EventKind::InstructionFile)
+        .unwrap();
+    assert_eq!(sub.payload["reason"], "subdirectory");
+    assert_eq!(sub.payload["sent"], "stub");
+    assert_eq!(sub.payload["size"], 40 * 1024);
+    let logged = sub.payload["content"].as_str().unwrap();
+    assert_eq!(logged.len(), 40 * 1024);
+    assert!(logged.contains("# Sub rules."), "len {}", logged.len());
+    // The stub-time notice names the path and size.
+    let notices: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind() == EventKind::Notice)
+        .collect();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].payload["code"], "instructions_large");
+    let message = notices[0].payload["message"].as_str().unwrap();
+    assert!(message.contains("40960 bytes"), "{message}");
+    assert!(message.contains("stub"), "{message}");
+    // The next request carries the stub text, not the full content.
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    let texts: Vec<&str> = requests[1]
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let stub = texts
+        .iter()
+        .find(|text| text.contains("this stub instead of the full text"))
+        .copied();
+    let stub = stub.unwrap_or_else(|| {
+        panic!(
+            "second request holds {} user texts, {} chars",
+            texts.len(),
+            texts.iter().map(|text| text.len()).sum::<usize>()
+        )
+    });
+    assert!(stub.contains("### "), "len {}", stub.len());
+    assert!(stub.contains("# Sub rules."), "len {}", stub.len());
+    assert!(stub.contains("40960 bytes"), "len {}", stub.len());
+    assert!(!stub.contains(&"x".repeat(64)), "len {}", stub.len());
+}
+
+#[test]
 fn a_later_date_appends_one_line() {
     let mut session = Session::new(vec![Scripted::text("One."), Scripted::text("Two.")], None);
     session.inbox.send(delivery("hi")).unwrap();
