@@ -4,18 +4,6 @@ crates/fakes/src/http_server.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacB
 crates/fakes/src/provider_server.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/fakes/src/temp_dir.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/fakes/src/lib.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/build.rs	fiber-4278	plan	2026-11-06T05:46:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/main.rs	fiber-4278	plan	2026-11-06T05:46:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/cli.rs	fiber-4278	plan	2026-11-06T05:46:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/launch.rs	fiber-4278	plan	2026-11-06T05:46:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/hub_command.rs	fiber-4278	plan	2026-11-06T05:46:15Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/rules.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/src/cli_tests.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/ask.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/doctor.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/hub_version.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/release_pack.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/update.rs	fiber-4278	plan	2026-11-06T06:05:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/fakes.md	fiber-4277	plan	2026-11-06T06:27:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4285,4284,4283,4259,4218,4213
 crates/log/src/write.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
 crates/log/src/write_tests.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
@@ -344,14 +332,6 @@ crates/main/tests/hub_delegate_resume.rs	fiber-4331	plan	2026-11-07T01:24:30Z	Am
 crates/loop/prompt/messages.md	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
 docs/tools.md	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
 crates/loop/src/jobs_tests.rs	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
-crates/build/Cargo.toml	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
-crates/build/build.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
-crates/build/src/lib.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
-crates/build/src/lib_tests.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
-Cargo.toml	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
-crates/main/Cargo.toml	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
-Cargo.lock	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
-crates/main/tests/main_journeys.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
 extensions/codemode/init.lua	fiber-4246	plan	2026-11-07T02:09:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_codemode.rs	fiber-4246	plan	2026-11-07T02:09:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/escalations.rs	fiber-4160	plan	2026-11-07T02:11:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
