@@ -1,0 +1,471 @@
+#!/usr/bin/env bash
+# Offline self-test for scripts/break-glass-audit. A shadow `gh` created in a
+# temp dir serves fixture files, so no case touches the network or the clock:
+# NOW pins the window.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+audit=$PWD/scripts/break-glass-audit
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+now=1700000000                  # 2023-11-14T22:13:20Z
+since=2023-11-12T22:13:20Z      # now - 172800 s
+repo=aakshintala/fiber
+failures=0
+
+fail() {
+  printf 'FAIL %s: %s\n' "$case_name" "$1" >&2
+  failures=$((failures + 1))
+}
+
+# new_case NAME: an empty fixture tree with the shadow gh in $FIX/bin.
+new_case() {
+  case_name=$1
+  FIX=$work/$1
+  mkdir -p "$FIX/bin" "$FIX/pages" "$FIX/pulls" "$FIX/checks"
+  cat >"$FIX/bin/gh" <<'SHADOW'
+#!/usr/bin/env bash
+# Serves $FIX files for the three `gh api` paths the audit may request. Any
+# other path, or a path with no fixture, fails like a real gh error.
+[ "$1" = api ] || { echo "shadow gh: not an api call: $*" >&2; exit 1; }
+shift
+paginate=0
+if [ "$1" = --paginate ]; then paginate=1; shift; fi
+path=$1
+echo "$paginate $path" >>"$FIX/calls.log"
+case $path in
+  "repos/aakshintala/fiber/commits?sha=main&since="*"&per_page=100")
+    [ "$paginate" = 1 ] || { echo "shadow gh: commits list without --paginate" >&2; exit 1; }
+    [ ! -e "$FIX/commits.fail" ] || { echo "shadow gh: HTTP 500" >&2; exit 1; }
+    since=${path#*since=}
+    since=${since%%&*}
+    printed=0
+    for page in "$FIX"/pages/*.json; do
+      [ -e "$page" ] || continue
+      jq -c --arg since "$since" \
+        'if type == "array" then map(select(.commit.committer.date > $since)) else . end' "$page"
+      printed=1
+    done
+    [ "$printed" = 1 ] || echo '[]'
+    ;;
+  "repos/aakshintala/fiber/commits/"*"/pulls")
+    sha=${path#repos/aakshintala/fiber/commits/}
+    sha=${sha%/pulls}
+    [ -e "$FIX/pulls/$sha.json" ] || { echo "shadow gh: no fixture for $path" >&2; exit 1; }
+    cat "$FIX/pulls/$sha.json"
+    ;;
+  "repos/aakshintala/fiber/commits/"*"/check-runs?check_name=CI&filter=latest&per_page=100")
+    head=${path#repos/aakshintala/fiber/commits/}
+    head=${head%%/*}
+    [ -e "$FIX/checks/$head.json" ] || { echo "shadow gh: no fixture for $path" >&2; exit 1; }
+    cat "$FIX/checks/$head.json"
+    ;;
+  *)
+    echo "shadow gh: unexpected path $path" >&2
+    exit 1
+    ;;
+esac
+SHADOW
+  chmod 755 "$FIX/bin/gh"
+}
+
+# page N JSON: the Nth page of the commits list.
+page() { printf '%s\n' "$2" >"$FIX/pages/$1.json"; }
+
+# commit SHA EPOCH: a commits-list entry whose committer date is EPOCH.
+commit() {
+  jq -nc --arg sha "$1" --argjson t "$2" \
+    '{sha: $sha, commit: {committer: {date: ($t | strftime("%Y-%m-%dT%H:%M:%SZ"))}}}'
+}
+
+# pr N HEAD BODY [MERGED_AT [BASE]]: one entry of commits/<sha>/pulls. BODY
+# NULL is a JSON null body.
+pr() {
+  jq -nc --argjson n "$1" --arg head "$2" --arg body "$3" \
+    --arg merged "${4-2023-11-14T20:00:00Z}" --arg base "${5-main}" \
+    '{number: $n, head: {sha: $head}, base: {ref: $base},
+      body: (if $body == "NULL" then null else $body end),
+      merged_at: (if $merged == "NULL" then null else $merged end)}'
+}
+
+# pulls SHA JSON-ARRAY
+pulls() { printf '%s\n' "$2" >"$FIX/pulls/$1.json"; }
+
+# run ID NAME STATUS CONCLUSION: one check run; CONCLUSION NULL is a JSON null.
+run() {
+  jq -nc --argjson id "$1" --arg name "$2" --arg status "$3" --arg c "$4" \
+    '{id: $id, name: $name, status: $status,
+      conclusion: (if $c == "NULL" then null else $c end)}'
+}
+
+# checks HEAD RUN...: the check-runs response for HEAD.
+checks() {
+  local head=$1
+  shift
+  if [ $# -eq 0 ]; then
+    printf '{"total_count":0,"check_runs":[]}\n' >"$FIX/checks/$head.json"
+  else
+    printf '%s\n' "$@" | jq -sc '{total_count: length, check_runs: .}' >"$FIX/checks/$head.json"
+  fi
+}
+
+green() { checks "$1" "$(run 1 CI completed success)"; }
+
+# two_green: two merges 1 h and 2 h old, both with a green CI and a body that
+# declares nothing.
+two_green() {
+  page 1 "[$(commit sha1 $((now - 3600))), $(commit sha2 $((now - 7200)))]"
+  pulls sha1 "[$(pr 101 head1 'plain body')]"
+  pulls sha2 "[$(pr 102 head2 'plain body')]"
+  green head1
+  green head2
+}
+
+# run_audit [ARG...]: runs the audit against $FIX; sets rc, stdout in
+# $FIX/out, stderr in $FIX/err.
+run_audit() {
+  rc=0
+  env FIX="$FIX" NOW="$now" GITHUB_REPOSITORY="$repo" PATH="$FIX/bin:$PATH" \
+    GITHUB_ACTIONS="${GITHUB_ACTIONS_FOR_CASE-}" \
+    "$audit" "$@" >"$FIX/out" 2>"$FIX/err" || rc=$?
+}
+
+# expect RC STDOUT: exact exit code and exact stdout.
+expect() {
+  [ "$rc" = "$1" ] || fail "exit $rc, want $1 (stderr: $(cat "$FIX/err"))"
+  if [ "$(cat "$FIX/out")" != "$2" ]; then
+    fail "stdout differs"
+    diff <(printf '%s\n' "$2") "$FIX/out" >&2 || true
+  fi
+}
+
+# expect_error: exit 1, an error line on stderr, and no count line on stdout.
+expect_error() {
+  [ "$rc" = 1 ] || fail "exit $rc, want 1"
+  grep -q '^error: ' "$FIX/err" || fail "no error line on stderr: $(cat "$FIX/err")"
+  if grep -q '^audited ' "$FIX/out"; then fail "printed a count line after an unreadable result"; fi
+}
+
+# --- all green ---------------------------------------------------------
+new_case all-green
+two_green
+run_audit
+expect 0 'audited 2 merges, 0 without green CI, 0 undeclared'
+grep -qF "0 repos/$repo/commits/head1/check-runs?check_name=CI&filter=latest&per_page=100" "$FIX/calls.log" ||
+  fail "check-runs query is not exactly check_name=CI&filter=latest&per_page=100"
+grep -qF "1 repos/$repo/commits?sha=main&since=$since&per_page=100" "$FIX/calls.log" ||
+  fail "commits query lacks --paginate or since=$since"
+if grep -Eq 'rulesets|bypass' "$FIX/calls.log"; then fail "requested rulesets or bypass_actors"; fi
+
+# --- undeclared merge, CI failed --------------------------------------
+new_case undeclared-failure
+two_green
+checks head2 "$(run 7 CI completed failure)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+# --- the same merge, declared -----------------------------------------
+new_case declared
+two_green
+checks head2 "$(run 7 CI completed failure)"
+pulls sha2 "[$(pr 102 head2 'Break-glass: #4101 the CI check is broken. #9999 later.')]"
+run_audit
+expect 0 'merge sha2 head head2 PR #102 ticket #4101 declared
+audited 2 merges, 1 without green CI, 0 undeclared'
+
+# --- declared, no ticket ----------------------------------------------
+new_case declared-no-ticket
+two_green
+checks head2 "$(run 7 CI completed failure)"
+pulls sha2 "[$(pr 102 head2 'Break-glass: no ticket named')]"
+run_audit
+expect 0 'merge sha2 head head2 PR #102 ticket - declared
+audited 2 merges, 1 without green CI, 0 undeclared'
+
+# --- undeclared body: the first ticket anywhere in it ------------------
+new_case undeclared-ticket
+two_green
+checks head2 "$(run 7 CI completed failure)"
+pulls sha2 "[$(pr 102 head2 'Resolves #4178 and #4179')]"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket #4178 undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+# --- near-miss declarations are undeclared -----------------------------
+for body in 'break-glass: #4101 lowercase' ' Break-glass: #4101 leading space' \
+  'Break-glass #4101 no colon' 'See Break-glass: #4101 not at the start' NULL; do
+  new_case "near-miss-$(printf '%s' "$body" | tr -c 'A-Za-z0-9' _)"
+  two_green
+  checks head2 "$(run 7 CI completed failure)"
+  pulls sha2 "[$(pr 102 head2 "$body")]"
+  run_audit
+  [ "$rc" = 1 ] || fail "body '$body' passed (exit $rc)"
+  grep -q ' undeclared$' "$FIX/out" || fail "body '$body' not listed undeclared"
+done
+
+# --- no green CI shapes ------------------------------------------------
+new_case ci-absent
+two_green
+checks head2
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case ci-in-progress
+two_green
+checks head2 "$(run 7 CI in_progress NULL)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case ci-draft-only
+two_green
+checks head2 "$(run 7 'CI (draft)' completed success)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case ci-other-conclusions
+two_green
+checks head2 "$(run 7 CI completed cancelled)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case ci-completed-no-conclusion-success
+two_green
+checks head2 "$(run 7 CI queued success)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case ci-other-name-green
+two_green
+checks head2 "$(run 7 Lint completed success)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+# --- the newest CI run decides -----------------------------------------
+new_case newest-failure
+two_green
+checks head2 "$(run 7 CI completed success)" "$(run 9 CI completed failure)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case newest-success
+two_green
+checks head2 "$(run 9 CI completed success)" "$(run 7 CI completed failure)"
+run_audit
+expect 0 'audited 2 merges, 0 without green CI, 0 undeclared'
+
+# --- the PR for a commit -----------------------------------------------
+new_case no-pr
+two_green
+pulls sha2 '[]'
+run_audit
+expect 1 'merge sha2 head none PR none ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case unmerged-pr-only
+two_green
+pulls sha2 "[$(pr 102 head2 'Break-glass: #1 x' NULL)]"
+run_audit
+expect 1 'merge sha2 head none PR none ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case other-base-only
+two_green
+pulls sha2 "[$(pr 102 head2 'Break-glass: #1 x' 2023-11-14T20:00:00Z release)]"
+run_audit
+expect 1 'merge sha2 head none PR none ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case several-prs-first-merged-main
+two_green
+pulls sha2 "[$(pr 50 headx 'Break-glass: #1 x' NULL), $(pr 102 head2 'plain body'), $(pr 103 headz 'plain body')]"
+checks head2 "$(run 7 CI completed failure)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+# --- the 48 h window ---------------------------------------------------
+new_case window-edges
+page 1 "[$(commit inside $((now - 172740))), $(commit outside $((now - 172860)))]"
+pulls inside "[$(pr 1 headin 'plain body')]"
+green headin
+run_audit
+expect 0 'audited 1 merges, 0 without green CI, 0 undeclared'
+grep -qF "since=$since&" "$FIX/calls.log" || fail "since is not now - 172800 ($since)"
+[ ! -e "$FIX/pulls/outside.json" ] || fail "fixture error"
+if grep -q 'commits/outside/' "$FIX/calls.log"; then fail "audited a commit older than 48 h"; fi
+
+new_case second-page
+page 1 "[$(commit sha1 $((now - 3600)))]"
+page 2 "[$(commit sha2 $((now - 7200)))]"
+pulls sha1 "[$(pr 101 head1 'plain body')]"
+pulls sha2 "[$(pr 102 head2 'plain body')]"
+green head1
+checks head2 "$(run 7 CI completed failure)"
+run_audit
+expect 1 'merge sha2 head head2 PR #102 ticket - undeclared
+audited 2 merges, 1 without green CI, 1 undeclared'
+
+new_case empty-window
+run_audit
+expect 0 'audited 0 merges, 0 without green CI, 0 undeclared'
+
+# --- unreadable results never pass -------------------------------------
+new_case gh-fails-commits
+two_green
+: >"$FIX/commits.fail"
+run_audit
+expect_error
+
+new_case gh-fails-pulls
+two_green
+rm "$FIX/pulls/sha2.json"
+run_audit
+expect_error
+
+new_case gh-fails-checks
+two_green
+rm "$FIX/checks/head2.json"
+run_audit
+expect_error
+
+new_case invalid-json-commits
+two_green
+page 1 'not json'
+run_audit
+expect_error
+
+new_case invalid-json-pulls
+two_green
+pulls sha2 '{"unterminated"'
+run_audit
+expect_error
+
+new_case invalid-json-checks
+two_green
+printf 'oops\n' >"$FIX/checks/head2.json"
+run_audit
+expect_error
+
+# --- valid JSON of the wrong shape never passes -------------------------
+new_case shape-checks-null-array
+two_green
+printf '{"total_count":0,"check_runs":null}\n' >"$FIX/checks/head2.json"
+run_audit
+expect_error
+
+new_case shape-checks-missing-total
+two_green
+printf '{"check_runs":[]}\n' >"$FIX/checks/head2.json"
+run_audit
+expect_error
+
+new_case shape-checks-total-not-number
+two_green
+printf '{"total_count":"0","check_runs":[]}\n' >"$FIX/checks/head2.json"
+run_audit
+expect_error
+
+new_case shape-checks-total-exceeds-read
+two_green
+printf '{"total_count":101,"check_runs":[]}\n' >"$FIX/checks/head2.json"
+run_audit
+expect_error
+
+new_case shape-checks-null
+two_green
+printf 'null\n' >"$FIX/checks/head2.json"
+run_audit
+expect_error
+
+new_case shape-checks-run-not-object
+two_green
+printf '{"total_count":1,"check_runs":["CI"]}\n' >"$FIX/checks/head2.json"
+run_audit
+expect_error
+
+new_case shape-pulls-null
+two_green
+pulls sha2 null
+run_audit
+expect_error
+
+new_case shape-pulls-object
+two_green
+pulls sha2 '{"message":"Not Found"}'
+run_audit
+expect_error
+
+new_case shape-pulls-missing-head
+two_green
+pulls sha2 '[{"number":102,"base":{"ref":"main"},"body":"x","merged_at":"2023-11-14T20:00:00Z"}]'
+run_audit
+expect_error
+
+new_case shape-pulls-missing-number
+two_green
+pulls sha2 '[{"head":{"sha":"head2"},"base":{"ref":"main"},"body":"x","merged_at":"2023-11-14T20:00:00Z"}]'
+run_audit
+expect_error
+
+new_case shape-pulls-body-number
+two_green
+pulls sha2 '[{"number":102,"head":{"sha":"head2"},"base":{"ref":"main"},"body":7,"merged_at":"2023-11-14T20:00:00Z"}]'
+run_audit
+expect_error
+
+new_case shape-commits-object
+two_green
+page 1 '{"message":"Server Error"}'
+run_audit
+expect_error
+
+new_case shape-commits-null
+two_green
+page 1 null
+run_audit
+expect_error
+
+new_case shape-commit-no-sha
+two_green
+page 1 '[{"commit":{"committer":{"date":"2023-11-14T20:00:00Z"}}}]'
+run_audit
+expect_error
+
+# --- usage ---------------------------------------------------------------
+new_case usage
+two_green
+run_audit extra
+expect 2 ''
+grep -q '^usage: ' "$FIX/err" || fail "no usage line on stderr"
+[ ! -e "$FIX/calls.log" ] || fail "called gh before rejecting the argument"
+
+# --- workflow mode: failures are annotations -----------------------------
+new_case workflow-annotations
+two_green
+checks head2 "$(run 7 CI completed failure)"
+GITHUB_ACTIONS_FOR_CASE=true run_audit
+[ "$rc" = 1 ] || fail "exit $rc, want 1"
+grep -qF '::error::merge sha2 head head2 PR #102 ticket - undeclared' "$FIX/out" ||
+  fail "no ::error:: annotation for the undeclared merge: $(cat "$FIX/out")"
+
+new_case workflow-unreadable
+two_green
+rm "$FIX/pulls/sha2.json"
+GITHUB_ACTIONS_FOR_CASE=true run_audit
+[ "$rc" = 1 ] || fail "exit $rc, want 1"
+grep -q '^::error::' "$FIX/err" || fail "no ::error:: line for an unreadable result"
+
+if [ "$failures" -ne 0 ]; then
+  printf 'test-break-glass-audit: %d failure(s)\n' "$failures" >&2
+  exit 1
+fi
+echo "test-break-glass-audit: ok"
