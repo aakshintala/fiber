@@ -59,7 +59,7 @@ fn home(seam: Arc<Fake>) -> App {
 /// A hub `command_rejected` for `id`, with `code` and `message`.
 fn refused(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: contract::HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -75,7 +75,7 @@ fn refused(id: &str, code: &str, message: &str) -> Line {
 /// A hub `command_accepted` for `id` opening `session`.
 fn accepted(id: &str, session: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -90,7 +90,7 @@ fn accepted(id: &str, session: &str) -> Line {
 /// An idle `session_status` for `session`, so `/clear` sends its start.
 fn status(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: contract::events::EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -144,7 +144,7 @@ fn session_line_for(
     payload: Value,
 ) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: seq,
         schema_version: contract::SCHEMA_VERSION,
@@ -1316,7 +1316,7 @@ fn row_clicks_cannot_clobber_the_offer() {
         .unwrap_or_default();
     let id = recent["id"].as_str().expect("the recent ask").to_owned();
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1402,7 +1402,7 @@ fn the_wheel_over_the_offer_frame_moves_no_list() {
         })
         .collect();
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1463,7 +1463,7 @@ fn the_wheel_while_the_names_query_runs_moves_no_list() {
         })
         .collect();
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [

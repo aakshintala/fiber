@@ -558,7 +558,10 @@ job and keeps its timeout.
 
 **`shell` runs the person's own command, and the model sees it only if asked.**
 It runs in the session's workspace with the shell and output cap of the shell
-tool (`docs/tools.md`, "Shell"), and `cancel` stops it. It needs no approval:
+tool (`docs/tools.md`, "Shell"), and `cancel` stops it. It has no timeout: it
+runs until it exits or the session shuts down. The 600,000 (10-minute) default
+in `docs/tools.md` ("Timeout") bounds the agent's `shell` tool calls, not this
+command. It needs no approval:
 the person typed it, and a client that can attach already controls the session
 ([#30](https://github.com/aakshintala/fiber/issues/30)).
 
@@ -897,6 +900,9 @@ rationale and the rejected layouts are
   `session_held`, so the person can close it or let it exit. A resume that
   finds the session's keeper at a version it cannot read declines the same
   way, naming the keeper's version, and works once the keeper exits.
+  An additive change (a new kind, a new optional field, or a new value in an
+  open set, `docs/events.md`, "Versioning") never bumps `schema_version`, so a
+  different integer means breaking.
 
 The socket is the only path into a running session. The terminal, a parent
 session, a GUI and a phone through the hub are the same kind of client, as map

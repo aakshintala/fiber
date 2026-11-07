@@ -14,7 +14,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 fn envelope(kind: &str, payload: serde_json::Value) -> Envelope {
     Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -198,7 +198,7 @@ fn called_with(path: &str, mime: &str) -> Vec<Envelope> {
     let mut acted = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
         seq += 1;
         Envelope {
-            kind: EventKind::from_name(kind).name().to_owned(),
+            kind: EventKind::from_name(kind),
             session_id: SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

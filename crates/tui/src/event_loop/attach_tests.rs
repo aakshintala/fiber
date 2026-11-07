@@ -11,7 +11,9 @@ use crate::Input;
 use crate::link::{Credits, Feed, Line, answers, read_lines};
 use crate::retry::Retry;
 use contract::ErrorCode;
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
@@ -263,8 +265,8 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
     inputs
         .iter()
         .map(|input| match input {
-            Input::Hub(Line::Session(line)) => line.kind.clone(),
-            Input::Hub(Line::Hub(line)) => line.kind.clone(),
+            Input::Hub(Line::Session(line)) => line.kind.name().to_owned(),
+            Input::Hub(Line::Hub(line)) => line.kind.name().to_owned(),
             Input::Bytes(_) => "bytes".to_owned(),
             Input::Tick => "tick".to_owned(),
             Input::Converted { .. } => "other".to_owned(),
@@ -324,7 +326,7 @@ fn spawn_reader(
 /// The hub's greeting.
 fn hello() -> contract::HubLine {
     contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1731,7 +1733,7 @@ fn stream_event(kind: &str, session: &contract::SessionId, last: Option<u64>) ->
         payload["last_seq"] = json!(last);
     }
     Line::Hub(contract::HubLine {
-        kind: kind.into(),
+        kind: contract::HubEventKind::from(kind.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().unwrap().clone(),
@@ -1772,7 +1774,9 @@ fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
     assert!(!lp.app.pass_open());
     let stashed = lp.hub.stashed();
     assert_eq!(stashed.len(), 1);
-    assert!(matches!(&stashed[0], Input::Hub(Line::Hub(line)) if line.kind == "attention"));
+    assert!(
+        matches!(&stashed[0], Input::Hub(Line::Hub(line)) if line.kind == HubEventKind::Attention)
+    );
     assert!(matches!(
         rx.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
@@ -2080,7 +2084,7 @@ fn abandoned_history_answers_are_discarded_once_by_id() {
         );
         lp.app.on_line(Line::Session(answer.clone()));
         assert!(!lp.app.pass_open());
-        answer.kind = "command_accepted".into();
+        answer.kind = EventKind::CommandAccepted;
         lp.app.on_line(Line::Session(answer));
         assert!(
             lp.app.pass_open(),
@@ -2856,7 +2860,7 @@ fn the_raise_is_written_after_the_frame_draws() {
     // next frame's flush, before `draw` returns.
     block.store(true, Ordering::SeqCst);
     let ack = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -3099,7 +3103,7 @@ fn tail_open_prepared(
     // replay's turn starts, which the hub serves before hanging up.
     let replay_turns = log
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind == EventKind::TurnStarted)
         .count();
     // One manual replay per open takes the gated accept's wait ends.
     let mut ack_gate = Some((ack_release, ack_done));
@@ -3403,10 +3407,10 @@ fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() 
     let mut log = super::handoff_log(3, "tail reply");
     let at = log
         .iter()
-        .position(|line| line.kind == "assistant_message_completed")
+        .position(|line| line.kind == EventKind::AssistantMessageCompleted)
         .unwrap();
     let mut tool = log[at].clone();
-    tool.kind = "tool_call_requested".into();
+    tool.kind = EventKind::ToolCallRequested;
     tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
     tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
         .as_object()
@@ -3496,10 +3500,10 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
     let mut log = super::handoff_log(3, "tail reply");
     let at = log
         .iter()
-        .position(|line| line.kind == "assistant_message_completed")
+        .position(|line| line.kind == EventKind::AssistantMessageCompleted)
         .unwrap();
     let mut tool = log[at].clone();
-    tool.kind = "tool_call_requested".into();
+    tool.kind = EventKind::ToolCallRequested;
     tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
     tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
         .as_object()
@@ -3888,7 +3892,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     Deadline::after(DEADLINE).recv_or_fail(&hub_done, "the hub to hang up");
     let replay_turns = log
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind == EventKind::TurnStarted)
         .count()
         + 1;
     let seen_commands: Vec<serde_json::Value> =
@@ -4068,7 +4072,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     Deadline::after(DEADLINE).recv_or_fail(&hub_done, "the hub to hang up");
     let replay_turns = log
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind == EventKind::TurnStarted)
         .count()
         + 1;
     let seen_commands: Vec<serde_json::Value> =
@@ -4107,7 +4111,7 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
     Deadline::after(DEADLINE).recv_or_fail(&open.hub_done, "the hub to hang up");
     let replay_turns = log
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind == EventKind::TurnStarted)
         .count();
     let seen_commands: Vec<serde_json::Value> = open
         .seen
@@ -4272,7 +4276,7 @@ fn live_app() -> crate::app::App {
 /// A session `command_accepted` carrying the command's id.
 fn session_accepted(session: &str, command: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4288,7 +4292,7 @@ fn session_accepted(session: &str, command: &str) -> Line {
 /// The raise's acceptance with the pass ending at `last`.
 fn raise_accepted(session: &str, command: &str, last: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4731,7 +4735,7 @@ fn started(session: &str, parent: Option<(&str, u64)>) -> contract::Envelope {
         payload = json!({"forked_from": {"session_id": parent_session, "seq": point}});
     }
     contract::Envelope {
-        kind: "session_started".to_owned(),
+        kind: contract::events::EventKind::SessionStarted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4983,7 +4987,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     while events.try_recv().is_ok() {}
     block.store(true, Ordering::SeqCst);
     let ack = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(CHILD.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -5228,7 +5232,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     // frame parks in its flush once the preview installs.
     block.store(true, Ordering::SeqCst);
     let ack = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(CHILD.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -6007,7 +6011,7 @@ fn attach_spans_are_discarded_when_the_due_tail_has_no_stream() {
         ..Default::default()
     });
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -6023,7 +6027,7 @@ fn attach_spans_are_discarded_when_the_due_tail_has_no_stream() {
         })
         .unwrap_or_else(|| panic!("a summary subscribe among {sent:?}"));
     let accepted = contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -6103,7 +6107,7 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
         })
         .unwrap_or_else(|| panic!("a summary subscribe among {sent:?}"));
     let accepted = contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -6137,7 +6141,7 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
     let (tx, rx) = mpsc::channel();
     for _ in 0..3 {
         tx.send(Input::Hub(Line::Hub(contract::HubLine {
-            kind: "stream_reopened".to_owned(),
+            kind: contract::HubEventKind::StreamReopened,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: json!({"session_id": session})
@@ -6369,7 +6373,7 @@ mod attach_span_tests {
             })
             .unwrap_or_else(|| panic!("a summary subscribe among {lines:?}"));
         let accepted = contract::Envelope {
-            kind: "command_accepted".to_owned(),
+            kind: contract::events::EventKind::CommandAccepted,
             session_id: SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -6397,7 +6401,7 @@ mod attach_span_tests {
     /// without failing it.
     fn reopened() -> Input {
         Input::Hub(Line::Hub(contract::HubLine {
-            kind: "stream_reopened".to_owned(),
+            kind: contract::HubEventKind::StreamReopened,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::json!({"session_id": SESSION})
@@ -6531,7 +6535,7 @@ mod attach_span_tests {
                 .as_str()
                 .unwrap_or_else(|| panic!("an id: {history}"));
             tx.send(Input::Hub(Line::Session(contract::Envelope {
-                kind: "command_rejected".to_owned(),
+                kind: contract::events::EventKind::CommandRejected,
                 session_id: SessionId(SESSION.to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -6811,9 +6815,14 @@ fn exited_log() -> Vec<contract::Envelope> {
     push("usage_recorded", Some("a_42"), serde_json::json!({}));
     push("turn_completed", Some("a_42"), completed());
     assert_eq!(lines.len(), 319, "the log crosses the history window");
-    assert_eq!(lines[306].kind, "fiber_exited", "the exit sits at 306");
     assert_eq!(
-        lines[318].kind, "turn_completed",
+        lines[306].kind,
+        EventKind::FiberExited,
+        "the exit sits at 306"
+    );
+    assert_eq!(
+        lines[318].kind,
+        EventKind::TurnCompleted,
         "the resumed turn completes the tail"
     );
     lines
@@ -6857,7 +6866,7 @@ fn opened_exited(
     });
     app.set_size(60, 24);
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

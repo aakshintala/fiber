@@ -9,7 +9,7 @@ use serde_json::json;
 
 fn answer(id: &str, kind: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
+        kind: HubEventKind::from(kind.to_owned()),
         ts: 1,
         schema_version: 1,
         payload: serde_json::from_value(json!({"command_id":id,"result":{"ok":true}})).unwrap(),

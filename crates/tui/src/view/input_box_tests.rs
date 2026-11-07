@@ -307,7 +307,7 @@ fn rule_row(screen: &str) -> usize {
 /// One session envelope for the box's keyboard tests.
 fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> crate::link::Line {
     crate::link::Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1076,7 +1076,7 @@ fn item_opened(app: &mut App) {
     use contract::SessionId;
     let lines: Vec<serde_json::Value> = app
         .on_line(crate::link::Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: contract::HubEventKind::HubHello,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -1131,7 +1131,7 @@ fn item_opened(app: &mut App) {
         serde_json::Value::String(id.clone()),
     );
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: SessionId(ITEM_SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1149,7 +1149,7 @@ fn item_opened(app: &mut App) {
         .to_owned();
     payload.insert("command_id".to_owned(), serde_json::Value::String(raise_id));
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: SessionId(ITEM_SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -2295,4 +2295,88 @@ fn the_input_status_builtin_row_reaches_a_decorating_renderer() {
     let at = rule_row(&shown);
     let row = shown.lines().nth(at + 1).expect("a row under the rule");
     assert!(row.contains("test/model"), "{row:?}");
+}
+
+/// The drawn status row with an optional preamble model and an
+/// optional `session_status` model folded, for the model-fallback
+/// edges.
+fn edge_row(preamble: Option<&str>, status: Option<&str>) -> String {
+    let window = 1_000_000;
+    let trigger = 400_000;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(launch());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.set_size(100, 30);
+    if let Some(model) = preamble {
+        app.on_line(session_line(
+            "s_aaaaaaaaaaaaaaaa",
+            "preamble_built",
+            serde_json::json!({
+                "reason": "start", "model": model, "context_window": window,
+                "trigger_at": trigger, "thinking": "high",
+                "tool_choice": "auto", "cache_lifetime": "5m",
+                "system_prompt": "", "tools": [],
+            }),
+        ));
+    }
+    if let Some(model) = status {
+        app.on_line(session_line(
+            "s_aaaaaaaaaaaaaaaa",
+            "session_status",
+            serde_json::json!({
+                "name": "one", "workspace": "/w/fiber", "project": "-w",
+                "state": "idle", "started": 0, "calls": 0, "since": 0,
+                "spend": {"tokens": {"input": 1, "cache_read": 0,
+                    "cache_write": {}, "output": 2},
+                    "cost": 0.0, "subscription_cost": 0.0},
+                "model": model, "delegates": 0, "jobs": 0, "clients": 0,
+                "context": {"tokens": 268_000, "window": window},
+            }),
+        ));
+    }
+    let shown = screen(&app, 100, 30);
+    let at = rule_row(&shown);
+    shown
+        .lines()
+        .nth(at + 1)
+        .expect("a row under the rule")
+        .to_owned()
+}
+
+/// The status row names the model the session runs on: a preamble
+/// naming the configured default with a `session_status` naming the
+/// session-only choice still draws the choice (`docs/tui.md`, "The
+/// input box").
+#[test]
+fn the_status_row_names_the_session_status_model_over_the_preamble() {
+    let row = edge_row(Some("default/model"), Some("chosen/model"));
+    assert!(row.contains("chosen/model"), "{row:?}");
+    assert!(!row.contains("default/model"), "{row:?}");
+}
+
+/// With no preamble the row still names the `session_status` model:
+/// the status arm needs no preamble beside it (`docs/tui.md`, "The
+/// input box").
+#[test]
+fn the_status_row_names_a_status_model_with_no_preamble() {
+    let row = edge_row(None, Some("chosen/model"));
+    assert!(row.contains("chosen/model"), "{row:?}");
+}
+
+/// With no status the row keeps the preamble model: the fallback arm
+/// covers a session whose status has not landed (`docs/tui.md`, "The
+/// input box").
+#[test]
+fn the_status_row_falls_back_to_the_preamble_with_no_status() {
+    let row = edge_row(Some("default/model"), None);
+    assert!(row.contains("default/model"), "{row:?}");
+}
+
+/// With neither landed the model slot stays blank while the row still
+/// draws its context side (`docs/tui.md`, "The input box").
+#[test]
+fn the_status_row_leaves_the_model_blank_with_neither_landed() {
+    let row = edge_row(None, None);
+    assert!(row.contains("ctx"), "{row:?}");
+    assert!(!row.contains("high"), "{row:?}");
 }

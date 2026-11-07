@@ -95,22 +95,31 @@ pub enum ConfigError {
         expected: &'static str,
     },
     /// No key for a provider.
-    #[error("No credential for `{provider}`: {why}. Run `fiber login {provider}`.")]
+    #[error("No credential for `{provider}`: {why}.{advice}", advice = Self::login_sentence(provider, login_advice))]
     CredentialMissing {
         /// The provider.
         provider: String,
         /// Where Fiber looked, never a value.
         why: String,
+        /// Whether the sentence advises `fiber login`: set where the
+        /// provider reads the key `fiber login` stores, or its data
+        /// declares `login`.
+        login_advice: bool,
     },
     /// A stored credential exists but cannot be used.
     #[error(
-        "The stored credential for `{provider}` cannot be used: {why}. Run `fiber login {provider}`."
+        "The stored credential for `{provider}` cannot be used: {why}.{advice}",
+        advice = Self::login_sentence(provider, login_advice)
     )]
     CredentialFailed {
         /// The provider.
         provider: String,
         /// Why it cannot be used, never a value.
         why: String,
+        /// Whether the sentence advises `fiber login`: set where the
+        /// provider reads the key `fiber login` stores, or its data
+        /// declares `login`.
+        login_advice: bool,
     },
     /// One file, or `-c`, that sets a key of an extension under both its
     /// short and its full name (`docs/configuration.md`, "Keys").
@@ -138,6 +147,17 @@ pub enum ConfigError {
 }
 
 impl ConfigError {
+    /// The `fiber login` advice a credential sentence carries: the login
+    /// command where `fiber login` can fix the credential, else nothing, so
+    /// the sentence ends at the `why`'s period.
+    fn login_sentence(provider: &str, login_advice: &bool) -> String {
+        if *login_advice {
+            format!(" Run `fiber login {provider}`.")
+        } else {
+            String::new()
+        }
+    }
+
     /// The stable code a caller switches on.
     pub fn code(&self) -> ErrorCode {
         match self {

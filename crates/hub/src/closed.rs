@@ -23,7 +23,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use contract::SessionId;
+use contract::{HubEventKind, SessionId};
 use serde_json::{Map, Value};
 
 use crate::connection::{Hub, lock};
@@ -65,7 +65,7 @@ pub(crate) fn on_end(
         }
     }
     lock(relays).subscribed.retain(|(kept, _)| kept != session);
-    crate::connection::send(writer, hub, "stream_closed", payload(session));
+    crate::connection::send(writer, hub, HubEventKind::StreamClosed, payload(session));
 }
 
 /// Whether `session` looks like a running session: its log ends in none

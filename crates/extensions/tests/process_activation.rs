@@ -758,7 +758,7 @@ fn events_plan(marker: &Path) -> Value {
 
 fn notice_envelope(session_id: &str, seq: u64, message: &str) -> contract::Envelope {
     contract::Envelope {
-        kind: "notice".to_owned(),
+        kind: contract::events::EventKind::Notice,
         session_id: contract::SessionId(session_id.to_owned()),
         ts: 1_759_150_000_000 + seq,
         schema_version: contract::SCHEMA_VERSION,
@@ -788,7 +788,7 @@ fn process_event_stream_forwards_live_and_replays_durable_lines() {
     let session = env.load(ExtensionReason::New, 7);
     // The watcher registered before ready: live events reach it.
     let first = contract::Envelope {
-        kind: "notice".to_owned(),
+        kind: contract::events::EventKind::Notice,
         session_id: contract::SessionId("s_proc".into()),
         ts: 1_759_150_000_000,
         schema_version: contract::SCHEMA_VERSION,

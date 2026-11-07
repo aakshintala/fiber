@@ -237,7 +237,7 @@ fn taken<B: Backend>(lp: &mut Loop<B>, inputs: Vec<Input>) -> (i32, usize) {
 
 pub(super) fn hello() -> contract::HubLine {
     contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -402,7 +402,7 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
     assert_eq!(start["args"]["workspace"], "/w");
     assert!(start["args"].get("content").is_none());
     let accepted = contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": start["id"], "result": {"session_id": "s_aaaaaaaaaaaaaaaa"}})
@@ -573,7 +573,7 @@ fn run_quits_on_double_ctrl_c_with_the_reader_blocked() {
     let (hub, _held) =
         std::os::unix::net::UnixStream::pair().unwrap_or_else(|err| panic!("pair: {err}"));
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
@@ -922,7 +922,7 @@ pub(super) fn offering(request: &str) -> Input {
         "rule": {"subject": "npm test --watch", "prefix": "npm test"},
     });
     Input::Hub(Line::Session(contract::Envelope {
-        kind: "permission_requested".to_owned(),
+        kind: contract::events::EventKind::PermissionRequested,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -935,7 +935,7 @@ pub(super) fn offering(request: &str) -> Input {
 
 fn one_question(payload: serde_json::Value) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: "interaction_requested".to_owned(),
+        kind: contract::events::EventKind::InteractionRequested,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -960,7 +960,7 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
     );
     let (reader, start) = command(reader, "the start command");
     let accepted = contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": start["id"], "result": {"session_id": "s_aaaaaaaaaaaaaaaa"}})
@@ -1019,7 +1019,7 @@ fn connected_loop() -> (Loop<TestBackend>, BufReader<UnixStream>) {
     );
     let (reader, start) = command(reader, "the start command");
     let accepted = contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": start["id"],
@@ -1128,7 +1128,7 @@ fn esc_on_each_one_question_kind_declines_to_the_hub() {
 /// The hub accepting command `id` from `s_aaaaaaaaaaaaaaaa`.
 fn session_accepted(id: &serde_json::Value) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1194,7 +1194,7 @@ fn command_after_decline(
         feed(
             &mut lp,
             vec![Input::Hub(Line::Session(contract::Envelope {
-                kind: "turn_started".to_owned(),
+                kind: contract::events::EventKind::TurnStarted,
                 session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -1217,7 +1217,7 @@ fn command_after_decline(
         feed(
             &mut lp,
             vec![Input::Hub(Line::Session(contract::Envelope {
-                kind: "command_accepted".to_owned(),
+                kind: contract::events::EventKind::CommandAccepted,
                 session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -1907,7 +1907,7 @@ fn a_copy_writes_osc_52_and_pipes_the_code_to_the_command() {
     lp.app.attach(session.clone());
     let line = |kind: &str, payload: serde_json::Value, action: Option<&str>| {
         Input::Hub(Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: contract::events::EventKind::from_name(kind),
             session_id: session.clone(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -1993,7 +1993,7 @@ fn a_non_left_press_keeps_copied_and_a_left_press_clears_it() {
     lp.app.attach(session.clone());
     let line = |kind: &str, payload: serde_json::Value, action: Option<&str>| {
         Input::Hub(Line::Session(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: contract::events::EventKind::from_name(kind),
             session_id: session.clone(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -2065,7 +2065,7 @@ fn opening_a_row_by_key_calls_on_attach() {
         "an unscoped recent went out: {hello_lines:?}"
     );
     let status = contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: contract::events::EventKind::SessionStatus,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -2125,7 +2125,7 @@ fn opening_a_row_by_key_calls_on_attach() {
 /// A live `session_status` for `session` in `state`.
 fn live_status(session: &str, state: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: contract::events::EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -2218,7 +2218,7 @@ fn an_exit_sends_its_lines_then_quits() {
 /// A hub `session_status` line for `session` in `state`.
 fn hub_status(session: &str, state: &str) -> String {
     serde_json::to_string(&contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: contract::events::EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -2683,7 +2683,7 @@ fn search_session() -> Vec<contract::Envelope> {
     let mut push = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
         seq += 1;
         lines.push(contract::Envelope {
-            kind: kind.to_owned(),
+            kind: contract::events::EventKind::from_name(kind),
             session_id: session.clone(),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -2877,7 +2877,7 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
             .cloned()
             .collect();
         let answer = Line::Session(contract::Envelope {
-            kind: "command_accepted".to_owned(),
+            kind: contract::events::EventKind::CommandAccepted,
             session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -2936,7 +2936,7 @@ fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
         .cloned()
         .collect();
     tx.send(Input::Hub(Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -363,7 +363,7 @@ pub fn measure_paging(
         // connects once first: the answers come from the log, as the
         // hub's would. Later searches reuse the connection.
         paging.app.on_line(Line::Hub(contract::HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: contract::HubEventKind::HubHello,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -515,7 +515,7 @@ impl Paging<'_> {
                 }
             };
             let answer = contract::Envelope {
-                kind: "command_accepted".to_owned(),
+                kind: EventKind::CommandAccepted,
                 session_id: self
                     .app
                     .session()

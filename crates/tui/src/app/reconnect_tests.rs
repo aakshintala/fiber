@@ -43,7 +43,7 @@ fn home() -> App {
 /// A `hub_hello` at `schema`.
 fn hello_at(schema: u32) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: schema,
         payload: serde_json::Map::new(),
@@ -261,7 +261,7 @@ fn the_banner_row_is_counted_in_conversation_height() {
 /// A hub answer of `kind` with `payload`.
 fn hub(kind: &str, payload: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
+        kind: HubEventKind::from(kind.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().cloned().unwrap_or_default(),
@@ -271,7 +271,7 @@ fn hub(kind: &str, payload: Value) -> Line {
 /// A line from `session` of `kind` with `payload` at `seq`.
 fn from(session: &str, kind: &str, seq: Option<u64>, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

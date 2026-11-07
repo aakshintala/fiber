@@ -12,7 +12,7 @@ use crate::app::Target;
 fn envelope(seq: &mut u64, kind: &str, action: Option<&str>, payload: Value) -> Envelope {
     *seq += 1;
     Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 1_000 + *seq,
         schema_version: contract::SCHEMA_VERSION,

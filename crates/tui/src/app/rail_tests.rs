@@ -80,7 +80,7 @@ fn live(session: &str, fields: Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: contract::events::EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -94,7 +94,7 @@ fn live(session: &str, fields: Value) -> Line {
 /// A hub `session_left` for `session`, ended `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: contract::HubEventKind::SessionLeft,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"session_id": session, "how": how})
@@ -391,7 +391,7 @@ fn a_recent_row_gets_no_number() {
     let mut app = home_with(200, 40, launch());
     let (_, recent) = linked(&mut app);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": recent, "result": {"sessions": [
@@ -443,7 +443,7 @@ fn sent(effect: Effect) -> Vec<Value> {
 /// A session `command_accepted` for `id` from `session`.
 fn accepted(session: &str, id: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -629,7 +629,7 @@ fn a_click_on_the_session_on_screen_does_nothing() {
 /// A `permission_requested` from `session` for `request`.
 fn permission(session: &str, request: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "permission_requested".to_owned(),
+        kind: contract::events::EventKind::PermissionRequested,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -728,7 +728,7 @@ fn an_unreadable_card_gives_the_notice_and_sends_nothing() {
 fn an_unreadable_card_after_a_differing_hello_names_the_hubs_build() {
     let mut app = opened(&[A, B], A);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"fiber_version": "9.9.9", "fiber_commit": "2121f38d1e4f0a9b"})
@@ -1093,7 +1093,7 @@ fn put_aside(app: &mut App) {
 /// An `interaction_requested` form from `session` for `request`.
 fn question(session: &str, request: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "interaction_requested".to_owned(),
+        kind: contract::events::EventKind::InteractionRequested,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1129,7 +1129,7 @@ fn alt_a_reopens_a_put_aside_offer_first() {
     let items = [json!({"kind": "mcp_server", "name": "a", "hash": "h",
         "required": false, "summary": "MCP server: a"})];
     app.on_line(Line::Session(contract::Envelope {
-        kind: "repository_code_offered".to_owned(),
+        kind: contract::events::EventKind::RepositoryCodeOffered,
         session_id: contract::SessionId(A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1289,7 +1289,7 @@ fn a_request_already_answered_does_not_reopen() {
 /// A hub answer of `kind` for command `id`, refusing with `message`.
 fn hub_answer(kind: &str, id: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: kind.to_owned(),
+        kind: contract::HubEventKind::from(kind.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "code": "invalid_arguments", "message": message})
@@ -1732,7 +1732,7 @@ fn a_resolved_request_ends_the_wait() {
     let Line::Session(mut resolved) = permission(C, "r_c") else {
         panic!("a session line");
     };
-    resolved.kind = "permission_resolved".to_owned();
+    resolved.kind = contract::events::EventKind::PermissionResolved;
     app.on_line(Line::Session(resolved));
     app.on_line(permission(C, "r_c"));
     assert!(app.panel().is_none(), "{}", panel_text(&app));
@@ -1782,7 +1782,7 @@ fn answer_recent(app: &mut App, recent: &str, sessions: &[&str]) -> Vec<String> 
         .map(|session| exited_row(session))
         .collect::<Vec<_>>()});
     let line = Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -2174,7 +2174,7 @@ fn two_projects() -> App {
 /// A session envelope of `kind` for `session` with a JSON `payload`.
 fn turn(session: &str, kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -2921,7 +2921,7 @@ fn answer_scoped_total(app: &mut App, out: &[Value], total: usize) {
     for line in out.iter().filter(|line| line["command"] == "recent") {
         let id = line["id"].as_str().unwrap_or_else(|| panic!("a scoped id"));
         app.on_line(Line::Hub(contract::HubLine {
-            kind: "command_accepted".to_owned(),
+            kind: contract::HubEventKind::CommandAccepted,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: json!({"command_id": id, "result": {"sessions": [], "total": total}})
@@ -3248,7 +3248,7 @@ fn sessions_result(app: &mut App, id: &str, running: &[&str]) {
         .map(|session| json!({"session_id": session}))
         .collect();
     app.on_line(Line::Hub(contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "result": {"live": live, "exited": []}})

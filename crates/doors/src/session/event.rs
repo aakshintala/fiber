@@ -1,7 +1,7 @@
 //! Envelopes for events the session door sends directly.
 
 use contract::clock::{Clock, wall_ms};
-use contract::events::Event;
+use contract::events::{Event, EventKind};
 use contract::{Envelope, SCHEMA_VERSION, SessionId};
 use serde_json::Map;
 
@@ -11,7 +11,7 @@ pub(crate) fn envelope(session: &SessionId, clock: &dyn Clock, event: &Event) ->
     let payload = event.payload();
     debug_assert!(payload.is_ok(), "doors builds only events with a payload");
     Envelope {
-        kind: event.kind().to_owned(),
+        kind: EventKind::from_name(event.kind()),
         session_id: session.clone(),
         ts: wall_ms(clock.wall()),
         schema_version: SCHEMA_VERSION,

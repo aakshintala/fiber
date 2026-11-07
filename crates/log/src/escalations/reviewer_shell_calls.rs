@@ -119,8 +119,7 @@ fn calls_in(session: &Place) -> Vec<ShellCall> {
         let Some(action_id) = narrow.action_id else {
             continue;
         };
-        let kind = contract::events::EventKind::from_name(&narrow.kind);
-        if kind == contract::events::EventKind::ToolCallRequested {
+        if narrow.kind == contract::events::EventKind::ToolCallRequested {
             if let Ok(requested) = serde_json::from_value::<Requested>(narrow.payload) {
                 let action = action_for(&mut actions, &mut order, &action_id);
                 if action.name.is_none() {
@@ -129,7 +128,7 @@ fn calls_in(session: &Place) -> Vec<ShellCall> {
                     action.ran_by = requested.ran_by.is_some();
                 }
             }
-        } else if kind == contract::events::EventKind::PermissionRequested {
+        } else if narrow.kind == contract::events::EventKind::PermissionRequested {
             if let Ok(request) = serde_json::from_value::<Request>(narrow.payload) {
                 let action = action_for(&mut actions, &mut order, &action_id);
                 if action.rule_subject.is_none() {
@@ -137,7 +136,7 @@ fn calls_in(session: &Place) -> Vec<ShellCall> {
                 }
                 action.escalated = action.escalated || request.escalation.is_some();
             }
-        } else if kind == contract::events::EventKind::PermissionResolved
+        } else if narrow.kind == contract::events::EventKind::PermissionResolved
             && let Ok(resolved) = serde_json::from_value::<ResolvedLine>(narrow.payload)
         {
             let action = action_for(&mut actions, &mut order, &action_id);
@@ -212,12 +211,16 @@ fn finish(session: &Place, actions: HashMap<String, Action>, order: Vec<String>)
 }
 
 /// A line's kind, envelope action and body alone: every other line is
-/// skipped past this.
+/// skipped past this. The kind reads through the typed vocabulary, so
+/// an unfamiliar name parses to its retained variant and joins nothing;
+/// a missing or non-string kind stays a serde error and ends the walk
+/// through `finish`.
 #[derive(Deserialize)]
 struct Narrow {
     #[serde(default)]
     action_id: Option<String>,
-    kind: String,
+    #[serde(deserialize_with = "super::kind_field")]
+    kind: contract::events::EventKind,
     #[serde(default)]
     payload: Value,
 }
