@@ -524,6 +524,16 @@ pub(crate) fn summary(name: &str, arguments: &Value) -> String {
     if let Kind::Ask(questions) = kind(name, arguments) {
         return count(questions, "question", "questions");
     }
+    // A message call's target is its recipient, not the message.
+    if matches!(
+        kind(name, arguments),
+        Kind::DelegateMessage | Kind::SessionMessage
+    ) {
+        let id = argument(arguments, "id").map(oneline).unwrap_or_default();
+        if !id.is_empty() {
+            return id;
+        }
+    }
     if let Value::Object(arguments) = arguments {
         // The first useful string field, in the order tools take them;
         // an empty value names nothing, so it is skipped.

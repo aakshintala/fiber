@@ -1182,3 +1182,27 @@ fn each_added_count_alone_takes_plural_and_singular() {
     );
     assert_eq!(alone(|k, n| k.sessions = n, 1), "Looked at sessions once");
 }
+
+#[test]
+fn a_message_call_shows_its_recipient_as_the_target() {
+    assert_eq!(
+        summary("session_message", &json!({"id": "s_1", "text": "hello"})),
+        "s_1"
+    );
+    assert_eq!(
+        summary("delegate_message", &json!({"id": "j_1", "message": "hi"})),
+        "j_1"
+    );
+    // No id (or an empty one): the generic key list.
+    assert_eq!(
+        summary("session_message", &json!({"text": "hello\n there"})),
+        "hello there"
+    );
+    assert_eq!(
+        summary("session_message", &json!({"id": "", "text": "hello"})),
+        "hello"
+    );
+    assert_eq!(summary("delegate_message", &json!({"message": "hi"})), "");
+    // Another tool keeps the generic order: text before id.
+    assert_eq!(summary("other", &json!({"id": "x", "text": "t"})), "t");
+}
