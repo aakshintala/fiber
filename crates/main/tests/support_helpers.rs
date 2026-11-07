@@ -2942,8 +2942,9 @@ fn hub_threads_names_a_zombie_as_text() {
     );
 }
 
-/// `docs/invocation.md` orders no line against a command's answer, so a
-/// `session_status` may arrive before the subscribe acknowledgement:
+/// A `session_status` has no position against the session's other lines
+/// (`docs/testing.md`, "Event streams"), so it may arrive before the
+/// subscribe acknowledgement:
 /// `close_session` matches the acknowledgement by its command id.
 #[test]
 fn close_session_reads_its_acknowledgement_by_command_id() {
