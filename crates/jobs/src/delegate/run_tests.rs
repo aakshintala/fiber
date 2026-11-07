@@ -286,6 +286,7 @@ struct Rig {
     job: JobId,
     events: std::path::PathBuf,
     worktree_run: Mutex<Option<super::WorktreeRun>>,
+    timing: Option<Timing>,
     /// Set by the runner thread as its first step, so an expiry can tell
     /// a thread that never started from one that never reached its first
     /// watch or park.
@@ -317,6 +318,7 @@ fn rig(replies: Vec<WatchReply>) -> Rig {
         job: crate::registry::mint_job_id(),
         events,
         worktree_run: Mutex::new(None),
+        timing: None,
         runner_started: Arc::new(AtomicBool::new(false)),
     }
 }
@@ -337,14 +339,11 @@ impl Rig {
         cap: u64,
         after: Option<u64>,
     ) -> mpsc::Receiver<()> {
-        self.start_timeout(shell, bound, cap, after, None, None, None)
-            .0
+        self.start_timeout(shell, bound, cap, after, None, None).0
     }
 
     /// Builds the runner, spawns, records and drives it. `on_usage` is
     /// the watcher's tap; `None` keeps the existing unwired behavior.
-    /// `timing` is the trace probe; `None` emits nothing, mirroring the
-    /// untimed behaviour.
     fn start_timeout(
         &self,
         shell: &str,
@@ -353,7 +352,6 @@ impl Rig {
         after: Option<u64>,
         timeout: Option<Duration>,
         on_usage: Option<super::UsageForward>,
-        timing: Option<Timing>,
     ) -> (mpsc::Receiver<()>, Arc<Parker>) {
         let shell = shell.to_owned();
         let script = Arc::clone(&self.script);
@@ -379,7 +377,7 @@ impl Rig {
             after,
             timeout,
             on_usage,
-            timing,
+            self.timing.clone(),
         );
         let runner = runner.with_worktree(self.worktree_run.lock().unwrap().take());
         let launched = Launched {
@@ -985,21 +983,14 @@ fn the_receive_and_deliver_traces_fire_in_order_for_one_exit() {
     let dir = TempDir::new("fiber-delegate-trace-order");
     let release = fifo(dir.path(), "release");
     let shell = format!("read _ < '{}'; exit 0", release.display());
-    let rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(
+    let mut rig = rig(vec![WatchReply::Exited(vec![fiber_exited_line(
         1, "Done.",
     )])]);
     // Backstop: kills the group if the test fails before the child exits.
     let watchdog = Watchdog::matching(&release.to_string_lossy());
     let (trace_tx, trace_rx) = mpsc::channel();
-    let (done, _park) = rig.start_timeout(
-        &shell,
-        BOUND,
-        1024,
-        None,
-        None,
-        None,
-        Some(probe_timing(trace_tx)),
-    );
+    rig.timing = Some(probe_timing(trace_tx));
+    let (done, _park) = rig.start_timeout(&shell, BOUND, 1024, None, None, None);
     let stop = Arc::new(AtomicBool::new(false));
     let clock = Arc::clone(&rig.clock);
     let script = Arc::clone(&rig.script);
@@ -2303,7 +2294,7 @@ fn timeout_stops_a_term_trap_without_sigkill() {
     let rig = rig(vec![WatchReply::Block(held)]);
     let origin = rig.clock.now();
     let timeout = Duration::from_millis(500);
-    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout), None, None);
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(timeout), None);
     let pgid = pid_in_file(&pidfile);
     let watchdog = Watchdog::group(pgid);
     wait_ready(&ready);
@@ -2339,7 +2330,7 @@ fn timeout_does_not_replace_a_childs_own_early_exit() {
         block.display(),
         json_line(1, "done")
     );
-    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10), None, None);
+    let (done, park) = rig.start_timeout(&shell, BOUND, 1024, None, Some(BOUND * 10), None);
     let watchdog = Watchdog::group(pid_in_file(&pidfile));
     release_fifo(&block, b"go\n");
     let notice = timeout_report(&rig, &park);
@@ -3422,7 +3413,6 @@ fn the_stream_forwards_live_usage_past_the_run_boundary() {
             Some(1),
             None,
             Some(rig.registry.usage_forward()),
-            None,
         )
         .0;
     let _waited = waited;
@@ -3559,7 +3549,6 @@ fn the_watcher_tap_forwards_well_formed_usage_and_drops_malformed() {
             None,
             None,
             Some(rig.registry.usage_forward()),
-            None,
         )
         .0;
     let _waited = waited;
@@ -3714,7 +3703,6 @@ fn the_reap_replays_file_usage_the_socket_never_saw() {
             None,
             None,
             Some(rig.registry.usage_forward()),
-            None,
         )
         .0;
     let _waited = waited;
@@ -3885,7 +3873,6 @@ fn the_trip_calls_stop_once_on_crossing_and_never_before() {
             None,
             None,
             Some(rig.registry.usage_forward()),
-            None,
         )
         .0;
     let _done = done;
@@ -3988,7 +3975,6 @@ fn a_correction_applies_only_its_delta() {
             None,
             None,
             Some(rig.registry.usage_forward()),
-            None,
         )
         .0;
     let _waited = waited;
