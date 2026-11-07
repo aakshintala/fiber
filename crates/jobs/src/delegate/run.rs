@@ -658,6 +658,16 @@ impl Runner {
                 );
                 finished.worktree = self.end_worktree();
                 finish.report(completed, Some(finished));
+                // The deliver trace: the report returned, so the notice is
+                // handed to the loop. It runs on this thread after the
+                // registry lock is released, beside the report it follows.
+                if let Some(timing) = &self.timing {
+                    drop(timing(
+                        Op::JobsDeliver,
+                        Some(TimingName::Job(&self.job_id)),
+                        None,
+                    ));
+                }
                 self.retire(&mut listing);
                 return;
             }
@@ -860,6 +870,20 @@ impl Watcher {
                     None
                 }
             };
+            // The receive trace: the exit is recognised as valid, new and
+            // past-boundary, so the watcher has its end. It sits outside
+            // the adoption lock hold and ahead of the clock read and the
+            // file stat below, so the emission covers the receive, never
+            // the cap check.
+            if exited.is_some()
+                && let Some(timing) = &self.timing
+            {
+                drop(timing(
+                    Op::JobsReceive,
+                    Some(TimingName::Job(&self.job_id)),
+                    None,
+                ));
+            }
             // Taps each well-formed `usage_recorded` envelope in stream
             // order, outside the fold lock: malformed lines never reach
             // the loop, as the fold already ignores every non-`fiber_exited`
