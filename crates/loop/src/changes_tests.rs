@@ -767,7 +767,7 @@ fn sized_subdirectory_file(workspace: &Path, bytes: usize) -> PathBuf {
 /// Queues `sub/` once and applies what the queue emits to what the model
 /// had, as the loop's render does when it writes the lines.
 fn queue_subdirectory(state: &mut State, workspace: &Path) -> Vec<Event> {
-    let own = state.call_completed(&workspace, &declared(Some(&["sub/notes.txt"])));
+    let own = state.call_completed(workspace, &declared(Some(&["sub/notes.txt"])));
     assert!(own.is_empty());
     let queued = state.take_queued();
     for event in &queued {
