@@ -288,7 +288,7 @@ pub(crate) fn session_command_refusal(
     let command = stripped
         .get("command")
         .and_then(Value::as_str)
-        .filter(|command| *command == "prompt" || *command == "steer" || *command == "reply")?;
+        .filter(|command| contract::commands::is_from_session_command(command))?;
     let refusal = || FromSessionRefusal::SessionCommand { command, target };
     let target_pid = match target_state {
         RelayTarget::SyntheticReplay => unreachable!("synthetic replay returned above"),
