@@ -4,6 +4,7 @@
 //! under a registry-wide gate, so two messages to one finished delegate
 //! start one run.
 
+use std::path::Path;
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
@@ -35,6 +36,22 @@ fn with_final_file(job: &super::Job, mut finished: DelegateFinished) -> Delegate
                 .to_string_lossy()
                 .into_owned(),
         );
+    }
+    finished
+}
+
+/// `finished` without the file name when the file's session directory is
+/// gone: the delivery writes the file only under an existing session
+/// directory and creates none, so no file will exist for a `wait` to name.
+fn without_unwritable_file(finished: &DelegateFinished) -> DelegateFinished {
+    let mut finished = finished.clone();
+    let session_exists = finished
+        .artifact_absolute
+        .as_deref()
+        .and_then(|file| Path::new(file).parent()?.parent())
+        .is_some_and(Path::is_dir);
+    if !session_exists {
+        finished.artifact_absolute = None;
     }
     finished
 }
@@ -459,7 +476,8 @@ impl Registry {
         } else {
             finished
         };
-        let text = final_text(&job.path, completed, finished);
+        let unwritable = finished.map(without_unwritable_file);
+        let text = final_text(&job.path, completed, unwritable.as_ref());
         Some(Answer {
             text,
             settle: Some(self.settle_through(id, Mark::end(run))),

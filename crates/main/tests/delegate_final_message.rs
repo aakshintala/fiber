@@ -508,7 +508,7 @@ fn a_stopped_delegate_final_message_is_written_before_the_stop_returns() {
         "the stop was requested"
     );
     assert!(
-        child.await_requests(1, setup.deadline),
+        child.await_partial(1, setup.deadline),
         "the child stalled its model call"
     );
     parent.release();

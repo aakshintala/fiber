@@ -1917,33 +1917,43 @@ fn retain_extensions_waits_for_a_start_holding_the_gate_then_stops_it() {
     );
 }
 
-/// `registry`'s one delegate on `/sessions/s_x/events.jsonl`, ended with
-/// `completed` and `text`, and the answer to a wait on it.
-fn answer_for_end(completed: JobCompleted, text: &str) -> String {
+/// `registry`'s one delegate on `<session>/events.jsonl`, in a session
+/// directory that exists, ended with `completed` and `text`: the session
+/// directory and the answer to a wait on it.
+fn answer_for_end(completed: JobCompleted, text: &str) -> (TempDir, String) {
     let (_dir, registry) = world();
+    let session = TempDir::new("fiber-final-file");
     let id = completed.job_id.clone();
     let (_started, finish) = registry.open_started(
         id.clone(),
         "delegate_spawn".into(),
         "scan".into(),
-        "/sessions/s_x/events.jsonl".into(),
+        session
+            .path()
+            .join("events.jsonl")
+            .to_string_lossy()
+            .into_owned(),
         Stop(Box::new(|| {})),
         delegate_started(&id.0),
     );
     finish.report(completed, Some(delegate_finished(&id.0, text)));
-    registry.wait(&id.0, 0, &CancelToken::new()).unwrap().text
+    let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap().text;
+    (session, answer)
 }
 
 #[test]
 fn a_delegate_wait_names_the_final_file_right_after_the_header() {
-    let text = answer_for_end(ended_ok("j_one"), "Done.");
+    let (session, text) = answer_for_end(ended_ok("j_one"), "Done.");
+    let dir = session.path().display();
     assert_eq!(
         text,
-        "Job j_one completed.\n\
-         Full final message: /sessions/s_x/artifacts/final.md\n\
-         Exit code 0.\n\
-         Final message:\nDone.\n\
-         Output: /sessions/s_x/events.jsonl\n"
+        format!(
+            "Job j_one completed.\n\
+             Full final message: {dir}/artifacts/final.md\n\
+             Exit code 0.\n\
+             Final message:\nDone.\n\
+             Output: {dir}/events.jsonl\n"
+        )
     );
 }
 
@@ -1952,12 +1962,15 @@ fn a_failed_delegate_with_an_error_over_16_kib_names_the_file_inside_the_first_1
     let mut end = failure();
     end.job_id = JobId("j_one".into());
     end.error.as_mut().unwrap().message = "e".repeat(20_000);
-    let text = answer_for_end(end, "");
-    let line = "Full final message: /sessions/s_x/artifacts/final.md\n";
+    let (session, text) = answer_for_end(end, "");
+    let line = format!(
+        "Full final message: {}/artifacts/final.md\n",
+        session.path().display()
+    );
     assert_eq!(text.lines().nth(1), Some(line.trim_end()));
     let head = &text.as_bytes()[..16_384];
     assert!(
-        String::from_utf8_lossy(head).contains(line),
+        String::from_utf8_lossy(head).contains(&line),
         "the retained prefix keeps the path line"
     );
 }

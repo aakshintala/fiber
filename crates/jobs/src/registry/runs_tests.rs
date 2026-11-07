@@ -1338,6 +1338,32 @@ fn another_harnesss_finish_names_no_file() {
     );
 }
 
+#[test]
+fn a_wait_names_no_file_when_the_session_directory_is_gone() {
+    let (_dir, registry) = world();
+    let session = TempDir::new("fiber-final-file");
+    let events = session.path().join("gone/events.jsonl");
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let (id, finish) = open_delegate_on(&registry, &events, "fiber");
+    end_run(finish, &id, "Done.");
+    // The finish names the file before the delivery tries to write it.
+    let sent = take_notice(&rx).delegate.expect("a delegate's notice");
+    assert!(sent.artifact_absolute.is_some(), "{sent:?}");
+    // The delivery cannot write it, so the wait does not name it.
+    let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
+    assert!(
+        !answer.text.contains("Full final message"),
+        "{}",
+        answer.text
+    );
+    assert!(
+        answer.text.contains("Final message:\nDone.\n"),
+        "{}",
+        answer.text
+    );
+}
+
 /// A wait after the loop delivered the finish with `delivered` as its
 /// text: the stored copy still answers the raw text and the same path.
 fn wait_after_delivery_as(delivered: &str) {

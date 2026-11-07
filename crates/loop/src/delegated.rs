@@ -13,9 +13,8 @@ use log::Log;
 /// `finished` with its text cut to [`Bound::DEFAULT`], the notice naming
 /// the final-message file when the finish names one. A text of exactly
 /// 16 KiB is not cut.
-// debt: `_log` is unused since the file moved to the delivery write; drop it
-// with the `log` parameter of `calls::job_event` when that signature next
-// changes.
+// debt: `_log` is unused because the delivery writes the file; drop it with
+// the `log` parameter of `calls::job_event` when that signature next changes.
 pub(crate) fn bounded(_log: &Log, finished: DelegateFinished) -> DelegateFinished {
     let cap = Bound::DEFAULT.start.saturating_add(Bound::DEFAULT.end);
     if finished.text.len() <= cap {
