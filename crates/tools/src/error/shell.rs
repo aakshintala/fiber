@@ -174,48 +174,14 @@ fn usable_check(command: &str) -> Option<String> {
             }
         }
     }
-    // Walk the comment-stripped rest with the same quote rules, cutting
-    // lines at newlines: a line is dropped only when it holds no content
-    // and starts outside quotes, so whitespace within a multiline quote
-    // survives untouched. Kept lines feed the output verbatim; trimmed
-    // views serve the accept/reject tests only.
-    let mut kept: Vec<&str> = Vec::new();
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut escaped = false;
-    let mut line_start = 0;
-    let mut line_has_content = false;
-    let mut line_quoted = false;
-    for (idx, ch) in cleaned.char_indices() {
-        if ch == '\n' {
-            if line_has_content || line_quoted {
-                kept.push(cleaned.get(line_start..idx)?);
-            }
-            if escaped {
-                escaped = false;
-            }
-            line_start = idx + 1;
-            line_has_content = false;
-            line_quoted = in_single || in_double;
-            continue;
-        }
-        if escaped {
-            escaped = false;
-        } else {
-            match ch {
-                '\\' if !in_single => escaped = true,
-                '\'' if !in_double => in_single = !in_single,
-                '"' if !in_single => in_double = !in_double,
-                _ => {}
-            }
-        }
-        if !ch.is_whitespace() {
-            line_has_content = true;
-        }
-    }
-    if line_has_content || line_quoted {
-        kept.push(cleaned.get(line_start..)?);
-    }
+    // The fallback above rejected any newline inside quotes, so every
+    // blank line here starts outside quotes: drop blank lines and keep
+    // every other line byte for byte. Trimmed views serve the
+    // accept/reject tests only.
+    let kept: Vec<&str> = cleaned
+        .split('\n')
+        .filter(|line| line.chars().any(|ch| !ch.is_whitespace()))
+        .collect();
     let first = kept.first()?;
     let trimmed = first.trim();
     if matches!(trimmed.chars().next(), Some('&' | '|' | ';')) {
