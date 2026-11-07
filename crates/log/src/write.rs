@@ -18,6 +18,8 @@ use contract::events::{Class, Event};
 use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
+use serde::{Deserialize, Deserializer};
+
 use crate::offsets::Offsets;
 use crate::read::{Queue, Watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
@@ -716,13 +718,23 @@ impl Inner {
 
 /// The two fields `Log::open` reads from every line: what decides
 /// whether the line is fully parsed. Every other field is skipped, but
-/// its JSON syntax is still checked. `kind` borrows the line's bytes and
-/// allocates only for an escaped kind; `seq` is required.
+/// its JSON syntax is still checked. `kind` parses once through the
+/// typed vocabulary, borrowing the line's bytes and allocating only
+/// for an escaped kind or an unrecognized name; `seq` is required.
 #[derive(serde::Deserialize)]
-struct Head<'a> {
-    #[serde(borrow)]
-    kind: Cow<'a, str>,
+struct Head {
+    #[serde(deserialize_with = "kind_field")]
+    kind: contract::events::EventKind,
     seq: u64,
+}
+
+/// The `kind` key, read once as a string and parsed without its payload.
+fn kind_field<'de, D>(deserializer: D) -> Result<contract::events::EventKind, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let name = Cow::deserialize(deserializer)?;
+    Ok(contract::events::EventKind::from_name(&name))
 }
 
 /// Whether `keep_latest` keeps a line of this kind: the latest-wins kinds.
@@ -740,10 +752,10 @@ fn latest_wins(kind: &contract::events::EventKind) -> bool {
 }
 
 /// Whether `Log::open` fully parses a line of this kind: the kinds a fold
-/// reads.
-fn folded(kind: &str) -> bool {
-    let parsed = contract::events::EventKind::from_name(kind);
-    latest_wins(&parsed) || offer_kind(&parsed) || RateFold::reads(kind)
+/// reads. An unfamiliar kind parses to its retained variant and is never
+/// folded, so it skips the full parse exactly as an unfolded kind does.
+fn folded(kind: &contract::events::EventKind) -> bool {
+    latest_wins(kind) || offer_kind(kind) || RateFold::reads(kind.name())
 }
 
 /// The event kinds that maintain the pending repository offer.
