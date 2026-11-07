@@ -395,6 +395,173 @@ fn a_disabled_extension_leaves_its_tool_out_of_the_session() {
 }
 
 #[test]
+fn a_printed_outcome_shows_its_text() {
+    let source = "local o = host.tool(\"read\", { path = \"small.txt\" })\n\
+        print(o)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    // A completed outcome prints exactly its text content: the `hello`
+    // line, then the status line, then the one ledger row.
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "hello\nScript finished\n- read completed"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_printed_failed_outcome_shows_its_error_and_status() {
+    // Array arguments stay an array, which the loop fails
+    // `invalid_arguments` as an ordinary return (`crates/loop/src/completion.rs`,
+    // `failed`: the message in the content and in the error beside it).
+    let source = "local o = host.tool(\"read\", { \"small.txt\" })\n\
+        print(\"outcome:\")\n\
+        print(o)\n\
+        print(\"message:\")\n\
+        print(o.error.message)\n\
+        print(\"status:\")\n\
+        print(o.status)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    // The printed outcome ends with the error message then the status, in
+    // that order; the labelled blocks that follow pin what those hold.
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed_text(completed);
+    let lines: Vec<&str> = text.lines().collect();
+    let outcome_at = lines.iter().position(|line| *line == "outcome:").unwrap();
+    let message_at = lines.iter().position(|line| *line == "message:").unwrap();
+    let status_at = lines.iter().position(|line| *line == "status:").unwrap();
+    assert!(
+        outcome_at < message_at && message_at < status_at,
+        "{text:?}"
+    );
+    let outcome_block = &lines[outcome_at + 1..message_at];
+    let message_block = &lines[message_at + 1..status_at];
+    assert!(
+        !message_block.is_empty(),
+        "the error message block: {text:?}"
+    );
+    assert_eq!(lines[status_at + 1], "failed");
+    assert_eq!(lines[status_at + 2], "Script finished");
+    assert_eq!(lines[status_at + 3], "- read failed");
+    assert_eq!(lines.len(), status_at + 4, "{text:?}");
+    let tail = &outcome_block[outcome_block.len() - message_block.len() - 1..];
+    assert_eq!(
+        tail,
+        &[message_block, &["failed"]].concat(),
+        "the outcome ends with its error message then its status: {text:?}"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_printed_denied_outcome_shows_its_reason_and_status() {
+    let source = "local o = host.tool(\"read\", { path = \"small.txt\" })\n\
+        print(\"outcome:\")\n\
+        print(o)\n\
+        print(\"reason:\")\n\
+        print(o.reason)\n\
+        print(\"status:\")\n\
+        print(o.status)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    setup.lua(
+        "deny",
+        "fiber.hook(\"before_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) if call.tool == \"read\" then return { refuse = \"nope\" } end end })\n",
+    );
+    std::fs::write(setup.workspace().join("small.txt"), "hello").unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    // A refused inner call is an ordinary return with the denial text in
+    // the content and the reason beside it: the printed outcome ends with
+    // the reason then the status, in that order.
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed_text(completed);
+    let lines: Vec<&str> = text.lines().collect();
+    let outcome_at = lines.iter().position(|line| *line == "outcome:").unwrap();
+    let reason_at = lines.iter().position(|line| *line == "reason:").unwrap();
+    let status_at = lines.iter().position(|line| *line == "status:").unwrap();
+    assert!(outcome_at < reason_at && reason_at < status_at, "{text:?}");
+    let outcome_block = &lines[outcome_at + 1..reason_at];
+    let reason_block = &lines[reason_at + 1..status_at];
+    assert!(!reason_block.is_empty(), "the reason block: {text:?}");
+    assert_eq!(lines[status_at + 1], "denied");
+    assert_eq!(lines[status_at + 2], "Script finished");
+    assert_eq!(lines[status_at + 3], "- read denied");
+    assert_eq!(lines.len(), status_at + 4, "{text:?}");
+    let tail = &outcome_block[outcome_block.len() - reason_block.len() - 1..];
+    assert_eq!(
+        tail,
+        &[reason_block, &["denied"]].concat(),
+        "the outcome ends with its reason then its status: {text:?}"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_printed_failed_outcome_with_redacted_content_shows_its_error_and_status() {
+    // Reading a missing file runs the tool and fails as an ordinary
+    // return; an `after_tool` hook replaces the content, so the printed
+    // error line is the only place the message survives: dropping the
+    // error line changes the output.
+    let source = "local o = host.tool(\"read\", { path = \"missing.txt\" })\n\
+        print(\"outcome:\")\n\
+        print(o)\n\
+        print(\"message:\")\n\
+        print(o.error.message)\n\
+        print(\"status:\")\n\
+        print(o.status)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    setup.lua(
+        "redact",
+        r#"fiber.hook("after_tool", { timeout = 30000, on_failure = "blocking",
+           run = function(call) if call.tool == "read" then return { content = "redacted" } end end })"#,
+    );
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed_text(completed);
+    let lines: Vec<&str> = text.lines().collect();
+    let outcome_at = lines.iter().position(|line| *line == "outcome:").unwrap();
+    let message_at = lines.iter().position(|line| *line == "message:").unwrap();
+    let status_at = lines.iter().position(|line| *line == "status:").unwrap();
+    assert!(
+        outcome_at < message_at && message_at < status_at,
+        "{text:?}"
+    );
+    let outcome_block = &lines[outcome_at + 1..message_at];
+    let message_block = &lines[message_at + 1..status_at];
+    assert!(
+        !message_block.is_empty(),
+        "the error message block: {text:?}"
+    );
+    assert_eq!(lines[status_at + 1], "failed");
+    assert_eq!(lines[status_at + 2], "Script finished");
+    assert_eq!(lines[status_at + 3], "- read failed");
+    assert_eq!(lines.len(), status_at + 4, "{text:?}");
+    // The redacted content, then the full error message, then the status.
+    assert_eq!(
+        outcome_block,
+        &[&["redacted"], message_block, &["failed"]].concat(),
+        "{text:?}"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
 fn an_uncut_inner_call_keeps_an_after_tool_artifact_in_the_ledger() {
     let source = r#"local o = host.tool("read", { path = "small.txt" })
 print(o.content[1].text)"#;

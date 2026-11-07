@@ -4,7 +4,9 @@
 -- them (`status`, `content`, `artifact`, and `reason` or `error` when the
 -- call did not complete). Printed output comes only from `print()`; a chunk
 -- return value is ignored. The result is the printed lines, then one status
--- line, then one ledger row per inner call that finished.
+-- line, then one ledger row per inner call that finished. A printed outcome
+-- shows its text parts in order, then its error message or reason when it
+-- carries one, then its status when that status is not `completed`.
 --
 -- The tool declares `executes`, so admission reviews the script
 -- (`docs/extensions.md`, "Running a tool"). An inner call runs inside the
@@ -42,8 +44,30 @@ fiber.tool("codemode", {
     -- raises instead of returning finishes nothing and leaves no row.
     local ledger = {}
     local real_tool = host.tool
+    -- How a printed outcome reads: its text parts in order, then its error
+    -- message or reason when it carries one, then its status when that
+    -- status is not `completed`. Non-text parts print nothing.
+    local function outcome_text(outcome)
+      local lines = {}
+      for _, part in ipairs(outcome.content) do
+        if part.type == "text" then
+          lines[#lines + 1] = part.text
+        end
+      end
+      if outcome.error ~= nil then
+        lines[#lines + 1] = outcome.error.message
+      elseif outcome.reason ~= nil then
+        lines[#lines + 1] = outcome.reason
+      end
+      if outcome.status ~= "completed" then
+        lines[#lines + 1] = outcome.status
+      end
+      return table.concat(lines, "\n")
+    end
+    local outcome_metatable = { __tostring = outcome_text }
     local function observing_tool(name, call_args)
       local outcome = real_tool(name, call_args)
+      setmetatable(outcome, outcome_metatable)
       local row = { name = name, status = outcome.status }
       if outcome.artifact ~= nil then
         row.artifact = outcome.artifact
