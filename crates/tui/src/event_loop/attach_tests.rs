@@ -1778,21 +1778,24 @@ fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
     ));
 }
 
-/// Runs one `history` wait for the attached session through `fetch` on a
-/// thread of its own, answering the minted command after a `stream_reopened`
-/// naming `reopened`: the fetch's result and the loop back, with the minted
-/// id, the needed span and the awaited lines. The caller names which
-/// reopening the wait sees: another session's, or the read one.
-fn fetch_past_reopen(
-    read: contract::SessionId,
-    reopened: contract::SessionId,
-) -> (
+/// One `history` wait through a reopening: the fetch's result and the loop
+/// back, with the minted id, the needed span and the awaited lines.
+type FetchedPastReopen = (
     Result<Vec<contract::Envelope>, String>,
     super::super::Loop<ratatui::backend::TestBackend>,
     String,
     std::ops::RangeInclusive<contract::Seq>,
     Vec<contract::Envelope>,
-) {
+);
+
+/// Runs one `history` wait for the attached session through `fetch` on a
+/// thread of its own, answering the minted command after a `stream_reopened`
+/// naming `reopened`. The caller names which reopening the wait sees:
+/// another session's, or the read one.
+fn fetch_past_reopen(
+    read: contract::SessionId,
+    reopened: contract::SessionId,
+) -> FetchedPastReopen {
     let (mut lp, theirs, tx, rx) = opened();
     assert_eq!(
         lp.app.session(),
