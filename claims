@@ -358,3 +358,5 @@ Cargo.toml	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lan
 crates/main/Cargo.toml	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
 Cargo.lock	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
 crates/main/tests/main_journeys.rs	fiber-4278	grant	2026-11-07T01:48:57Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4278-commit-leaf	
+extensions/codemode/init.lua	fiber-4246	plan	2026-11-07T02:09:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/extension_codemode.rs	fiber-4246	plan	2026-11-07T02:09:44Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
