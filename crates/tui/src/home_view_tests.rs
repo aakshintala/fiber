@@ -542,7 +542,7 @@ fn home_header_counts_loaded_rows_without_a_total() {
 /// A `hub_hello` this terminal reads.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -552,7 +552,7 @@ fn hello() -> Line {
 /// The hub's answer to the `recent` command `id`.
 fn accepted(id: &str, result: serde_json::Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -592,7 +592,7 @@ fn status(session: &str, name: &str, state: serde_json::Value) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -619,7 +619,7 @@ fn status_in(session: &str, name: &str, workspace: &str) -> Line {
         payload[key] = value;
     }
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1332,7 +1332,7 @@ fn blocker_lines_sit_above_the_box_and_the_list_yields() {
         serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1405,7 +1405,7 @@ fn blockers_count_against_the_four_row_logo() {
         serde_json::from_str(&lines[0]).unwrap_or_else(|err| panic!("start: {err}"));
     let id = start["id"].as_str().unwrap_or_else(|| panic!("start id"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1493,7 +1493,7 @@ fn home_cursor_hides_while_navigating() {
 fn the_placeholder_goes_after_a_start_is_sent() {
     let mut app = home(80, 24);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1619,7 +1619,7 @@ fn home_with_a_focused_row() {
 /// A hub `command_rejected` for `id`, with `code` and `message`.
 fn refused(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1754,7 +1754,7 @@ fn focus_first_row(app: &mut App) {
 /// A `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::SessionLeft.name().to_owned(),
+        kind: HubEventKind::SessionLeft,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session, "how": how})

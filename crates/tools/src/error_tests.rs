@@ -966,11 +966,332 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
         error.to_string(),
         "Background jobs are not available in this session."
     );
-    let error = ShellError::BareWait;
+    let error = ShellError::BareWait {
+        command: "sleep 240; echo hi".to_owned(),
+    };
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
     assert_eq!(
         error.to_string(),
-        "This command waits with `sleep` for 25 seconds or more. Use `run_in_background`, wait with `jobs wait`, or run a monitor with an `until` loop."
+        "`sleep 240; echo hi` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 240; echo hi`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until echo hi; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; grep -q READY log".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 30; grep -q READY log` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30; grep -q READY log`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until grep -q READY log; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; while true; do echo hi; done".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 30; while true; do echo hi; done` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30; while true; do echo hi; done`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; # waiting".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 30; # waiting` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30; # waiting`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; # waiting\necho hi".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo hi; do sleep 5; done"),
+        "a comment-led rest with a check names that check: {text}"
+    );
+    assert!(
+        !text.contains("until <check command>"),
+        "a rest holding a check does not fall back: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo hi # done".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo hi; do sleep 5; done"),
+        "a trailing comment is stripped from the check: {text}"
+    );
+    assert!(
+        !text.contains("until echo hi # done"),
+        "no emitted until line is commented out: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30 && grep -q READY log".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 30 && grep -q READY log` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30 && grep -q READY log`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 60".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 60` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 60`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    for command in [
+        "sleep 30; until ready; do sleep 1; done",
+        "sleep 30; for i in 1 2 3; do echo $i; done",
+        "sleep 30;",
+    ] {
+        let error = ShellError::BareWait {
+            command: command.to_owned(),
+        };
+        assert_eq!(error.code(), ErrorCode::InvalidArguments);
+        let text = error.to_string();
+        assert!(
+            text.contains("until <check command>; do sleep 5; done"),
+            "other loop keywords and empty rest fall back: {text}"
+        );
+    }
+    let error = ShellError::BareWait {
+        command: "sleep 25\nls".to_owned(),
+    };
+    let text = error.to_string();
+    assert!(
+        text.contains("until ls; do sleep 5; done"),
+        "a newline rest names its check command: {text}"
+    );
+}
+
+#[test]
+fn a_bare_wait_multiline_check_names_the_complete_check() {
+    let error = ShellError::BareWait {
+        command: "sleep 30; test -f ready\ngrep -q READY ready".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until test -f ready\ngrep -q READY ready; do sleep 5; done"),
+        "a multiline check is named complete, not truncated: {text}"
+    );
+    assert!(
+        !text.contains("until <check command>"),
+        "a rest holding checks does not fall back: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; printf '%s' \"a\n# b\nc\"".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "a newline inside quotes names the placeholder: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \"hi".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "an unbalanced quote falls back instead of emitting invalid shell: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo hi\n; echo bye".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "a separator-led continuation falls back instead of emitting invalid shell: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'hi # there'".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'hi # there'; do sleep 5; done"),
+        "a hash inside single quotes stays part of the check: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \"it's\" # done".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo \"it's\"; do sleep 5; done"),
+        "an apostrophe inside doubles does not swallow the trailing comment: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a \"b' # done".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a \"b'; do sleep 5; done"),
+        "a double quote inside singles does not swallow the trailing comment: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo hi\\".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "a trailing escape falls back instead of emitting invalid shell: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a\\'b".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a\\'b; do sleep 5; done"),
+        "a backslash inside singles stays literal and the check is named: {text}"
+    );
+}
+
+#[test]
+fn a_bare_wait_quoted_newline_falls_back_to_placeholder() {
+    let error = ShellError::BareWait {
+        command: "sleep 30; test \"$(cat ready)\" = 'READY\n  DONE'".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "a newline inside quotes names the placeholder: {text}"
+    );
+    assert!(
+        !text.contains("until test \"$(cat ready)\""),
+        "a quoted check is not named verbatim: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; printf 'a\n\nb'".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "a blank line inside quotes names the placeholder: {text}"
+    );
+    assert!(
+        !text.contains("until printf"),
+        "a quoted check is not named verbatim: {text}"
+    );
+}
+
+#[test]
+fn a_bare_wait_quote_guards_shape_the_check() {
+    // An escaped quote outside singles is literal, so the newline stays
+    // outside quotes and the check is named.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo x\\\"y\nz".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo x\\\"y\nz; do sleep 5; done"),
+        "an escaped quote outside singles leaves the newline outside quotes: {text}"
+    );
+    // A backslash inside singles escapes nothing, so the quote still closes
+    // and the newline stays outside quotes.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a\\'\\nb".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a\\'\\nb; do sleep 5; done"),
+        "a backslash inside singles closes the quote before the newline: {text}"
+    );
+    // An apostrophe inside doubles toggles nothing, so the doubles still
+    // close and the newline stays outside quotes.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \"a'b\"\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo \"a'b\"\nc; do sleep 5; done"),
+        "an apostrophe inside doubles closes the doubles before the newline: {text}"
+    );
+    // A double quote inside singles toggles nothing, so the singles still
+    // close and the newline stays outside quotes.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a\"b'\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a\"b'\nc; do sleep 5; done"),
+        "a double quote inside singles closes the singles before the newline: {text}"
+    );
+    // An escaped quote leaves no quote open, so a later blank line starts
+    // outside quotes and is dropped.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \\\"a\n\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo \\\"a\nc; do sleep 5; done"),
+        "an escaped quote outside singles drops a later blank line: {text}"
+    );
+    // A backslash inside singles changes no quote state, so a later blank
+    // line starts outside quotes and is dropped.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a\\'b\n\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a\\'b\nc; do sleep 5; done"),
+        "a backslash inside singles drops a later blank line: {text}"
+    );
+    // A lone apostrophe inside doubles opens no single quote, so a later
+    // blank line starts outside quotes and is dropped.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \"a'b\"\n\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo \"a'b\"\nc; do sleep 5; done"),
+        "an apostrophe inside doubles drops a later blank line: {text}"
+    );
+    // A lone double quote inside singles opens no double quote (and a lone
+    // apostrophe needs no single-quote tracking), so a later blank line
+    // starts outside quotes and is dropped.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'x\"y'\n\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'x\"y'\nc; do sleep 5; done"),
+        "a double quote inside singles drops a later blank line: {text}"
     );
 }
 

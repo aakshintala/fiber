@@ -352,7 +352,7 @@ fn find_logged_session_skips_a_directory_without_a_log() {
 
 fn line() -> Envelope {
     Envelope {
-        kind: "x".into(),
+        kind: EventKind::Unknown("x".into()),
         session_id: SessionId("s".into()),
         ts: 0,
         schema_version: 1,

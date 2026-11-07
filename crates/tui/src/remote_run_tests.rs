@@ -117,7 +117,7 @@ fn serve(hub: UnixStream, lines: mpsc::Sender<Value>) {
             continue;
         };
         let accepted = contract::HubLine {
-            kind: HubEventKind::CommandAccepted.name().to_owned(),
+            kind: HubEventKind::CommandAccepted,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: answer.as_object().cloned().unwrap_or_default(),

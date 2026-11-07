@@ -60,7 +60,7 @@ fn two(width: u16, height: u16) -> App {
 /// A live idle `session_status` for `session` named `name`.
 fn status(session: &str, name: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -84,7 +84,7 @@ fn status(session: &str, name: &str) -> Line {
 /// A `turn_started` with one message.
 fn turn_started(text: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::TurnStarted.name().to_owned(),
+        kind: EventKind::TurnStarted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

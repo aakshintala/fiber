@@ -2852,9 +2852,11 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
   or fails as usual with no connection.
-  If `stream_reopened` arrives during a `history` wait, the wait ends at
-  once. A `history` wait with no answer after 10 seconds ends as a lost
-  connection, and the terminal reconnects as it does after a disconnect.
+  If `stream_reopened` for the session being waited on arrives during a
+  `history` wait, the wait ends at once; a reopening for any other
+  session leaves the wait alone. A `history` wait with no answer after
+  10 seconds ends as a lost connection, and the terminal reconnects as
+  it does after a disconnect.
   Stashed lines fold in order before the new fold, whose lines are
   never stashed. The late answer is discarded by its id, and the page
   loads in a frame after the pass ends.

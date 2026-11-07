@@ -26,7 +26,7 @@ const WIDTH: u16 = 60;
 /// One envelope at `ts` milliseconds.
 fn envelope(kind: &str, action: Option<&str>, ts: u64, payload: Value) -> Envelope {
     Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

@@ -1023,7 +1023,7 @@ fn the_note_after_a_stop_names_the_jobs_with_their_descriptions() {
             output_path: "/tmp/out".into(),
         });
         let line = contract::Envelope {
-            kind: event.kind().into(),
+            kind: EventKind::from_name(event.kind()),
             session_id: SessionId(A_ID.into()),
             ts: 1_759_150_000_000,
             schema_version: contract::SCHEMA_VERSION,

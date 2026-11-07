@@ -1926,7 +1926,7 @@ fn an_unreadable_line_before_the_last_handoff_does_not_fail_the_resume() {
     append_raw(
         &dir,
         &contract::Envelope {
-            kind: "reasoning_completed".into(),
+            kind: contract::events::EventKind::ReasoningCompleted,
             session_id: SessionId("s_unread1".into()),
             ts: 1,
             schema_version: contract::SCHEMA_VERSION,

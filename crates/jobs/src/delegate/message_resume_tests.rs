@@ -122,7 +122,7 @@ type WatchCalls = Arc<Mutex<Vec<(SessionId, Option<u64>)>>>;
 
 fn envelope(seq: u64, kind: &str, payload: serde_json::Value) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: SessionId("s_child".into()),
         ts: 0,
         schema_version: 1,

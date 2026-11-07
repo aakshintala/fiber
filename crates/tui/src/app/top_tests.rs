@@ -121,7 +121,7 @@ pub(in crate::app) fn stacked(set: &[Surface], make: fn() -> App) -> Vec<(Surfac
 
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -132,7 +132,7 @@ fn hello() -> Line {
 /// about.
 fn working() -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -176,7 +176,7 @@ pub(in crate::app) fn home_app() -> App {
     app.on_line(working());
     // One exited row for the delete question to ask about.
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": recent["id"], "result": {"sessions": [{
@@ -212,7 +212,7 @@ pub(in crate::app) fn long_names() -> ImportedNames {
 /// A session line of `kind` from the attached session.
 fn session_line(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1169,7 +1169,7 @@ fn a_covered_surface_with_no_frame_takes_the_old_path() {
 /// A hub hello, bringing the link up.
 fn hub_hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

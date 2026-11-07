@@ -67,7 +67,7 @@ fn connect(client: UnixStream) -> impl FnMut() -> Result<doors::hub::Hub, doors:
         Ok((
             client.take().expect("one connection"),
             HubLine {
-                kind: "hub_hello".to_owned(),
+                kind: contract::HubEventKind::HubHello,
                 ts: 1,
                 schema_version: 1,
                 payload: Map::new(),

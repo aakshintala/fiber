@@ -34,7 +34,7 @@ fn app() -> App {
 /// Connects the app to the hub.
 fn connect(app: &mut App) {
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
@@ -113,7 +113,7 @@ fn accept_start(app: &mut App, command_id: &str, session: &str) -> String {
 /// Accepts `start` for `session`, returning every line the app sends.
 fn accept_start_lines(app: &mut App, command_id: &str, session: &str) -> Vec<String> {
     let hello = contract::HubLine {
-        kind: "command_accepted".to_owned(),
+        kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({
@@ -289,7 +289,7 @@ fn enter_before_connect_holds_start_until_hub_hello() {
     assert_eq!(send(&mut app, "more", now), Effect::None);
     assert_eq!(app.draft(), "more");
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
@@ -315,7 +315,7 @@ fn a_failed_connect_returns_a_held_start_to_the_draft() {
     assert_eq!(app.draft(), "hi");
     // Nothing is held any more: a hub that speaks later gets no `start`.
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
@@ -333,7 +333,7 @@ fn a_schema_mismatch_keeps_a_held_start_back() {
     let mut app = app();
     assert_eq!(send(&mut app, "hi", now), Effect::None);
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION + 1,
         payload: Default::default(),
@@ -500,7 +500,7 @@ fn rejected_start_returns_to_connected() {
     let mut app = app();
     let id = started(&mut app, now);
     let rejected = contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: contract::HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": id, "code": "io_failed", "message": "no hub"})
@@ -550,7 +550,7 @@ fn lines_for_another_session_are_ignored() {
 fn schema_mismatch_is_a_notice() {
     let mut app = app();
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION + 1,
         payload: Default::default(),
@@ -581,7 +581,7 @@ fn connection_lost_is_a_notice() {
 fn a_refused_schema_keeps_its_notice_when_the_hub_hangs_up() {
     let mut app = app();
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION + 1,
         payload: Default::default(),
@@ -1885,7 +1885,7 @@ fn hub_refused(id: &str, session: Option<&str>) -> Line {
             .insert("session_id".to_owned(), serde_json::json!(session));
     }
     Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: contract::HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().cloned().unwrap_or_default(),
@@ -1972,7 +1972,7 @@ fn an_answered_shell_command_marks_new_lines_while_scrolled_up() {
 /// A hub `stream_closed` for `session`.
 fn stream_closed(session: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "stream_closed".to_owned(),
+        kind: contract::HubEventKind::StreamClosed,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session})

@@ -263,10 +263,14 @@ impl Connection {
             // args name the ancestor segment. Own windows carry no
             // session, exactly as today: when the serving session is the
             // window's own, it is the same value either way, so no guard
-            // is left for mutants to flip.
-            let top = app.paging_session().unwrap_or(session);
-            let args = history_args(top, session, Some(from), Some(to));
-            let command = session_command(&id, "history", top, Some(args)).to_string();
+            // is left for mutants to flip. The wait borrows the app, so
+            // the target goes along owned.
+            let top = app
+                .paging_session()
+                .cloned()
+                .unwrap_or_else(|| session.clone());
+            let args = history_args(&top, session, Some(from), Some(to));
+            let command = session_command(&id, "history", &top, Some(args)).to_string();
             let written = self
                 .hub
                 .as_ref()
@@ -275,7 +279,7 @@ impl Connection {
                 self.lost(app);
                 return Err(LOST.to_owned());
             }
-            let answer = match self.answer(rx, &id, app, tick, clock, frame_deadline)? {
+            let answer = match self.answer(rx, &id, &top, app, tick, clock, frame_deadline)? {
                 Answer::Lines(lines) => lines,
                 Answer::Reopened => return Ok(Vec::new()),
             };
@@ -345,7 +349,7 @@ impl Connection {
                 self.lost(app);
                 return Err(LOST.to_owned());
             }
-            match self.answer(rx, &id, app, tick, clock, frame_deadline) {
+            match self.answer(rx, &id, session, app, tick, clock, frame_deadline) {
                 Ok(Answer::Lines(lines)) => match phase {
                     Phase::Count => app.tail_count_lines(lines),
                     Phase::Tail => {
@@ -379,11 +383,17 @@ impl Connection {
     /// with the signal's number next. The wait rides the working line's
     /// ticker: the earlier of the frame's deadline and the wait's own
     /// wakes it, so a silent hub ends the wait once the injected clock
-    /// passes [`HISTORY_WAIT`].
+    /// passes [`HISTORY_WAIT`]. The history command's target session goes
+    /// along: `fetch` passes its `top`, `fetch_history` its `session`.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the wait carries the id, the target session, the app, the tick, the clock and the frame's deadline"
+    )]
     pub(super) fn answer(
         &mut self,
         rx: &Receiver<Input>,
         id: &str,
+        target: &SessionId,
         app: &mut App,
         tick: &TickThread,
         clock: &dyn Clock,
@@ -418,15 +428,23 @@ impl Connection {
                     return link::history_answer(&line).map(Answer::Lines);
                 }
                 Input::Hub(Line::Hub(line)) if line.kind() == HubEventKind::StreamReopened => {
-                    if let Some(session) = line
+                    let reopened = line
                         .payload
                         .get("session_id")
-                        .and_then(serde_json::Value::as_str)
-                    {
+                        .and_then(serde_json::Value::as_str);
+                    if let Some(session) = reopened {
                         app.reopen_pending(SessionId(session.to_owned()));
                     }
-                    app.abandon_history(id.to_owned());
+                    // The wait belongs to the history command's target: a
+                    // reopening for any other session, or with no session
+                    // at all, waits stashed like every other held line,
+                    // and the wait holds for its answer.
+                    let for_target = reopened == Some(target.0.as_str());
                     self.push_stash(Input::Hub(Line::Hub(line)));
+                    if !for_target {
+                        continue;
+                    }
+                    app.abandon_history(id.to_owned());
                     return Ok(Answer::Reopened);
                 }
                 // A tick while a frame waits for history is acked and

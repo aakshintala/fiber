@@ -44,7 +44,7 @@ fn home(width: u16, height: u16) -> App {
 /// A `session_status` for `session` in `state`.
 fn status(session: &str, state: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

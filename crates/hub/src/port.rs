@@ -18,7 +18,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::clock::Wake;
-use contract::{CommandId, ErrorCode};
+use contract::{CommandId, ErrorCode, HubEventKind};
 use log::diag::Severity;
 use serde_json::{Map, Value};
 
@@ -239,7 +239,11 @@ pub(crate) fn serve(
 /// bridge. Before authentication succeeds the connection carries only the
 /// hello, the first answer and a close.
 fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>) {
-    let hello = connection::line(&hub, "hub_hello", connection::hello_payload(&hub));
+    let hello = connection::line(
+        &hub,
+        HubEventKind::HubHello,
+        connection::hello_payload(&hub),
+    );
     if web.text(&hello).is_err() {
         web.shut();
         hub.rollback(n);
@@ -312,7 +316,7 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
                 Err(crate::pairing::Refused::Io(message)) => {
                     web.text(&connection::line(
                         &hub,
-                        "command_rejected",
+                        HubEventKind::CommandRejected,
                         connection::rejection(Some(&line.id), &ErrorCode::IoFailed, &message),
                     ))
                     .unwrap_or(());
@@ -355,7 +359,11 @@ fn serve_client(web: Arc<Web>, hub: Arc<Hub>, n: u64, read: BufReader<TcpStream>
         accepted.insert("result".to_owned(), result);
     }
     if web
-        .text(&connection::line(&hub, "command_accepted", accepted))
+        .text(&connection::line(
+            &hub,
+            HubEventKind::CommandAccepted,
+            accepted,
+        ))
         .is_err()
     {
         web.shut();
@@ -442,8 +450,12 @@ fn refuse(
     message: &str,
 ) {
     let payload = connection::rejection(id, code, message);
-    web.text(&connection::line(hub, "command_rejected", payload))
-        .unwrap_or(());
+    web.text(&connection::line(
+        hub,
+        HubEventKind::CommandRejected,
+        payload,
+    ))
+    .unwrap_or(());
     web.close(1008, close_reason);
     web.shut();
     hub.diag.line(

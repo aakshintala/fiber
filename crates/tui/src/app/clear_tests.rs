@@ -58,7 +58,7 @@ fn clear_status(session: &str, workspace: &str, model: &str, thinking: Option<&s
         payload["thinking"] = json!(thinking);
     }
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: contract::events::EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -101,7 +101,7 @@ fn clear_model_changed(session: &str, credential: Option<&str>) -> Line {
 /// A `kind` line from `session`, parsed from the hub's side.
 fn old_line(session: &str, kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: kind.to_owned(),
+        kind: contract::events::EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -539,7 +539,7 @@ fn clear_keeps_the_learned_sender_names() {
     accept_start(&mut app, &id, NEW);
     assert!(app.lines().is_empty());
     app.on_line(Line::Session(contract::Envelope {
-        kind: "turn_started".to_owned(),
+        kind: contract::events::EventKind::TurnStarted,
         session_id: contract::SessionId(NEW.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

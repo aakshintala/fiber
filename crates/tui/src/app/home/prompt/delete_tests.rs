@@ -56,7 +56,7 @@ fn live(session: &str, name: &str) -> Line {
 /// A live `session_status` at an explicit watermark.
 fn live_since(session: &str, name: &str, since: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -108,7 +108,7 @@ fn recent_only(app: &mut App, session: &str, name: &str) {
 /// A hub `session_left` for `session`, ending `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::SessionLeft.name().to_owned(),
+        kind: HubEventKind::SessionLeft,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"session_id": session, "how": how})
@@ -121,7 +121,7 @@ fn left(session: &str, how: &str) -> Line {
 /// A hub `command_accepted` for `id` with `result`.
 fn accepted(id: &str, result: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -136,7 +136,7 @@ fn accepted(id: &str, result: Value) -> Line {
 /// A hub `command_rejected` for `id` with `code` and `message`.
 fn rejected(id: &str, code: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id, "code": code, "message": message})
@@ -163,7 +163,7 @@ fn rejected_with_held_value(id: &str, message: &str, held: Value) -> Line {
     .unwrap_or_default();
     payload.insert("held".to_owned(), held);
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload,

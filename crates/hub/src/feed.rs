@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use contract::clock::{Clock, Wake, wall_ms};
 use contract::events::{EventKind, SessionState, SessionStatus};
-use contract::{CommandId, Envelope, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
+use contract::{CommandId, Envelope, ErrorCode, HubEventKind, HubLine, SCHEMA_VERSION, SessionId};
 use serde_json::{Map, Value};
 use support::lock;
 
@@ -684,7 +684,7 @@ impl Feed {
             serde_json::to_value(how).unwrap_or(Value::Null),
         );
         let line = HubLine {
-            kind: "session_left".to_owned(),
+            kind: HubEventKind::SessionLeft,
             ts: wall_ms(self.clock.wall()),
             schema_version: SCHEMA_VERSION,
             payload,
@@ -743,7 +743,7 @@ pub(crate) fn answer(
         Ok(Some(result)) => accept_result(writer, hub, id, result),
         Ok(None) => {
             let payload = Map::from_iter([("command_id".to_owned(), Value::String(id.0.clone()))]);
-            send_line(writer, hub, "command_accepted", payload);
+            send_line(writer, hub, HubEventKind::CommandAccepted, payload);
         }
         Err(refused) => reject(writer, hub, Some(id), &refused.code, &refused.message),
     }
@@ -782,7 +782,7 @@ fn status_line(row: &RecentRow, payload: &SessionStatus) -> Line {
         _ => Map::new(),
     };
     to_line(&Envelope {
-        kind: "session_status".to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: row.session_id.clone(),
         ts: row.ts,
         schema_version: SCHEMA_VERSION,

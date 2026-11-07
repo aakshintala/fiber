@@ -189,6 +189,18 @@ pub enum Command {
     Unknown,
 }
 
+/// The wire names a connection from inside a session is refused
+/// `from_session` for sending to a session on its walk
+/// (`docs/permissions.md`, "Sessions on the sockets"). The hub relay and
+/// the session socket both read this one set, so a command added to one
+/// path and not the other fails the exact-set tests in each crate.
+pub const FROM_SESSION_COMMANDS: &[&str] = &["prompt", "steer", "reply", "sandbox"];
+
+/// Whether `command` is a wire name the `from_session` refusal covers.
+pub fn is_from_session_command(command: &str) -> bool {
+    FROM_SESSION_COMMANDS.contains(&command)
+}
+
 /// The `args` of `call`: one process-extension call, with the Lua call's
 /// arguments as a JSON array. A function the Lua call passes as a value is
 /// sent as `true`, and Fiber calls it with an `extension_request`.
