@@ -126,27 +126,38 @@ fn rows() -> Vec<Row> {
         Row {
             name: "model missing",
             error: JobsError::ModelMissing {
-                catalogue: "roles: code".to_owned(),
+                roles: "Roles: deep".to_owned(),
             },
             code: ErrorCode::InvalidArguments,
-            message: "Give model: a role or a full reference.\nroles: code",
+            message: "Give model: a role or a full reference.\nRoles: deep\nCall delegate_models for every reference.",
         },
         Row {
             name: "model not string",
             error: JobsError::ModelNotString {
-                catalogue: "roles: code".to_owned(),
+                roles: "Roles: deep".to_owned(),
             },
             code: ErrorCode::InvalidArguments,
-            message: "model must be a string.\nroles: code",
+            message: "model must be a string.\nRoles: deep\nCall delegate_models for every reference.",
         },
         Row {
             name: "model unresolved",
             error: JobsError::ModelUnresolved {
                 reason: "Unknown role `nope`.".to_owned(),
-                catalogue: "roles: code".to_owned(),
+                roles: "Roles: deep".to_owned(),
+                closest: vec!["fiber:fake/m:high".to_owned(), "fiber:fake/m".to_owned()],
             },
             code: ErrorCode::InvalidArguments,
-            message: "Unknown role `nope`.\nroles: code",
+            message: "Unknown role `nope`.\nRoles: deep\nClosest references: fiber:fake/m:high, fiber:fake/m\nCall delegate_models for every reference.",
+        },
+        Row {
+            name: "model unresolved, no candidates",
+            error: JobsError::ModelUnresolved {
+                reason: "Unknown role `nope`.".to_owned(),
+                roles: "Roles: none".to_owned(),
+                closest: Vec::new(),
+            },
+            code: ErrorCode::InvalidArguments,
+            message: "Unknown role `nope`.\nRoles: none\nClosest references: none\nCall delegate_models for every reference.",
         },
         Row {
             name: "credential unavailable",

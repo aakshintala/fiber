@@ -47,6 +47,8 @@ pub(super) fn delegates() -> crate::delegates::Delegates {
         jobs::Resolve {
             lookup: Arc::new(|_| Err(String::new())),
             catalogue: Arc::from(""),
+            roles: Arc::from("Roles: none"),
+            closest: Arc::new(|_| Vec::new()),
             credential: Arc::new(|_| Ok(None)),
         },
         Arc::new(std::sync::Mutex::new(tools::SandboxSettings {

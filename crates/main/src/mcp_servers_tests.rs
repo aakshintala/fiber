@@ -1155,6 +1155,8 @@ fn delegates() -> crate::delegates::Delegates {
         jobs::Resolve {
             lookup: std::sync::Arc::new(|_| Err(String::new())),
             catalogue: std::sync::Arc::from(""),
+            roles: std::sync::Arc::from("Roles: none"),
+            closest: std::sync::Arc::new(|_| Vec::new()),
             credential: std::sync::Arc::new(|_| Ok(None)),
         },
         std::sync::Arc::new(std::sync::Mutex::new(tools::SandboxSettings {

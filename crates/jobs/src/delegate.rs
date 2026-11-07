@@ -385,23 +385,25 @@ impl DelegateSpawn {
             Some(Value::String(model)) => model.clone(),
             None => {
                 return Err(JobsError::ModelMissing {
-                    catalogue: self.resolve.catalogue.to_string(),
+                    roles: self.resolve.roles.to_string(),
                 });
             }
             Some(_) => {
                 return Err(JobsError::ModelNotString {
-                    catalogue: self.resolve.catalogue.to_string(),
+                    roles: self.resolve.roles.to_string(),
                 });
             }
         };
         // Checked when the call is made, before any process starts: an
-        // invalid value fails and lists the valid roles and references.
+        // invalid value fails and lists the roles, the closest references
+        // and the pointer.
         let resolved = match (self.resolve.lookup)(&model) {
             Ok(resolved) => resolved,
             Err(reason) => {
                 return Err(JobsError::ModelUnresolved {
                     reason,
-                    catalogue: self.resolve.catalogue.to_string(),
+                    roles: self.resolve.roles.to_string(),
+                    closest: (self.resolve.closest)(&model),
                 });
             }
         };

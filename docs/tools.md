@@ -1003,8 +1003,9 @@ The kinds are `docs/events.md`.
 - Its optional properties and the `minimum` limit put its schema outside the
   strict subset, so it is sent with `strict: false`.
 - `delegate_spawn`'s `model` is neither required nor typed in its schema, because
-  the tool checks it and lists the valid roles and references (`docs/delegates.md`,
-  "Choosing a model"), so `delegate_spawn` is sent with `strict: false`.
+  the tool checks it and lists the roles, up to 3 closest references, and names
+  `delegate_models` for the rest (`docs/delegates.md`, "Choosing a model"), so
+  `delegate_spawn` is sent with `strict: false`.
 - `delegate_fork`'s `timeout_ms` is optional and carries a `minimum` limit, so
   `delegate_fork` is sent with `strict: false`.
 - The model-facing tool is one `jobs` tool with actions `list`, `wait`,
