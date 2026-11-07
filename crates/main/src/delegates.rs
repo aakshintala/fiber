@@ -78,10 +78,11 @@ pub(crate) struct Delegates {
     /// The session clock.
     clock: Arc<dyn Clock>,
     /// Resolves a `delegate_spawn` `model` argument, and lists the
-    /// catalogue every refusal carries. The reload install swaps the
-    /// whole snapshot at once, so the stored one and the installed
-    /// tools never disagree.
-    resolve: Mutex<jobs::Resolve>,
+    /// catalogue every refusal carries. Shared with the installed
+    /// tools, which read it on every call: a reload or a `/model`
+    /// switch swaps the whole snapshot at once with `set_resolve`,
+    /// so the stored one and the installed tools never disagree.
+    resolve: Arc<Mutex<jobs::Resolve>>,
     /// Builds the child's command.
     launch: jobs::Launch,
     /// Watches the child's socket.
@@ -138,7 +139,7 @@ impl Delegates {
             sessions,
             jobs,
             clock,
-            resolve: Mutex::new(resolve),
+            resolve: Arc::new(Mutex::new(resolve)),
             launch,
             watch,
             steer,
@@ -170,9 +171,16 @@ impl Delegates {
         }
     }
 
-    /// The `delegate_spawn` tool this session declares.
-    pub(crate) fn tool(&self) -> jobs::DelegateSpawn {
-        self.tools_with(&self.resolve_snapshot()).0
+    /// The `delegate_spawn` tool this session declares: the wiring is
+    /// built once, while every call resolves against the stored
+    /// snapshot, so the installed tool follows a reload or a `/model`
+    /// switch without being replaced — the loop keeps the instance it
+    /// registered at startup.
+    pub(crate) fn tool(&self) -> LiveSpawn {
+        LiveSpawn {
+            wiring: self.wiring(),
+            current: Arc::clone(&self.resolve),
+        }
     }
 
     /// Replaces the stored resolver snapshot: the reload install calls
@@ -182,32 +190,20 @@ impl Delegates {
         *support::lock(&self.resolve) = resolve;
     }
 
-    /// The stored resolver snapshot: `tool()` and `models()` build from
-    /// it, so both tools read one snapshot.
+    /// The stored resolver snapshot, for the tests that pin what a
+    /// rebuild stores: the installed tools read it on every call
+    /// instead of taking it here.
+    #[cfg(test)]
     pub(crate) fn resolve_snapshot(&self) -> jobs::Resolve {
         support::lock(&self.resolve).clone()
     }
 
-    /// Both delegate tools built from one resolver snapshot: the reload
-    /// publishes the pair, so a fresh spawn tool never meets a stale
-    /// models text, or the reverse.
-    pub(crate) fn tools_with(
-        &self,
-        resolve: &jobs::Resolve,
-    ) -> (jobs::DelegateSpawn, jobs::DelegateModels) {
-        let spawn = jobs::DelegateSpawn {
-            wiring: self.wiring(),
-            resolve: resolve.clone(),
-        };
-        let quota = self.quota.clone();
-        let models = jobs::DelegateModels {
-            catalogue: Arc::clone(&resolve.catalogue),
-            quota: Arc::new(move || match quota {
-                Some(ref reader) => quota_text(&reader()),
-                None => String::from("Quota: none"),
-            }),
-        };
-        (spawn, models)
+    /// Both delegate tools live over the stored snapshot: the reload
+    /// publishes the pair, and the install's `set_resolve` moves both
+    /// at once, so a fresh spawn tool never meets a stale models text,
+    /// or the reverse — and a later switch moves them again.
+    pub(crate) fn tools_with(&self) -> (LiveSpawn, LiveModels) {
+        (self.tool(), self.models())
     }
 
     fn wiring(&self) -> jobs::DelegateWiring {
@@ -234,6 +230,129 @@ impl Delegates {
             launch: Arc::clone(&self.launch),
             watch: Arc::clone(&self.watch),
         }
+    }
+}
+
+/// The `delegate_spawn` tool this session installed: the wiring is
+/// built once, while every call resolves against the stored snapshot.
+/// The loop keeps the registered instance across a reload or a
+/// `/model` switch, so the instance itself must follow the snapshot —
+/// a snapshot taken at install would resolve and refuse against the
+/// old session model after a switch.
+pub(crate) struct LiveSpawn {
+    /// Built once: the launch and lifecycle wiring never follows a switch.
+    pub wiring: jobs::DelegateWiring,
+    /// The stored snapshot, read on every call.
+    current: Arc<Mutex<jobs::Resolve>>,
+}
+
+impl LiveSpawn {
+    /// This call's snapshot.
+    pub(crate) fn resolve(&self) -> jobs::Resolve {
+        support::lock(&self.current).clone()
+    }
+
+    /// This call's spawn tool: the installed wiring with the snapshot
+    /// taken now, so the installed tool moves with a `/model` switch.
+    fn fresh(&self) -> jobs::DelegateSpawn {
+        jobs::DelegateSpawn {
+            wiring: self.wiring.clone(),
+            resolve: self.resolve(),
+        }
+    }
+
+    /// Starts an extension-owned delegate with the model tool's admission
+    /// and limits. Binds its id before spawning; the caller must unbind on
+    /// a later failure. `bind` must not start or resume another delegate.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the same jobs boundary the delegated call returns by value"
+    )]
+    fn start_extension(
+        &self,
+        extension: &str,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+        bind: &mut dyn FnMut(&contract::JobId),
+    ) -> Result<contract::JobId, jobs::JobsError> {
+        self.fresh().start_extension(extension, arguments, bind)
+    }
+}
+
+impl contract::tool::Tool for LiveSpawn {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        self.fresh().definition()
+    }
+
+    fn effects(
+        &self,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        self.fresh().effects(arguments)
+    }
+
+    fn run(
+        &self,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+        cancel: &dyn contract::tool::Cancel,
+        emit: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        self.fresh().run(arguments, cancel, emit)
+    }
+}
+
+/// The `delegate_models` tool this session installed: every call
+/// renders the stored snapshot's catalogue, with the quota section
+/// appended. The loop keeps the registered instance across a reload or
+/// a `/model` switch, so the instance itself must follow the snapshot —
+/// a snapshot taken at install would lead with the old session model
+/// after a switch.
+pub(crate) struct LiveModels {
+    /// The stored snapshot, read on every call.
+    current: Arc<Mutex<jobs::Resolve>>,
+    /// Renders the quota section, read on every call.
+    quota: Option<ModelQuotaRead>,
+}
+
+impl LiveModels {
+    /// This call's catalogue: the stored snapshot's text taken now, so
+    /// the installed tool leads with the session's current model.
+    pub(crate) fn catalogue(&self) -> Arc<str> {
+        Arc::clone(&support::lock(&self.current).catalogue)
+    }
+
+    /// This call's models tool: the snapshot taken now with the quota
+    /// reader, so the installed tool moves with a `/model` switch.
+    fn fresh(&self) -> jobs::DelegateModels {
+        let quota = self.quota.clone();
+        jobs::DelegateModels {
+            catalogue: self.catalogue(),
+            quota: Arc::new(move || match quota {
+                Some(ref reader) => quota_text(&reader()),
+                None => String::from("Quota: none"),
+            }),
+        }
+    }
+}
+
+impl contract::tool::Tool for LiveModels {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        self.fresh().definition()
+    }
+
+    fn effects(
+        &self,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        self.fresh().effects(arguments)
+    }
+
+    fn run(
+        &self,
+        arguments: &serde_json::Map<String, serde_json::Value>,
+        cancel: &dyn contract::tool::Cancel,
+        emit: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        self.fresh().run(arguments, cancel, emit)
     }
 }
 
@@ -307,16 +426,22 @@ impl Delegates {
         }
     }
 
-    /// The `delegate_models` tool this session declares: the catalogue
-    /// built with the session's resolver, with the quota section appended.
-    pub(crate) fn models(&self) -> jobs::DelegateModels {
-        self.tools_with(&self.resolve_snapshot()).1
+    /// The `delegate_models` tool this session declares: it renders the
+    /// stored snapshot's catalogue on every call, with the quota section
+    /// appended, so the installed tool follows a reload or a `/model`
+    /// switch without being replaced, as `tool()` does.
+    pub(crate) fn models(&self) -> LiveModels {
+        LiveModels {
+            current: Arc::clone(&self.resolve),
+            quota: self.quota.clone(),
+        }
     }
 }
 
 /// Resolves a delegate's model through the installed providers and the
 /// configured roles: an argument that equals a role name is that role,
-/// anything else is a full `fiber:<provider>/<model>[:<level>]` reference
+/// a `fiber:<provider>/<model>[:<level>]` reference is itself, and a bare
+/// `provider/model[:level]` is the `fiber:`-prefixed reference
 /// (`docs/delegates.md`, "Choosing a model"). An explicit level must be
 /// one the model takes, checked with the same rule `--model` uses. A
 /// role's target is resolved as a reference only: roles never chain. Both
@@ -326,20 +451,22 @@ impl Delegates {
 /// swaps it onto the session whole: the lookup and the catalogue the
 /// reloaded tools check against never disagree either, while a running
 /// delegate keeps the model it started with (`docs/delegates.md`,
-/// "Choosing a model").
+/// "Choosing a model"). `session_model` is the session's own
+/// `provider/model` reference, printed after the `fiber:` prefix on the
+/// catalogue's `Session model:` first line, never re-resolved.
 pub(crate) fn resolver(
     providers: &extensions::Providers,
     config: &config::Config,
+    session_model: &str,
 ) -> jobs::Resolve {
+    let catalogue = catalogue(providers, config, session_model);
     let providers = providers.clone();
     let config = config.clone();
-    let listed = providers.clone();
-    let read = config.clone();
     let credential_providers = providers.clone();
     let credential_config = config.clone();
     jobs::Resolve {
         lookup: Arc::new(move |argument| lookup(&providers, &config, argument)),
-        catalogue: Arc::from(catalogue(&listed, &read)),
+        catalogue: Arc::from(catalogue),
         credential: Arc::new(move |argument| {
             credential_for(&credential_providers, &credential_config, argument)
         }),
@@ -358,7 +485,26 @@ fn lookup(
         return resolve_reference(providers, config, &target)
             .map_err(|reason| format!("Role {argument:?} maps to {target:?}: {reason}"));
     }
-    resolve_reference(providers, config, argument)
+    if argument.starts_with("fiber:") {
+        return resolve_reference(providers, config, argument);
+    }
+    if argument.contains('/') {
+        let reference = format!("fiber:{argument}");
+        return resolve_reference(providers, config, &reference).map_err(|reason| {
+            if reason == unknown_model(&reference) {
+                unknown_model(argument)
+            } else {
+                reason
+            }
+        });
+    }
+    Err(unknown_model(argument))
+}
+
+/// The refusal for an argument that names no usable model: the typed
+/// argument, never the reference the lookup resolved internally.
+fn unknown_model(argument: &str) -> String {
+    format!("Unknown delegate model {argument:?}.")
 }
 
 /// A role's credential label as configured now: the object's string
@@ -542,15 +688,14 @@ fn resolve_reference(
     config: &config::Config,
     reference: &str,
 ) -> Result<String, String> {
-    let unknown = || format!("Unknown delegate model {reference:?}.");
     let Some(resolved) = providers.delegate_model(reference) else {
-        return Err(unknown());
+        return Err(unknown_model(reference));
     };
     if !providers
         .switched_on(config)
         .any(|name| name == resolved.provider.name)
     {
-        return Err(unknown());
+        return Err(unknown_model(reference));
     }
     if let Some(level) = resolved.thinking {
         let reference = resolved.reference();
@@ -571,10 +716,16 @@ fn resolve_reference(
 }
 
 /// The catalogue text `delegate_models` returns and every model refusal
-/// lists: the configured roles, what each maps to now, and the full
-/// references available. Roles and references are each sorted by name. A
-/// role whose target is not a usable reference is marked ` (unavailable)`.
-fn catalogue(providers: &extensions::Providers, config: &config::Config) -> String {
+/// lists: the session's own model first, then the configured roles with
+/// what each maps to now, then the full references available grouped by
+/// provider with each group's count. Roles are sorted by name; providers
+/// iterate sorted and each group's entries are sorted by name. A role
+/// whose target is not a usable reference is marked ` (unavailable)`.
+fn catalogue(
+    providers: &extensions::Providers,
+    config: &config::Config,
+    session_model: &str,
+) -> String {
     let mut roles: Vec<(String, String)> = config
         .merged(None)
         .get("roles")
@@ -594,13 +745,14 @@ fn catalogue(providers: &extensions::Providers, config: &config::Config) -> Stri
         })
         .unwrap_or_default();
     roles.sort();
-    let mut references: Vec<String> = Vec::new();
+    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
     for name in providers.switched_on(config) {
         if let Some(provider) = providers.get(name) {
+            let mut entries: Vec<String> = Vec::new();
             for model in &provider.models {
                 let reference = format!("fiber:{name}/{}", model.id);
                 if model.thinking_levels.is_empty() {
-                    references.push(reference);
+                    entries.push(reference);
                 } else {
                     let levels = model
                         .thinking_levels
@@ -608,12 +760,13 @@ fn catalogue(providers: &extensions::Providers, config: &config::Config) -> Stri
                         .map(|level| level.to_string())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    references.push(format!("{reference} (thinking: {levels})"));
+                    entries.push(format!("{reference} (thinking: {levels})"));
                 }
             }
+            entries.sort();
+            grouped.push((name.to_owned(), entries));
         }
     }
-    references.sort();
     let roles_text = if roles.is_empty() {
         String::from("Roles: none")
     } else {
@@ -628,16 +781,19 @@ fn catalogue(providers: &extensions::Providers, config: &config::Config) -> Stri
         }
         text
     };
-    let references_text = if references.is_empty() {
+    let references_text = if grouped.is_empty() {
         String::from("References: none")
     } else {
         let mut text = String::from("References:");
-        for reference in &references {
-            text.push_str(&format!("\n{reference}"));
+        for (provider, entries) in &grouped {
+            text.push_str(&format!("\n{provider} ({}):", entries.len()));
+            for entry in entries {
+                text.push_str(&format!("\n{entry}"));
+            }
         }
         text
     };
-    format!("{roles_text}\n{references_text}")
+    format!("Session model: fiber:{session_model}\n{roles_text}\n{references_text}")
 }
 
 /// Builds the child's command from its launch: the running binary

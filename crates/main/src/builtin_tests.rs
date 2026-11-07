@@ -672,14 +672,15 @@ const STRICT_KEYWORDS: &[&str] = &[
 /// Tools whose `docs/tools.md` section says they are sent with
 /// `strict: false`.
 const NOT_STRICT: &[&str] = &[
-    "ask_user",       // "Asking the person", "The call"
-    "delegate_fork",  // "Background jobs"
-    "delegate_spawn", // "Background jobs"
-    "jobs",           // "Background jobs"
-    "name_session",   // "Naming the session"
-    "session_search", // "Searching past sessions"
-    "shell",          // "Shell", "Running a command"
-    "web_search",     // "Web fetch and web search", "web_search"
+    "ask_user",        // "Asking the person", "The call"
+    "delegate_fork",   // "Background jobs"
+    "delegate_models", // "Background jobs"
+    "delegate_spawn",  // "Background jobs"
+    "jobs",            // "Background jobs"
+    "name_session",    // "Naming the session"
+    "session_search",  // "Searching past sessions"
+    "shell",           // "Shell", "Running a command"
+    "web_search",      // "Web fetch and web search", "web_search"
 ];
 
 /// Whether `schema` fits the vendor's strict subset: scalar nullable unions

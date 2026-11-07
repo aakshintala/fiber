@@ -10,9 +10,10 @@
 
 use std::sync::Arc;
 
+use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
@@ -63,6 +64,16 @@ pub struct DelegateModels {
     pub quota: Arc<dyn Fn() -> String + Send + Sync>,
 }
 
+/// The error output's content: explicitly empty, so a refusal never
+/// carries content parts. Deleting it is unobservable — `Output`'s
+/// derived `Default` leaves content empty — so no test can catch the
+/// deletion; the explicit field documents the refusal shape instead of
+/// a test pinning it.
+#[cfg_attr(false, mutants::skip)]
+fn no_content() -> Vec<ContentPart> {
+    Vec::new()
+}
+
 impl Tool for DelegateModels {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
@@ -72,7 +83,12 @@ impl Tool for DelegateModels {
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
-                "properties": {},
+                "properties": {
+                    "filter": {
+                        "type": "string",
+                        "description": "Keep only references containing this string."
+                    }
+                },
                 "required": [],
                 "additionalProperties": false
             }),
@@ -102,17 +118,113 @@ impl Tool for DelegateModels {
 
     fn run(
         &self,
-        _arguments: &Map<String, Value>,
+        arguments: &Map<String, Value>,
         _cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
+        let filter = match arguments.get("filter") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(filter)) => Some(filter.clone()),
+            Some(_) => {
+                return Output {
+                    error: Some(Failure {
+                        code: ErrorCode::InvalidArguments,
+                        message: "`filter` must be a string.".to_owned(),
+                        retry_after_ms: None,
+                        provider: None,
+                    }),
+                    content: no_content(),
+                    ..Output::default()
+                };
+            }
+        };
+        let catalogue = match filter {
+            None => self.catalogue.to_string(),
+            Some(filter) => apply_filter(&self.catalogue, &filter),
+        };
         Output {
             content: vec![ContentPart::Text {
-                text: format!("{}\n{}", self.catalogue, (self.quota)()),
+                text: format!("{catalogue}\n{}", (self.quota)()),
             }],
             ..Output::default()
         }
     }
+}
+
+/// Keeps only the References-section entries whose reference token
+/// contains `filter`, case-sensitively: the token is the entry before
+/// any ` (…)` annotation, so a filter never matches the annotation.
+/// Group headers survive only with at least one kept entry, with their
+/// counts rewritten; no kept entry renders `References: none`. The
+/// session line and the roles pass through untouched.
+fn apply_filter(catalogue: &str, filter: &str) -> String {
+    let mut head: Vec<&str> = Vec::new();
+    let mut entries: Vec<&str> = Vec::new();
+    let mut in_references = false;
+    for line in catalogue.split('\n') {
+        if !in_references {
+            if line == "References:" || line == "References: none" {
+                in_references = true;
+            } else {
+                head.push(line);
+            }
+        } else {
+            entries.push(line);
+        }
+    }
+    if !in_references {
+        return catalogue.to_owned();
+    }
+    let mut rendered: Vec<String> = Vec::new();
+    let mut group: Option<String> = None;
+    let mut kept: Vec<String> = Vec::new();
+    let flush = |rendered: &mut Vec<String>, group: &mut Option<String>, kept: &mut Vec<String>| {
+        if let Some(name) = group.take() {
+            if !kept.is_empty() {
+                rendered.push(format!("{name} ({}):", kept.len()));
+                rendered.append(kept);
+            }
+        } else {
+            rendered.append(kept);
+        }
+    };
+    for line in entries {
+        if let Some(name) = group_header(line) {
+            flush(&mut rendered, &mut group, &mut kept);
+            group = Some(name);
+        } else if reference_token(line).contains(filter) {
+            kept.push(line.to_owned());
+        }
+    }
+    flush(&mut rendered, &mut group, &mut kept);
+    let mut text = head.join("\n");
+    text.push_str("\nReferences:");
+    if rendered.is_empty() {
+        text.push_str(" none");
+    } else {
+        for line in &rendered {
+            text.push('\n');
+            text.push_str(line);
+        }
+    }
+    text
+}
+
+/// The provider name of a `{provider} ({count}):` group header; `None`
+/// for a reference entry, which never ends with a colon.
+fn group_header(line: &str) -> Option<String> {
+    let inner = line.strip_suffix(':')?;
+    let (name, count) = inner.rsplit_once(" (")?;
+    count
+        .strip_suffix(')')
+        .filter(|count| count.parse::<usize>().is_ok())?;
+    Some(name.to_owned())
+}
+
+/// The reference token of a catalogue entry: the entry before any
+/// ` (…)` annotation.
+fn reference_token(line: &str) -> &str {
+    line.split_once(' ').map(|(head, _)| head).unwrap_or(line)
 }
 
 #[cfg(test)]

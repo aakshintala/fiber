@@ -248,7 +248,8 @@ impl Tool for DelegateSpawn {
                  Returns at once with the delegate's job id and log path; \
                  wait for it with `jobs wait`. `model` is required: a configured \
                  role name or a full `fiber:` model reference, checked when the \
-                 call is made; list the valid roles and references with \
+                 call is made. A bare `provider/model` resolves to \
+                 `fiber:provider/model`. List the valid roles and references with \
                  `delegate_models`. Optional `timeout_ms` stops the delegate at its deadline, failed with code `timeout`; there is no default."
                 .to_owned(),
             input_schema: json!({
