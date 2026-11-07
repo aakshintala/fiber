@@ -179,3 +179,4 @@ crates/loop/src/jobs_tests.rs	fiber-4248	plan	2026-11-07T17:26:27Z	Amoghs-MacBoo
 crates/jobs/src/registry/runs_tests.rs	fiber-4248	plan	2026-11-07T17:26:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/registry_tests.rs	fiber-4248	plan	2026-11-07T17:26:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/delegate_final_message.rs	fiber-4248	plan	2026-11-07T17:27:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/delegates/4248-final-message-file	
+crates/tui/examples/paging.rs	fiber-4059	plan	2026-11-07T17:44:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
