@@ -14,7 +14,12 @@
 -- the outer call cancels its inner calls.
 
 fiber.tool("codemode", {
-  description = "Runs a Lua script. The script calls session tools through host.tool; the result is the printed lines, then one status line and a ledger.",
+  description = "Runs a Lua script. The script calls session tools through host.tool(name, args); "
+    .. "each call returns its outcome table: status, content, artifact, and reason or error when the call "
+    .. "did not complete. Printing an outcome prints its text content. Example:\n"
+    .. "local o = host.tool(\"read\", { path = \"x\" })\n"
+    .. "print(o)\n"
+    .. "print(o.content[1].text)",
   input_schema = {
     type = "object",
     properties = { source = { type = "string", description = "The Lua to run." } },

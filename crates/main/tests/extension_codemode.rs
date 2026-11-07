@@ -510,6 +510,43 @@ fn a_printed_denied_outcome_shows_its_reason_and_status() {
 }
 
 #[test]
+fn the_tool_description_lists_the_outcome_fields() {
+    let source = "print(\"hi\")";
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The session-start preamble carries every tool's description; the
+    // codemode one states the outcome fields with a three-line example.
+    let tools = &run.of("preamble_built")[0]["payload"]["tools"];
+    let codemode = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "codemode")
+        .expect("the preamble lists the codemode tool");
+    let description = codemode["definition"]["description"]
+        .as_str()
+        .expect("the description is text");
+    for field in ["status", "content", "artifact", "reason", "error"] {
+        assert!(
+            description.contains(field),
+            "the description names {field}: {description:?}"
+        );
+    }
+    for line in [
+        "local o = host.tool(\"read\", { path = \"x\" })",
+        "print(o)",
+        "print(o.content[1].text)",
+    ] {
+        assert!(
+            description.contains(line),
+            "the description holds the example line {line:?}: {description:?}"
+        );
+    }
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
 fn a_printed_failed_outcome_with_redacted_content_shows_its_error_and_status() {
     // Reading a missing file runs the tool and fails as an ordinary
     // return; an `after_tool` hook replaces the content, so the printed
