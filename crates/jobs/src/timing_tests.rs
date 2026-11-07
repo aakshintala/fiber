@@ -83,6 +83,11 @@ impl Probe {
         let records = self.records.clone();
         Arc::new(
             move |op: Op, name: Option<TimingName>, started: Option<Instant>| {
+                // This probe covers `jobs.start`; the registry also sends
+                // later receive and deliver traces through the same seam.
+                if op != Op::JobsStart {
+                    return None;
+                }
                 calls.fetch_add(1, Ordering::SeqCst);
                 let start = started.unwrap_or_else(|| clock.now());
                 let scope = Scope {
