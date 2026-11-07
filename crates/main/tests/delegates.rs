@@ -4831,6 +4831,8 @@ fn delegate_models_omits_logged_out_provider_references() {
     );
     assert!(!references.contains("fiber:pb/m"), "{text}");
     assert!(text.contains("deep: fiber:pb/m (unavailable)"), "{text}");
+    assert!(text.starts_with("Session model: fiber:pa/m\n"), "{text}");
+    assert!(references.contains("pa (1):"), "{text}");
     for model in ["fiber:pb/m", "deep"] {
         let requested = lines
             .iter()
@@ -4912,7 +4914,7 @@ fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_nei
     let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(
         text,
-        "Roles:\ndeep: fiber:pb/m\nReferences:\nfiber:pa/m\nfiber:pb/m\nQuota: loading"
+        "Session model: fiber:pa/m\nRoles:\ndeep: fiber:pb/m\nReferences:\npa (1):\nfiber:pa/m\npb (1):\nfiber:pb/m\nQuota: loading"
     );
     let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
     let tools = first["tools"].as_array().unwrap();
@@ -4972,6 +4974,56 @@ fn the_first_delegate_models_call_reads_quota_loading_with_two_credential_labels
         text.ends_with("\nQuota: loading"),
         "the first call answers loading: {text:?}"
     );
+}
+
+/// A `delegate_models` call with a `filter` keeps only the matching
+/// provider group: the session line, the roles and the quota pass through.
+#[test]
+fn delegate_models_filter_returns_only_matching_references() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[function_call(
+            "call_models",
+            "delegate_models",
+            &json!({"filter": "pb"}),
+        )]),
+        support::hello(),
+    ])
+    .unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "roles": {"deep": "fiber:pb/m"}}),
+    );
+
+    let output = support::run_to_exit(
+        setup.deadline,
+        "fiber ask",
+        setup.fiber(&["ask", "list the models"]),
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8(output.stderr).unwrap()
+    );
+    let completed = completed_for(&lines, "delegate_models");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("Session model: fiber:pa/m\n"), "{text}");
+    assert!(text.contains("deep: fiber:pb/m"), "{text}");
+    let references = text.split_once("References:\n").unwrap().1;
+    let references = references.split_once("\nQuota:").unwrap().0;
+    assert_eq!(references, "pb (1):\nfiber:pb/m");
 }
 
 /// A role run's parent durable kinds, in order, pinned from a real run:
@@ -7404,6 +7456,45 @@ fn a_delegate_started_with_a_role_runs_on_the_role_label() {
     assert_eq!(preamble["credential"], "default");
     let completed = completed_for(&lines, "delegate_spawn");
     assert_eq!(completed["payload"]["status"], "completed");
+}
+
+/// A spawn with the session's own bare `provider/model` string, the form
+/// the system prompt reports, starts the delegate on `fiber:provider/model`.
+/// The child shares the parent's provider server, whose script answers in
+/// arrival order: the hold past the receipt and the verdict keeps the
+/// interleaved parent and child turns from racing the script.
+#[test]
+fn a_delegate_started_with_the_bare_session_model_runs() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[spawn_call("pa/m")]),
+        text_reply("allow"),
+        support::hello(),
+        support::hello(),
+        support::hello(),
+        text_reply("done"),
+    ])
+    .unwrap();
+    parent.hold_from(3, fakes::deadline::BUDGET);
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    running.wait_line("the spawn receipt", |line| {
+        line["kind"] == "tool_call_completed"
+    });
+    parent.release();
+    running.wait_line("the delegate to finish", |line| {
+        line["kind"] == "delegate_finished"
+    });
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let completed = completed_for(&lines, "delegate_spawn");
+    assert_eq!(completed["payload"]["status"], "completed");
+    one(&lines, "delegate_started");
 }
 
 #[test]
