@@ -366,3 +366,7 @@ crates/main/tests/support/pty.rs	fiber-4101	plan	2026-11-07T02:47:37Z	Amoghs-Mac
 xtask/src/rules.rs	fiber-4101	plan	2026-11-07T02:47:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/fakes.md	fiber-4101	plan	2026-11-07T02:47:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/code-quality.md	fiber-4101	plan	2026-11-07T02:47:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/log/src/escalations/place.rs	fiber-4160	plan	2026-11-07T02:56:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/src/escalations_tests.rs	fiber-4160	plan	2026-11-07T02:56:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/src/escalations/reviewer_shell_calls_tests.rs	fiber-4160	plan	2026-11-07T02:56:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/log/src/write_tests.rs	fiber-4160	plan	2026-11-07T02:56:02Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
