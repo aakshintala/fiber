@@ -2,11 +2,17 @@
 //!
 //! The ticket shape is thousands of entries with single messages and tool
 //! outputs of tens of thousands of rows, linked across four sessions. The
-//! shape test pins that shape; the page-load test pins that loading one
-//! page stays window-bounded.
+//! shape test pins that shape; the screen test pins visible rows and page
+//! loads.
+
+use std::ops::RangeInclusive;
 
 use contract::events::EventKind;
+use contract::{Envelope, Seq, SessionId};
 use serde_json::Value;
+
+use crate::app::App;
+use crate::link::Line;
 
 /// Counts durable lines (those carrying `seq`) in `events`.
 fn durable_count(events: &str) -> usize {
@@ -82,7 +88,7 @@ fn rows(text: &str) -> usize {
 /// pages and rows the session draws.
 #[test]
 fn shape_ticket_session() {
-    let events = crate::paging_session::ticket_session();
+    let events = crate::paging_session::ticket_session(1);
     let durable = durable_count(&events);
     assert!(
         durable >= 3_000,
@@ -171,5 +177,98 @@ fn shape_ticket_session() {
     assert!(
         rows_total > 20_000,
         "the long message draws tens of thousands of rows, found {rows_total}"
+    );
+}
+
+/// The durable lines in `range`, as the hub answers for `session`.
+fn history(lines: &[Envelope], session: &SessionId, range: &RangeInclusive<Seq>) -> Vec<Envelope> {
+    lines
+        .iter()
+        .filter(|line| {
+            &line.session_id == session && line.seq.is_some_and(|seq| range.contains(&seq))
+        })
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn screen_pages_visible_rows() {
+    let events = crate::paging_session::ticket_session(1);
+    let lines: Vec<Envelope> = events
+        .lines()
+        .map(|line| {
+            serde_json::from_str(line)
+                .unwrap_or_else(|error| panic!("ticket line does not parse: {error}"))
+        })
+        .collect();
+    let mut app = App::new(None);
+    app.set_size(80, 48);
+    app.attach(
+        lines
+            .first()
+            .expect("the ticket session has a first line")
+            .session_id
+            .clone(),
+    );
+    for line in &lines {
+        app.on_line(Line::Session(line.clone()));
+    }
+
+    let long_seq = lines
+        .iter()
+        .find(|line| {
+            line.kind() == EventKind::TextCompleted
+                && line
+                    .payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| {
+                        text.starts_with("the session log holds every durable line")
+                    })
+        })
+        .and_then(|line| line.seq)
+        .expect("the ticket message has a durable sequence");
+    let page_at = app
+        .pages()
+        .index()
+        .pages()
+        .iter()
+        .position(|page| page.first_seq <= long_seq && long_seq <= page.last_seq)
+        .expect("the long message belongs to a page");
+    let top = app
+        .pages()
+        .index()
+        .starts()
+        .get(page_at)
+        .copied()
+        .expect("the message page has a row start");
+    app.jump(top);
+    let bound = app.pages().index().pages().len().saturating_add(1);
+    let mut page_loads = 0;
+    for _ in 0..bound {
+        let Some((session, range)) = app.needs().into_iter().next() else {
+            break;
+        };
+        app.load(&session, history(&lines, &session, &range));
+        page_loads += 1;
+        assert_ne!(
+            app.needs().first(),
+            Some(&(session, range)),
+            "loading did not settle"
+        );
+    }
+    assert!(
+        app.needs().is_empty(),
+        "the screen window is still missing pages"
+    );
+    assert_eq!(page_loads, 1, "the visible message needs one page load");
+
+    let shown = app.shown(top, 48);
+    assert!(
+        shown.lines.iter().any(|(line, _, _)| {
+            line.to_string()
+                .contains("the session log holds every durable line")
+        }),
+        "the visible rows contain the long message"
     );
 }

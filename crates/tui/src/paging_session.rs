@@ -279,8 +279,14 @@ fn ticket_log(
 
 /// The ticket's single large session: thousands of entries with one long
 /// message and one long tool output of tens of thousands of rows.
-pub fn ticket_session() -> String {
-    let (log, _) = ticket_log("s_dddddddddddddddd", TICKET_LARGE_STEPS, None, true, 0);
+pub fn ticket_session(scale: usize) -> String {
+    let (log, _) = ticket_log(
+        "s_dddddddddddddddd",
+        TICKET_LARGE_STEPS.saturating_mul(scale),
+        None,
+        true,
+        0,
+    );
     log
 }
 

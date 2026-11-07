@@ -4,13 +4,11 @@
 //!
 //! `cargo run --release -p tui --example paging -- [scale] [width] [height]`
 //!
-//! The session is shaped like the prototype's heavy fixture
-//! (`research/tui-prototype/LARGE.md`): 10 turns, 965 steps with text,
-//! about 1,047 tool calls with long results, in Fiber's own event kinds.
-//! `scale` repeats it, 1 by default. A turn still running follows it, which
-//! the jig appends one line a frame, deltas included. The screen is 160x48
-//! by default. Peak memory is the process's, read from outside, such as
-//! with `/usr/bin/time -l`.
+//! The session has 10 turns and 400 steps at scale 1, with one 20,000-row
+//! message and tool output. `scale` multiplies the steps. A turn still
+//! running follows it, which the jig appends one line a frame, deltas
+//! included. The screen is 160x48 by default. Peak memory is the process's,
+//! read from outside, such as with `/usr/bin/time -l`.
 
 #![allow(
     clippy::print_stdout,
@@ -105,7 +103,7 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    let events = tui::paging_session(scale);
+    let events = tui::ticket_session(scale);
     println!(
         "session: scale {scale}, {:.2} MiB, at {width}x{height}",
         mib(events.len())
