@@ -310,7 +310,7 @@ pub struct JobCompleted {
     /// For a job that ran a process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<Process>,
-    /// For a failed job, the tail of its output, capped; absent when a hook
+    /// The tail of its output, capped; absent when a hook
     /// changed the completion notice (`notice` holds what the model was sent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tail: Option<String>,

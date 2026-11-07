@@ -1027,6 +1027,10 @@ The kinds are `docs/events.md`.
   message does. Jobs finishing together are delivered together in one turn,
   not one turn each. If a `jobs wait` already returned a job's final state to
   the model, no completion notice is sent for it.
+- A `jobs wait` that returns a job's final state carries the same `output_tail`
+  and output path as the completion notice. A wait that ends at its deadline
+  with the job still running reports `still_running` with no tail; a finished
+  job whose output file is empty or missing carries no tail either.
   A job an extension started with `host.delegate` is the exception: its end
   wakes nothing and starts no turn. The model does not see its completion
   notice, live or after a resume. A `jobs wait`, `jobs stop` or `jobs write`
