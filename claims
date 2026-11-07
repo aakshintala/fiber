@@ -228,3 +228,4 @@ crates/tui/src/view/input_box_tests.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roun
 crates/tui/src/view/panel_tests.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
 crates/tui/src/app/home_tests.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
 crates/tui/src/app/model_picker_tests.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+docs/tui.md	fiber-4227	plan	2026-11-07T11:22:59Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
