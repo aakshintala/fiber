@@ -1933,6 +1933,17 @@ pub(crate) fn close_session(socket: &Socket) {
     until_close(socket);
 }
 
+/// Closes the session on a socket that already holds a `full` subscription,
+/// and waits for it to leave. The caller must already be subscribed at
+/// `full` on this socket: [`until_close`] needs the session's leaving event,
+/// which only a `full` subscription delivers. A socket that is not, or is
+/// subscribed lower, uses [`close_session`].
+#[track_caller]
+pub(crate) fn close_subscribed_session(socket: &Socket) {
+    socket.send(r#"{"id":"c_close","command":"close"}"#);
+    until_close(socket);
+}
+
 /// Runs `command`, which runs in its own process group, to its exit under
 /// the test's [`Deadline`], naming `what` on expiry, and checks it left no
 /// process in its group.
