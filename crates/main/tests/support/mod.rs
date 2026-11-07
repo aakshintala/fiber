@@ -1927,7 +1927,7 @@ pub(crate) fn await_first_request(server: &ProviderServer, deadline: Deadline) {
 #[track_caller]
 pub(crate) fn close_session(socket: &Socket) {
     socket.send(r#"{"id":"c_close_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let ack = recv(socket, "the subscribe acknowledgement");
+    let ack = recv_answer(socket, "c_close_sub", "the subscribe acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
     socket.send(r#"{"id":"c_close","command":"close"}"#);
     until_close(socket);
