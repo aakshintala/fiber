@@ -150,8 +150,9 @@ pub(crate) fn depth_refusal(depth: u32, tool: &str) -> Option<JobsError> {
 
 /// Reads `description` and `prompt`: each is required, and each is a
 /// string. `model` is checked in `run`, not here, so a missing or
-/// wrongly typed one reaches the tool's own check, which lists the valid
-/// roles and references (`docs/delegates.md`, "Choosing a model").
+/// wrongly typed one reaches the tool's own check, which prints the roles
+/// line and points at `delegate_models` for every reference
+/// (`docs/delegates.md`, "Choosing a model").
 #[allow(
     clippy::result_large_err,
     reason = "every jobs boundary returns the crate's error enum by value"
@@ -379,8 +380,9 @@ impl DelegateSpawn {
             }
         };
         // The schema leaves `model` optional and untyped, so a missing or
-        // wrongly typed value reaches this check, which lists the valid
-        // roles and references (`docs/delegates.md`, "Choosing a model").
+        // wrongly typed value reaches this check, which prints the roles
+        // line and points at `delegate_models` for every reference
+        // (`docs/delegates.md`, "Choosing a model").
         let model = match arguments.get("model") {
             Some(Value::String(model)) => model.clone(),
             None => {

@@ -1,6 +1,5 @@
-//! Unit tests for the shared suggestion helpers: the edit count pins
-//! moved from the CLI's closest-model hint, plus the gated candidate pool,
-//! ranking and roles line both delegate callers use.
+//! Unit tests for the shared suggestion helpers: the edit count, the gated
+//! candidate pool, ranking and roles line both delegate callers use.
 
 #![allow(clippy::unwrap_used, reason = "test code; a failure is the test's")]
 
