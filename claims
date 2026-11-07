@@ -396,8 +396,6 @@ crates/config/tests/credentials.rs	fiber-4215	plan	2026-11-07T08:27:22Z	Amoghs-M
 crates/config/tests/credential_origins.rs	fiber-4215	plan	2026-11-07T08:27:22Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/release.yml	fiber-4273	plan	2026-11-07T08:29:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4273-red-nightly-pauses-merges	
 docs/ci.md	fiber-4273	plan	2026-11-07T08:29:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4273-red-nightly-pauses-merges	
-xtask/src/doc_citations.rs	fiber-4144	plan	2026-11-07T08:30:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/doc_citations_tests.rs	fiber-4144	plan	2026-11-07T08:30:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/extensions/src/providers/naming.rs	fiber-4215	plan	2026-11-07T08:38:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/extensions/src/providers/naming_tests.rs	fiber-4215	plan	2026-11-07T08:38:45Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
 crates/contract/src/diag.rs	fiber-4312	plan	2026-11-07T08:39:54Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
