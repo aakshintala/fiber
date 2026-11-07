@@ -206,7 +206,7 @@ fn still_needed_range_fails() {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(80, 24);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: contract::HubEventKind::HubHello.name().to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
