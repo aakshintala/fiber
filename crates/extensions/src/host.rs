@@ -343,7 +343,13 @@ pub(crate) fn install(
 /// still raises exactly as strict. Escaped quotes and backslashes keep the
 /// string tracking honest.
 fn escape_raw_controls(bytes: &[u8]) -> Vec<u8> {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
+    fn hex(nibble: u8) -> u8 {
+        if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'a' + nibble - 10
+        }
+    }
     let mut out = Vec::with_capacity(bytes.len());
     let mut in_string = false;
     let mut escaped = false;
@@ -366,8 +372,8 @@ fn escape_raw_controls(bytes: &[u8]) -> Vec<u8> {
                 0x0D => out.extend_from_slice(b"\\r"),
                 _ => {
                     out.extend_from_slice(b"\\u00");
-                    out.push(HEX[(b >> 4) as usize]);
-                    out.push(HEX[(b & 0x0F) as usize]);
+                    out.push(hex(b >> 4));
+                    out.push(hex(b & 0x0F));
                 }
             }
         } else {
