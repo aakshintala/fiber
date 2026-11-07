@@ -82,7 +82,7 @@ fn identity_of(dir: &Path) -> Option<(Option<String>, Option<String>)> {
     let mut first = Vec::new();
     BufReader::new(file).read_until(b'\n', &mut first).ok()?;
     let line: First = serde_json::from_slice(&first).ok()?;
-    if line.kind != Some(contract::events::EventKind::SessionStarted) {
+    if line.kind.as_deref() != Some("session_started") {
         return None;
     }
     let payload = line.payload?;
@@ -99,43 +99,10 @@ fn identity_of(dir: &Path) -> Option<(Option<String>, Option<String>)> {
 /// only `repository` absent.
 #[derive(Deserialize)]
 struct First {
-    #[serde(default, deserialize_with = "kind_field")]
-    kind: Option<contract::events::EventKind>,
+    #[serde(default)]
+    kind: Option<String>,
     #[serde(default, deserialize_with = "payload_field")]
     payload: Option<Payload>,
-}
-
-/// The `kind` key, shaped like [`payload_field`]: a missing key never
-/// calls it and reads as no kind, `null` reads as no kind, a string
-/// parses through the typed vocabulary, and a non-string value stays a
-/// serde error so the first line drops the session exactly as before.
-/// Only the arms serde_json's `deserialize_any` emits for JSON values
-/// exist: every other arm's default errors, and no mutant can hide in
-/// an arm that never fires.
-fn kind_field<'de, D>(deserializer: D) -> Result<Option<contract::events::EventKind>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct Lenient;
-    impl<'de> Visitor<'de> for Lenient {
-        type Value = Option<contract::events::EventKind>;
-        // exempted: the expecting text never surfaces: a bad first line
-        // drops the session through `identity_of`'s `ok`.
-        #[cfg_attr(false, mutants::skip)]
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("null or a kind name")
-        }
-        fn visit_unit<E: de::Error>(self) -> Result<Option<contract::events::EventKind>, E> {
-            Ok(None)
-        }
-        fn visit_str<E: de::Error>(
-            self,
-            value: &str,
-        ) -> Result<Option<contract::events::EventKind>, E> {
-            Ok(Some(contract::events::EventKind::from_name(value)))
-        }
-    }
-    deserializer.deserialize_any(Lenient)
 }
 
 #[derive(Default)]

@@ -2,7 +2,6 @@
 //! durable lines, fsyncs them in the order `docs/events.md`, "Writing", sets,
 //! and fans every event out to watchers.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Write};
@@ -17,8 +16,6 @@ use contract::emit::Emit;
 use contract::events::{Class, Event};
 use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
-
-use serde::{Deserialize, Deserializer};
 
 use crate::offsets::Offsets;
 use crate::read::{Queue, Watcher};
@@ -723,18 +720,9 @@ impl Inner {
 /// for an escaped kind or an unrecognized name; `seq` is required.
 #[derive(serde::Deserialize)]
 struct Head {
-    #[serde(deserialize_with = "kind_field")]
+    #[serde(deserialize_with = "crate::escalations::kind_field")]
     kind: contract::events::EventKind,
     seq: u64,
-}
-
-/// The `kind` key, read once as a string and parsed without its payload.
-fn kind_field<'de, D>(deserializer: D) -> Result<contract::events::EventKind, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let name = Cow::deserialize(deserializer)?;
-    Ok(contract::events::EventKind::from_name(&name))
 }
 
 /// Whether `keep_latest` keeps a line of this kind: the latest-wins kinds.

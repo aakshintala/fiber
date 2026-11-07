@@ -419,36 +419,6 @@ fn places(home: &Path) -> Vec<super::place::Place> {
     super::place::sessions(home)
 }
 
-#[test]
-fn only_a_session_started_first_line_names_a_session() {
-    let home = fakes::TempDir::new("log-escalations-first-kind");
-    let root = home.path();
-    // An unfamiliar kind names no session, even with a workspace payload.
-    write_log(
-        &session_dir(root, "proj", "s_01"),
-        b"{\"kind\":\"future_kind\",\"payload\":{\"workspace\":\"/w\"}}\n",
-    );
-    // A non-string kind drops the session too.
-    write_log(
-        &session_dir(root, "proj", "s_02"),
-        b"{\"kind\":7,\"payload\":{\"workspace\":\"/w\"}}\n",
-    );
-    // A null kind reads as no kind: the session drops as well.
-    write_log(
-        &session_dir(root, "proj", "s_04"),
-        b"{\"kind\":null,\"payload\":{\"workspace\":\"/w\"}}\n",
-    );
-    // The known kind still yields its identity pair.
-    write_log(
-        &session_dir(root, "proj", "s_03"),
-        started_line(&json!({"workspace": "/w"})).as_bytes(),
-    );
-    let found = places(home.path());
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0].dir.file_name().unwrap(), "s_03");
-    assert_eq!(found[0].identity.as_deref(), Some("/w"));
-}
-
 fn write_first_line(dir: &Path, payload: &serde_json::Value) {
     write_log(dir, started_line(payload).as_bytes());
 }

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use super::place::Place;
@@ -219,19 +219,10 @@ fn finish(session: &Place, actions: HashMap<String, Action>, order: Vec<String>)
 struct Narrow {
     #[serde(default)]
     action_id: Option<String>,
-    #[serde(deserialize_with = "kind_field")]
+    #[serde(deserialize_with = "super::kind_field")]
     kind: contract::events::EventKind,
     #[serde(default)]
     payload: Value,
-}
-
-/// The `kind` key, read once as a string and parsed without its payload.
-fn kind_field<'de, D>(deserializer: D) -> Result<contract::events::EventKind, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let name = String::deserialize(deserializer)?;
-    Ok(contract::events::EventKind::from_name(&name))
 }
 
 /// A `tool_call_requested` body, naming only what the join keeps: the

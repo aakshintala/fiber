@@ -13,6 +13,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use serde::{Deserialize, Deserializer};
+use std::borrow::Cow;
 
 /// One escalation a person answered allow: the `projects/<key>` directory
 /// name of the session whose log holds it, the identity that session's
@@ -106,11 +107,11 @@ struct Kind {
 }
 
 /// The `kind` key, read once as a string and parsed without its payload.
-fn kind_field<'de, D>(deserializer: D) -> Result<contract::events::EventKind, D::Error>
+pub(crate) fn kind_field<'de, D>(deserializer: D) -> Result<contract::events::EventKind, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let name = String::deserialize(deserializer)?;
+    let name = Cow::deserialize(deserializer)?;
     Ok(contract::events::EventKind::from_name(&name))
 }
 
