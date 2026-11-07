@@ -248,9 +248,8 @@ const STALLED_LISTING_BOUND_MS: &str = "FIBER_TEST_STALLED_LISTING_BOUND_MS";
 /// production. The residual gate cost is one 200 ms wall-clock expiry
 /// plus the re-executed child's boot, about a second on an idle host.
 /// The wait cannot move onto the injected clock: the shadow is a real
-/// `pgrep` parked in a FIFO `read` released only by the parent's
-/// wall-clock `drop(held)`, and production `bounded()` takes a plain
-/// `Duration` awaited through `Deadline::after` on the wall clock.
+/// `pgrep` parked in a FIFO `read`, and production `bounded()` takes a
+/// plain `Duration` awaited through `Deadline::after` on the wall clock.
 #[test]
 fn kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_cleanup_budget() {
     if std::env::var_os(STALLED_LISTING_CHILD).is_some() {
