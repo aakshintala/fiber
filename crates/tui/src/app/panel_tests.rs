@@ -314,7 +314,7 @@ fn model_thinking_window_and_trigger_come_from_the_latest_preamble() {
     app.on_line(preamble_line("two/model", "high", 2000, 1600));
     let session = app.session().unwrap();
     let panel = app.panel_state();
-    assert_eq!(panel.model(), Some("two/model"));
+    assert_eq!(panel.session_model(), Some("two/model"));
     assert_eq!(panel.thinking(), Some("high"));
     assert_eq!(panel.window_for(session), Some(2000));
     assert_eq!(panel.trigger_at(), Some(1600));
@@ -326,7 +326,7 @@ fn model_changed_updates_model_and_thinking() {
     app.on_line(preamble_line("one/model", "low", 1000, 800));
     app.on_line(changed_line("two/model", "high"));
     let panel = app.panel_state();
-    assert_eq!(panel.model(), Some("two/model"));
+    assert_eq!(panel.session_model(), Some("two/model"));
     assert_eq!(panel.thinking(), Some("high"));
 }
 

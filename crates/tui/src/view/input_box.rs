@@ -371,7 +371,8 @@ fn ctx_segment(app: &App) -> Segment {
 
 /// The row's right side: the model in `accent` with the thinking level
 /// in `attention`, then the ctx segment, joined by a dim `  │  `. The
-/// model slot stays blank until a preamble names one
+/// model slot names the latest `session_status` model, else the
+/// preamble's; it stays blank until one of them lands
 /// (`docs/tui.md`, "The input box").
 fn status_right(app: &App) -> Joined {
     let panel = app.panel_state();
@@ -379,9 +380,7 @@ fn status_right(app: &App) -> Joined {
         spans: Vec::new(),
         spots: Vec::new(),
     };
-    let model = panel
-        .model()
-        .or_else(|| panel.status().map(|status| status.model.as_str()));
+    let model = panel.session_model();
     let mut spans = Vec::new();
     if let Some(model) = model {
         spans.push(Span::styled(model.to_owned(), style(Role::Accent)));
@@ -542,9 +541,7 @@ fn row_input(app: &App, flat: bool) -> InputStatus<'_> {
     });
     InputStatus {
         workspace: status.map(|status| status.workspace.as_str()),
-        model: panel
-            .model()
-            .or_else(|| status.map(|status| status.model.as_str())),
+        model: panel.session_model(),
         thinking: panel.thinking(),
         context: known.map(|(window, context)| Context {
             tokens: context.tokens,

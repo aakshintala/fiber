@@ -506,13 +506,13 @@ impl HubLogWatch {
 }
 
 #[cfg(target_os = "linux")]
-struct PlatformWatch {
+pub(crate) struct PlatformWatch {
     notify: rustix::fd::OwnedFd,
 }
 
 #[cfg(target_os = "linux")]
 impl PlatformWatch {
-    fn register(log: &Path) -> io::Result<Self> {
+    pub(crate) fn register(log: &Path) -> io::Result<Self> {
         let notify = rustix::fs::inotify::init(
             rustix::fs::inotify::CreateFlags::CLOEXEC | rustix::fs::inotify::CreateFlags::NONBLOCK,
         )?;
@@ -520,7 +520,7 @@ impl PlatformWatch {
         Ok(Self { notify })
     }
 
-    fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
+    pub(crate) fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
         let mut fds = [rustix::event::PollFd::new(
             &self.notify,
             rustix::event::PollFlags::IN,
@@ -554,7 +554,7 @@ impl PlatformWatch {
 }
 
 #[cfg(target_os = "macos")]
-struct PlatformWatch {
+pub(crate) struct PlatformWatch {
     queue: rustix::fd::OwnedFd,
     file: rustix::fd::OwnedFd,
 }
@@ -567,7 +567,7 @@ impl PlatformWatch {
         unsafe_code,
         reason = "kqueue registration for hub.log writes on macOS: the registered vnode fd is the watch's own open file, alive for every wait, and the event buffer is an empty stack array the kernel writes nothing into"
     )]
-    fn register(log: &Path) -> io::Result<Self> {
+    pub(crate) fn register(log: &Path) -> io::Result<Self> {
         use rustix::event::kqueue::{Event, EventFilter, EventFlags, VnodeEvents, kevent, kqueue};
         let file = rustix::fs::open(
             log,
@@ -608,7 +608,7 @@ impl PlatformWatch {
         unsafe_code,
         reason = "kqueue waits for hub.log writes on macOS: the registered vnode fd is the watch's own open file, alive for every wait, and the event buffer is a stack array the kernel writes only within its length"
     )]
-    fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
+    pub(crate) fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
         use rustix::event::kqueue::{Event, kevent};
         let mut events = [std::mem::MaybeUninit::<Event>::uninit(); 1];
         // SAFETY: registration added the vnode `WRITE` kevent in
