@@ -195,6 +195,10 @@ under its own name, `#[cfg(test)] mod <feature>_tests;`, so its tests sit
 in `<feature>_tests`. A test file, named `tests.rs` or ending in
 `_tests.rs` or under a crate's `tests/` directory, is never counted.
 
+A file under `crates/*/tests/support/` that more than one test binary
+compiles holds no `#[test]`: its tests live in the one binary that
+declares them alone, so each runs once.
+
 A feature joins the app through a registration seam, so features stop
 colliding on one file: a built-in command is one table row; a view's
 state is its own struct behind one `App` field; a feature's tests go in
