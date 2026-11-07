@@ -1084,6 +1084,50 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
 }
 
 #[test]
+fn a_bare_wait_multiline_check_names_the_complete_check() {
+    let error = ShellError::BareWait {
+        command: "sleep 30; test -f ready\ngrep -q READY ready".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until test -f ready\ngrep -q READY ready; do sleep 5; done"),
+        "a multiline check is named complete, not truncated: {text}"
+    );
+    assert!(
+        !text.contains("until <check command>"),
+        "a rest holding checks does not fall back: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; printf '%s' \"a\n# b\nc\"".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until printf '%s' \"a\n# b\nc\"; do sleep 5; done"),
+        "a quoted hash across lines stays part of the check: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \"hi".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "an unbalanced quote falls back instead of emitting invalid shell: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo hi\n; echo bye".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "a separator-led continuation falls back instead of emitting invalid shell: {text}"
+    );
+}
+
+#[test]
 fn a_deadline_past_the_session_longest_names_the_longest_twice() {
     let error = ShellError::DeadlineTooLong { max_ms: 600_000 };
     assert_eq!(error.code(), ErrorCode::InvalidArguments);

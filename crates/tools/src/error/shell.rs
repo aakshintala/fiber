@@ -125,7 +125,7 @@ const CHECK_PLACEHOLDER: &str = "<check command>";
 /// naming the check command when the command holds one, with the deadline
 /// rule the monitor runs under (`docs/tools.md`, "Background jobs").
 fn bare_wait_message(command: &str) -> String {
-    let check = usable_check(command).unwrap_or(CHECK_PLACEHOLDER);
+    let check = usable_check(command).unwrap_or_else(|| CHECK_PLACEHOLDER.to_owned());
     format!(
         "`{command}` waits with `sleep` for 25 seconds or more, so it never started. \
          Run it in the background instead: call `shell` again with `run_in_background: true` and the command `{command}`, then wait for it with `jobs wait`. \
@@ -138,73 +138,111 @@ fn bare_wait_message(command: &str) -> String {
 }
 
 /// The check command a bare-wait refusal names in its monitor snippet: the
-/// first line past the refused command's first separator that holds code
-/// beyond comments or shell blanks, stripped of any trailing `#` comment,
-/// when it opens with neither a separator nor a loop keyword, so the emitted
-/// `until` line reads as the condition to poll for and no `#` comments it out.
-fn usable_check(command: &str) -> Option<&str> {
+/// complete rest past the refused command's first separator, with `#`
+/// comments removed and blank or comment-only lines dropped, when its first
+/// code-bearing line opens with neither a separator nor a loop keyword and no
+/// later line opens with a separator, so the emitted `until` snippet polls
+/// the whole check and stays valid shell no `#` comments out.
+fn usable_check(command: &str) -> Option<String> {
     let end = command.find(['\n', ';', '&', '|'])?;
     let rest = command.get(end + 1..)?.trim();
     if rest.is_empty() || matches!(rest.chars().next(), Some('&' | '|' | ';')) {
         return None;
     }
-    for line in rest.lines() {
-        let code = strip_shell_comment(line).trim();
-        if code.is_empty() {
-            continue;
-        }
-        if matches!(code.chars().next(), Some('&' | '|' | ';')) {
-            return None;
-        }
-        if matches!(
-            code.split_whitespace().next(),
-            Some("while" | "until" | "for")
-        ) {
-            return None;
-        }
-        return Some(code);
+    let cleaned = strip_shell_comments(rest)?;
+    let lines: Vec<&str> = cleaned
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let first = lines.first()?;
+    if matches!(first.chars().next(), Some('&' | '|' | ';')) {
+        return None;
     }
-    None
+    if matches!(
+        first.split_whitespace().next(),
+        Some("while" | "until" | "for")
+    ) {
+        return None;
+    }
+    if lines[1..]
+        .iter()
+        .any(|line| matches!(line.chars().next(), Some('&' | '|' | ';')))
+    {
+        return None;
+    }
+    Some(lines.join("\n"))
 }
 
-/// The line before its `#` comment: a `#` outside quotes starts a comment
-/// only at the line start or after whitespace or a shell separator, so a
-/// `#` inside quotes or a word stays part of the check command.
-fn strip_shell_comment(line: &str) -> &str {
+/// The rest before its `#` comments: a `#` outside quotes starts a comment
+/// only at the rest start or after whitespace or a shell separator, so a `#`
+/// inside quotes or a word stays part of the check command. Quote state
+/// carries across newlines, so a `#` on a later line inside a multiline
+/// quote is kept. `None` when a quote or escape is left open: emitting that
+/// rest would split a quoted string, so the refusal falls back to
+/// `<check command>` instead of handing the model invalid shell.
+fn strip_shell_comments(rest: &str) -> Option<String> {
+    let mut cleaned = String::with_capacity(rest.len());
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
-    for (idx, ch) in line.char_indices() {
+    let mut in_comment = false;
+    let mut previous: Option<char> = None;
+    for ch in rest.chars() {
+        if in_comment {
+            if ch == '\n' {
+                in_comment = false;
+                cleaned.push(ch);
+            }
+            previous = Some(ch);
+            continue;
+        }
         if escaped {
             escaped = false;
+            cleaned.push(ch);
+            previous = Some(ch);
             continue;
         }
         match ch {
             '\\' if !in_single => {
                 escaped = true;
+                cleaned.push(ch);
+                previous = Some(ch);
             }
             '\'' if !in_double => {
                 in_single = !in_single;
+                cleaned.push(ch);
+                previous = Some(ch);
             }
             '"' if !in_single => {
                 in_double = !in_double;
+                cleaned.push(ch);
+                previous = Some(ch);
             }
             '#' if !in_single && !in_double => {
-                let before = &line[..idx];
-                let at_comment_start = match before.chars().next_back() {
+                let at_comment_start = match previous {
                     None => true,
                     Some(prev) => {
                         prev.is_whitespace() || matches!(prev, ';' | '&' | '|' | '(' | '`')
                     }
                 };
                 if at_comment_start {
-                    return before;
+                    in_comment = true;
+                } else {
+                    cleaned.push(ch);
                 }
+                previous = Some(ch);
             }
-            _ => {}
+            _ => {
+                cleaned.push(ch);
+                previous = Some(ch);
+            }
         }
     }
-    line
+    if in_single || in_double || escaped {
+        return None;
+    }
+    Some(cleaned)
 }
 
 impl ShellError {
