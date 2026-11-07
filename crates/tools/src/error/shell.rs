@@ -138,38 +138,81 @@ fn bare_wait_message(command: &str) -> String {
 }
 
 /// The check command a bare-wait refusal names in its monitor snippet: the
-/// complete rest past the refused command's first separator, with `#`
-/// comments removed and blank or comment-only lines dropped, when its first
-/// code-bearing line opens with neither a separator nor a loop keyword and no
-/// later line opens with a separator, so the emitted `until` snippet polls
-/// the whole check and stays valid shell no `#` comments out.
+/// rest past the refused command's first separator, with `#` comments
+/// removed and only lines that are blank outside quotes dropped, when its
+/// first code-bearing line opens with neither a separator nor a loop
+/// keyword and no later line opens with a separator. Every kept line stays
+/// byte for byte — leading spaces and blank lines within a multiline quote
+/// included — so the emitted `until` snippet polls the check as written
+/// and stays valid shell no `#` comments out.
 fn usable_check(command: &str) -> Option<String> {
     let end = command.find(['\n', ';', '&', '|'])?;
     let rest = command.get(end + 1..)?.trim();
     let cleaned = strip_shell_comments(rest)?;
-    let lines: Vec<&str> = cleaned
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect();
-    let first = lines.first()?;
-    if matches!(first.chars().next(), Some('&' | '|' | ';')) {
+    // Walk the comment-stripped rest with the same quote rules, cutting
+    // lines at newlines: a line is dropped only when it holds no content
+    // and starts outside quotes, so whitespace within a multiline quote
+    // survives untouched. Kept lines feed the output verbatim; trimmed
+    // views serve the accept/reject tests only.
+    let mut kept: Vec<&str> = Vec::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut line_start = 0;
+    let mut line_has_content = false;
+    let mut line_quoted = false;
+    for (idx, ch) in cleaned.char_indices() {
+        if ch == '\n' {
+            if line_has_content || line_quoted {
+                kept.push(cleaned.get(line_start..idx)?);
+            }
+            if escaped {
+                escaped = false;
+            }
+            line_start = idx + 1;
+            line_has_content = false;
+            line_quoted = in_single || in_double;
+            continue;
+        }
+        if escaped {
+            escaped = false;
+        } else {
+            match ch {
+                '\\' if !in_single => escaped = true,
+                '\'' if !in_double => in_single = !in_single,
+                '"' if !in_single => in_double = !in_double,
+                _ => {}
+            }
+        }
+        if !ch.is_whitespace() {
+            line_has_content = true;
+        }
+    }
+    if line_has_content || line_quoted {
+        kept.push(cleaned.get(line_start..)?);
+    }
+    let first = kept.first()?;
+    let trimmed = first.trim();
+    if matches!(trimmed.chars().next(), Some('&' | '|' | ';')) {
         return None;
     }
     if matches!(
-        first.split_whitespace().next(),
+        trimmed.split_whitespace().next(),
         Some("while" | "until" | "for")
     ) {
         return None;
     }
-    if lines.get(1..).is_some_and(|later| {
+    if kept.get(1..).is_some_and(|later| {
         later
             .iter()
-            .any(|line| matches!(line.chars().next(), Some('&' | '|' | ';')))
+            .any(|line| matches!(line.trim().chars().next(), Some('&' | '|' | ';')))
     }) {
         return None;
     }
-    Some(lines.join("\n"))
+    // Stripping an end-of-rest comment leaves its preceding space behind;
+    // trim the end back off. The tail is always outside quotes — a balanced
+    // check cannot end inside them — so no quoted byte is touched.
+    Some(kept.join("\n").trim_end().to_owned())
 }
 
 /// The rest before its `#` comments: a `#` outside quotes starts a comment

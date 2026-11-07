@@ -1173,6 +1173,32 @@ fn a_bare_wait_multiline_check_names_the_complete_check() {
 }
 
 #[test]
+fn a_bare_wait_quoted_whitespace_survives_verbatim() {
+    let error = ShellError::BareWait {
+        command: "sleep 30; test \"$(cat ready)\" = 'READY\n  DONE'".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until test \"$(cat ready)\" = 'READY\n  DONE'; do sleep 5; done"),
+        "leading spaces inside a multiline quote are named byte for byte: {text}"
+    );
+    assert!(
+        !text.contains("until <check command>"),
+        "a rest holding a quoted check does not fall back: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; printf 'a\n\nb'".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until printf 'a\n\nb'; do sleep 5; done"),
+        "a blank line inside quotes is significant and stays: {text}"
+    );
+}
+
+#[test]
 fn a_deadline_past_the_session_longest_names_the_longest_twice() {
     let error = ShellError::DeadlineTooLong { max_ms: 600_000 };
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
