@@ -651,7 +651,11 @@ impl State {
             }
         }
         (
-            Some(crate::delegates::resolver(&providers, config)),
+            Some(crate::delegates::resolver(
+                &providers,
+                config,
+                route.model.as_str(),
+            )),
             notices,
         )
     }

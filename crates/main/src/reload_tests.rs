@@ -374,7 +374,7 @@ impl Fixture {
         // The same object the state holds: the snapshot moves, never
         // the service, as the install does.
         self.delegates
-            .set_resolve(crate::delegates::resolver(&providers, &config));
+            .set_resolve(crate::delegates::resolver(&providers, &config, "fake/m"));
     }
 
     /// The fake provider's data file, as `install_fake` lays it out.

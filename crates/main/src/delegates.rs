@@ -316,7 +316,8 @@ impl Delegates {
 
 /// Resolves a delegate's model through the installed providers and the
 /// configured roles: an argument that equals a role name is that role,
-/// anything else is a full `fiber:<provider>/<model>[:<level>]` reference
+/// a `fiber:<provider>/<model>[:<level>]` reference is itself, and a bare
+/// `provider/model[:level]` is the `fiber:`-prefixed reference
 /// (`docs/delegates.md`, "Choosing a model"). An explicit level must be
 /// one the model takes, checked with the same rule `--model` uses. A
 /// role's target is resolved as a reference only: roles never chain. Both
@@ -326,10 +327,13 @@ impl Delegates {
 /// swaps it onto the session whole: the lookup and the catalogue the
 /// reloaded tools check against never disagree either, while a running
 /// delegate keeps the model it started with (`docs/delegates.md`,
-/// "Choosing a model").
+/// "Choosing a model"). `session_model` is the session's own
+/// `provider/model` reference, printed verbatim as the catalogue's first
+/// line, never re-resolved.
 pub(crate) fn resolver(
     providers: &extensions::Providers,
     config: &config::Config,
+    session_model: &str,
 ) -> jobs::Resolve {
     let providers = providers.clone();
     let config = config.clone();
@@ -337,9 +341,10 @@ pub(crate) fn resolver(
     let read = config.clone();
     let credential_providers = providers.clone();
     let credential_config = config.clone();
+    let session_model = session_model.to_owned();
     jobs::Resolve {
         lookup: Arc::new(move |argument| lookup(&providers, &config, argument)),
-        catalogue: Arc::from(catalogue(&listed, &read)),
+        catalogue: Arc::from(catalogue(&listed, &read, &session_model)),
         credential: Arc::new(move |argument| {
             credential_for(&credential_providers, &credential_config, argument)
         }),
@@ -358,7 +363,26 @@ fn lookup(
         return resolve_reference(providers, config, &target)
             .map_err(|reason| format!("Role {argument:?} maps to {target:?}: {reason}"));
     }
-    resolve_reference(providers, config, argument)
+    if argument.starts_with("fiber:") {
+        return resolve_reference(providers, config, argument);
+    }
+    if argument.contains('/') {
+        let reference = format!("fiber:{argument}");
+        return resolve_reference(providers, config, &reference).map_err(|reason| {
+            if reason == unknown_model(&reference) {
+                unknown_model(argument)
+            } else {
+                reason
+            }
+        });
+    }
+    Err(unknown_model(argument))
+}
+
+/// The refusal for an argument that names no usable model: the typed
+/// argument, never the reference the lookup resolved internally.
+fn unknown_model(argument: &str) -> String {
+    format!("Unknown delegate model {argument:?}.")
 }
 
 /// A role's credential label as configured now: the object's string
@@ -542,15 +566,14 @@ fn resolve_reference(
     config: &config::Config,
     reference: &str,
 ) -> Result<String, String> {
-    let unknown = || format!("Unknown delegate model {reference:?}.");
     let Some(resolved) = providers.delegate_model(reference) else {
-        return Err(unknown());
+        return Err(unknown_model(reference));
     };
     if !providers
         .switched_on(config)
         .any(|name| name == resolved.provider.name)
     {
-        return Err(unknown());
+        return Err(unknown_model(reference));
     }
     if let Some(level) = resolved.thinking {
         let reference = resolved.reference();
@@ -571,10 +594,16 @@ fn resolve_reference(
 }
 
 /// The catalogue text `delegate_models` returns and every model refusal
-/// lists: the configured roles, what each maps to now, and the full
-/// references available. Roles and references are each sorted by name. A
-/// role whose target is not a usable reference is marked ` (unavailable)`.
-fn catalogue(providers: &extensions::Providers, config: &config::Config) -> String {
+/// lists: the session's own model first, then the configured roles with
+/// what each maps to now, then the full references available grouped by
+/// provider with each group's count. Roles are sorted by name; providers
+/// iterate sorted and each group's entries are sorted by name. A role
+/// whose target is not a usable reference is marked ` (unavailable)`.
+fn catalogue(
+    providers: &extensions::Providers,
+    config: &config::Config,
+    session_model: &str,
+) -> String {
     let mut roles: Vec<(String, String)> = config
         .merged(None)
         .get("roles")
@@ -594,13 +623,16 @@ fn catalogue(providers: &extensions::Providers, config: &config::Config) -> Stri
         })
         .unwrap_or_default();
     roles.sort();
-    let mut references: Vec<String> = Vec::new();
-    for name in providers.switched_on(config) {
+    let mut grouped: Vec<(String, Vec<String>)> = Vec::new();
+    let mut names: Vec<&str> = providers.switched_on(config).collect();
+    names.sort();
+    for name in names {
         if let Some(provider) = providers.get(name) {
+            let mut entries: Vec<String> = Vec::new();
             for model in &provider.models {
                 let reference = format!("fiber:{name}/{}", model.id);
                 if model.thinking_levels.is_empty() {
-                    references.push(reference);
+                    entries.push(reference);
                 } else {
                     let levels = model
                         .thinking_levels
@@ -608,12 +640,13 @@ fn catalogue(providers: &extensions::Providers, config: &config::Config) -> Stri
                         .map(|level| level.to_string())
                         .collect::<Vec<_>>()
                         .join(", ");
-                    references.push(format!("{reference} (thinking: {levels})"));
+                    entries.push(format!("{reference} (thinking: {levels})"));
                 }
             }
+            entries.sort();
+            grouped.push((name.to_owned(), entries));
         }
     }
-    references.sort();
     let roles_text = if roles.is_empty() {
         String::from("Roles: none")
     } else {
@@ -628,16 +661,19 @@ fn catalogue(providers: &extensions::Providers, config: &config::Config) -> Stri
         }
         text
     };
-    let references_text = if references.is_empty() {
+    let references_text = if grouped.is_empty() {
         String::from("References: none")
     } else {
         let mut text = String::from("References:");
-        for reference in &references {
-            text.push_str(&format!("\n{reference}"));
+        for (provider, entries) in &grouped {
+            text.push_str(&format!("\n{provider} ({}):", entries.len()));
+            for entry in entries {
+                text.push_str(&format!("\n{entry}"));
+            }
         }
         text
     };
-    format!("{roles_text}\n{references_text}")
+    format!("Session model: fiber:{session_model}\n{roles_text}\n{references_text}")
 }
 
 /// Builds the child's command from its launch: the running binary
