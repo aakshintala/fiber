@@ -133,6 +133,21 @@ for i, (a, b) in fill.items():
   absolute path, not a session slug, so the slug-mask test
   (`committed_set_masks_every_session_slug`) deliberately leaves it
   alone.
+- Consent synthetics for owner review: 11 lines `r4234-shape-1`,
+  `r4234-shape-2`, `r4234-shape-3`, `r4234-shape-4`, `r4234-shape-5`,
+  `r4234-shape-6`, `r4234-field-1`, `r4234-field-2`, `r4234-field-3`,
+  `r4234-field-4`, `r4234-field-6` ship as sampled with synthetic sessions,
+  one per allow fixture (15 consent sessions under
+  `crates/loop/tests/fixtures/reviewer_consent/`: `shape-1-verbatim-retype`,
+  `shape-2-effect-named-by-reply`, `shape-3-prerequisite`,
+  `shape-4-conceded-then-new-demand`, `shape-5-task-names-action`,
+  `shape-6-reason-names-different-call`,
+  `field-1-typed-restart-and-run`, `field-2-picked-run-label`,
+  `field-3-named-branch-push`, `field-4-loopback-server-port`,
+  `field-6-restart-it-kill-and-start`, `control-1-credentialed-probe`,
+  `control-2-key-material-copy`, `control-3-delete-outside-workspace`,
+  `control-4-swapped-push-target`; the four controls stay out of the set).
+  Regenerate one with `cargo run -p loop --example review -- <session dir>`.
 
 ## Owner work (not run in this lane)
 
