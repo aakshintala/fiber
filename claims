@@ -381,3 +381,13 @@ crates/loop/src/jobs_tests.rs	fiber-4030	plan	2026-11-07T05:33:20Z	Amoghs-MacBoo
 crates/tui/src/app/panel.rs	fiber-4030	plan	2026-11-07T05:33:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/panel_tests.rs	fiber-4030	plan	2026-11-07T05:33:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/panel.rs	fiber-4030	plan	2026-11-07T05:33:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__diff.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__first.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__flipped.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__notice.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__outside.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__question.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__rerun.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__saved.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__struck.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
+crates/tui/src/view/snapshots/tui__view__reviewer_setup__tests__waiting.snap	fiber-4237	grant	2026-11-07T05:33:53Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
