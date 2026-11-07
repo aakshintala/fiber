@@ -2085,3 +2085,237 @@ fn person_input_fixture_binary_prints_answer() {
         assert!(!stdout.contains(banned), "{banned:?} stays out");
     }
 }
+
+/// The 15 consent fixtures: directory, reply marker, answer marker and
+/// call-under-review marker. Markers are distinctive substrings of the
+/// jig's rendered `The agent:`, `The person:` and `Tool call:` items.
+const CONSENT_FIXTURES: &[(&str, &str, &str, &str)] = &[
+    (
+        "shape-1-verbatim-retype",
+        "start the nightly build run with PR creation on",
+        "start the nightly build run with PR creation on",
+        "start-run --endpoint builds.example.invalid",
+    ),
+    (
+        "shape-2-effect-named-by-reply",
+        "push to branch feat/login",
+        "yes, push and replace the description",
+        "git push origin feat/login",
+    ),
+    (
+        "shape-3-prerequisite",
+        "restart the local server and start the nightly run",
+        "restart it and start the run",
+        "start-service --local nightly-helper",
+    ),
+    (
+        "shape-4-conceded-then-new-demand",
+        "I will restart the local server.",
+        "yes, restart the server",
+        "restart-server --local",
+    ),
+    (
+        "shape-5-task-names-action",
+        "I will set up the dev environment.",
+        "start dev server on port 4001 bound to 127.0.0.1",
+        "start-dev-server --port 4001 --bind 127.0.0.1",
+    ),
+    (
+        "shape-6-reason-names-different-call",
+        "open a draft PR and append a note",
+        "yes, do both",
+        "echo note >> /synthetic/log.txt",
+    ),
+    (
+        "field-1-typed-restart-and-run",
+        "I can restart the server and start a run",
+        "restart the server and start the nightly run",
+        "start-run --run nightly",
+    ),
+    (
+        "field-2-picked-run-label",
+        "Which pipeline should run?",
+        "1. starts the nightly run",
+        "start-run --run nightly",
+    ),
+    (
+        "field-3-named-branch-push",
+        "push to branch feat/search",
+        "yes, push and replace the description",
+        "git push origin feat/search",
+    ),
+    (
+        "field-4-loopback-server-port",
+        "run the dev server on port 4001",
+        "run it on 4001 and take screenshots",
+        "start-dev-server --port 4001 --bind 127.0.0.1",
+    ),
+    (
+        "field-6-restart-it-kill-and-start",
+        "I will restart it",
+        "restart it",
+        "start-server --local old-server",
+    ),
+    (
+        "control-1-credentialed-probe",
+        "I will list the workspace files.",
+        "yes, list the files",
+        "probe-keys",
+    ),
+    (
+        "control-2-key-material-copy",
+        "back up the configs, never the keys",
+        "yes, back up the configs",
+        "id_ed25519",
+    ),
+    (
+        "control-3-delete-outside-workspace",
+        "clean the workspace, never outside it",
+        "yes, clean the workspace",
+        "rm -rf /tmp/scratch",
+    ),
+    (
+        "control-4-swapped-push-target",
+        "push to branch feat/x",
+        "The person: yes",
+        "git push origin main",
+    ),
+];
+
+/// The staged bytes of one consent fixture, compiled in.
+fn consent_fixture_content(name: &str) -> &'static str {
+    match name {
+        "shape-1-verbatim-retype" => {
+            include_str!("fixtures/reviewer_consent/shape-1-verbatim-retype/events.jsonl")
+        }
+        "shape-2-effect-named-by-reply" => {
+            include_str!("fixtures/reviewer_consent/shape-2-effect-named-by-reply/events.jsonl")
+        }
+        "shape-3-prerequisite" => {
+            include_str!("fixtures/reviewer_consent/shape-3-prerequisite/events.jsonl")
+        }
+        "shape-4-conceded-then-new-demand" => {
+            include_str!("fixtures/reviewer_consent/shape-4-conceded-then-new-demand/events.jsonl")
+        }
+        "shape-5-task-names-action" => {
+            include_str!("fixtures/reviewer_consent/shape-5-task-names-action/events.jsonl")
+        }
+        "shape-6-reason-names-different-call" => include_str!(
+            "fixtures/reviewer_consent/shape-6-reason-names-different-call/events.jsonl"
+        ),
+        "field-1-typed-restart-and-run" => {
+            include_str!("fixtures/reviewer_consent/field-1-typed-restart-and-run/events.jsonl")
+        }
+        "field-2-picked-run-label" => {
+            include_str!("fixtures/reviewer_consent/field-2-picked-run-label/events.jsonl")
+        }
+        "field-3-named-branch-push" => {
+            include_str!("fixtures/reviewer_consent/field-3-named-branch-push/events.jsonl")
+        }
+        "field-4-loopback-server-port" => {
+            include_str!("fixtures/reviewer_consent/field-4-loopback-server-port/events.jsonl")
+        }
+        "field-6-restart-it-kill-and-start" => {
+            include_str!("fixtures/reviewer_consent/field-6-restart-it-kill-and-start/events.jsonl")
+        }
+        "control-1-credentialed-probe" => {
+            include_str!("fixtures/reviewer_consent/control-1-credentialed-probe/events.jsonl")
+        }
+        "control-2-key-material-copy" => {
+            include_str!("fixtures/reviewer_consent/control-2-key-material-copy/events.jsonl")
+        }
+        "control-3-delete-outside-workspace" => include_str!(
+            "fixtures/reviewer_consent/control-3-delete-outside-workspace/events.jsonl"
+        ),
+        "control-4-swapped-push-target" => {
+            include_str!("fixtures/reviewer_consent/control-4-swapped-push-target/events.jsonl")
+        }
+        _ => panic!("unknown consent fixture {name}"),
+    }
+}
+
+/// Each consent session replays with the approval adjacency intact: the
+/// reply a person message answers renders immediately before it
+/// (`docs/permissions.md`, "What it is shown"), and the call under
+/// review renders last with its declared effects.
+#[test]
+fn consent_fixtures_replay_answer_adjacency() {
+    for (name, reply, answer, call) in CONSENT_FIXTURES {
+        let home = fakes::TempDir::new("fiber-review-consent");
+        let dir = home.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("events.jsonl"), consent_fixture_content(name)).unwrap();
+        let args = ReviewArgs {
+            dir,
+            notes: None,
+            keep_all: false,
+        };
+        let outcome = replay(&args, Cursor::new(""), Vec::new()).unwrap();
+        let stages: Vec<&ModelRequest> = outcome
+            .requests
+            .iter()
+            .filter_map(|(kind, request)| match kind {
+                RequestKind::Stage => Some(request),
+                RequestKind::Selection => None,
+            })
+            .collect();
+        assert!(stages.len() >= 2, "{name} replays no review");
+        let first_texts = texts(stages[stages.len() - 2]);
+        let reply_at = first_texts
+            .iter()
+            .position(|text| text.starts_with("The agent: ") && text.contains(reply))
+            .unwrap_or_else(|| panic!("{reply:?} replays in {name}: {first_texts:?}"));
+        let answer_at = first_texts
+            .iter()
+            .position(|text| text.starts_with("The person: ") && text.contains(answer))
+            .unwrap_or_else(|| panic!("{answer:?} replays in {name}: {first_texts:?}"));
+        assert_eq!(
+            reply_at + 1,
+            answer_at,
+            "{reply:?} answers {answer:?} in {name}: {first_texts:?}"
+        );
+        let last_call_at = first_texts
+            .iter()
+            .rposition(|text| text.starts_with("Tool call: "))
+            .unwrap_or_else(|| panic!("no tool call renders in {name}: {first_texts:?}"));
+        assert!(
+            first_texts[last_call_at].contains(call),
+            "{call:?} renders last in {name}: {first_texts:?}"
+        );
+        assert!(
+            first_texts
+                .iter()
+                .skip(last_call_at)
+                .any(|text| text.contains("Call under review:")
+                    && text.contains("Declared effects:")),
+            "the call under review names its effects in {name}: {first_texts:?}"
+        );
+    }
+}
+
+/// The built jig exits 0 over each committed consent fixture directory
+/// and prints the same adjacency the replay sees.
+#[test]
+fn consent_fixtures_binary_prints_answer() {
+    for (name, reply, answer, call) in CONSENT_FIXTURES {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/reviewer_consent")
+            .join(name);
+        let output = run_jig(&dir, "", false, &[]);
+        assert!(
+            output.status.success(),
+            "the jig exits 0 on {name}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for marker in [*reply, *answer, *call] {
+            assert!(stdout.contains(marker), "{marker:?} prints for {name}");
+        }
+        if *name == "shape-6-reason-names-different-call" {
+            assert!(
+                stdout.contains("create-pr --draft"),
+                "the earlier call renders beside the call under review"
+            );
+        }
+    }
+}
