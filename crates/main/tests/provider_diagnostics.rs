@@ -341,7 +341,12 @@ fn a_repository_level_is_ignored_for_native_requests() {
 
 /// Installs provider `fake` with model `m` on `protocol` at the fake
 /// server, as [`Setup::provider`] does for `openai-responses`.
-fn install_protocol(setup: &Setup, protocol: &str, server: &ProviderServer) {
+fn install_protocol(
+    setup: &Setup,
+    protocol: &str,
+    server: &ProviderServer,
+    probe: Option<std::sync::mpsc::Sender<()>>,
+) {
     let source = setup.root.path().join("src");
     write_json(
         &source.join("extension.json"),
@@ -355,16 +360,14 @@ fn install_protocol(setup: &Setup, protocol: &str, server: &ProviderServer) {
             "models": [{"id": "m", "protocol": protocol, "base_url": format!("{}/v1", server.url()), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        probe,
+    );
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "fake/m"}),
@@ -386,7 +389,7 @@ fn a_query_bearing_url_is_logged_without_it() {
     let setup = Setup::new();
     let body_len = gemini_hello().body.len();
     let server = ProviderServer::start([gemini_hello()]).unwrap();
-    install_protocol(&setup, "google-generative-ai", &server);
+    install_protocol(&setup, "google-generative-ai", &server, None);
     debug_config(&setup, json!({}));
     let run = ask(&setup);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -565,7 +568,13 @@ fn a_resumed_ask_keeps_the_ask_process_and_restarts_attempts() {
 }
 
 /// Installs provider `name` with model `m` on `protocol` at `url`.
-fn install_url(setup: &Setup, name: &str, url: &str, protocol: &str) {
+fn install_url(
+    setup: &Setup,
+    name: &str,
+    url: &str,
+    protocol: &str,
+    probe: Option<std::sync::mpsc::Sender<()>>,
+) {
     let source = setup.root.path().join(format!("src-{name}"));
     write_json(
         &source.join("extension.json"),
@@ -579,16 +588,14 @@ fn install_url(setup: &Setup, name: &str, url: &str, protocol: &str) {
             "models": [{"id": "m", "protocol": protocol, "base_url": format!("{url}/v1"), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        probe,
+    );
 }
 
 fn spawn_call(model: &str) -> Value {
@@ -616,8 +623,8 @@ fn a_delegate_child_uses_its_own_process_and_id() {
     })
     .unwrap();
     let child = ProviderServer::start([text_reply("hi from child")]).unwrap();
-    install_url(&setup, "pa", &parent.url(), "openai-responses");
-    install_url(&setup, "pb", &child.url(), "openai-responses");
+    install_url(&setup, "pa", &parent.url(), "openai-responses", None);
+    install_url(&setup, "pb", &child.url(), "openai-responses", None);
     write_json(
         &setup.home().join("config.json"),
         &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
@@ -959,7 +966,7 @@ fn each_protocol_writes_one_diagnostics_line() {
             setup.provider(&server);
             debug_config(&setup, json!({"cache": {"diagnostics": true}}));
         } else {
-            install_protocol(&setup, protocol, &server);
+            install_protocol(&setup, protocol, &server, None);
             debug_config(&setup, json!({"cache": {"diagnostics": true}}));
         }
         let run = ask(&setup);
