@@ -1203,6 +1203,99 @@ fn a_bare_wait_quoted_newline_falls_back_to_placeholder() {
 }
 
 #[test]
+fn a_bare_wait_quote_guards_shape_the_check() {
+    // An escaped quote outside singles is literal, so the newline stays
+    // outside quotes and the check is named.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo x\\\"y\nz".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo x\\\"y\nz; do sleep 5; done"),
+        "an escaped quote outside singles leaves the newline outside quotes: {text}"
+    );
+    // A backslash inside singles escapes nothing, so the quote still closes
+    // and the newline stays outside quotes.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a\\'\\nb".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a\\'\\nb; do sleep 5; done"),
+        "a backslash inside singles closes the quote before the newline: {text}"
+    );
+    // An apostrophe inside doubles toggles nothing, so the doubles still
+    // close and the newline stays outside quotes.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \"a'b\"\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo \"a'b\"\nc; do sleep 5; done"),
+        "an apostrophe inside doubles closes the doubles before the newline: {text}"
+    );
+    // A double quote inside singles toggles nothing, so the singles still
+    // close and the newline stays outside quotes.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a\"b'\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a\"b'\nc; do sleep 5; done"),
+        "a double quote inside singles closes the singles before the newline: {text}"
+    );
+    // An escaped quote leaves no quote open, so a later blank line starts
+    // outside quotes and is dropped.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \\\"a\n\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo \\\"a\nc; do sleep 5; done"),
+        "an escaped quote outside singles drops a later blank line: {text}"
+    );
+    // A backslash inside singles changes no quote state, so a later blank
+    // line starts outside quotes and is dropped.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a\\'b\n\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a\\'b\nc; do sleep 5; done"),
+        "a backslash inside singles drops a later blank line: {text}"
+    );
+    // A lone apostrophe inside doubles opens no single quote, so a later
+    // blank line starts outside quotes and is dropped.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \"a'b\"\n\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo \"a'b\"\nc; do sleep 5; done"),
+        "an apostrophe inside doubles drops a later blank line: {text}"
+    );
+    // A lone double quote inside singles opens no double quote (and a lone
+    // apostrophe needs no single-quote tracking), so a later blank line
+    // starts outside quotes and is dropped.
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'x\"y'\n\nc".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'x\"y'\nc; do sleep 5; done"),
+        "a double quote inside singles drops a later blank line: {text}"
+    );
+}
+
+#[test]
 fn a_deadline_past_the_session_longest_names_the_longest_twice() {
     let error = ShellError::DeadlineTooLong { max_ms: 600_000 };
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
