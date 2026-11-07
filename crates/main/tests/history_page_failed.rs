@@ -257,13 +257,29 @@ impl Driver {
     /// Waits after a batch of keys for a frame at or after `from`, or for
     /// the hub to record the top-page request. A batch that moves nothing
     /// draws no frame (`Screen::draw` writes nothing for equal cells), so
-    /// only the request can end its wait. The wake channel carries both
-    /// signals: the reader's chunks and `serve`'s recorded commands.
+    /// only the request can end its wait. The hub records the request when
+    /// the placeholder enters the viewport, before the scroll reaches the
+    /// top, so a caller still scrolling passes `until_gone`: the request
+    /// ends the wait only once the grid no longer holds that text, and
+    /// before then only the batch's own frame does. The wake channel
+    /// carries both signals: the reader's chunks and `serve`'s recorded
+    /// commands.
     #[track_caller]
-    fn wait_batch(&self, from: usize, seen: &Mutex<Vec<String>>, what: &str) {
+    fn wait_batch(
+        &self,
+        from: usize,
+        seen: &Mutex<Vec<String>>,
+        until_gone: Option<&str>,
+        what: &str,
+    ) {
         let wait = self.deadline.start_wait();
         loop {
-            if self.holds_since(from, FRAME_END) || top_page_requested(seen) {
+            // settled: FRAME_END or the top-page request
+            let gone = || {
+                until_gone
+                    .is_none_or(|text| !self.shared.lock().unwrap().grid().contents.contains(text))
+            };
+            if self.holds_since(from, FRAME_END) || (top_page_requested(seen) && gone()) {
                 return;
             }
             if wait.recv(&self.wakes).is_err() {
@@ -476,9 +492,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // no clock: the grid says when the top is reached.
     let mut batches = 0;
     loop {
-        if top_page_requested(&seen)
-            || !driver.shared.lock().unwrap().grid().contents.contains(LAST)
-        {
+        if !driver.shared.lock().unwrap().grid().contents.contains(LAST) {
             break;
         }
         assert!(
@@ -491,7 +505,12 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
             driver.write(b"\x1b[5~");
         }
         batches += 1;
-        driver.wait_batch(from, &seen, &format!("a frame for scroll batch {batches}"));
+        driver.wait_batch(
+            from,
+            &seen,
+            Some(LAST),
+            &format!("a frame for scroll batch {batches}"),
+        );
     }
     let seen_report = || {
         let poisoned = top_page_requested(&seen);
@@ -527,6 +546,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         driver.wait_batch(
             from,
             &seen,
+            None,
             &format!("a frame for top-page batch {batches}"),
         );
     }
