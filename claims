@@ -188,3 +188,5 @@ crates/tui/src/view_tests.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook
 xtask/src/break_glass_audit.rs	fiber-4178	grant	2026-11-07T18:57:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4178-break-glass-audit	
 xtask/src/break_glass_audit_tests.rs	fiber-4178	grant	2026-11-07T18:57:42Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4178-break-glass-audit	
 xtask/tests/cli.rs	fiber-4178	grant	2026-11-07T18:58:18Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4178-break-glass-audit	
+crates/main/tests/feed.rs	fiber-4381	plan	2026-11-07T19:15:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/session_message.rs	fiber-4381	plan	2026-11-07T19:15:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
