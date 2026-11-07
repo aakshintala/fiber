@@ -2237,7 +2237,9 @@ fn consent_fixture_content(name: &str) -> &'static str {
 /// Each consent session replays with the approval adjacency intact: the
 /// reply a person message answers renders immediately before it
 /// (`docs/permissions.md`, "What it is shown"), and the call under
-/// review renders last with its declared effects.
+/// review renders with its declared effects. Each reviewed call holds
+/// its two reviewer stages (`docs/permissions.md`, "How it runs": "Two
+/// stages.").
 #[test]
 fn consent_fixtures_replay_answer_adjacency() {
     for (name, reply, answer, call) in CONSENT_FIXTURES {
@@ -2259,6 +2261,8 @@ fn consent_fixtures_replay_answer_adjacency() {
                 RequestKind::Selection => None,
             })
             .collect();
+        // `docs/permissions.md`, "How it runs": "Two stages." — each
+        // reviewed call contributes its first and second reviewer stages.
         assert!(stages.len() >= 2, "{name} replays no review");
         let first_texts = texts(stages[stages.len() - 2]);
         let reply_at = first_texts
@@ -2274,18 +2278,20 @@ fn consent_fixtures_replay_answer_adjacency() {
             answer_at,
             "{reply:?} answers {answer:?} in {name}: {first_texts:?}"
         );
-        let last_call_at = first_texts
-            .iter()
-            .rposition(|text| text.starts_with("Tool call: "))
-            .unwrap_or_else(|| panic!("no tool call renders in {name}: {first_texts:?}"));
+        // `docs/permissions.md`, "What it is shown": the reviewer gets
+        // the call under review and its declared effects — existence,
+        // never a last-position pin (`crates/loop/src/reviewer.rs`,
+        // `under_item`: the call stays where it ran, so the reviewer
+        // never counts on it coming last).
         assert!(
-            first_texts[last_call_at].contains(call),
-            "{call:?} renders last in {name}: {first_texts:?}"
+            first_texts
+                .iter()
+                .any(|text| text.starts_with("Tool call: ") && text.contains(call)),
+            "{call:?} renders in {name}: {first_texts:?}"
         );
         assert!(
             first_texts
                 .iter()
-                .skip(last_call_at)
                 .any(|text| text.contains("Call under review:")
                     && text.contains("Declared effects:")),
             "the call under review names its effects in {name}: {first_texts:?}"
@@ -2293,14 +2299,18 @@ fn consent_fixtures_replay_answer_adjacency() {
     }
 }
 
-/// The built jig exits 0 over each committed consent fixture directory
-/// and prints the same adjacency the replay sees.
+/// The built jig exits 0 over each staged consent fixture and prints
+/// the same adjacency the replay sees. The bytes are compiled in
+/// (`docs/testing.md`, "What a test asserts"): each fixture is staged
+/// from `consent_fixture_content` into a temporary directory, never
+/// read from the repository at run time.
 #[test]
 fn consent_fixtures_binary_prints_answer() {
     for (name, reply, answer, call) in CONSENT_FIXTURES {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/reviewer_consent")
-            .join(name);
+        let home = fakes::TempDir::new("fiber-review-consent-bin");
+        let dir = home.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("events.jsonl"), consent_fixture_content(name)).unwrap();
         let output = run_jig(&dir, "", false, &[]);
         assert!(
             output.status.success(),
