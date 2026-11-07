@@ -398,3 +398,9 @@ crates/loop/src/opening_tests.rs	fiber-4244	plan	2026-11-07T05:36:21Z	Amoghs-Mac
 crates/contract/src/events/context.rs	fiber-4244	plan	2026-11-07T05:36:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/codes.rs	fiber-4244	plan	2026-11-07T05:36:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/system-prompt.md	fiber-4244	plan	2026-11-07T05:36:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate/models.rs	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/jobs/src/delegate/models_tests.rs	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/delegates.rs	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/delegates_tests.rs	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/tool.rs	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/delegates.md	fiber-4242	plan	2026-11-07T05:38:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
