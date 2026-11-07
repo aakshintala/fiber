@@ -367,3 +367,6 @@ crates/main/tests/provider_diagnostics.rs	fiber-4331	plan	2026-11-07T01:24:30Z	A
 crates/main/tests/delegates.rs	fiber-4331	plan	2026-11-07T01:24:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/delegate_provider_message.rs	fiber-4331	plan	2026-11-07T01:24:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/hub_delegate_resume.rs	fiber-4331	plan	2026-11-07T01:24:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/loop/prompt/messages.md	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
+docs/tools.md	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
+crates/loop/src/jobs_tests.rs	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
