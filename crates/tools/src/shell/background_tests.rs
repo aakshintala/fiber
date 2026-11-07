@@ -310,6 +310,123 @@ fn unavailable_listing_moves_with_unnamed_receipt() {
     );
 }
 
+/// Hands off a move like [`hand_off_with_saved`], but with the drive's
+/// timeout deadline `lead` past the move and a non-monitor limit of `ms`:
+/// the receipt names when the timeout fires. The job's own drive is
+/// already settled, so its thread ends on its own.
+fn hand_off_with_timeout(
+    dir: &std::path::Path,
+    code: i32,
+    members: GroupMembers,
+    lead: Duration,
+    ms: u64,
+) -> (String, String) {
+    let clock = FakeClock::new();
+    let timeout_at = clock.now().checked_add(lead);
+    let shared = Arc::new(Shared::default());
+    note_eof(&shared);
+    {
+        let mut inner = lock(&shared.inner);
+        inner.reaped = true;
+        inner.status = Some(status_of(&format!("exit {code}")));
+    }
+    let moved = Moved {
+        reason: MoveReason::ShellExited { code },
+        bridge: None,
+        progress: Run {
+            phase: Phase::Draining {
+                until: clock.origin(),
+            },
+            stop: None,
+            sent_signal: false,
+            seen_empty: true,
+            stream_carry: Vec::new(),
+            timeout_at,
+            move_at: None,
+            members: Some(members),
+            pgid: 99,
+            hosted: None,
+            listing: None,
+            shared,
+            ask: None,
+            job: None,
+            feed: None,
+        },
+        cap: OUTPUT_CAP,
+        spill: None,
+        protection: None,
+    };
+    let jobs: Arc<dyn contract::jobs::Jobs> = fakes::jobs::FakeJobs::new(dir);
+    let clock: Arc<dyn contract::clock::Clock> = clock;
+    let output = take(
+        moved,
+        jobs,
+        clock,
+        "true",
+        Some(Limit { ms, monitor: false }),
+        false,
+        &CancelToken::new(),
+        &Recorder::default(),
+        None,
+        None,
+    );
+    let ContentPart::Text { text } = &output.content[0] else {
+        panic!("receipt text");
+    };
+    let contract::jobs::JobRecord::Started(started) = &output.jobs[0] else {
+        panic!("the receipt records the job");
+    };
+    (text.clone(), started.job_id.0.clone())
+}
+
+#[test]
+fn moved_receipt_names_the_stop_time_and_timeout() {
+    // The fake clock's wall starts at 2023-11-14T22:13:20Z, so a deadline
+    // 30 s past the move stops the job at 2023-11-14T22:13:50Z.
+    let dir = fakes::TempDir::new("fiber-shell-moved-receipt-deadline");
+    let (text, job) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Members("sleep (12)".to_owned()),
+        Duration::from_secs(30),
+        60_000,
+    );
+    let path = dir.path().join("j_0000000000000001.log");
+    assert_eq!(
+        text,
+        format!(
+            "The shell exited with code 3, leaving sleep (12) running, so it moved to the background.\nJob {job}. Output: {path}. Read it with `read`; `jobs wait` waits for it.\nFiber stops it at 2023-11-14T22:13:50Z (timeout_ms 60000). To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`.\n",
+            path = path.display(),
+        )
+    );
+}
+
+#[test]
+fn moved_timeout_error_carries_the_hint() {
+    let dir = fakes::TempDir::new("fiber-shell-moved-timeout-hint");
+    let path = dir.path().join("out");
+    std::fs::write(&path, "partial\n").unwrap();
+    let end = to_completed(
+        JobId("j_1".into()),
+        &path,
+        finished(None, Some(StopKind::Timeout), false, true, false),
+        Some(Limit {
+            ms: 5_000,
+            monitor: false,
+        }),
+    );
+    assert_eq!(end.status, Outcome::Failed);
+    let error = end.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert!(
+        error
+            .message
+            .contains("To keep a long-running process such as a server"),
+        "a moved job's timeout names the way out: {}",
+        error.message
+    );
+}
+
 const DEADLINE: Duration = Duration::from_secs(10);
 
 /// A `ps` that runs `script` with `sh`.
