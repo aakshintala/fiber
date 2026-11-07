@@ -423,3 +423,5 @@ crates/tui/src/window.rs	fiber-4192	grant	2026-11-07T09:04:40Z	Amoghs-MacBook-Pr
 crates/tui/src/window/residency.rs	fiber-4192	grant	2026-11-07T09:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/4192-diagnose-resume-hang	
 crates/tools/src/read.rs	fiber-4245	plan	2026-11-07T09:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4356
 crates/tools/src/read_tests.rs	fiber-4245	plan	2026-11-07T09:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4356
+crates/main/src/switch.rs	fiber-4242	grant	2026-11-07T09:51:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/delegates/4242-models-own-first	
+crates/main/src/switch_tests.rs	fiber-4242	grant	2026-11-07T09:51:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/delegates/4242-models-own-first	
