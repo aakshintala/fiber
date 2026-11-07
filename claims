@@ -392,3 +392,4 @@ docs/tools.md	fiber-4245	plan	2026-11-07T05:57:33Z	Amoghs-MacBook-Pro:/Users/aak
 scripts/bug-red	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-bug-red	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 scripts/test-bug-red-cargo	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/bug-red,scripts/test-bug-red	fiber-4324	grant	2026-11-07T06:17:56Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/ci/4324-bug-red-own-target	
