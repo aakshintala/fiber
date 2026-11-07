@@ -453,7 +453,7 @@ fn deliver_to_sends_each_later_end_whose_claim_holds() {
 /// The end notice follows the id leaving the list: the notice is sent
 /// under the lock that marks the job ended, so `running` never drops a
 /// job whose notice is not yet in the inbox
-/// (`crates/fakes/src/jobs.rs:393`). The fake keeps the order the
+/// (`crates/fakes-contract/src/jobs.rs:393`). The fake keeps the order the
 /// registry keeps: a job listed before its first output is the nearest
 /// of the paragraph's examples (`docs/testing/fakes.md`, "Fakes"). The
 /// test's receive pairs with the end's send (a channel), and the

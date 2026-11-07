@@ -147,6 +147,7 @@ fn install_url(
     url: &str,
     protocol: &str,
     extra: &serde_json::Value,
+    probe: Option<std::sync::mpsc::Sender<()>>,
 ) {
     let source = setup.root.path().join(format!("src-{name}"));
     let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
@@ -168,16 +169,14 @@ fn install_url(
             "models": [model]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        probe,
+    );
 }
 
 /// The sessions directory for a session in `workspace`. One site,
@@ -263,6 +262,7 @@ fn a_summary_subscription_through_the_hub_follows_a_delegate_into_its_resumed_ru
         &server_a.url(),
         "openai-responses",
         &json!({}),
+        None,
     );
     install_url(
         &setup,
@@ -270,6 +270,7 @@ fn a_summary_subscription_through_the_hub_follows_a_delegate_into_its_resumed_ru
         &server_b.url(),
         "openai-responses",
         &json!({}),
+        None,
     );
     support::write_json(
         &setup.home().join("config.json"),

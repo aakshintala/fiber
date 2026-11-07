@@ -231,8 +231,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        6852,
-        0xc8c6a047265663d3,
+        6940,
+        0xce299c6e8b5e5daf,
     );
 }
 
@@ -240,8 +240,8 @@ fn messages_md_bytes_are_pinned() {
 fn reviewer_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/reviewer.md"),
-        8563,
-        0xe84e383df7459969,
+        9145,
+        0xba38cac73db603f8,
     );
 }
 

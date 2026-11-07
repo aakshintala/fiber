@@ -11,7 +11,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock;
+use support::clock::Clock;
 
 use super::request::ParsedRequest;
 use super::*;

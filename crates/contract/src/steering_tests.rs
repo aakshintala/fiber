@@ -18,10 +18,10 @@ use fakes::Deadline;
 /// only bounds the test's own waits.
 const BOUND: Duration = Duration::from_secs(10);
 
-/// An [`Emit`] that records every event in arrival order. Local, not
-/// `fakes::emit::EventLog`: the dev-cycle builds a second `contract`
-/// instance for `fakes`, so its event log's trait impl never matches
-/// this crate's `Emit`.
+/// An [`Emit`] that records every event in arrival order. This crate uses
+/// contract-free `fakes` helpers and keeps its recorder local, rather than
+/// depending on `fakes-contract` for `EventLog` and introducing a dependency
+/// cycle through the contract-dependent helper package.
 #[derive(Default)]
 struct Recorded {
     events: Mutex<Vec<Event>>,
