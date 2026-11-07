@@ -92,7 +92,6 @@ crates/main/src/switch.rs	fiber-4242	grant	2026-11-07T09:51:14Z	Amoghs-MacBook-P
 crates/main/src/switch_tests.rs	fiber-4242	grant	2026-11-07T09:51:14Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/delegates/4242-models-own-first	
 crates/contract/src/events/context_tests.rs	fiber-4244	plan	2026-11-07T10:40:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
 crates/tools/src/shell/background.rs,crates/tools/src/shell/background_tests.rs,crates/tools/tests/shell.rs,crates/loop/src/kept.rs,crates/loop/src/kept_tests.rs,crates/jobs/src/tool_tests.rs,crates/loop/src/jobs_tests.rs,docs/tools.md,docs/events.md,crates/contract/src/events/host.rs	fiber-4240	grant	2026-11-07T11:57:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/jobs/4240-wait-output-tail	
-scripts/test-bug-red	fiber-4369	plan	2026-11-07T15:34:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4371
 crates/log/src/history.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/offsets.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/paging_session.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
