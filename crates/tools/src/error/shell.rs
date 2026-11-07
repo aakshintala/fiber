@@ -138,25 +138,73 @@ fn bare_wait_message(command: &str) -> String {
 }
 
 /// The check command a bare-wait refusal names in its monitor snippet: the
-/// refused command past its first separator, when that rest is more than
-/// comments or shell blanks and opens with neither a separator nor a loop
-/// keyword, so it reads as the condition to poll for.
+/// first line past the refused command's first separator that holds code
+/// beyond comments or shell blanks, stripped of any trailing `#` comment,
+/// when it opens with neither a separator nor a loop keyword, so the emitted
+/// `until` line reads as the condition to poll for and no `#` comments it out.
 fn usable_check(command: &str) -> Option<&str> {
     let end = command.find(['\n', ';', '&', '|'])?;
     let rest = command.get(end + 1..)?.trim();
-    if rest.is_empty()
-        || rest.starts_with('#')
-        || matches!(rest.chars().next(), Some('&' | '|' | ';'))
-    {
+    if rest.is_empty() || matches!(rest.chars().next(), Some('&' | '|' | ';')) {
         return None;
     }
-    if matches!(
-        rest.split_whitespace().next(),
-        Some("while" | "until" | "for")
-    ) {
-        return None;
+    for line in rest.lines() {
+        let code = strip_shell_comment(line).trim();
+        if code.is_empty() {
+            continue;
+        }
+        if matches!(code.chars().next(), Some('&' | '|' | ';')) {
+            return None;
+        }
+        if matches!(
+            code.split_whitespace().next(),
+            Some("while" | "until" | "for")
+        ) {
+            return None;
+        }
+        return Some(code);
     }
-    Some(rest)
+    None
+}
+
+/// The line before its `#` comment: a `#` outside quotes starts a comment
+/// only at the line start or after whitespace or a shell separator, so a
+/// `#` inside quotes or a word stays part of the check command.
+fn strip_shell_comment(line: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for (idx, ch) in line.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if !in_single => {
+                escaped = true;
+            }
+            '\'' if !in_double => {
+                in_single = !in_single;
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+            }
+            '#' if !in_single && !in_double => {
+                let before = &line[..idx];
+                let at_comment_start = match before.chars().next_back() {
+                    None => true,
+                    Some(prev) => {
+                        prev.is_whitespace() || matches!(prev, ';' | '&' | '|' | '(' | '`')
+                    }
+                };
+                if at_comment_start {
+                    return before;
+                }
+            }
+            _ => {}
+        }
+    }
+    line
 }
 
 impl ShellError {

@@ -609,9 +609,13 @@ fn a_bare_wait_never_starts() {
 
 #[test]
 fn a_bare_wait_short_sleep_still_runs() {
+    assert!(
+        !bare_wait("sleep 5; echo hi"),
+        "a short sleep is not a bare wait"
+    );
     let shell = shell();
     let output = shell.run(
-        &args("sleep 5; echo hi"),
+        &args("sleep 0; echo hi"),
         &CancelToken::new(),
         &Recorder::default(),
     );

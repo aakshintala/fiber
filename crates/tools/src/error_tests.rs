@@ -977,22 +977,6 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
          To wait for a condition instead, start a monitor with `monitor: true` and a command like `until echo hi; do sleep 5; done`; \
          every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
     );
-    let text = error.to_string();
-    assert!(
-        text.contains("run_in_background"),
-        "names the background rewrite: {text}"
-    );
-    assert!(
-        text.contains("sleep 240; echo hi"),
-        "quotes the refused command: {text}"
-    );
-    assert!(
-        text.contains("until echo hi; do sleep 5; done"),
-        "names the check command: {text}"
-    );
-    for number in ["300000", "1800000", "600000"] {
-        assert!(text.contains(number), "states the deadline rule: {text}");
-    }
     let error = ShellError::BareWait {
         command: "sleep 30; grep -q READY log".to_owned(),
     };
@@ -1015,11 +999,6 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
          To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
          every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
     );
-    let text = error.to_string();
-    assert!(
-        !text.contains("until while"),
-        "a loop rest is not a check command: {text}"
-    );
     let error = ShellError::BareWait {
         command: "sleep 30; # waiting".to_owned(),
     };
@@ -1032,6 +1011,32 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
          every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
     );
     let error = ShellError::BareWait {
+        command: "sleep 30; # waiting\necho hi".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo hi; do sleep 5; done"),
+        "a comment-led rest with a check names that check: {text}"
+    );
+    assert!(
+        !text.contains("until <check command>"),
+        "a rest holding a check does not fall back: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo hi # done".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo hi; do sleep 5; done"),
+        "a trailing comment is stripped from the check: {text}"
+    );
+    assert!(
+        !text.contains("until echo hi # done"),
+        "no emitted until line is commented out: {text}"
+    );
+    let error = ShellError::BareWait {
         command: "sleep 30 && grep -q READY log".to_owned(),
     };
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
@@ -1041,11 +1046,6 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
          Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30 && grep -q READY log`, then wait for it with `jobs wait`. \
          To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
          every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
-    );
-    let text = error.to_string();
-    assert!(
-        !text.contains("until &"),
-        "a separator-led rest is not a check command: {text}"
     );
     let error = ShellError::BareWait {
         command: "sleep 60".to_owned(),
@@ -1057,11 +1057,6 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
          Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 60`, then wait for it with `jobs wait`. \
          To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
          every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
-    );
-    let text = error.to_string();
-    assert!(
-        !text.contains("until ; do"),
-        "no rest never emits an empty command: {text}"
     );
     for command in [
         "sleep 30; until ready; do sleep 1; done",
