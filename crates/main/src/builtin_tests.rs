@@ -1428,12 +1428,15 @@ fn driver_shell_has_no_foreground_default() {
     // parked caller alone never moves the clock (`docs/testing.md`, "Waits
     // and timeouts"); the park is the signal the assertions below read.
     let (parked_tx, parked_rx) = std::sync::mpsc::channel();
+    // One wait for one park signal: the observer receives on this wait's
+    // behalf, so observer and receive share the one deadline made here
+    // (docs/testing.md, "Waits and timeouts").
+    let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     std::thread::Builder::new()
         .name("fiber-driver-parked".to_owned())
         .spawn({
             let fake = fake.clone();
             move || {
-                let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
                 loop {
                     let parked = fake.parked();
                     if parked.contains(&None) {
@@ -1448,10 +1451,7 @@ fn driver_shell_has_no_foreground_default() {
             }
         })
         .unwrap();
-    // The observer above waits up to MUST_SUCCEED_WITHIN itself, so this
-    // outer wait gets twice that budget (docs/testing.md, "Waits and timeouts").
-    Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&parked_rx, "the driver call to wait with no deadline");
+    bound.recv_or_fail(&parked_rx, "the driver call to wait with no deadline");
     // The 10-minute foreground default parks nowhere: the driver's only
     // park carries no deadline. A moved default parks at some instant and
     // fails the second assertion.

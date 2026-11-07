@@ -1596,12 +1596,15 @@ fn with_no_timeout_parks_without_a_deadline() {
         .unwrap();
     // The start marker: the call waits on the clock with no deadline.
     let (parked_tx, parked_rx) = std::sync::mpsc::channel();
+    // One wait for one park signal: the observer receives on this wait's
+    // behalf, so observer and receive share the one deadline made here
+    // (docs/testing.md, "Waits and timeouts").
+    let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
     std::thread::Builder::new()
         .name("fiber-shell-no-timeout-parked".to_owned())
         .spawn({
             let clock = clock.clone();
             move || {
-                let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
                 loop {
                     let parked = clock.parked();
                     if parked.contains(&None) {
@@ -1616,10 +1619,7 @@ fn with_no_timeout_parks_without_a_deadline() {
             }
         })
         .unwrap();
-    // The observer above waits up to MUST_SUCCEED_WITHIN itself, so this
-    // outer wait gets twice that budget (docs/testing.md, "Waits and timeouts").
-    fakes::Deadline::after(2 * fakes::MUST_SUCCEED_WITHIN)
-        .recv_or_fail(&parked_rx, "the no-timeout call to wait with no deadline");
+    bound.recv_or_fail(&parked_rx, "the no-timeout call to wait with no deadline");
     // No deadline parks anywhere: deleting the flag parks the agent
     // default instead and fails here.
     let parked = clock.parked();
