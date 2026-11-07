@@ -280,14 +280,15 @@ fn null_tests_by_equality_and_indexing_null_errors() {
 }
 
 #[test]
-fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
+fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
     let big = "B".repeat(20 * 1024);
     let source = "local small = _G.host.tool(\"read\", { path = \"small.txt\" })\n\
         local nested = load('local o = host.tool(\"read\", { path = \"nested.txt\" }); print(\"nested:\" .. o.content[1].text)')\n\
         nested()\n\
         local big = host.tool(\"shell\", { command = \"cat big.bin\" })\n\
         print(\"small:\" .. small.content[1].text)\n\
-        print(\"big:\" .. big.content[1].text:sub(1, 4))\n\
+        print(\"bytes:\" .. #big.content[1].text)\n\
+        print(\"cut:\" .. tostring(big.content[1].text:find(\"bytes cut\", 1, true) ~= nil))\n\
         print(\"multi\", 1, true)\n\
         return \"ignored\"";
     let setup = reviewed_setup(&calling(source), &allow());
@@ -310,34 +311,37 @@ fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
     let mut lines: Vec<&str> = text.lines().collect();
     assert_eq!(
         lines.len(),
-        8,
-        "four printed and status lines plus three ledger rows: {text:?}"
+        9,
+        "five printed and status lines plus three ledger rows: {text:?}"
     );
     let shell_row = lines.pop().unwrap();
     let nested_read_row = lines.pop().unwrap();
     let read_row = lines.pop().unwrap();
+    // The script saw the whole 20 KiB output: the file bytes plus the
+    // shell tool's closing line (`text_of`/`exit_line` in
+    // `crates/tools/src/shell.rs`), with no cut marker.
+    let whole = format!("{big}\nExit code 0.\n");
+    let bytes_line = format!("bytes:{}", whole.len());
     assert_eq!(
         lines,
         [
             "nested:world",
             "small:hello",
-            "big:BBBB",
+            bytes_line.as_str(),
+            "cut:false",
             "multi\t1\ttrue",
             "Script finished"
         ]
     );
     assert_eq!(read_row, "- read completed");
     assert_eq!(nested_read_row, "- read completed");
-    let path = shell_row
-        .strip_prefix("- shell completed ")
-        .unwrap_or_else(|| panic!("the cut row names its artifact: {shell_row:?}"));
-    assert!(!path.is_empty());
-    // The ledger row's path holds that call's full output: the file bytes
-    // plus the shell tool's closing line (`text_of`/`exit_line` in
-    // `crates/tools/src/shell.rs`).
-    let stored = std::fs::read(run.session_dir(&setup).join(path)).unwrap();
-    let stored = String::from_utf8(stored).unwrap();
-    assert_large_eq(&stored, &format!("{big}\nExit code 0.\n"));
+    assert_eq!(shell_row, "- shell completed");
+    // The inner completion the script resumed with holds every byte, with
+    // no artifact and no kept ranges.
+    let inner = completed_holding(&run, &"B".repeat(1024));
+    assert_large_eq(completed_text(inner), &whole);
+    assert_eq!(inner["payload"].get("artifact"), None);
+    assert_eq!(inner["payload"].get("kept"), None);
     // The turn finished on the scripted follow-up.
     assert_eq!(
         run.of("text_completed").last().unwrap()["payload"]["text"],
@@ -354,6 +358,42 @@ fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
             .any(|ext| ext["name"] == CODEMODE_NAME),
         "{loaded}"
     );
+}
+
+#[test]
+fn a_200kb_read_reaches_whole_without_a_cut() {
+    let big = "R".repeat(200 * 1024);
+    let source = "local o = host.tool(\"read\", { path = \"big.txt\" })\n\
+        print(\"bytes:\" .. #o.content[1].text)\n\
+        print(\"cut:\" .. tostring(o.content[1].text:find(\"bytes cut\", 1, true) ~= nil))\n\
+        print(\"artifact:\" .. tostring(o.artifact))";
+    let setup = Setup::new();
+    script(&setup, "s.json", &calling(source));
+    script(&setup, "r.json", &allow());
+    // The read tool's own slice is configured past the file: the loop's
+    // inner bypass then carries every byte to the script uncut.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"reviewer": {"model": "scripted/r.json"}, "tools": {"read": {"max_result_bytes": 300 * 1024}}}),
+    );
+    install_codemode(&setup);
+    std::fs::write(setup.workspace().join("big.txt"), &big).unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "bytes:204800\ncut:false\nartifact:nil\nScript finished\n- read completed"
+    );
+    // The inner completion the script resumed with holds all 204800 bytes,
+    // with no artifact and no kept ranges.
+    let inner = completed_holding(&run, &"R".repeat(1024));
+    assert_large_eq(completed_text(inner), &big);
+    assert_eq!(inner["payload"].get("artifact"), None);
+    assert_eq!(inner["payload"].get("kept"), None);
+    assert_eq!(run.of("turn_completed").len(), 1);
 }
 
 #[test]
