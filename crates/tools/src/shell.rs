@@ -67,13 +67,13 @@ const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 
 /// A monitor's deadline when the model gives no `timeout_ms`: 5 minutes
 /// (`docs/tools.md`, "Background jobs").
-const DEFAULT_DEADLINE_MS: u64 = 300_000;
+pub(crate) const DEFAULT_DEADLINE_MS: u64 = 300_000;
 
 /// The longest deadline a monitor may have: 30 minutes.
-const MAX_DEADLINE_MS: u64 = 1_800_000;
+pub(crate) const MAX_DEADLINE_MS: u64 = 1_800_000;
 
 /// The longest deadline in a non-interactive run: 10 minutes.
-const MAX_DEADLINE_NON_INTERACTIVE_MS: u64 = 600_000;
+pub(crate) const MAX_DEADLINE_NON_INTERACTIVE_MS: u64 = 600_000;
 
 const CANCELLED: &str = "Cancelled and stopped.";
 pub(crate) const INDETERMINATE: &str =
@@ -518,7 +518,9 @@ impl Shell {
             return errored(ShellError::NoJobs);
         }
         if !parsed.detach && !parsed.mode.in_background() && bare_wait(&parsed.command) {
-            return errored(ShellError::BareWait);
+            return errored(ShellError::BareWait {
+                command: parsed.command.clone(),
+            });
         }
         // The functions reach only the model's own command line: `classify`
         // and `effects` saw the original string above.

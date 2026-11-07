@@ -54,11 +54,11 @@ pub(crate) enum ShellError {
     #[error("Background jobs are not available in this session.")]
     NoJobs,
     /// The command is a bare wait a background mode should run.
-    #[error(
-        "This command waits with `sleep` for 25 seconds or more. \
-         Use `run_in_background`, wait with `jobs wait`, or run a monitor with an `until` loop."
-    )]
-    BareWait,
+    #[error("{}", bare_wait_message(command))]
+    BareWait {
+        /// The refused command, quoted verbatim in the refusal.
+        command: String,
+    },
     /// The command could not be spawned.
     #[error("The command could not be started: {source}.")]
     NotStarted {
@@ -116,6 +116,49 @@ pub(crate) enum ShellError {
     Flooded,
 }
 
+/// The placeholder a bare-wait refusal names when the refused command holds
+/// no usable check command after its sleep.
+const CHECK_PLACEHOLDER: &str = "<check command>";
+
+/// What a bare-wait refusal says: the refused command quoted verbatim, a
+/// background rewrite of that same command, and a monitor `until` snippet
+/// naming the check command when the command holds one, with the deadline
+/// rule the monitor runs under (`docs/tools.md`, "Background jobs").
+fn bare_wait_message(command: &str) -> String {
+    let check = usable_check(command).unwrap_or(CHECK_PLACEHOLDER);
+    format!(
+        "`{command}` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `{command}`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until {check}; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes ({} ms) by default, at most 30 minutes ({} ms), and at most 10 minutes ({} ms) in a non-interactive run.",
+        crate::shell::DEFAULT_DEADLINE_MS,
+        crate::shell::MAX_DEADLINE_MS,
+        crate::shell::MAX_DEADLINE_NON_INTERACTIVE_MS,
+    )
+}
+
+/// The check command a bare-wait refusal names in its monitor snippet: the
+/// refused command past its first separator, when that rest is more than
+/// comments or shell blanks and opens with neither a separator nor a loop
+/// keyword, so it reads as the condition to poll for.
+fn usable_check(command: &str) -> Option<&str> {
+    let end = command.find(['\n', ';', '&', '|'])?;
+    let rest = command.get(end + 1..)?.trim();
+    if rest.is_empty()
+        || rest.starts_with('#')
+        || matches!(rest.chars().next(), Some('&' | '|' | ';'))
+    {
+        return None;
+    }
+    if matches!(
+        rest.split_whitespace().next(),
+        Some("while" | "until" | "for")
+    ) {
+        return None;
+    }
+    Some(rest)
+}
+
 impl ShellError {
     /// The code from `docs/errors.md`: one fixed code per case, with no
     /// wildcard arm.
@@ -131,7 +174,7 @@ impl ShellError {
             | Self::DetachConfined
             | Self::NoJobs
             | Self::NoDetach
-            | Self::BareWait => ErrorCode::InvalidArguments,
+            | Self::BareWait { .. } => ErrorCode::InvalidArguments,
             Self::NotStarted { .. } | Self::NotReaped | Self::SandboxApply { .. } => {
                 ErrorCode::ToolError
             }

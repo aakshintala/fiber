@@ -966,11 +966,127 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
         error.to_string(),
         "Background jobs are not available in this session."
     );
-    let error = ShellError::BareWait;
+    let error = ShellError::BareWait {
+        command: "sleep 240; echo hi".to_owned(),
+    };
     assert_eq!(error.code(), ErrorCode::InvalidArguments);
     assert_eq!(
         error.to_string(),
-        "This command waits with `sleep` for 25 seconds or more. Use `run_in_background`, wait with `jobs wait`, or run a monitor with an `until` loop."
+        "`sleep 240; echo hi` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 240; echo hi`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until echo hi; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    let text = error.to_string();
+    assert!(
+        text.contains("run_in_background"),
+        "names the background rewrite: {text}"
+    );
+    assert!(
+        text.contains("sleep 240; echo hi"),
+        "quotes the refused command: {text}"
+    );
+    assert!(
+        text.contains("until echo hi; do sleep 5; done"),
+        "names the check command: {text}"
+    );
+    for number in ["300000", "1800000", "600000"] {
+        assert!(text.contains(number), "states the deadline rule: {text}");
+    }
+    let error = ShellError::BareWait {
+        command: "sleep 30; grep -q READY log".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 30; grep -q READY log` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30; grep -q READY log`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until grep -q READY log; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; while true; do echo hi; done".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 30; while true; do echo hi; done` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30; while true; do echo hi; done`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    assert!(
+        !error.to_string().contains("until while"),
+        "a loop rest is not a check command: {}",
+        error.to_string()
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; # waiting".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 30; # waiting` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30; # waiting`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30 && grep -q READY log".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 30 && grep -q READY log` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 30 && grep -q READY log`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    assert!(
+        !error.to_string().contains("until &"),
+        "a separator-led rest is not a check command: {}",
+        error.to_string()
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 60".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.to_string(),
+        "`sleep 60` waits with `sleep` for 25 seconds or more, so it never started. \
+         Run it in the background instead: call `shell` again with `run_in_background: true` and the command `sleep 60`, then wait for it with `jobs wait`. \
+         To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
+         every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
+    );
+    assert!(
+        !error.to_string().contains("until ; do"),
+        "no rest never emits an empty command: {}",
+        error.to_string()
+    );
+    for command in [
+        "sleep 30; until ready; do sleep 1; done",
+        "sleep 30; for i in 1 2 3; do echo $i; done",
+        "sleep 30;",
+    ] {
+        let error = ShellError::BareWait {
+            command: command.to_owned(),
+        };
+        assert_eq!(error.code(), ErrorCode::InvalidArguments);
+        assert!(
+            error
+                .to_string()
+                .contains("until <check command>; do sleep 5; done"),
+            "other loop keywords and empty rest fall back: {}",
+            error.to_string()
+        );
+    }
+    let error = ShellError::BareWait {
+        command: "sleep 25\nls".to_owned(),
+    };
+    assert!(
+        error.to_string().contains("until ls; do sleep 5; done"),
+        "a newline rest names its check command: {}",
+        error.to_string()
     );
 }
 
