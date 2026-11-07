@@ -11,9 +11,9 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::{
-    FileOutcome, NotesSaved, NotesWrite, ReadOnlyEntryProblem, ReadOnlyFlags, overlaps,
-    read_only_keys, same_directory, save_reviewer_notes, unread_keys, validate_read_only_entry,
-    with_notes_and_entries,
+    EntryLayer, EntryPreview, FileOutcome, NotesSaved, NotesWrite, ReadOnlyEntryProblem,
+    ReadOnlyFlags, overlaps, preview_read_only_changes, read_only_keys, same_directory,
+    save_reviewer_notes, unread_keys, validate_read_only_entry, with_notes_and_entries,
 };
 use crate::home::ProjectKey;
 use crate::reviewer_notes;
@@ -1228,6 +1228,328 @@ fn already_present_entries_converge_to_saved_without_rewriting() {
                 .unwrap();
             assert!(matches!(saved, NotesSaved::Written(_)));
             assert_eq!(write_count(), 0, "a converged save rewrites nothing");
+        },
+    );
+}
+
+// ------------------------------------------------------- entry preview
+
+fn preview(
+    setup: &Setup,
+    global: Vec<ReadOnlyFlags>,
+    project_entries: Vec<ReadOnlyFlags>,
+) -> Result<Vec<EntryPreview>, crate::ConfigError> {
+    preview_read_only_changes(&setup.home, &Setup::project(), &global, &project_entries)
+}
+
+fn previewed(layer: EntryLayer, file: &Path, command: &str, flags: &[&str]) -> EntryPreview {
+    EntryPreview {
+        layer,
+        file: file.to_path_buf(),
+        command: command.to_owned(),
+        flags: flags.iter().map(|flag| flag.to_string()).collect(),
+    }
+}
+
+#[test]
+fn preview_lists_added_entries_and_the_save_writes_exactly_them() {
+    fakes::within(
+        "entry preview added",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"reviewer": {"context": "old global"}}"#,
+            );
+            setup.write(
+                &setup.project_file(),
+                r#"{"reviewer": {"context": "old project"}}"#,
+            );
+            let global = vec![Setup::entry("acme-cli query", &["--json"])];
+            let project_entries = vec![Setup::entry("other-cli run", &["--fast"])];
+            let found = preview(&setup, global.clone(), project_entries.clone())
+                .expect("preview lists additions");
+            assert_eq!(
+                found,
+                [
+                    previewed(
+                        EntryLayer::Global,
+                        &setup.global(),
+                        "acme-cli query",
+                        &["--json"]
+                    ),
+                    previewed(
+                        EntryLayer::Project,
+                        &setup.project_file(),
+                        "other-cli run",
+                        &["--fast"]
+                    ),
+                ]
+            );
+            // The save writes exactly the preview: the same entries land in
+            // the same files.
+            let read = setup.read();
+            let saved = setup
+                .save_entries(
+                    Some((&read.global.version, "")),
+                    Some((&read.project.version, "")),
+                    global,
+                    project_entries,
+                )
+                .expect("save the preview");
+            assert!(matches!(saved, NotesSaved::Written(_)));
+            assert_eq!(
+                read_only_keys(&setup.home, &Setup::project()).expect("keys"),
+                ["acme-cli query", "other-cli run"]
+            );
+        },
+    );
+}
+
+#[test]
+fn preview_omits_entries_identical_to_their_layer() {
+    fakes::within(
+        "entry preview identical",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"shell": {"read_only": {"acme-cli query": {"flags": ["--json"]}}}}"#,
+            );
+            setup.write(
+                &setup.project_file(),
+                r#"{"reviewer": {"context": "old project"}}"#,
+            );
+            let found = preview(
+                &setup,
+                vec![Setup::entry("acme-cli query", &["--json"])],
+                vec![Setup::entry("other-cli run", &["--fast"])],
+            )
+            .expect("preview lists only the addition");
+            assert_eq!(
+                found,
+                [previewed(
+                    EntryLayer::Project,
+                    &setup.project_file(),
+                    "other-cli run",
+                    &["--fast"]
+                )]
+            );
+        },
+    );
+}
+
+#[test]
+fn preview_refuses_a_changed_entry_naming_it() {
+    fakes::within(
+        "entry preview overlap",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            // Changed flags on the same command, in either layer.
+            for (global_text, project_text, global, project_entries, file) in [
+                (
+                    r#"{"shell": {"read_only": {"acme-cli query": {"flags": ["--json"]}}}}"#,
+                    r#"{"reviewer": {"context": "old project"}}"#,
+                    vec![Setup::entry("acme-cli query", &["--yaml"])],
+                    Vec::new(),
+                    "global",
+                ),
+                (
+                    r#"{"reviewer": {"context": "old global"}}"#,
+                    r#"{"shell": {"read_only": {"acme-cli query": {"flags": ["--json"]}}}}"#,
+                    Vec::new(),
+                    vec![Setup::entry("acme-cli query", &["--yaml"])],
+                    "project",
+                ),
+            ] {
+                let setup = Setup::new();
+                setup.write(&setup.global(), global_text);
+                setup.write(&setup.project_file(), project_text);
+                let before = (
+                    setup.bytes(&setup.global()),
+                    setup.bytes(&setup.project_file()),
+                );
+                let result = preview(&setup, global, project_entries);
+                let Err(error) = result else {
+                    panic!("a changed entry is refused");
+                };
+                let file = if file == "global" {
+                    setup.global()
+                } else {
+                    setup.project_file()
+                };
+                refused(error, &file, "acme-cli query", before, &setup);
+            }
+            // A flip across layers: the command is configured globally, the
+            // project sends it with other flags.
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"shell": {"read_only": {"acme-cli query": {"flags": ["--json"]}}}}"#,
+            );
+            setup.write(
+                &setup.project_file(),
+                r#"{"reviewer": {"context": "old project"}}"#,
+            );
+            let before = (
+                setup.bytes(&setup.global()),
+                setup.bytes(&setup.project_file()),
+            );
+            let result = preview(
+                &setup,
+                Vec::new(),
+                vec![Setup::entry("acme-cli query", &["--yaml"])],
+            );
+            let Err(error) = result else {
+                panic!("a flipped entry is refused");
+            };
+            refused(
+                error,
+                &setup.project_file(),
+                "acme-cli query",
+                before,
+                &setup,
+            );
+        },
+    );
+}
+
+#[test]
+fn preview_refuses_a_malformed_table_naming_the_first_entry() {
+    fakes::within(
+        "entry preview malformed",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            for malformed in [r#"{"shell": {"read_only": []}}"#, r#"{"shell": "entries"}"#] {
+                // Malformed in the sent layer.
+                let setup = Setup::new();
+                setup.write(&setup.global(), malformed);
+                setup.write(
+                    &setup.project_file(),
+                    r#"{"reviewer": {"context": "old project"}}"#,
+                );
+                let before = (
+                    setup.bytes(&setup.global()),
+                    setup.bytes(&setup.project_file()),
+                );
+                let result = preview(
+                    &setup,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                );
+                let Err(error) = result else {
+                    panic!("{malformed} is refused");
+                };
+                refused(error, &setup.global(), "acme-cli query", before, &setup);
+                // Malformed in the layer that sends nothing.
+                let setup = Setup::new();
+                setup.write(
+                    &setup.global(),
+                    r#"{"reviewer": {"context": "old global"}}"#,
+                );
+                setup.write(&setup.project_file(), malformed);
+                let before = (
+                    setup.bytes(&setup.global()),
+                    setup.bytes(&setup.project_file()),
+                );
+                let result = preview(
+                    &setup,
+                    vec![Setup::entry("acme-cli query", &["--json"])],
+                    Vec::new(),
+                );
+                let Err(error) = result else {
+                    panic!("{malformed} in the other layer is refused");
+                };
+                refused(error, &setup.global(), "acme-cli query", before, &setup);
+            }
+        },
+    );
+}
+
+#[test]
+fn preview_refuses_an_in_run_overlap() {
+    fakes::within(
+        "entry preview in-run overlap",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"reviewer": {"context": "old global"}}"#,
+            );
+            setup.write(
+                &setup.project_file(),
+                r#"{"reviewer": {"context": "old project"}}"#,
+            );
+            let before = (
+                setup.bytes(&setup.global()),
+                setup.bytes(&setup.project_file()),
+            );
+            let result = preview(
+                &setup,
+                vec![Setup::entry("acme-cli query", &["--json"])],
+                vec![Setup::entry("acme-cli query extra", &["--json"])],
+            );
+            let Err(error) = result else {
+                panic!("an in-run overlap is refused");
+            };
+            refused(
+                error,
+                &setup.project_file(),
+                "acme-cli query extra",
+                before,
+                &setup,
+            );
+        },
+    );
+}
+
+#[test]
+fn preview_refuses_a_repeated_command_in_one_layer() {
+    fakes::within(
+        "entry preview duplicate",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            setup.write(
+                &setup.global(),
+                r#"{"reviewer": {"context": "old global"}}"#,
+            );
+            setup.write(
+                &setup.project_file(),
+                r#"{"reviewer": {"context": "old project"}}"#,
+            );
+            let before = (
+                setup.bytes(&setup.global()),
+                setup.bytes(&setup.project_file()),
+            );
+            let result = preview(
+                &setup,
+                vec![
+                    Setup::entry("acme-cli query", &["--json"]),
+                    Setup::entry("acme-cli query", &["--yaml"]),
+                ],
+                Vec::new(),
+            );
+            let Err(error) = result else {
+                panic!("a repeated command is refused");
+            };
+            refused(error, &setup.global(), "acme-cli query", before, &setup);
+        },
+    );
+}
+
+#[test]
+fn preview_with_no_sent_entry_lists_nothing() {
+    fakes::within(
+        "entry preview empty",
+        Deadline::after(Duration::from_secs(10)),
+        || {
+            let setup = Setup::new();
+            let found = preview(&setup, Vec::new(), Vec::new()).expect("no entries");
+            assert!(found.is_empty());
         },
     );
 }

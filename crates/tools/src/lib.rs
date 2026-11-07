@@ -17,6 +17,8 @@ mod pdf;
 #[path = "picture_timing_tests.rs"]
 mod picture_timing_tests;
 mod read;
+mod reviewer_notes;
+mod reviewer_notes_save;
 mod search;
 mod session_list;
 mod session_message;
@@ -36,6 +38,7 @@ pub use handoff::Handoff;
 pub use image::ImageChild;
 pub use name_session::NameSession;
 pub use read::Read;
+pub use reviewer_notes_save::ReviewerNotesSave;
 pub use search::{find_main, grep_main};
 pub use session_list::SessionList;
 pub use session_message::SessionMessage;
