@@ -631,7 +631,12 @@ const STALLED_PGREP_BOUND_MS: &str = "FIBER_TEST_STALLED_PGREP_BOUND_MS";
 /// (per-test processes, so no other test's listing can block on this
 /// FIFO), guards the stall by pid, and asserts the child's success before
 /// releasing the FIFO; the expiry already killed and reaped the shadow
-/// through production.
+/// through production. The residual gate cost is one 200 ms wall-clock
+/// expiry plus the re-executed child's boot, about a second on an idle
+/// host. The wait cannot move onto the injected clock: the shadow is a
+/// real `pgrep` parked in a FIFO `read` released only by the parent's
+/// wall-clock `drop(held)`, and production `bounded()` takes a plain
+/// `Duration` awaited through `Deadline::after` on the wall clock.
 #[test]
 fn a_stalled_pgrep_times_out_naming_the_step_with_the_halved_bound() {
     if std::env::var_os(STALLED_PGREP_CHILD).is_some() {
