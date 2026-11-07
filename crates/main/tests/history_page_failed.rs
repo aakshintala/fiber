@@ -68,8 +68,10 @@ fn accept(command: &Value, id: &str, result: Value) -> String {
 
 /// Serves `theirs`: `hub_hello`, then one answer per command. The first
 /// page's `history` answers with no lines; every other window answers
-/// from the jig's lines. Records each command's name and window.
-fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>) {
+/// from the jig's lines. Records each command's name and window, then
+/// sends on `wake`, so a wait on the driver's wake channel sees the
+/// command recorded.
+fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>, wake: mpsc::Sender<()>) {
     let mut reader = BufReader::new(theirs.try_clone().unwrap());
     let mut writer = theirs;
     let hello = json!({
@@ -100,6 +102,9 @@ fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>) {
             "{name} from={from:?} to={to:?} level={:?}",
             args.get("level").and_then(Value::as_str),
         ));
+        // After the state it announces
+        // (`docs/code-quality.md`, "What a reviewer checks").
+        wake.send(()).unwrap_or(());
         let mut open_last = false;
         let result = match name.as_str() {
             "subscribe" if args.get("level").and_then(Value::as_str) == Some("full") => {
@@ -154,6 +159,20 @@ fn serve(theirs: UnixStream, hub: Hub, seen: Arc<Mutex<Vec<String>>>) {
     }
 }
 
+/// Whether `command` is the request for the top page: the first window,
+/// with an upper bound.
+fn is_top_page_request(command: &str) -> bool {
+    command.starts_with("history from=Some(0) ") && !command.contains("to=None")
+}
+
+/// Whether the hub has recorded the request for the top page.
+fn top_page_requested(seen: &Mutex<Vec<String>>) -> bool {
+    seen.lock()
+        .unwrap()
+        .iter()
+        .any(|command| is_top_page_request(command))
+}
+
 /// The pty the loop draws on: the master drained from the first frame,
 /// the writer typing on it.
 struct Driver {
@@ -164,15 +183,36 @@ struct Driver {
     _reader: Reader,
 }
 
+/// Which frames a [`Driver::wait_screen`] may match.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Frames {
+    /// The live grid only.
+    Live,
+    /// The live grid or the frame [`Driver::retain`] kept.
+    Kept,
+}
+
 impl Driver {
-    fn spawn(deadline: Deadline) -> (Self, fs::File) {
+    /// `wake` is the sender the reader signals each chunk on and `wakes`
+    /// its receiver; the test hands `serve` a clone of `wake` too, so one
+    /// receiver wakes on output and on a recorded command.
+    fn spawn(
+        deadline: Deadline,
+        wake: mpsc::Sender<()>,
+        wakes: mpsc::Receiver<()>,
+    ) -> (Self, fs::File) {
         let terminal = open_with_pixels(COLS, ROWS, 0, 0);
         let slave = terminal.terminal;
         let main = fs::File::from(terminal.main);
         let shared = Arc::new(Mutex::new(Shared::new(COLS, ROWS)));
         let writer: Writer = Arc::new(Mutex::new(main.try_clone().unwrap()));
-        let (reader, wakes) =
-            Reader::start(main, Arc::clone(&shared), Arc::clone(&writer), deadline);
+        let reader = Reader::start_with_wake(
+            main,
+            Arc::clone(&shared),
+            Arc::clone(&writer),
+            deadline,
+            wake,
+        );
         (
             Self {
                 shared,
@@ -193,17 +233,28 @@ impl Driver {
         self.shared.lock().unwrap().output()
     }
 
+    /// Arms the harness to keep the first whole frame holding `needle`,
+    /// so [`Driver::wait_screen`] still sees it after a later frame
+    /// replaced it.
+    fn retain(&self, needle: &str) {
+        self.shared.lock().unwrap().retain(needle);
+    }
+
+    /// Whether the output at or after `from` holds `needle`.
+    fn holds_since(&self, from: usize, needle: &[u8]) -> bool {
+        let output = self.shared.lock().unwrap().output();
+        output.len() >= from
+            && output[from..]
+                .windows(needle.len())
+                .any(|window| window == needle)
+    }
+
     /// Waits until the output at or after `from` holds `needle`.
     #[track_caller]
     fn wait_bytes(&self, from: usize, needle: &[u8], what: &str) {
         let wait = self.deadline.start_wait();
         loop {
-            let output = self.shared.lock().unwrap().output();
-            if output.len() >= from
-                && output[from..]
-                    .windows(needle.len())
-                    .any(|window| window == needle)
-            {
+            if self.holds_since(from, needle) {
                 return;
             }
             if wait.recv(&self.wakes).is_err() {
@@ -212,13 +263,56 @@ impl Driver {
         }
     }
 
+    /// Whether the grid no longer holds `text`.
+    fn lacks(&self, text: &str) -> bool {
+        !self.shared.lock().unwrap().grid().contents.contains(text)
+    }
+
+    /// Waits after a batch of keys for a frame at or after `from`, or for
+    /// the hub to record the top-page request. A batch that moves nothing
+    /// draws no frame (`Screen::draw` writes nothing for equal cells), so
+    /// only the request can end its wait. The hub records the request when
+    /// the placeholder enters the viewport, before the scroll reaches the
+    /// top, so a caller still scrolling passes `until_gone`: the request
+    /// ends the wait only once the grid no longer holds that text, and
+    /// before then only the batch's own frame does. The wake channel
+    /// carries both signals: the reader's chunks and `serve`'s recorded
+    /// commands.
+    #[track_caller]
+    fn wait_batch(
+        &self,
+        from: usize,
+        seen: &Mutex<Vec<String>>,
+        until_gone: Option<&str>,
+        what: &str,
+    ) {
+        let wait = self.deadline.start_wait();
+        loop {
+            if self.holds_since(from, FRAME_END)
+                || (top_page_requested(seen) && until_gone.is_none_or(|text| self.lacks(text)))
+            {
+                return;
+            }
+            if wait.recv(&self.wakes).is_err() {
+                panic!(
+                    "waited until the deadline for {what}; hub saw {:?}",
+                    seen.lock().unwrap()
+                );
+            }
+        }
+    }
+
     /// Waits until the grid matches, however many frames arrive. A wait
     /// that outlives the loop panics naming the wait and the last grid;
     /// an expiry panics with `extra`'s report, so a stall says whether
-    /// the poisoned page was even requested.
+    /// the poisoned page was even requested. With `Frames::Kept` the
+    /// frame [`Driver::retain`] kept matches too; only the wait for the
+    /// retained needle passes it, since any other wait must read the live
+    /// grid and the kept frame is older.
     #[track_caller]
     fn wait_screen(
         &self,
+        frames: Frames,
         what: &str,
         mut done: impl FnMut(&Grid) -> bool,
         extra: impl FnOnce() -> String,
@@ -226,6 +320,14 @@ impl Driver {
         let wait = self.deadline.start_wait();
         let start_left = wait.left();
         loop {
+            if frames == Frames::Kept {
+                let retained = { self.shared.lock().unwrap().retained() };
+                if let Some(kept) = retained
+                    && done(&kept)
+                {
+                    return kept;
+                }
+            }
             let grid = { self.shared.lock().unwrap().grid() };
             if done(&grid) {
                 return grid;
@@ -257,9 +359,7 @@ fn notice_wait_report<T: std::fmt::Debug>(
     raw: &[u8],
 ) -> String {
     let seen = seen.lock().unwrap();
-    let poisoned = seen.iter().any(|command| {
-        command.starts_with("history from=Some(0) ") && !command.contains("to=None")
-    });
+    let poisoned = seen.iter().any(|command| is_top_page_request(command));
     let base = format!("poisoned page requested: {poisoned}; hub saw: {seen:?}");
     let drew = raw
         .windows(NOTICE.len())
@@ -271,8 +371,9 @@ fn notice_wait_report<T: std::fmt::Debug>(
         ),
         Err(mpsc::TryRecvError::Empty) if drew => format!(
             "{base}; the loop is still running and the notice bytes are in the \
-             raw output: the notice drew and a later frame skipped it \
-             (H2, a snapshot gap skipped the notice's 10 s life)"
+             raw output but no frame holds them: retention was not armed \
+             before the first scroll key, or the clock passed to the loop \
+             was not the frozen one (H2)"
         ),
         Err(mpsc::TryRecvError::Empty) => format!(
             "{base}; the loop is still running and no notice bytes are in the \
@@ -329,6 +430,9 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         Some((max_seq - 256) % 256)
     };
     let (open_done, open_done_rx) = mpsc::channel();
+    // One receiver wakes the driver's waits on output (the reader) and on
+    // a recorded hub command (`serve`).
+    let (wake, wakes) = mpsc::channel();
     let hub = Hub {
         lines,
         max_seq,
@@ -336,7 +440,8 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         done: open_done,
     };
     let served = Arc::clone(&seen);
-    thread::spawn(move || serve(theirs, hub, served));
+    let served_wake = wake.clone();
+    thread::spawn(move || serve(theirs, hub, served, served_wake));
     let connect: tui::Connect = Box::new(move || {
         let mut reader = BufReader::new(ours.try_clone()?);
         let mut text = String::new();
@@ -354,14 +459,18 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         open_at: tui::OpenAt::Session(contract::SessionId(ID.to_owned()), None),
         ..Default::default()
     };
-    let clock: Arc<dyn contract::clock::Clock> = Arc::new(fakes::clock::SystemClock);
+    // Frozen for the whole test: the failure notice clears after 10 s on
+    // the loop's clock, so a clock that passes could clear it before the
+    // test looks. Every wait below keeps its wall-clock deadline.
+    let clock: Arc<dyn contract::clock::Clock> =
+        fakes::clock::FakeClock::with_sleep(::support::clock::Sleep::Waits);
     let diag = Arc::new(log::diag::Diag::new(
         &setup.home(),
         log::diag::Process::Tui,
         log::diag::Level::Info,
         Arc::clone(&clock),
     ));
-    let (driver, tty) = Driver::spawn(setup.deadline);
+    let (driver, tty) = Driver::spawn(setup.deadline, wake, wakes);
     let on_attach: tui::OnAttach = Box::new(|_: &contract::SessionId| {});
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
@@ -372,6 +481,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // any typing goes out.
     driver.wait_bytes(0, TITLE, "the end of the first frame");
     driver.wait_screen(
+        Frames::Live,
         "the last turn's rows",
         |grid| grid.contents.contains(LAST),
         || format!("hub saw: {:?}", seen.lock().unwrap()),
@@ -388,6 +498,10 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         );
     }
     seen.lock().unwrap().clear();
+    // Keep the frame that draws the notice, whenever the waits below look:
+    // only the scroll below can request the top page, so nothing earlier
+    // can draw it.
+    driver.retain(NOTICE);
     // To the top, through the page that cannot load: five keys per
     // drawn frame. A bulk write stalls against a full input buffer
     // (write_within blocks on the deadline), so each batch waits for
@@ -395,7 +509,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // no clock: the grid says when the top is reached.
     let mut batches = 0;
     loop {
-        if !driver.shared.lock().unwrap().grid().contents.contains(LAST) {
+        if driver.lacks(LAST) {
             break;
         }
         assert!(
@@ -408,25 +522,24 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
             driver.write(b"\x1b[5~");
         }
         batches += 1;
-        driver.wait_bytes(
+        driver.wait_batch(
             from,
-            FRAME_END,
-            &format!(
-                "a frame for scroll batch {batches}; hub saw {:?}",
-                seen.lock().unwrap()
-            ),
+            &seen,
+            Some(LAST),
+            &format!("a frame for scroll batch {batches}"),
         );
     }
     let seen_report = || {
-        let seen = seen.lock().unwrap();
-        let poisoned = seen.iter().any(|command| {
-            command.starts_with("history from=Some(0) ") && !command.contains("to=None")
-        });
-        format!("poisoned page requested: {poisoned}; hub saw: {seen:?}")
+        let poisoned = top_page_requested(&seen);
+        format!(
+            "poisoned page requested: {poisoned}; hub saw: {:?}",
+            seen.lock().unwrap()
+        )
     };
     // The scroll lands first: the last turn's rows leave the screen.
     // Only then can the loop name the top page and fetch it.
     driver.wait_screen(
+        Frames::Live,
         "the scroll to reach the top",
         |grid| !grid.contents.contains(LAST),
         seen_report,
@@ -435,10 +548,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
     // continues until `seen` shows it (recorded before the reply), and the
     // settled-screen wait below checks the notice.
     loop {
-        let requested = seen.lock().unwrap().iter().any(|command| {
-            command.starts_with("history from=Some(0) ") && !command.contains("to=None")
-        });
-        if requested {
+        if top_page_requested(&seen) {
             break;
         }
         assert!(
@@ -451,19 +561,18 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
             driver.write(b"\x1b[5~");
         }
         batches += 1;
-        driver.wait_bytes(
+        driver.wait_batch(
             from,
-            FRAME_END,
-            &format!(
-                "a frame for top-page batch {batches}; hub saw {:?}",
-                seen.lock().unwrap()
-            ),
+            &seen,
+            None,
+            &format!("a frame for top-page batch {batches}"),
         );
     }
     // The open may already have asked for the top page while landing:
     // either way exactly one failure notice shows for it, and the
     // scroll below asserts the loop keeps drawing past it.
     driver.wait_screen(
+        Frames::Kept,
         "the load-failure notice",
         |grid| grid.contents.contains(NOTICE),
         || notice_wait_report(&seen, &finished, &driver.output()),
@@ -475,6 +584,7 @@ fn scrolling_past_a_page_that_cannot_load_still_draws_and_quits() {
         driver.write(b"\x1b[6~");
     }
     let grid = driver.wait_screen(
+        Frames::Live,
         "rows past the page that cannot load",
         |grid| grid.contents.contains(LAST),
         seen_report,
