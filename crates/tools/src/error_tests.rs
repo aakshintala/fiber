@@ -1125,6 +1125,51 @@ fn a_bare_wait_multiline_check_names_the_complete_check() {
         text.contains("until <check command>; do sleep 5; done"),
         "a separator-led continuation falls back instead of emitting invalid shell: {text}"
     );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'hi # there'".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'hi # there'; do sleep 5; done"),
+        "a hash inside single quotes stays part of the check: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo \"it's\" # done".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo \"it's\"; do sleep 5; done"),
+        "an apostrophe inside doubles does not swallow the trailing comment: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a \"b' # done".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a \"b'; do sleep 5; done"),
+        "a double quote inside singles does not swallow the trailing comment: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo hi\\".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until <check command>; do sleep 5; done"),
+        "a trailing escape falls back instead of emitting invalid shell: {text}"
+    );
+    let error = ShellError::BareWait {
+        command: "sleep 30; echo 'a\\'b".to_owned(),
+    };
+    assert_eq!(error.code(), ErrorCode::InvalidArguments);
+    let text = error.to_string();
+    assert!(
+        text.contains("until echo 'a\\'b; do sleep 5; done"),
+        "a backslash inside singles stays literal and the check is named: {text}"
+    );
 }
 
 #[test]

@@ -146,9 +146,6 @@ fn bare_wait_message(command: &str) -> String {
 fn usable_check(command: &str) -> Option<String> {
     let end = command.find(['\n', ';', '&', '|'])?;
     let rest = command.get(end + 1..)?.trim();
-    if rest.is_empty() || matches!(rest.chars().next(), Some('&' | '|' | ';')) {
-        return None;
-    }
     let cleaned = strip_shell_comments(rest)?;
     let lines: Vec<&str> = cleaned
         .lines()
