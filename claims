@@ -389,3 +389,6 @@ extensions/codemode/init.lua	fiber-4245	plan	2026-11-07T05:57:33Z	Amoghs-MacBook
 crates/main/tests/extension_codemode.rs	fiber-4245	plan	2026-11-07T05:57:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/extensions.md	fiber-4245	plan	2026-11-07T05:57:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4245	plan	2026-11-07T05:57:33Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/bug-red	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-bug-red	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+scripts/test-bug-red-cargo	fiber-4324	plan	2026-11-07T06:09:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
