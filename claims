@@ -9,8 +9,6 @@ crates/log/src/history.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pr
 crates/log/src/offsets.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/paging_session.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/performance.md	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/cli/src/config_tests.rs	fiber-4189	plan	2026-11-07T15:45:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4366
-crates/jobs/src/delegate.rs	fiber-4189	plan	2026-11-07T15:45:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4366
 crates/tui/src/reviewer_setup.rs	fiber-4237	plan	2026-11-07T15:46:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4362
 crates/tui/src/reviewer_setup/lines.rs	fiber-4237	plan	2026-11-07T15:46:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4362
 crates/tui/src/reviewer_setup/template.rs	fiber-4237	plan	2026-11-07T15:46:02Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4362
