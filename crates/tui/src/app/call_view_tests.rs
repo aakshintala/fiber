@@ -2780,9 +2780,9 @@ fn a_message_call_with_an_artifact_pages_after_its_recipient_and_text() {
 #[test]
 fn a_message_wraps_at_the_width_of_the_view() {
     let mut app = attached(80, 24);
-    // A word-spaced paragraph one column short of the view's width: the
-    // view has no scroll-bar column, so it stays on one row.
-    let total = usize::from(app.column_width()) - 1;
+    // A word-spaced paragraph exactly the view's width: the view has no
+    // scroll-bar column, so it stays on one row.
+    let total = usize::from(app.column_width());
     let half = (total - 1) / 2;
     let paragraph = format!("{} {}", "a".repeat(half), "b".repeat(total - 1 - half));
     assert_eq!(paragraph.len(), total);
