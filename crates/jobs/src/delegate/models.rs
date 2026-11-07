@@ -64,16 +64,6 @@ pub struct DelegateModels {
     pub quota: Arc<dyn Fn() -> String + Send + Sync>,
 }
 
-/// The error output's content: explicitly empty, so a refusal never
-/// carries content parts. Deleting it is unobservable — `Output`'s
-/// derived `Default` leaves content empty — so no test can catch the
-/// deletion; the explicit field documents the refusal shape instead of
-/// a test pinning it.
-#[cfg_attr(false, mutants::skip)]
-fn no_content() -> Vec<ContentPart> {
-    Vec::new()
-}
-
 impl Tool for DelegateModels {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
@@ -133,7 +123,7 @@ impl Tool for DelegateModels {
                         retry_after_ms: None,
                         provider: None,
                     }),
-                    content: no_content(),
+                    content: Vec::new(),
                     ..Output::default()
                 };
             }
