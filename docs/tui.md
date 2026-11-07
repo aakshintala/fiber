@@ -2050,7 +2050,21 @@ through the `input_status` slot ("Extension seams").
   draft is left as it is.
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
-  `send` false, `docs/invocation.md`).
+  `send` false, `docs/invocation.md`). A draft is in shell mode when its
+  trimmed text starts with `!` and it carries no image. Its first row then
+  opens with `! ` instead of `› `, and the box's top-edge row carries
+  `shell` for `!` or `shell · not sent` for `!!`, right-aligned. A bare `!`
+  already marks the draft. Backspace past the `!` clears the marker, and an
+  image draft shows none. The label is chrome and sheds first when the box
+  is cut short. The `! ` prompt stays. While a run is in flight, the box
+  carries the run's label instead, and the draft prompt stays plain. Each
+  run shows as one transcript row: `! <command>`, then `sent with your next
+  prompt` for `!` or `only you see this` for `!!`, then the output as it
+  arrived, then `exit N` (`exit 0` included) or `signal S`. A run with
+  neither ending shows no ending. A command that could not start shows
+  `! <command>` then `<code>: <message>` as it arrived. A refused run puts
+  that row on its session beside the notice. Shell rows show the full
+  output with no 20-line cap.
 
 ### Bindings
 
