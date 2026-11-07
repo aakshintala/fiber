@@ -44,7 +44,22 @@ const CODE_QUALITY: &str = "# Code quality
 /// 20 s, under half of nextest's 120 s kill. A passing run never waits on
 /// the bound.
 fn xtask(dir: &TempDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
+    xtask_without(dir, args, env, &[], stdin)
+}
+
+/// `xtask`, with the `unset` variables removed from the child's environment
+/// before `env` is applied, so a case does not depend on the caller's shell.
+fn xtask_without(
+    dir: &TempDir,
+    args: &[&str],
+    env: &[(&str, &str)],
+    unset: &[&str],
+    stdin: &str,
+) -> (i32, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    for name in unset {
+        command.env_remove(name);
+    }
     command
         .args(args)
         .envs(env.iter().copied())
@@ -2885,7 +2900,13 @@ fn verdict_keeps_a_touched_retry_failure_with_no_new_breaks() {
 #[test]
 fn break_glass_audit_rejects_an_unknown_argument() {
     let dir = workspace();
-    let (code, out) = xtask(&dir, &["break-glass-audit", "--bogus"], &[], "");
+    let (code, out) = xtask_without(
+        &dir,
+        &["break-glass-audit", "--bogus"],
+        &[],
+        &["GITHUB_ACTIONS"],
+        "",
+    );
     assert_eq!(code, 2);
     assert!(
         out.starts_with("xtask: usage: cargo xtask break-glass-audit"),
@@ -2896,10 +2917,11 @@ fn break_glass_audit_rejects_an_unknown_argument() {
 #[test]
 fn break_glass_audit_since_prints_the_cutoff_without_stdin() {
     let dir = workspace();
-    let (code, out) = xtask(
+    let (code, out) = xtask_without(
         &dir,
         &["break-glass-audit", "--since", "--now", "1794000000"],
         &[],
+        &["GITHUB_ACTIONS"],
         "",
     );
     assert_eq!((code, out.as_str()), (0, "2026-11-04T21:20:00Z\n"));
@@ -2916,7 +2938,7 @@ fn break_glass_audit_exits_one_on_an_undeclared_merge_and_two_on_bad_input() {
         "checks": {head.clone(): {"ok": true, "body": {"total_count": 0, "check_runs": []}}},
     });
     let args = ["break-glass-audit", "--now", "1794000000"];
-    let (code, out) = xtask(&dir, &args, &[], &input.to_string());
+    let (code, out) = xtask_without(&dir, &args, &[], &["GITHUB_ACTIONS"], &input.to_string());
     assert_eq!(code, 1, "{out}");
     assert!(
         out.contains(&format!(
@@ -2934,7 +2956,7 @@ fn break_glass_audit_exits_one_on_an_undeclared_merge_and_two_on_bad_input() {
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("::error::merge "), "{out}");
 
-    let (code, out) = xtask(&dir, &args, &[], "{not json");
+    let (code, out) = xtask_without(&dir, &args, &[], &["GITHUB_ACTIONS"], "{not json");
     assert_eq!(code, 2, "{out}");
     assert!(out.starts_with("xtask: break-glass-audit:"), "{out}");
 }
