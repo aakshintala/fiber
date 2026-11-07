@@ -35,7 +35,7 @@ fn app() -> App {
 /// Folds one line of `kind` at `ts` milliseconds.
 fn feed(app: &mut App, kind: &str, action: Option<&str>, ts: u64, payload: Value) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

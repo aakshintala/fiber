@@ -87,8 +87,9 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   switched-on providers count.
 - It is required and checked when the call is made. The schema leaves it
   optional and untyped, so a missing or wrong value reaches that check. An
-  invalid value fails with `invalid_arguments` and lists the valid roles and
-  references.
+  invalid value fails with `invalid_arguments` and lists the roles in full
+  on one line, up to 3 closest references nearest-first with ties in sorted
+  order, and names `delegate_models` for the rest.
 - Neither the roles nor the references appear in any tool definition or the
   system prompt. They change when config changes, when a provider withdraws a
   model, or when model discovery refreshes, and a tool definition that changes

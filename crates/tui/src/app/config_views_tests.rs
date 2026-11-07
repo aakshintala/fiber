@@ -103,7 +103,7 @@ fn screen(app: &App) -> Vec<String> {
 /// A session line of `kind` on [`SESSION`].
 fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -509,7 +509,7 @@ fn an_edit_goes_to_the_open_field_not_the_input_box() {
 fn connected(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -650,7 +650,7 @@ fn a_hub_rejection_of_tools_shows_its_message() {
     let mut app = connected(fake());
     let id = open_tools(&mut app);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."})
@@ -785,6 +785,45 @@ fn the_tools_last_row_says_what_the_rebuild_costs() {
     );
 }
 
+/// The tools view's last row prices the session's model: the status
+/// model wins over the preamble's, whose entry carries no price
+/// (`docs/tui.md`, "The model picker").
+#[test]
+fn the_tools_last_row_prices_the_status_model_over_the_preamble() {
+    let mut app = connected(fake());
+    app.on_line(preamble("a/b"));
+    app.on_line(session_line(
+        "session_status",
+        serde_json::json!({
+            "name": "fix the parser", "workspace": "/w", "project": "-w",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "a/c", "delegates": 0, "jobs": 0, "clients": 0,
+            "state": "idle",
+        }),
+    ));
+    app.on_line(usage_of(84_000));
+    app.on_models(Ok(crate::catalogue::Catalogue {
+        installable: Vec::new(),
+        models: vec![priced("a/b", None), priced("a/c", Some(3_690_000))],
+        notices: Vec::new(),
+        lists: Vec::new(),
+        left_out: Vec::new(),
+        ..Default::default()
+    }));
+    let id = open_tools(&mut app);
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": tools_answer()}),
+    ));
+    assert_eq!(
+        app.config_view_screen().expect("the view is open").footer,
+        "a change rebuilds the cache (~84k tokens · $0.31) on reload"
+    );
+}
+
 #[test]
 fn the_tools_last_row_counts_only_the_session_on_screen() {
     let mut app = connected(fake());
@@ -793,7 +832,7 @@ fn the_tools_last_row_counts_only_the_session_on_screen() {
     let lines = sent(slash_tools(&mut app));
     let id = lines[0]["id"].as_str().unwrap_or_default().to_owned();
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -999,7 +1038,7 @@ fn no_workspace_remote_case(
 /// A `hub_hello` the remote home reads: the link comes up.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1010,7 +1049,7 @@ fn hello() -> Line {
 /// proves a second pass asks the hub nothing more.
 fn stray_accepted() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -2349,7 +2388,7 @@ fn tools_rejection_on_either_link_settles_its_tag() {
         let payload = serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."});
         let line = if hub {
             Line::Hub(contract::HubLine {
-                kind: HubEventKind::CommandRejected.name().to_owned(),
+                kind: HubEventKind::CommandRejected,
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
                 payload: payload.as_object().unwrap().clone(),
@@ -2477,7 +2516,7 @@ fn a_hub_rejection_for_the_credential_ask_drops_it_so_a_late_answer_sends_no_swi
     let id = credential_ask(&mut app);
     assert_eq!(app.outbox.waiting(&id), Some(Waiting::Credentials));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."})
@@ -2513,7 +2552,7 @@ fn a_hub_rejection_for_the_credential_switch_drops_its_save() {
         Some(Waiting::CredentialSwitch)
     );
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": switch_id, "code": "busy", "message": "Busy."})

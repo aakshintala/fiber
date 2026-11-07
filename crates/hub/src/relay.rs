@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use contract::diag::DebugLog;
-use contract::{CommandId, ErrorCode, SessionId};
+use contract::{CommandId, ErrorCode, HubEventKind, SessionId};
 use serde_json::{Map, Value};
 
 mod ack;
@@ -153,8 +153,8 @@ pub(crate) enum FromSessionRefusal<'a> {
         /// The session the approval is for.
         target: &'a SessionId,
     },
-    /// `prompt`, `steer` or `reply` to a session on the caller's walk or
-    /// sharing a session process with it.
+    /// `prompt`, `steer`, `reply` or `sandbox` to a session on the
+    /// caller's walk or sharing a session process with it.
     SessionCommand {
         /// The refused wire command.
         command: &'a str,
@@ -244,10 +244,11 @@ fn is_approval_reply(stripped: &Map<String, Value>) -> bool {
 /// The `from_session` refusal for a session-targeted command, if any
 /// (`docs/permissions.md`, "Sessions on the sockets"). Refusal 1 rejects
 /// an approval answer from an owned or incomplete local connection, with
-/// no exception. Refusal 2 rejects `prompt`, `steer` and `reply` when the
-/// target pid is on the caller's walk, or when a session-host pid from the
-/// target's parent walk is also on the caller's walk, unless the caller is
-/// the target's current kernel parent with a readable target ancestry. A
+/// no exception. Refusal 2 rejects `prompt`, `steer`, `reply` and
+/// `sandbox` when the target pid is on the caller's walk, or when a
+/// session-host pid from the target's parent walk is also on the caller's
+/// walk, unless the caller is the target's current kernel parent with a
+/// readable target ancestry. A
 /// synthetic replay has no target process, so no refusal applies to it. An
 /// unreadable target pid, parent, or walk fails closed.
 pub(crate) fn session_command_refusal(
@@ -288,7 +289,7 @@ pub(crate) fn session_command_refusal(
     let command = stripped
         .get("command")
         .and_then(Value::as_str)
-        .filter(|command| *command == "prompt" || *command == "steer" || *command == "reply")?;
+        .filter(|command| contract::commands::is_from_session_command(command))?;
     let refusal = || FromSessionRefusal::SessionCommand { command, target };
     let target_pid = match target_state {
         RelayTarget::SyntheticReplay => unreachable!("synthetic replay returned above"),
@@ -1000,7 +1001,7 @@ fn replay_exited_delegate(
     let mut payload = Map::new();
     payload.insert("command_id".into(), Value::String(id.0.clone()));
     payload.insert("result".into(), Value::Object(result));
-    let mut preloaded = crate::connection::line(hub, "command_accepted", payload);
+    let mut preloaded = crate::connection::line(hub, HubEventKind::CommandAccepted, payload);
     preloaded.push(b'\n');
     for line in &fold {
         let Ok(bytes) = serde_json::to_vec(line) else {
@@ -1692,7 +1693,12 @@ fn relay(
                             if let Some(last_seq) = ack.last_seq {
                                 payload.insert("last_seq".into(), Value::from(last_seq));
                             }
-                            crate::connection::send(writer, hub, "stream_reopened", payload);
+                            crate::connection::send(
+                                writer,
+                                hub,
+                                HubEventKind::StreamReopened,
+                                payload,
+                            );
                         }
                     }
                     // The filter hook above already ran: waiting on the
@@ -1779,7 +1785,7 @@ fn relay(
                                 if let Some(id) = answered.clone() {
                                     let mut rejection = crate::connection::line(
                                         hub,
-                                        "command_rejected",
+                                        HubEventKind::CommandRejected,
                                         crate::connection::rejection(
                                             Some(&CommandId(id.clone())),
                                             &refused.code,
@@ -1809,7 +1815,7 @@ fn relay(
                         // below writes the rejection in command order.
                         let mut rejection = crate::connection::line(
                             hub,
-                            "command_rejected",
+                            HubEventKind::CommandRejected,
                             crate::connection::rejection(
                                 Some(&CommandId(id.clone())),
                                 &ErrorCode::Indeterminate,

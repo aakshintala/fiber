@@ -466,9 +466,7 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
     for value in log.iter() {
         lp.app
             .on_line(crate::link::Line::Session(contract::Envelope {
-                kind: EventKind::from_name(value["kind"].as_str().unwrap_or(""))
-                    .name()
-                    .to_owned(),
+                kind: EventKind::from_name(value["kind"].as_str().unwrap_or("")),
                 session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -505,9 +503,7 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
                 let lines: Vec<contract::Envelope> = window(&worker_log, from, to)
                     .into_iter()
                     .map(|v| contract::Envelope {
-                        kind: EventKind::from_name(v["kind"].as_str().unwrap_or(""))
-                            .name()
-                            .to_owned(),
+                        kind: EventKind::from_name(v["kind"].as_str().unwrap_or("")),
                         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                         ts: 0,
                         schema_version: contract::SCHEMA_VERSION,
@@ -519,7 +515,7 @@ fn first_page_fetch_times_log_read_and_successful_load_times_transcript() {
                     .collect();
                 let payload = json!({"command_id": id, "result": {"lines": lines}});
                 let envelope = contract::Envelope {
-                    kind: EventKind::CommandAccepted.name().to_owned(),
+                    kind: EventKind::CommandAccepted,
                     session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                     ts: 0,
                     schema_version: contract::SCHEMA_VERSION,
@@ -595,9 +591,7 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
     for value in failed_log.iter() {
         lp.app
             .on_line(crate::link::Line::Session(contract::Envelope {
-                kind: EventKind::from_name(value["kind"].as_str().unwrap_or(""))
-                    .name()
-                    .to_owned(),
+                kind: EventKind::from_name(value["kind"].as_str().unwrap_or("")),
                 session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -636,7 +630,7 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
                 let id = command["id"].clone();
                 let payload = json!({"command_id": id, "message": "injected failure"});
                 let envelope = contract::Envelope {
-                    kind: EventKind::CommandRejected.name().to_owned(),
+                    kind: EventKind::CommandRejected,
                     session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                     ts: 0,
                     schema_version: contract::SCHEMA_VERSION,
@@ -698,9 +692,7 @@ fn failed_first_fetch_times_log_read_but_leaves_transcript_unset() {
         window(&failed_log, failed_range.start().0, failed_range.end().0)
             .into_iter()
             .map(|value| contract::Envelope {
-                kind: EventKind::from_name(value["kind"].as_str().unwrap_or(""))
-                    .name()
-                    .to_owned(),
+                kind: EventKind::from_name(value["kind"].as_str().unwrap_or("")),
                 session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -801,7 +793,7 @@ fn accept_summary(lp: &mut super::Loop<TestBackend>, id: &str) {
     let _ = lp
         .app
         .on_line(crate::link::Line::Session(contract::Envelope {
-            kind: EventKind::CommandAccepted.name().to_owned(),
+            kind: EventKind::CommandAccepted,
             session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -903,7 +895,7 @@ fn attached_frame_waits_for_the_tail_install_and_draw() {
                 let id = command["id"].clone();
                 let payload = json!({"command_id": id, "result": {"lines": []}});
                 let envelope = contract::Envelope {
-                    kind: EventKind::CommandAccepted.name().to_owned(),
+                    kind: EventKind::CommandAccepted,
                     session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
                     ts: 0,
                     schema_version: contract::SCHEMA_VERSION,

@@ -60,7 +60,7 @@ fn home(seam: Arc<Fake>) -> App {
 fn connected(seam: Arc<Fake>) -> App {
     let mut app = home(seam);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -119,7 +119,7 @@ fn skills_answer() -> serde_json::Value {
 /// A session line of `kind` on [`SESSION`].
 fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -229,7 +229,7 @@ fn a_hub_rejection_of_skills_shows_its_message() {
     let mut app = connected(fake());
     let id = open_skills(&mut app);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"command_id": id, "code": "busy", "message": "Busy."})

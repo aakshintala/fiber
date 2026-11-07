@@ -24,7 +24,7 @@ impl Log {
     fn line(&mut self, kind: &str, action: Option<&str>, payload: Value) {
         let seq = u64::try_from(self.lines.len()).unwrap_or(u64::MAX);
         self.lines.push(Envelope {
-            kind: EventKind::from_name(kind).name().to_owned(),
+            kind: EventKind::from_name(kind),
             session_id: SessionId(SESSION.to_owned()),
             ts: 1_000 + seq * 700,
             schema_version: contract::SCHEMA_VERSION,
@@ -270,7 +270,7 @@ fn a_late_usage_line_on_a_dropped_page_counts_the_padded_closing_rows() {
     {
         let mut line = |kind: &str, action: Option<&str>, payload: Value| {
             lines.push(Envelope {
-                kind: EventKind::from_name(kind).name().to_owned(),
+                kind: EventKind::from_name(kind),
                 session_id: SessionId(SESSION.to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -320,7 +320,7 @@ fn a_late_usage_line_on_a_dropped_page_counts_the_padded_closing_rows() {
     assert_eq!(crate::rows::fitted(&closing, crate::surface::inset(20)), 2);
     pages.residency.drop_slot_for_test(0);
     lines.push(Envelope {
-        kind: EventKind::UsageRecorded.name().to_owned(),
+        kind: EventKind::UsageRecorded,
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -358,7 +358,7 @@ fn a_late_usage_line_with_new_rows_on_a_held_page_counts_it_again() {
     {
         let mut line = |kind: &str, action: Option<&str>, payload: Value| {
             lines.push(Envelope {
-                kind: EventKind::from_name(kind).name().to_owned(),
+                kind: EventKind::from_name(kind),
                 session_id: SessionId(SESSION.to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -406,7 +406,7 @@ fn a_late_usage_line_with_new_rows_on_a_held_page_counts_it_again() {
     let head = pages.summaries.first().expect("the first turn's totals");
     assert_eq!(head.closed_on, 0, "the first turn ends on the first page");
     lines.push(Envelope {
-        kind: EventKind::UsageRecorded.name().to_owned(),
+        kind: EventKind::UsageRecorded,
         session_id: SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

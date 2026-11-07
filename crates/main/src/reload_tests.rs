@@ -650,14 +650,16 @@ fn provider_reload_refreshes_the_spawn_catalogue() {
         serde_json::json!({"description": "d", "prompt": "p", "model": "fiber:fake/plain:high"});
     let text = tool_text(&spawn, arguments.as_object().unwrap());
     assert!(text.contains("not one model `fake/plain` takes"), "{text}");
+    // The thinking refusal takes the same short shape: the roles line,
+    // the closest references and the pointer, never the whole catalogue.
+    assert!(text.contains("\nRoles: "), "{text}");
+    assert!(text.contains("\nClosest references: "), "{text}");
     assert!(
-        text.contains("Session model: fiber:scripted/s.json"),
+        text.contains("Call delegate_models for every reference."),
         "{text}"
     );
-    assert!(
-        text.contains("fake (2):\nfiber:fake/m (thinking: high)"),
-        "{text}"
-    );
+    assert!(!text.contains("References:"), "{text}");
+    assert!(!text.contains("(thinking: "), "{text}");
     // The rebuilt definitions are byte-equal to the pre-reload held
     // ones: the swap changes no tool definition.
     for (name, before) in &held {

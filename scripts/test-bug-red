@@ -6,7 +6,9 @@
 # with no test file exits 1.
 #
 # bug-red cds to the top level of its checkout, so each fixture cds into
-# its throwaway repo and calls bug-red by absolute path. A stub cargo
+# its throwaway repo and calls bug-red by absolute path. A further case
+# proves the red tree builds into the fixture's target/bug-red dir, never
+# its target/. A stub cargo
 # first on PATH stands in for the toolchain: docs-only exits 1 (not
 # docs-only), bug-filter records its file args and prints a filter plus
 # one package, and nextest exits 100 (a test failed). No background
@@ -16,6 +18,10 @@ cd "$(git rev-parse --show-toplevel)"
 top=$PWD
 
 tmp=$(mktemp -d)
+# mktemp keeps the logical spelling of a symlinked TMPDIR while git
+# rev-parse reports the physical path, so resolve the fixture dir once
+# here and compare physical against physical below.
+tmp=$(cd "$tmp" && pwd -P)
 trap 'rm -rf "$tmp"' EXIT
 
 fail() {
@@ -514,3 +520,40 @@ a_plan_empty_on_both_legs_fails() {
   }
 }
 a_plan_empty_on_both_legs_fails
+
+# The red tree builds into the fixture's persistent target/bug-red dir and
+# never into its target/. The checked-in recording wrapper around the stub
+# cargo records the CARGO_TARGET_DIR each nextest invocation sees and, on
+# nextest run, writes a probe file into it without creating parents, so the
+# probe's location also proves bug-red creates the dir.
+mkdir -p "$tmp/bin-target"
+ln -s "$top/scripts/test-bug-red-target-cargo" "$tmp/bin-target/cargo"
+
+repo_t="$tmp/repo-target"
+new_repo "$repo_t"
+mkdir -p "$repo_t/crates/a/tests" "$repo_t/crates/a/src" "$repo_t/target"
+printf '// red\n' >"$repo_t/crates/a/tests/red.rs"
+git -C "$repo_t" add crates/a/tests/red.rs
+git -C "$repo_t" commit -q -m red
+printf '// fix\n' >"$repo_t/crates/a/src/fix.rs"
+git -C "$repo_t" add crates/a/src/fix.rs
+git -C "$repo_t" commit -q -m fix
+base_t=$(git -C "$repo_t" rev-parse HEAD~2)
+head_t=$(git -C "$repo_t" rev-parse HEAD)
+: >"$tmp/target-record.txt"
+export BUG_RED_TARGET_RECORD="$tmp/target-record.txt"
+unset BUG_RED_NEXTEST_STATUS
+cd "$repo_t"
+rc=0
+PATH="$tmp/bin-target:$PATH" "$bug_red" "$base_t" "$head_t" >"$tmp/out-target.txt" 2>&1 || rc=$?
+cd "$top"
+[ "$rc" -eq 0 ] || { cat "$tmp/out-target.txt" >&2; fail "target-dir case exited $rc, want 0"; }
+[ -s "$tmp/target-record.txt" ] || fail "target-dir case recorded no CARGO_TARGET_DIR"
+if grep -xvF "$repo_t/target/bug-red" "$tmp/target-record.txt" >/dev/null; then
+  cat "$tmp/target-record.txt" >&2
+  fail "nextest did not see $repo_t/target/bug-red"
+fi
+[ -f "$repo_t/target/bug-red/bug-red-target-probe" ] || fail "target-dir case has no probe in target/bug-red, so bug-red did not create the dir"
+if [ -e "$repo_t/target/bug-red-target-probe" ]; then
+  fail "target-dir case leaked the probe into the checkout target/"
+fi

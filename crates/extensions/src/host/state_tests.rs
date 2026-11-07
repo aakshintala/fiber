@@ -477,7 +477,7 @@ fn lua_state_depth_limit_round_trips_inside_the_log_envelope() {
                 panic!("one accepted write")
             };
             let envelope = contract::Envelope {
-                kind: "extension_state_set".into(),
+                kind: contract::events::EventKind::ExtensionStateSet,
                 session_id: contract::SessionId("state".into()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,

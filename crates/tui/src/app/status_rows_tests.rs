@@ -79,7 +79,7 @@ fn attached(width: u16, height: u16) -> App {
 /// One envelope of `session`.
 fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

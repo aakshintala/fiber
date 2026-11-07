@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 
 use contract::commands::{Command, CommandLine, ReplyAnswer};
-use contract::events::{CommandResult, Event, ExtensionReason};
+use contract::events::{CommandResult, Event, EventKind, ExtensionReason};
 use contract::{CommandId, Envelope, RequestId, SessionId};
 
 fn parse(line: &str) -> Result<CommandLine, serde_json::Error> {
@@ -16,7 +16,7 @@ fn parse(line: &str) -> Result<CommandLine, serde_json::Error> {
 
 fn envelope(kind: &str, payload: serde_json::Value) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s".into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,

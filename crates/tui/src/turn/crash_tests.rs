@@ -35,7 +35,7 @@ fn feed_with_seq(
     payload: Value,
 ) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

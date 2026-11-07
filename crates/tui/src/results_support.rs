@@ -25,7 +25,7 @@ pub(crate) fn now() -> Instant {
 pub(crate) fn attached(width: u16, height: u16) -> App {
     let session = |kind: &str, payload: Value, action: Option<&str>| {
         Line::Session(contract::Envelope {
-            kind: EventKind::from_name(kind).name().to_owned(),
+            kind: EventKind::from_name(kind),
             session_id: contract::SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -39,7 +39,7 @@ pub(crate) fn attached(width: u16, height: u16) -> App {
     app.set_size(width, height);
     assert!(
         app.on_line(Line::Hub(contract::HubLine {
-            kind: HubEventKind::HubHello.name().to_owned(),
+            kind: HubEventKind::HubHello,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -60,7 +60,7 @@ pub(crate) fn attached(width: u16, height: u16) -> App {
 /// replaces its line, otherwise it appends.
 pub(crate) fn reply(app: &mut App, action: &str, text: &str) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::TextCompleted.name().to_owned(),
+        kind: EventKind::TextCompleted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

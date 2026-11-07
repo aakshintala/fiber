@@ -50,9 +50,17 @@ fn resolve() -> Resolve {
             "deep" => Ok("fake/m:high".to_owned()),
             _ => Err(format!("Unknown delegate model {model:?}.")),
         }),
-        catalogue: Arc::from(
-            "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m:high\nReferences:\nfake (1):\nfiber:fake/m",
-        ),
+        catalogue: Arc::from(CATALOGUE),
+        roles: Arc::from(ROLES_LINE),
+        // The shared ranking's answer for the leveled typo, in ruled
+        // order: the stub pins the assembly, not the ranking.
+        closest: Arc::new(|_| {
+            vec![
+                "fiber:fake/gpt-5.6:xhigh".to_owned(),
+                "fiber:fake/gpt-5.4".to_owned(),
+                "fiber:fake/gpt-5.6".to_owned(),
+            ]
+        }),
         credential: Arc::new(|_| Ok(None)),
     }
 }
@@ -75,9 +83,23 @@ fn arguments(model: &str) -> serde_json::Map<String, serde_json::Value> {
     .clone()
 }
 
-/// The stub catalogue, shared with the refusal tests below: every
-/// model refusal lists it after its reason.
-const CATALOGUE: &str = "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m:high\nReferences:\nfake (1):\nfiber:fake/m";
+/// The stub catalogue, shared with the refusal tests below: four
+/// `fiber:` references, so a refusal listing the closest 3 must leave one
+/// out. No refusal prints this text whole: unknown models list the roles
+/// line, up to 3 closest references and the pointer instead.
+const CATALOGUE: &str = "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m:high\nReferences:\nfake (4):\nfiber:fake/gpt-5.6:xhigh\nfiber:fake/gpt-5.4\nfiber:fake/gpt-5.6\nfiber:fake/other";
+
+/// The roles line the stub's refusals carry: the one configured role.
+const ROLES_LINE: &str = "Roles: deep";
+
+/// The pointer every model refusal ends with.
+const POINTER_LINE: &str = "Call delegate_models for every reference.";
+
+/// The stub's 3 closest references for the leveled typo below, nearest
+/// first with ties in sorted order: `gpt-5.6:xhigh` is 1 edit away, and
+/// `gpt-5.4` sorts before `gpt-5.6` on the tied count of 7.
+const CLOSEST_LINE: &str =
+    "Closest references: fiber:fake/gpt-5.6:xhigh, fiber:fake/gpt-5.4, fiber:fake/gpt-5.6";
 
 #[test]
 fn sandbox_snapshot_failure_creates_no_worktree_or_child() {
@@ -262,7 +284,9 @@ fn a_non_fiber_model_and_an_unknown_one_fail_without_spawning() {
         assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
         assert_eq!(
             error.message,
-            format!("Unknown delegate model {model:?}.\n{CATALOGUE}")
+            format!(
+                "Unknown delegate model {model:?}.\n{ROLES_LINE}\n{CLOSEST_LINE}\n{POINTER_LINE}"
+            )
         );
         // The model reads the failure in the content, not the error.
         let text = output.content.iter().map(text_of).collect::<String>();
@@ -276,6 +300,85 @@ fn a_non_fiber_model_and_an_unknown_one_fail_without_spawning() {
     }
 }
 
+/// An unknown model against a catalogue of more than 3 references:
+/// the reason, the roles line, exactly the 3 closest references and the
+/// pointer, with no 4th reference. The fixture is a leveled typo, so the
+/// closest carry their level suffixes verbatim.
+#[test]
+fn an_unknown_model_lists_roles_closest_and_pointer() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let model = "fiber:fake/gpt-5.5:xhigh";
+    let output = spawned.run(
+        &arguments(model),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let error = output.error.expect("an unknown model fails");
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.message,
+        format!("Unknown delegate model {model:?}.\n{ROLES_LINE}\n{CLOSEST_LINE}\n{POINTER_LINE}")
+    );
+    // A dropped truncation would list the 4th reference too.
+    assert!(
+        !error.message.contains("fiber:fake/other"),
+        "{}",
+        error.message
+    );
+    // The model reads the failure in the content, not the error.
+    let text = output.content.iter().map(text_of).collect::<String>();
+    assert_eq!(text, error.message);
+    assert!(output.jobs.is_empty());
+    assert_eq!(
+        rig.launch_count.load(Ordering::SeqCst),
+        0,
+        "no process starts"
+    );
+}
+
+/// A level the model does not take fails in the same shape: the roles
+/// line, up to 3 closest references and the pointer, with no reference
+/// beyond the closest 3. The message names `fiber:` exactly 4 times: once
+/// for the typed model in the reason, 3 times for the closest.
+#[test]
+fn a_bad_thinking_level_holds_no_reference_beyond_the_closest_three() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let model = "fiber:fake/m:low";
+    let output = spawned.run(
+        &arguments(model),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let error = output.error.expect("a bad thinking level fails");
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.message,
+        format!("Unknown delegate model {model:?}.\n{ROLES_LINE}\n{CLOSEST_LINE}\n{POINTER_LINE}")
+    );
+    assert!(
+        !error.message.contains("fiber:fake/other"),
+        "{}",
+        error.message
+    );
+    assert_eq!(
+        error.message.matches("fiber:").count(),
+        4,
+        "{}",
+        error.message
+    );
+    // The model reads the failure in the content, not the error.
+    let text = output.content.iter().map(text_of).collect::<String>();
+    assert_eq!(text, error.message);
+    assert!(output.jobs.is_empty());
+    assert_eq!(
+        rig.launch_count.load(Ordering::SeqCst),
+        0,
+        "no process starts"
+    );
+}
+
 #[test]
 fn a_missing_model_fails_listing_the_roles_and_references() {
     let rig = rig();
@@ -287,8 +390,10 @@ fn a_missing_model_fails_listing_the_roles_and_references() {
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
     assert_eq!(
         error.message,
-        format!("Give model: a role or a full reference.\n{CATALOGUE}")
+        format!("Give model: a role or a full reference.\n{ROLES_LINE}\n{POINTER_LINE}")
     );
+    // Nothing to compare, so no `Closest` line leaks in.
+    assert!(!error.message.contains("Closest"), "{}", error.message);
     assert!(output.jobs.is_empty());
     assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
 }
@@ -310,8 +415,10 @@ fn a_non_string_model_fails_listing_the_roles_and_references() {
         assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
         assert_eq!(
             error.message,
-            format!("model must be a string.\n{CATALOGUE}")
+            format!("model must be a string.\n{ROLES_LINE}\n{POINTER_LINE}")
         );
+        // Nothing to compare, so no `Closest` line leaks in.
+        assert!(!error.message.contains("Closest"), "{}", error.message);
         assert!(output.jobs.is_empty());
         assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
     }

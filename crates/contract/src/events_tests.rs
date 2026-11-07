@@ -158,7 +158,7 @@ fn table_keys(block: &'static str) -> BTreeSet<&'static str> {
 
 fn line(kind: &str, payload: Value) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s".into()),
         ts: 1,
         schema_version: crate::SCHEMA_VERSION,

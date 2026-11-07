@@ -11,7 +11,9 @@ use crate::Input;
 use crate::link::{Credits, Feed, Line, answers, read_lines};
 use crate::retry::Retry;
 use contract::ErrorCode;
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::json;
@@ -262,8 +264,8 @@ fn kinds(inputs: &[Input]) -> Vec<String> {
     inputs
         .iter()
         .map(|input| match input {
-            Input::Hub(Line::Session(line)) => line.kind.clone(),
-            Input::Hub(Line::Hub(line)) => line.kind.clone(),
+            Input::Hub(Line::Session(line)) => line.kind.name().to_owned(),
+            Input::Hub(Line::Hub(line)) => line.kind.name().to_owned(),
             Input::Bytes(_) => "bytes".to_owned(),
             Input::Tick => "tick".to_owned(),
             Input::Converted { .. } => "other".to_owned(),
@@ -323,7 +325,7 @@ fn spawn_reader(
 /// The hub's greeting.
 fn hello() -> contract::HubLine {
     contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1050,11 +1052,13 @@ fn wait_behind_replay(
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp
                 .hub
                 .answer(
                     &rx,
                     "a_1",
+                    &target,
                     &mut lp.app,
                     &lp.tick,
                     lp.clock.as_ref(),
@@ -1142,11 +1146,13 @@ fn an_answer_first_leaves_no_stash() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp
                 .hub
                 .answer(
                     &rx,
                     "a_1",
+                    &target,
                     &mut lp.app,
                     &lp.tick,
                     lp.clock.as_ref(),
@@ -1381,11 +1387,13 @@ fn a_history_wait_at_the_plateau_stashes_queue_plus_one() {
     std::thread::Builder::new()
         .name("attach-answer".to_owned())
         .spawn(move || {
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp
                 .hub
                 .answer(
                     &rx,
                     "a_1",
+                    &target,
                     &mut lp.app,
                     &lp.tick,
                     lp.clock.as_ref(),
@@ -1724,7 +1732,7 @@ fn stream_event(kind: &str, session: &contract::SessionId, last: Option<u64>) ->
         payload["last_seq"] = json!(last);
     }
     Line::Hub(contract::HubLine {
-        kind: kind.into(),
+        kind: contract::HubEventKind::from(kind.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().unwrap().clone(),
@@ -1755,6 +1763,7 @@ fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
     let answer = lp.hub.answer(
         &rx,
         "a_1",
+        &session,
         &mut lp.app,
         &lp.tick,
         lp.clock.as_ref(),
@@ -1764,11 +1773,155 @@ fn a_history_wait_does_not_end_on_an_unrelated_hub_line() {
     assert!(!lp.app.pass_open());
     let stashed = lp.hub.stashed();
     assert_eq!(stashed.len(), 1);
-    assert!(matches!(&stashed[0], Input::Hub(Line::Hub(line)) if line.kind == "attention"));
+    assert!(
+        matches!(&stashed[0], Input::Hub(Line::Hub(line)) if line.kind == HubEventKind::Attention)
+    );
     assert!(matches!(
         rx.try_recv(),
         Err(mpsc::TryRecvError::Disconnected)
     ));
+}
+
+/// One `history` wait through a reopening: the fetch's result and the loop
+/// back, with the minted id, the needed span and the awaited lines.
+type FetchedPastReopen = (
+    Result<Vec<contract::Envelope>, String>,
+    super::super::Loop<ratatui::backend::TestBackend>,
+    String,
+    std::ops::RangeInclusive<contract::Seq>,
+    Vec<contract::Envelope>,
+);
+
+/// Runs one `history` wait for the attached session through `fetch` on a
+/// thread of its own, answering the minted command after a `stream_reopened`
+/// naming `reopened`. The caller names which reopening the wait sees:
+/// another session's, or the read one.
+fn fetch_past_reopen(
+    read: contract::SessionId,
+    reopened: contract::SessionId,
+) -> FetchedPastReopen {
+    let (mut lp, theirs, tx, rx) = opened();
+    assert_eq!(
+        lp.app.session(),
+        Some(&read),
+        "the read session is attached"
+    );
+    demand_top(&mut lp);
+    let needed = lp.app.needs();
+    assert!(!needed.is_empty(), "the top page still needs its lines");
+    let (segment, span) = needed[0].clone();
+    assert_eq!(segment, read, "the top page is the read session's");
+    // One `history` command answers 256 lines at most: fetch the span's
+    // first chunk, so the wait below sees exactly one command. The fold
+    // still lands the span's page, which is what `needs` tracks.
+    let from = span.start().0;
+    let end = from
+        .saturating_add(super::super::hub::HISTORY_LINES - 1)
+        .min(span.end().0);
+    let range = contract::Seq(from)..=contract::Seq(end);
+    let want = super::history(&session(), from, end);
+    assert!(!want.is_empty(), "the chunk holds the read session's lines");
+    let fetch_session = segment.clone();
+    let fetch_range = range.clone();
+    let (done, finished) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-history-fetch".to_owned())
+        .spawn(move || {
+            let result = lp.hub.fetch(
+                &rx,
+                &fetch_session,
+                &fetch_range,
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                lp.tick.armed(),
+            );
+            done.send((result, lp)).unwrap_or(());
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The write precedes the wait: the command is already buffered once the
+    // fetch runs, so the read below returns at once.
+    theirs
+        .set_nonblocking(true)
+        .unwrap_or_else(|err| panic!("nonblocking: {err}"));
+    let command = read_command(&theirs);
+    assert_eq!(
+        command["command"], "history",
+        "the fetch asks once: {command}"
+    );
+    let id = command["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the minted id: {command}"))
+        .to_owned();
+    let last = session().len() as u64;
+    tx.send(Input::Hub(stream_event(
+        "stream_reopened",
+        &reopened,
+        Some(last),
+    )))
+    .unwrap_or_else(|err| panic!("send: {err}"));
+    // The wait may already have ended on the reopening, leaving the answer
+    // nowhere to go; the assertions below tell a live wait from a dead one.
+    tx.send(Input::Hub(Line::Session(command_answer(&id, want.clone()))))
+        .unwrap_or(());
+    let (result, lp) = Deadline::after(DEADLINE).recv_or_fail(&finished, "the history wait to end");
+    // No second command went out: the fetch returned after its one answer.
+    let mut byte = [0u8; 1];
+    match (&theirs).read(&mut byte) {
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+        Ok(0) => panic!("the hub's end closed"),
+        Ok(_) => panic!("the fetch asked twice"),
+        Err(error) => panic!("the hub's read failed: {error}"),
+    }
+    (result, lp, id, span, want)
+}
+
+/// A reopening for another session leaves the read's history wait live:
+/// the wait answers with the read session's lines, which fold into its
+/// page. B is the session being read; A resumes alongside it.
+#[test]
+fn a_reopened_stream_for_another_session_leaves_the_history_wait_live() {
+    let read = contract::SessionId(super::SESSION.to_owned());
+    let other = contract::SessionId("s_bbbbbbbbbbbbbbbb".into());
+    assert_ne!(read, other, "two sessions resume at once");
+    let (result, mut lp, id, span, want) = fetch_past_reopen(read.clone(), other);
+    let lines = result.unwrap_or_else(|err| panic!("the foreign reopening ends the wait: {err}"));
+    assert_eq!(
+        lines, want,
+        "the wait answers with the read session's lines"
+    );
+    assert_eq!(
+        lp.app.outbox.waiting(&id),
+        None,
+        "the foreign reopening abandons nothing"
+    );
+    lp.app.load_inner(&read, lines);
+    assert!(
+        !lp.app.needs().contains(&(read.clone(), span)),
+        "the folded page is no longer needed"
+    );
+    assert!(
+        lp.app.pages().part(0).is_some(),
+        "the folded page is resident"
+    );
+}
+
+/// A reopening for the read session abandons its history wait at once:
+/// the wait ends with no lines and the minted id is abandoned.
+#[test]
+fn a_reopened_stream_for_the_read_session_abandons_its_wait() {
+    let read = contract::SessionId(super::SESSION.to_owned());
+    let (result, lp, id, _, _) = fetch_past_reopen(read.clone(), read.clone());
+    assert_eq!(
+        result,
+        Ok(Vec::new()),
+        "the reopening ends the wait with no lines"
+    );
+    assert_eq!(
+        lp.app.outbox.waiting(&id),
+        Some(crate::app::Waiting::Abandoned),
+        "the read session's reopening abandons its wait"
+    );
 }
 
 #[test]
@@ -1930,7 +2083,7 @@ fn abandoned_history_answers_are_discarded_once_by_id() {
         );
         lp.app.on_line(Line::Session(answer.clone()));
         assert!(!lp.app.pass_open());
-        answer.kind = "command_accepted".into();
+        answer.kind = EventKind::CommandAccepted;
         lp.app.on_line(Line::Session(answer));
         assert!(
             lp.app.pass_open(),
@@ -2706,7 +2859,7 @@ fn the_raise_is_written_after_the_frame_draws() {
     // next frame's flush, before `draw` returns.
     block.store(true, Ordering::SeqCst);
     let ack = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -2949,7 +3102,7 @@ fn tail_open_prepared(
     // replay's turn starts, which the hub serves before hanging up.
     let replay_turns = log
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind == EventKind::TurnStarted)
         .count();
     // One manual replay per open takes the gated accept's wait ends.
     let mut ack_gate = Some((ack_release, ack_done));
@@ -3253,10 +3406,10 @@ fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() 
     let mut log = super::handoff_log(3, "tail reply");
     let at = log
         .iter()
-        .position(|line| line.kind == "assistant_message_completed")
+        .position(|line| line.kind == EventKind::AssistantMessageCompleted)
         .unwrap();
     let mut tool = log[at].clone();
-    tool.kind = "tool_call_requested".into();
+    tool.kind = EventKind::ToolCallRequested;
     tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
     tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
         .as_object()
@@ -3346,10 +3499,10 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
     let mut log = super::handoff_log(3, "tail reply");
     let at = log
         .iter()
-        .position(|line| line.kind == "assistant_message_completed")
+        .position(|line| line.kind == EventKind::AssistantMessageCompleted)
         .unwrap();
     let mut tool = log[at].clone();
-    tool.kind = "tool_call_requested".into();
+    tool.kind = EventKind::ToolCallRequested;
     tool.action_id = Some(contract::ActionId("a_tail_tool".into()));
     tool.payload = json!({"name":"shell","arguments":{"command":"echo tail"}})
         .as_object()
@@ -3738,7 +3891,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     Deadline::after(DEADLINE).recv_or_fail(&hub_done, "the hub to hang up");
     let replay_turns = log
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind == EventKind::TurnStarted)
         .count()
         + 1;
     let seen_commands: Vec<serde_json::Value> =
@@ -3918,7 +4071,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     Deadline::after(DEADLINE).recv_or_fail(&hub_done, "the hub to hang up");
     let replay_turns = log
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind == EventKind::TurnStarted)
         .count()
         + 1;
     let seen_commands: Vec<serde_json::Value> =
@@ -3957,7 +4110,7 @@ fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
     Deadline::after(DEADLINE).recv_or_fail(&open.hub_done, "the hub to hang up");
     let replay_turns = log
         .iter()
-        .filter(|envelope| envelope.kind == "turn_started")
+        .filter(|envelope| envelope.kind == EventKind::TurnStarted)
         .count();
     let seen_commands: Vec<serde_json::Value> = open
         .seen
@@ -4122,7 +4275,7 @@ fn live_app() -> crate::app::App {
 /// A session `command_accepted` carrying the command's id.
 fn session_accepted(session: &str, command: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4138,7 +4291,7 @@ fn session_accepted(session: &str, command: &str) -> Line {
 /// The raise's acceptance with the pass ending at `last`.
 fn raise_accepted(session: &str, command: &str, last: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4581,7 +4734,7 @@ fn started(session: &str, parent: Option<(&str, u64)>) -> contract::Envelope {
         payload = json!({"forked_from": {"session_id": parent_session, "seq": point}});
     }
     contract::Envelope {
-        kind: "session_started".to_owned(),
+        kind: contract::events::EventKind::SessionStarted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4833,7 +4986,7 @@ fn a_short_child_waits_for_the_chain_root_to_fill_the_screen() {
     while events.try_recv().is_ok() {}
     block.store(true, Ordering::SeqCst);
     let ack = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(CHILD.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -5078,7 +5231,7 @@ fn the_first_frame_draws_before_the_ancestor_count_and_the_raise() {
     // frame parks in its flush once the preview installs.
     block.store(true, Ordering::SeqCst);
     let ack = Line::Session(contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(CHILD.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -5308,9 +5461,11 @@ fn wait_on(
     std::thread::Builder::new()
         .name("attach-history-wait".to_owned())
         .spawn(move || {
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp.hub.answer(
                 &rx,
                 "a_1",
+                &target,
                 &mut lp.app,
                 &lp.tick,
                 lp.clock.as_ref(),
@@ -5539,9 +5694,16 @@ fn an_answer_at_the_deadline_is_stashed_and_lost() {
         .name("attach-late-answer".to_owned())
         .spawn(move || {
             let mut lp = lp;
-            let result = lp
-                .hub
-                .answer(&rx, "a_1", &mut lp.app, &lp.tick, lp.clock.as_ref(), None);
+            let target = lp.app.session().cloned().expect("attached");
+            let result = lp.hub.answer(
+                &rx,
+                "a_1",
+                &target,
+                &mut lp.app,
+                &lp.tick,
+                lp.clock.as_ref(),
+                None,
+            );
             done.send((result, lp)).unwrap_or(());
         })
         .unwrap_or_else(|err| panic!("spawn: {err}"));
@@ -5848,7 +6010,7 @@ fn attach_spans_are_discarded_when_the_due_tail_has_no_stream() {
         ..Default::default()
     });
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -5864,7 +6026,7 @@ fn attach_spans_are_discarded_when_the_due_tail_has_no_stream() {
         })
         .unwrap_or_else(|| panic!("a summary subscribe among {sent:?}"));
     let accepted = contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -5944,7 +6106,7 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
         })
         .unwrap_or_else(|| panic!("a summary subscribe among {sent:?}"));
     let accepted = contract::Envelope {
-        kind: "command_accepted".to_owned(),
+        kind: contract::events::EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -5978,7 +6140,7 @@ fn attach_spans_are_emitted_at_a_reopened_install_draw() {
     let (tx, rx) = mpsc::channel();
     for _ in 0..3 {
         tx.send(Input::Hub(Line::Hub(contract::HubLine {
-            kind: "stream_reopened".to_owned(),
+            kind: contract::HubEventKind::StreamReopened,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: json!({"session_id": session})
@@ -6210,7 +6372,7 @@ mod attach_span_tests {
             })
             .unwrap_or_else(|| panic!("a summary subscribe among {lines:?}"));
         let accepted = contract::Envelope {
-            kind: "command_accepted".to_owned(),
+            kind: contract::events::EventKind::CommandAccepted,
             session_id: SessionId(SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -6238,7 +6400,7 @@ mod attach_span_tests {
     /// without failing it.
     fn reopened() -> Input {
         Input::Hub(Line::Hub(contract::HubLine {
-            kind: "stream_reopened".to_owned(),
+            kind: contract::HubEventKind::StreamReopened,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::json!({"session_id": SESSION})
@@ -6372,7 +6534,7 @@ mod attach_span_tests {
                 .as_str()
                 .unwrap_or_else(|| panic!("an id: {history}"));
             tx.send(Input::Hub(Line::Session(contract::Envelope {
-                kind: "command_rejected".to_owned(),
+                kind: contract::events::EventKind::CommandRejected,
                 session_id: SessionId(SESSION.to_owned()),
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -6652,9 +6814,14 @@ fn exited_log() -> Vec<contract::Envelope> {
     push("usage_recorded", Some("a_42"), serde_json::json!({}));
     push("turn_completed", Some("a_42"), completed());
     assert_eq!(lines.len(), 319, "the log crosses the history window");
-    assert_eq!(lines[306].kind, "fiber_exited", "the exit sits at 306");
     assert_eq!(
-        lines[318].kind, "turn_completed",
+        lines[306].kind,
+        EventKind::FiberExited,
+        "the exit sits at 306"
+    );
+    assert_eq!(
+        lines[318].kind,
+        EventKind::TurnCompleted,
         "the resumed turn completes the tail"
     );
     lines
@@ -6698,7 +6865,7 @@ fn opened_exited(
     });
     app.set_size(60, 24);
     let hello = contract::HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: contract::HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

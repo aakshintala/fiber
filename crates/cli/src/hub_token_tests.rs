@@ -1,6 +1,6 @@
 //! Device listing and revocation over a fake hub socket.
 use super::*;
-use contract::{ErrorCode, HubLine};
+use contract::{ErrorCode, HubEventKind, HubLine};
 use fakes::Deadline;
 use serde_json::{Map, json};
 use std::io::BufRead as _;
@@ -32,7 +32,7 @@ fn run_wait(answer: Value, device: Option<&str>) -> (Result<(), CliError>, Vec<u
             Ok((
                 client.take().unwrap(),
                 HubLine {
-                    kind: "hub_hello".to_owned(),
+                    kind: HubEventKind::HubHello,
                     ts: 1,
                     schema_version: 1,
                     payload: Map::new(),
@@ -143,7 +143,7 @@ fn exit_code(
                     Ok((
                         client.take().unwrap(),
                         HubLine {
-                            kind: "hub_hello".to_owned(),
+                            kind: HubEventKind::HubHello,
                             ts: 1,
                             schema_version: 1,
                             payload: Map::new(),

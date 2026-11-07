@@ -12,7 +12,7 @@ fn file_calls_name_their_paths_but_replies_and_other_calls_do_not() {
     let mut feed = |kind: &str, action: Option<&str>, payload: serde_json::Value| {
         seq += 1;
         let line = contract::Envelope {
-            kind: EventKind::from_name(kind).name().to_owned(),
+            kind: EventKind::from_name(kind),
             session_id: contract::SessionId(super::super::tests::SESSION.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -163,7 +163,7 @@ fn a_match_on_a_turns_first_and_last_row_is_in_it() {
 fn a_match_outside_any_turn_has_no_turn() {
     let mut app = attached(40, 10);
     let line = contract::Envelope {
-        kind: EventKind::ShellCommand.name().to_owned(), session_id: contract::SessionId(super::super::tests::SESSION.to_owned()),
+        kind: EventKind::ShellCommand, session_id: contract::SessionId(super::super::tests::SESSION.to_owned()),
         ts: 0, schema_version: contract::SCHEMA_VERSION, turn_id: None, action_id: None,
         seq: Some(contract::Seq(1)), payload: serde_json::json!({"command": "needle", "process": {"exit_code": 0, "timed_out": false}, "output": "needle"}).as_object().unwrap().clone(),
     };

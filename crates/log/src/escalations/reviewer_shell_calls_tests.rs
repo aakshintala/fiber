@@ -381,6 +381,44 @@ fn a_torn_tail_and_an_unreadable_line_keep_what_came_before() {
 }
 
 #[test]
+fn an_unknown_kind_line_with_an_action_id_joins_nothing() {
+    let home = fakes::TempDir::new("fiber-log-shell-unknown-kind");
+    let mut body = requested("a_1", 1, "acme-cli query --json");
+    // An unfamiliar kind joins no action: the walk skips it and the
+    // resolution after it still joins the request before it.
+    body.push_str(&line(
+        "future_kind",
+        Some("a_1"),
+        2,
+        &json!({"note": "new"}),
+    ));
+    body.push_str(&resolved("a_1", 3, None, "allow", "reviewer", None));
+    seed(home.path(), "p", "s_1", &body);
+    let found = calls(home.path());
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].raw.as_deref(), Some("acme-cli query --json"));
+}
+
+#[test]
+fn a_missing_kind_line_ends_the_walk_through_finish() {
+    let home = fakes::TempDir::new("fiber-log-shell-missing-kind");
+    let mut body = requested("a_1", 1, "acme-cli query --json");
+    body.push_str(&resolved("a_1", 2, None, "allow", "reviewer", None));
+    // The unreadable kind ends the walk through finish: the joined
+    // record before it stays, and the action after it never joins.
+    body.push_str(
+        r#"{"session_id":"s_1","ts":3,"schema_version":1,"seq":3,"action_id":"a_2","payload":{}}"#,
+    );
+    body.push('\n');
+    body.push_str(&requested("a_2", 4, "acme-cli push"));
+    body.push_str(&resolved("a_2", 5, None, "allow", "reviewer", None));
+    seed(home.path(), "p", "s_1", &body);
+    let found = calls(home.path());
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].raw.as_deref(), Some("acme-cli query --json"));
+}
+
+#[test]
 fn calls_read_sessions_across_projects() {
     let home = fakes::TempDir::new("fiber-log-shell-order");
     seed(

@@ -113,7 +113,7 @@ fn now() -> std::time::Instant {
 /// A session line.
 fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -127,7 +127,7 @@ fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
 /// The hub's `hub_hello`.
 fn hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

@@ -792,6 +792,8 @@ fn delegates_for(root: &fakes::TempDir, id: &str) -> super::Delegates {
         jobs::Resolve {
             lookup: Arc::new(|_| Err("unused".into())),
             catalogue: Arc::from("unused"),
+            roles: Arc::from("unused"),
+            closest: Arc::new(|_| Vec::new()),
             credential: Arc::new(|_| Ok(None)),
         },
         sandbox_handle(false),
@@ -800,7 +802,7 @@ fn delegates_for(root: &fakes::TempDir, id: &str) -> super::Delegates {
 
 fn log_envelope(session: &str, seq: u64, event: &contract::events::Event) -> contract::Envelope {
     contract::Envelope {
-        kind: event.kind().to_owned(),
+        kind: contract::events::EventKind::from_name(event.kind()),
         session_id: SessionId(session.to_owned()),
         ts: 1_759_150_000_000 + seq,
         schema_version: contract::SCHEMA_VERSION,
@@ -947,6 +949,8 @@ fn tool_depth() -> u32 {
         jobs::Resolve {
             lookup: Arc::new(|_| Err("unused".into())),
             catalogue: Arc::from("unused"),
+            roles: Arc::from("unused"),
+            closest: Arc::new(|_| Vec::new()),
             credential: Arc::new(|_| Ok(None)),
         },
         sandbox_handle(false),
@@ -1075,7 +1079,7 @@ fn watch_bounded(
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut on_line = |envelope: &contract::Envelope| {
-            seen.lock().unwrap().push(envelope.kind.clone());
+            seen.lock().unwrap().push(envelope.kind.name().to_owned());
         };
         done.send(watch(&id, after, &mut on_line)).unwrap_or(());
     });
@@ -1671,6 +1675,8 @@ fn message_rig() -> (super::Delegates, Arc<jobs::Registry>) {
         jobs::Resolve {
             lookup: Arc::new(|_| Err("unused".into())),
             catalogue: Arc::from("unused"),
+            roles: Arc::from("unused"),
+            closest: Arc::new(|_| Vec::new()),
             credential: Arc::new(|_| Ok(None)),
         },
         sandbox_handle(false),
@@ -2106,6 +2112,8 @@ fn models_rig(catalogue: &str) -> super::Delegates {
         jobs::Resolve {
             lookup: Arc::new(|_| Err("unused".into())),
             catalogue: Arc::from(catalogue.to_owned()),
+            roles: Arc::from("unused"),
+            closest: Arc::new(|_| Vec::new()),
             credential: Arc::new(|_| Ok(None)),
         },
         sandbox_handle(false),
@@ -2198,6 +2206,8 @@ fn refreshed_tools_share_one_resolve() {
             }
         }),
         catalogue: Arc::from("Roles: none\nReferences:\nfiber:fake/m (thinking: high)"),
+        roles: Arc::from("Roles: none"),
+        closest: Arc::new(|_| Vec::new()),
         credential: Arc::new(|_| Ok(None)),
     };
     delegates.set_resolve(resolve);
@@ -2300,6 +2310,8 @@ fn service_rig(depth: u32) -> ServiceRig {
                 _ => Err(format!("Unknown delegate model {model:?}.")),
             }),
             catalogue: Arc::from("Roles:\ndeep: fake/m:high"),
+            roles: Arc::from("Roles: deep"),
+            closest: Arc::new(|_| Vec::new()),
             credential: Arc::new(|_| Ok(None)),
         },
         sandbox_handle(false),

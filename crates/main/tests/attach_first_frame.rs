@@ -195,8 +195,8 @@ fn seed(setup: &Setup) {
         let envelope: contract::Envelope = serde_json::from_str(line).unwrap();
         match contract::events::Event::from_envelope(&envelope) {
             Ok(Some(_)) => {}
-            Ok(None) => panic!("the seed holds kind {}", envelope.kind),
-            Err(error) => panic!("the seed's {} does not read: {error}", envelope.kind),
+            Ok(None) => panic!("the seed holds kind {}", envelope.kind.name()),
+            Err(error) => panic!("the seed's {} does not read: {error}", envelope.kind.name()),
         }
     }
     fs::write(dir.join("events.jsonl"), log.join("\n") + "\n").unwrap();

@@ -57,7 +57,7 @@
 //! - `models-dev [--from FILE]`: regenerates the first-party model lists
 //!   from models.dev, or from FILE instead of fetching
 //!   (`docs/model-routing.md`)
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `visibility`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `crate-edges`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `support-tests`, `visibility`, `compiled-in`, `dependency-list`, `image-isolation`, `tui-isolation`, `crate-edges`, `preserve-order`, `check-docs`, `ci-needs`, `kinds-ratchet`: the checks
 //! - `doc-citations --print`: prints the allow table for code citations
 //!   (`xtask/doc-citations.allow`); `check-docs` fails what the table
 //!   does not list
@@ -88,6 +88,7 @@
 //!   it (`docs/testing/running.md`, "Flaky tests")
 //! - `session-paths`, `fiber-home-paths`, `loop-tool-names`: architecture rules 3, 4 and 5
 //! - `must-succeed`: no test file holds a wait bound of 1 s up to `fakes::MUST_SUCCEED_WITHIN`, except the kept bounds in `xtask/src/must_succeed.rs`
+//! - `support-tests`: no file under a crate's `tests/support/` that more than one test binary compiles holds a `#[test]`; the helpers' tests live in the one binary that declares them alone (`docs/code-quality.md`, "Size")
 //! - `nightly-pair (--is-nightly|--prev-excluding|--parse-version|--check-extensions) <bare-version>|--count-nightly`:
 //!   the shared nightly-tag predicate, the previous-nightly lookup over the
 //!   tag list on stdin, and the `fiber --version`, extension-list and
@@ -431,6 +432,11 @@ fn run(args: &[String]) -> Result<bool, String> {
         "signal-sites" => report(
             "signal-sites",
             &rules::signal_sites(&rust_files(&workspace_members()?)?),
+            "ok",
+        ),
+        "support-tests" => report(
+            "support-tests",
+            &rules::support_tests(&rust_files(&workspace_members()?)?),
             "ok",
         ),
         "visibility" => {

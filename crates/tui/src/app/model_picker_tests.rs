@@ -627,7 +627,7 @@ fn the_picker_is_a_picker_context() {
 /// A `hub_hello` this terminal reads.
 fn hello() -> crate::link::Line {
     crate::link::Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -637,7 +637,7 @@ fn hello() -> crate::link::Line {
 /// A live `session_status` for `session`, streaming.
 fn streaming(session: &str) -> crate::link::Line {
     crate::link::Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -740,7 +740,7 @@ const OTHER: &str = "s_bbbbbbbbbbbbbbbb";
 /// One envelope of `session`.
 fn session_line(session: &str, kind: &str, payload: serde_json::Value) -> crate::link::Line {
     crate::link::Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1197,7 +1197,7 @@ fn sent(effect: Effect) -> serde_json::Value {
 /// A `command_accepted` for `id` on `session`.
 fn accepted(session: &str, id: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1211,7 +1211,7 @@ fn accepted(session: &str, id: &str) -> Line {
 /// A `command_rejected` for `id` on `session`, with `code` and `message`.
 fn refused(session: &str, id: &str, code: &str, message: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandRejected.name().to_owned(),
+        kind: EventKind::CommandRejected,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1231,7 +1231,7 @@ fn refused(session: &str, id: &str, code: &str, message: &str) -> Line {
 /// A hub `command_rejected` for `id` with `message`.
 fn hub_refused(id: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1924,6 +1924,80 @@ fn ctrl_s_sends_one_model_command_and_waits_on_nothing() {
     assert!(app.model_picker.awaiting.is_empty());
 }
 
+/// A `session_status` naming `model`, mirroring `streaming` but idle.
+fn status_model(model: &str) -> crate::link::Line {
+    session_line(
+        SESSION,
+        "session_status",
+        json!({
+            "name": "fix the parser",
+            "workspace": "/w",
+            "project": "-w",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": model,
+            "delegates": 0,
+            "jobs": 0,
+            "clients": 0,
+            "state": "idle",
+        }),
+    )
+}
+
+/// The status row's line: the one line joining a side to the `ctx`
+/// segment with `│`.
+fn status_row(app: &App) -> String {
+    let (width, height) = app.screen_size();
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    let rows: Vec<String> = crate::view::text(&buf)
+        .lines()
+        .filter(|row| row.contains("ctx") && row.contains("│"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(rows.len(), 1, "one status row, got {rows:?}");
+    rows.into_iter().next().expect("a status row")
+}
+
+/// Mid-session Ctrl+S holds the old model until the session accepts:
+/// the row still names it after the send, and names the new model
+/// once the accept, the switch and the fresh status land. The accept
+/// alone changes no display; the session's switch envelopes do, so
+/// this fails with them reverted (`docs/tui.md`, "The input box").
+#[test]
+fn ctrl_s_mid_session_updates_the_row_once_the_session_accepts() {
+    let (mut app, _) = choosing_app();
+    app.on_line(preamble_line("test/model", Some("high")));
+    app.on_line(status_model("test/model"));
+    let row = status_row(&app);
+    assert!(row.contains("test/model"), "{row:?}");
+    // Idle, Ctrl+S another model: the `model` command goes out, and
+    // the row still names the old model before the accept.
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+    let line = sent(ctrl_s(&mut app));
+    assert_eq!(line["command"], json!("model"));
+    assert_eq!(line["args"]["model"], json!("acme/m2"));
+    let row = status_row(&app);
+    assert!(row.contains("test/model"), "{row:?}");
+    assert!(!row.contains("acme/m2"), "{row:?}");
+    // The accept books the mark but draws nothing new.
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(accepted(SESSION, &id));
+    let row = status_row(&app);
+    assert!(row.contains("test/model"), "{row:?}");
+    // The switch lands: the fresh status names the new model first.
+    app.on_line(changed_line("acme/m2", None));
+    app.on_line(status_model("acme/m2"));
+    let row = status_row(&app);
+    assert!(row.contains("acme/m2"), "{row:?}");
+    assert!(!row.contains("test/model"), "{row:?}");
+}
+
 #[test]
 fn ctrl_s_with_the_quit_question_up_sends_nothing_from_a_choosable_row() {
     let mut app = quitting();
@@ -2257,7 +2331,7 @@ fn the_start_model_clears_once_start_is_accepted() {
         .expect("a start line");
     // The hub accepts the `start`: the choice rode it, and clears.
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -2729,6 +2803,74 @@ fn an_accepted_level_updates_only_the_matching_pending_start_model() {
             .as_ref()
             .and_then(|choice| choice.level.as_deref()),
         Some("low")
+    );
+}
+
+/// Attached with the preamble on `acme/m1` at `low` and the latest
+/// `session_status` on `zeta/z1`: the session runs on the status model
+/// (`docs/tui.md`, "The model picker").
+fn status_over_preamble() -> App {
+    let (mut app, _) = choosing_app();
+    app.on_line(preamble_line("acme/m1", Some("low")));
+    app.on_line(status_model("zeta/z1"));
+    app
+}
+
+/// The ids of the rows the open picker marks current.
+fn current_ids(app: &App) -> Vec<String> {
+    app.model_picker_view()
+        .expect("open")
+        .sections
+        .iter()
+        .flat_map(|section| section.models.iter())
+        .filter(|model| model.current)
+        .map(|model| model.id.clone())
+        .collect()
+}
+
+#[test]
+fn the_picker_opens_on_and_marks_the_status_model_current() {
+    let mut app = status_over_preamble();
+    open(&mut app);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(current_ids(&app), ["z1"]);
+}
+
+#[test]
+fn thinking_acts_on_the_status_model() {
+    let mut app = status_over_preamble();
+    assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    let line = sent(run_draft(&mut app, "/thinking low"));
+    assert_eq!(line["args"]["model"], json!("zeta/z1"));
+}
+
+#[test]
+fn choosing_the_status_model_at_its_level_rebuilds_nothing() {
+    let mut app = status_over_preamble();
+    app.on_line(usage_line(
+        SESSION,
+        1000,
+        200000,
+        json!({"1h": 34}),
+        json!({}),
+    ));
+    open(&mut app);
+    assert_eq!(selected(&app).as_deref(), Some("zeta/z1"));
+    sends_one(app.on_key(Key::Enter, now()));
+    assert!(app.notices().is_empty(), "{:?}", app.notices());
+}
+
+#[test]
+fn a_busy_level_only_choice_names_the_level_for_the_status_model() {
+    let mut app = status_over_preamble();
+    app.on_line(turn_started());
+    open(&mut app);
+    sends_one(app.on_key(Key::Enter, now()));
+    assert_eq!(
+        app.notice(),
+        Some("thinking low applies when this turn ends")
     );
 }
 
@@ -3524,7 +3666,7 @@ fn remote_home_named(model: Option<&str>, thinking: Option<&str>) -> App {
 
 fn hub_hello() -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -3595,9 +3737,9 @@ fn scripted_remote_named(
             };
             let answer = Line::Hub(contract::HubLine {
                 kind: if accepted {
-                    HubEventKind::CommandAccepted.name().to_owned()
+                    HubEventKind::CommandAccepted
                 } else {
-                    HubEventKind::CommandRejected.name().to_owned()
+                    HubEventKind::CommandRejected
                 },
                 ts: 0,
                 schema_version: contract::SCHEMA_VERSION,
@@ -4687,7 +4829,7 @@ fn count_code(app: &App, code: ErrorCode) -> usize {
 /// path alone clears.
 fn turn_started() -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::TurnStarted.name().to_owned(),
+        kind: EventKind::TurnStarted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -4708,7 +4850,7 @@ fn turn_started() -> Line {
 /// turn ends, so the turn-end fold clears the applied shares.
 fn turn_completed() -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::TurnCompleted.name().to_owned(),
+        kind: EventKind::TurnCompleted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

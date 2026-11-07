@@ -827,7 +827,7 @@ fn ordinary_envelope(session: &SessionId, kind: &str, token: u64) -> contract::E
     let mut payload = serde_json::Map::new();
     payload.insert("token".to_owned(), serde_json::Value::from(token));
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: session.clone(),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

@@ -32,7 +32,7 @@ fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(80, 24);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -69,7 +69,7 @@ fn home_at(open_at: crate::OpenAt) -> App {
 /// One durable session line numbered `seq`.
 fn line(kind: &str, seq: u64, action: Option<&str>, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: id(SESSION),
         ts: seq,
         schema_version: contract::SCHEMA_VERSION,
@@ -137,7 +137,7 @@ fn call_turn(seq: &mut u64, message: &str, call: &str) -> Vec<Line> {
 /// A session `command_accepted` for `id`, without a result.
 fn session_accepted(session: &str, command: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -153,7 +153,7 @@ fn session_accepted(session: &str, command: &str) -> Line {
 /// The raise's acceptance for `id`: the pass ends at `last`.
 fn raise_accepted(session: &str, command: &str, last: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -177,7 +177,7 @@ fn hub(kind: &str, session: &str, last: Option<u64>) -> Line {
         payload.insert("last_seq".to_owned(), json!(last));
     }
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
+        kind: HubEventKind::from(kind.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload,
@@ -187,7 +187,7 @@ fn hub(kind: &str, session: &str, last: Option<u64>) -> Line {
 /// A hub `command_rejected` for `id` with `message`.
 fn hub_refused(id: &str, message: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandRejected.name().to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -1557,7 +1557,7 @@ fn replayed_shell_lines_fold_into_the_second_pages() {
         .pending
         .insert(shell_id.to_owned(), (Kind::Shell, draft));
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: id(SESSION),
         ts: 11,
         schema_version: contract::SCHEMA_VERSION,
@@ -1680,7 +1680,7 @@ fn no_thumb_while_the_screen_is_frozen() {
 /// A turn whose prompt carried an image at `path`.
 fn started_with_image(app: &mut App, path: &str) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::TurnStarted.name().to_owned(),
+        kind: EventKind::TurnStarted,
         session_id: id(SESSION),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1767,7 +1767,7 @@ fn a_refusal_recorded_at_one_id_holds_after_the_swap() {
 /// Folds a prompt carrying an image at `path` into `pages`.
 fn fold_image(pages: &mut crate::window::Pages, path: &str) {
     pages.apply(&contract::Envelope {
-        kind: EventKind::TurnStarted.name().to_owned(),
+        kind: EventKind::TurnStarted,
         session_id: id(SESSION),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -3365,7 +3365,7 @@ fn segment_lines_in(
         started = json!({"forked_from": forked});
     }
     lines.push(contract::Envelope {
-        kind: EventKind::SessionStarted.name().to_owned(),
+        kind: EventKind::SessionStarted,
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -3611,7 +3611,7 @@ fn chain_segment(
         started = json!({"forked_from": {"session_id": parent_session, "seq": point}});
     }
     lines.push(contract::Envelope {
-        kind: EventKind::SessionStarted.name().to_owned(),
+        kind: EventKind::SessionStarted,
         session_id: id(session),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

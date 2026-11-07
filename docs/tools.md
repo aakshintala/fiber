@@ -594,10 +594,22 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - A bare wait is rejected. When the call is not `run_in_background` and
   the first part of the command is `sleep N` with N of 25 seconds or more,
   alone or followed by other commands, the call completes as `failed` with
-  code `invalid_arguments` and never starts. The message points to
-  `run_in_background`, `jobs wait`, or a monitor running an `until` loop.
-  A `sleep` inside a loop is not the first part of the command and is
-  allowed.
+  code `invalid_arguments` and never starts. The message quotes the refused
+  command and gives two copy-and-run rewrites: run the same command with
+  `run_in_background`, then wait with `jobs wait`, and a monitor `until`
+  snippet naming the check command when the command holds one, with the
+  deadline rule. Refusing `sleep 240; echo hi` says: "`sleep 240; echo hi`
+  waits with `sleep` for 25 seconds or more, so it never started. Run it in
+  the background instead: call `shell` again with `run_in_background: true`
+  and the command `sleep 240; echo hi`, then wait for it with `jobs wait`.
+  To wait for a condition instead, start a monitor with `monitor: true` and
+  a command like `until echo hi; do sleep 5; done`; every monitor has a
+  deadline, 5 minutes (300000 ms) by default, at most 30 minutes
+  (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive
+  run." When the command holds no usable check command — a bare `sleep 60`,
+  an empty, comment-only or separator-led rest, or a rest opening with a loop
+  keyword — the `until` snippet names `<check command>` instead. A `sleep`
+  inside a loop is not the first part of the command and is allowed.
 
 ### Timeout
 
@@ -641,8 +653,12 @@ that ticket's resolution holds the rationale and the rejected alternatives.
     command ends").
 - Moving never kills anything and never restarts anything. The tool call
   completes with the job's receipt, which says the command is still
-  running, why it moved, the `job_id` and the output file's path. Output
-  already produced and all later output go to the job's output file.
+  running, why it moved, the `job_id` and the output file's path. When
+  the job kept the command's timeout, the receipt ends with when Fiber
+  stops it and how to keep a long-running process instead ("When a
+  command ends"). A moved command with no timeout says nothing about a
+  deadline. Output already produced and all later output go to the job's
+  output file.
 
 ### When a command ends
 
@@ -653,7 +669,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   command moves to the background at once. The receipt gives the shell's
   exit code and names what was left running (command names and process
   ids). The job ends when the group is empty, and keeps the command's
-  timeout.
+  timeout. A receipt for a move that kept a timeout ends with the stop
+  time in UTC, the timeout, and the long-running-process hint, for
+  example (``Fiber stops it at 2023-11-14T22:13:50Z (timeout_ms 60000).
+  To keep a long-running process such as a server, start it with
+  `run_in_background` and no timeout, or with `detach`. ``).
 - A process that left the group on purpose, for example with `setsid`,
   is not tracked. `nohup` does not leave the group: the process stays in
   it, and a timeout, a cancellation, a `jobs stop` and a shutdown stop it
@@ -692,6 +712,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   - `Exit code N.` for an exit, 0 included;
   - `Killed by SIGNAME.` for a signal;
   - `Timed out after N ms; Fiber stopped the whole process group.` for a timeout;
+    a moved job's timeout adds the long-running-process hint ("When a
+    command ends");
   - `The monitor's deadline of N ms passed; start it again if you still need it.` for a monitor's deadline;
   - `Cancelled and stopped.` for a cancellation;
   - `The command was stopped, and Fiber cannot tell whether it completed.` for
@@ -981,8 +1003,9 @@ The kinds are `docs/events.md`.
 - Its optional properties and the `minimum` limit put its schema outside the
   strict subset, so it is sent with `strict: false`.
 - `delegate_spawn`'s `model` is neither required nor typed in its schema, because
-  the tool checks it and lists the valid roles and references (`docs/delegates.md`,
-  "Choosing a model"), so `delegate_spawn` is sent with `strict: false`.
+  the tool checks it and lists the roles, up to 3 closest references, and names
+  `delegate_models` for the rest (`docs/delegates.md`, "Choosing a model"), so
+  `delegate_spawn` is sent with `strict: false`.
 - `delegate_fork`'s `timeout_ms` is optional and carries a `minimum` limit, so
   `delegate_fork` is sent with `strict: false`.
 - `delegate_models`'s `filter` is optional, so `delegate_models` is sent with

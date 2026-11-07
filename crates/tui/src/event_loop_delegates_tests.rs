@@ -29,7 +29,7 @@ fn wheel(col: u16, row: u16) -> Input {
 /// One envelope of `session`.
 fn envelope(session: &str, kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

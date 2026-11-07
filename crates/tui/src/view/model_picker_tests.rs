@@ -30,7 +30,7 @@ fn attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -42,7 +42,7 @@ fn attached(width: u16, height: u16) -> App {
 /// Sets the attached session's current model.
 fn current_model(app: &mut App, reference: &str) {
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: EventKind::PreambleBuilt.name().to_owned(),
+        kind: EventKind::PreambleBuilt,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -259,7 +259,7 @@ fn priced() -> Catalogue {
 fn priced_session(usage: Option<u64>) -> App {
     let mut app = attached(160, 48);
     let mut event = contract::Envelope {
-        kind: EventKind::PreambleBuilt.name().to_owned(),
+        kind: EventKind::PreambleBuilt,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -277,7 +277,7 @@ fn priced_session(usage: Option<u64>) -> App {
     };
     app.on_line(crate::link::Line::Session(event.clone()));
     if let Some(input) = usage {
-        event.kind = EventKind::UsageRecorded.name().to_owned();
+        event.kind = EventKind::UsageRecorded;
         event.payload = serde_json::json!({
             "generation_id": "g_1", "model": "acme/p1",
             "tokens": {"input": input, "cache_read": 0, "cache_write": {}, "output": 0},
@@ -428,7 +428,7 @@ fn narrow_list() {
 fn levels_current_and_saved() {
     let mut app = attached(160, 48);
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: EventKind::PreambleBuilt.name().to_owned(),
+        kind: EventKind::PreambleBuilt,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -446,7 +446,7 @@ fn levels_current_and_saved() {
         .unwrap_or_default(),
     }));
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: EventKind::UsageRecorded.name().to_owned(),
+        kind: EventKind::UsageRecorded,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -562,7 +562,7 @@ fn choose_session_only(app: &mut App) {
     let line: serde_json::Value = serde_json::from_str(&lines[0]).unwrap();
     let id = line["id"].as_str().expect("a command id").to_owned();
     app.on_line(crate::link::Line::Session(contract::Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

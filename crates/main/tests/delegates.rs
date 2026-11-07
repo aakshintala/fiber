@@ -4602,9 +4602,18 @@ fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
         message.contains("Unknown delegate model \"fiber:fake/none\"."),
         "{message}"
     );
-    assert!(message.contains("deep: fiber:pb/m"), "{message}");
-    assert!(message.contains("fiber:pa/m"), "{message}");
-    assert!(message.contains("fiber:pb/m"), "{message}");
+    // The refusal lists the roles line, the closest references and the
+    // pointer, never the whole catalogue: `fiber:pa/m` is 7 edits away,
+    // `fiber:pb/m` 8.
+    assert_eq!(
+        message,
+        "Unknown delegate model \"fiber:fake/none\".\n\
+         Roles: deep\n\
+         Closest references: fiber:pa/m, fiber:pb/m\n\
+         Call delegate_models for every reference."
+    );
+    assert!(!message.contains("deep: fiber:pb/m"), "{message}");
+    assert!(!message.contains("References:"), "{message}");
     // No child started: no delegate line, and the parent's is the only
     // session directory.
     assert!(
@@ -4737,9 +4746,15 @@ fn a_delegate_spawn_without_a_model_lists_the_roles_and_references() {
         assert_eq!(error["code"], "invalid_arguments");
         let message = error["message"].as_str().unwrap();
         assert!(message.starts_with(prefix), "{message}");
-        for part in ["deep: fiber:pb/m", "fiber:pa/m", "fiber:pb/m"] {
-            assert!(message.contains(part), "{message}");
-        }
+        // With nothing to compare, the refusal carries the roles line
+        // and the pointer, and no `Closest` line.
+        assert!(message.contains("Roles: deep"), "{message}");
+        assert!(
+            message.contains("Call delegate_models for every reference."),
+            "{message}"
+        );
+        assert!(!message.contains("Closest"), "{message}");
+        assert!(!message.contains("deep: fiber:pb/m"), "{message}");
     }
     // No child started: no delegate line, and the child saw no request.
     assert!(

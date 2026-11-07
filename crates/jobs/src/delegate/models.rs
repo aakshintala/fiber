@@ -19,12 +19,14 @@ use serde_json::{Map, Value, json};
 
 /// Resolves a `delegate_spawn` `model` argument to the `provider/model[:level]`
 /// the child is started with, or refuses it with one reason sentence, and
-/// carries the catalogue text every refusal lists. Whoever builds a
-/// `Resolve` builds `lookup` and `catalogue` from one immutable snapshot,
-/// so every role the catalogue lists without ` (unavailable)` looks up
-/// `Ok` to its listed target, every role marked ` (unavailable)` looks up
-/// `Err`, and every listed reference looks up `Ok`. `lookup` captures only
-/// owned, cloned data, so a later configuration write cannot change it.
+/// carries the short shape every refusal lists: the roles line and, for a
+/// model string that resolves to nothing, the closest references. Whoever
+/// builds a `Resolve` builds `lookup`, `catalogue`, `roles` and `closest`
+/// from one immutable snapshot, so every role the catalogue lists without
+/// ` (unavailable)` looks up `Ok` to its listed target, every role marked
+/// ` (unavailable)` looks up `Err`, and every listed reference looks up
+/// `Ok`. `lookup` captures only owned, cloned data, so a later
+/// configuration write cannot change it.
 #[derive(Clone)]
 pub struct Resolve {
     /// Resolves the argument to `provider/model[:level]`, or refuses it
@@ -34,9 +36,22 @@ pub struct Resolve {
         reason = "the resolver seam: one closure type shared by the session resolver and every test stub"
     )]
     pub lookup: Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>,
-    /// The full text `delegate_models` returns and every model refusal
-    /// lists.
+    /// The full text `delegate_models` returns. A refusal never lists it
+    /// whole: it carries `roles` and, for a model string that resolves to
+    /// nothing, the closest references instead.
     pub catalogue: Arc<str>,
+    /// The one-line roles listing every model refusal carries, built with
+    /// the resolver from the same snapshot as `lookup` and `catalogue`.
+    pub roles: Arc<str>,
+    /// The closest references for a model string, nearest first, built
+    /// with the resolver from the same snapshot as `lookup`: a missing or
+    /// non-string model has nothing to compare, so those refusals never
+    /// call it.
+    #[allow(
+        clippy::type_complexity,
+        reason = "the resolver seam: one closure type shared by the session resolver and every test stub"
+    )]
+    pub closest: Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>,
     /// Resolves the `credential` label a role names for the same `model`
     /// argument `lookup` took, after `lookup` was `Ok`: `Ok(Some(label))`
     /// when the role names a label the provider has, `Ok(None)` for a
@@ -54,9 +69,10 @@ pub struct Resolve {
 /// Returns the catalogue with the quota appended on top: the configured
 /// roles, what each maps to now, the full references available, and one
 /// quota entry per provider credential label (`docs/delegates.md`,
-/// "The tools"). A refusal carries the catalogue alone; only
-/// `delegate_models` appends the quota. The quota is read on every call,
-/// so a `delegate_models` call never answers a stale figure.
+/// "The tools"). A refusal carries the roles line and closest references,
+/// never the catalogue; only `delegate_models` appends the quota. The
+/// quota is read on every call, so a `delegate_models` call never answers
+/// a stale figure.
 pub struct DelegateModels {
     /// The catalogue text, built with the session's resolver.
     pub catalogue: Arc<str>,

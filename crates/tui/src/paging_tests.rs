@@ -57,7 +57,7 @@ impl Stream {
             Seq(self.seq - 1)
         });
         self.lines.push(Envelope {
-            kind: EventKind::from_name(kind).name().to_owned(),
+            kind: EventKind::from_name(kind),
             session_id: SessionId(SESSION.to_owned()),
             ts,
             schema_version: contract::SCHEMA_VERSION,
@@ -368,7 +368,7 @@ fn pages_are_cut_inside_turns() {
 fn app(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     let hello = contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -1257,7 +1257,7 @@ fn resident_counts_every_held_page() {
 /// One envelope of `kind` with `payload`, outside any page cut.
 fn envelope(kind: &str, action: Option<&str>, payload: Value) -> Envelope {
     Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(SESSION.to_owned()),
         ts: 1_000,
         schema_version: contract::SCHEMA_VERSION,
@@ -1535,7 +1535,7 @@ fn the_open_page_caches_only_its_lines_too_wide_for_one_row() {
     // caches it: the nudge is one line, however long. (A failed MCP
     // server's warning wraps at draw, so it caches nothing.)
     pages.apply(&Envelope {
-        kind: EventKind::ContextNudged.name().to_owned(),
+        kind: EventKind::ContextNudged,
         session_id: SessionId("s_aaaaaaaaaaaaaaaa".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -5074,7 +5074,7 @@ fn edge_line(session: &str, seq: u64, kind: &str) -> Envelope {
         json!({})
     };
     Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(session.to_owned()),
         ts: seq,
         schema_version: contract::SCHEMA_VERSION,

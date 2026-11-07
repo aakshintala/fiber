@@ -2204,7 +2204,7 @@ fn answered_ask_call(id: usize) -> Call {
             super::super::answers::fold(
                 &mut turns,
                 &contract::Envelope {
-                    kind: EventKind::from_name(kind).name().to_owned(),
+                    kind: EventKind::from_name(kind),
                     session_id: contract::SessionId("s".to_owned()),
                     ts: 0,
                     schema_version: contract::SCHEMA_VERSION,

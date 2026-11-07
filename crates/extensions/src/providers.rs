@@ -21,10 +21,12 @@ mod declared;
 mod naming;
 mod placeholders;
 mod scripted;
+mod suggest;
 
 pub(crate) use declared::{first_undeclared, provider_scripts};
 pub use placeholders::{Unconfigured, UnconfiguredModel};
 pub use scripted::START_ONLY;
+pub use suggest::{closest_refs, distance, roles_line};
 
 /// One model a placeholder fill left out: its per-model notice, and, for a
 /// placeholder with no value, its group of one.

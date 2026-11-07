@@ -243,7 +243,7 @@ fn home_app() -> App {
 /// One live `session_status` line naming `name`.
 fn status_line(session: &str, name: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
