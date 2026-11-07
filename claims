@@ -162,7 +162,6 @@ crates/bench/examples/bench/pty.rs	fiber-2465	plan	2026-11-07T20:26:21Z	Amoghs-M
 crates/cli/src/import.rs	fiber-2465	plan	2026-11-07T20:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests	fiber-2465	plan	2026-11-07T20:27:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/2465-one-main-test-binary	
 scripts/test-retry-filter	fiber-2465	plan	2026-11-07T20:27:46Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/2465-one-main-test-binary	
-crates/main/tests/panel_look.rs	fiber-4393	plan	2026-11-07T20:42:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 xtask	fiber-2465	grant	2026-11-07T22:15:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/2465-one-main-test-binary	
 scripts	fiber-2465	grant	2026-11-07T22:15:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/2465-one-main-test-binary	
 docs	fiber-2465	grant	2026-11-07T22:15:16Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/test/2465-one-main-test-binary	
