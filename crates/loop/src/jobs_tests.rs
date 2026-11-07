@@ -2685,6 +2685,51 @@ fn the_ending_notice_is_given_once_even_when_another_job_starts() {
 }
 
 #[test]
+fn the_ending_notice_names_detach_for_outliving_processes() {
+    // `docs/tools.md`, "Background jobs": the ending wake names the job,
+    // says the rest is waited for, and names `detach` as the way out.
+    let world = World::new(
+        vec![
+            Scripted::text("Done."),
+            Scripted::text("Waiting."),
+            Scripted::text("Seen."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+
+    let _first = world.next_turn();
+    let ending = world.next_turn();
+    assert_eq!(ending[2].payload["reason"], json!("ending"));
+    let text = ending[0].payload["input"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(text.contains(&id), "notice names the running job: {text}");
+    assert!(
+        text.contains("will be waited for"),
+        "notice says the rest is waited for: {text}"
+    );
+    assert!(text.contains("`shell`"), "notice names shell: {text}");
+    assert!(
+        text.contains("detach"),
+        "notice names detach as the way out: {text}"
+    );
+
+    (job.end.0)(failed(&id));
+    let last = world.next_turn();
+    assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
+    let wait = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    ran(&finished, &wait);
+}
+
+#[test]
 fn after_close_a_prompt_is_rejected_and_a_steer_does_not_join_a_job_turn() {
     let world = World::new(
         vec![
