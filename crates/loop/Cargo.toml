@@ -19,7 +19,7 @@ similar.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-fakes = { path = "../fakes" }
+fakes = { package = "fakes-contract", path = "../fakes-contract" }
 # The mid-`jobs wait` cancel test enters the production `JobsTool::wait`
 # on a real registry.
 jobs = { path = "../jobs" }

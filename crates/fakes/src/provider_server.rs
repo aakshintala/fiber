@@ -15,7 +15,7 @@ use std::time::Duration;
 /// test thread that panicked has already failed its test.
 use support::lock;
 
-use contract::clock::Clock;
+use support::clock::Clock;
 
 use crate::clock::SystemClock;
 use crate::deadline::Deadline;

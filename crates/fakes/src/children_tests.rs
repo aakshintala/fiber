@@ -8,7 +8,7 @@ use std::thread;
 use std::time::Duration;
 
 use super::{Ready, escapes_group, grouped_output, ignores_sigterm, leaves_descendants};
-use contract::clock::Clock;
+use support::clock::Clock;
 
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;

@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use crate::http_server::{Connection, HttpServer, Limits, ReplyEnd, request::RequestOutcome};
 
 /// The clock the fake bounds its requests on.
-fn clock() -> Arc<dyn contract::clock::Clock> {
+fn clock() -> Arc<dyn support::clock::Clock> {
     Arc::new(crate::clock::SystemClock)
 }
 

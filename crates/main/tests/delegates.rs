@@ -45,6 +45,7 @@ fn install_url(
     url: &str,
     protocol: &str,
     extra: &serde_json::Value,
+    probe: Option<std::sync::mpsc::Sender<()>>,
 ) {
     let source = setup.root.path().join(format!("src-{name}"));
     let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
@@ -66,23 +67,21 @@ fn install_url(
             "models": [model]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        probe,
+    );
 }
 
 /// Installs the parent's `pa/m` and the child's `pb/m` on `protocol` at the
 /// two base URLs, and configures the parent's model and reviewer.
 fn providers_url(setup: &support::Setup, parent: &str, child: &str, protocol: &str) {
-    install_url(setup, "pa", parent, protocol, &json!({}));
-    install_url(setup, "pb", child, protocol, &json!({}));
+    install_url(setup, "pa", parent, protocol, &json!({}), None);
+    install_url(setup, "pb", child, protocol, &json!({}), None);
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "pa/m", "reviewer": {"model": "pa/m"}}),
@@ -4321,8 +4320,16 @@ fn a_delegate_whose_call_fails_without_a_claimed_trip_keeps_its_own_exit_code() 
         &parent.url(),
         "openai-completions",
         &json!({}),
+        None,
     );
-    install_url(&setup, "pb", &child.url(), "openai-completions", &json!({}));
+    install_url(
+        &setup,
+        "pb",
+        &child.url(),
+        "openai-completions",
+        &json!({}),
+        None,
+    );
     standing_allow(&setup);
     slow_idle(&setup);
     let id = doors::mint("s_");
@@ -4767,7 +4774,14 @@ fn delegate_models_omits_logged_out_provider_references() {
         support::hello(),
     ])
     .unwrap();
-    install_url(&setup, "pa", &parent.url(), "openai-responses", &json!({}));
+    install_url(
+        &setup,
+        "pa",
+        &parent.url(),
+        "openai-responses",
+        &json!({}),
+        None,
+    );
     install_pb_without_credential(&setup, "http://127.0.0.1:1");
     support::write_json(
         &setup.home().join("config.json"),
@@ -5096,9 +5110,23 @@ fn a_role_runs_its_reference_and_a_remap_applies_at_resume_without_changing_any_
     let pb = ProviderServer::start([support::hello()]).unwrap();
     let pc = ProviderServer::start([support::hello()]).unwrap();
     pb.hold();
-    install_url(&setup, "pa", &parent.url(), "openai-responses", &json!({}));
-    install_url(&setup, "pb", &pb.url(), "openai-responses", &thinking);
-    install_url(&setup, "pc", &pc.url(), "openai-responses", &json!({}));
+    install_url(
+        &setup,
+        "pa",
+        &parent.url(),
+        "openai-responses",
+        &json!({}),
+        None,
+    );
+    install_url(&setup, "pb", &pb.url(), "openai-responses", &thinking, None);
+    install_url(
+        &setup,
+        "pc",
+        &pc.url(),
+        "openai-responses",
+        &json!({}),
+        None,
+    );
     let config_with = |target: &str| {
         json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
             "session": {"idle_exit_ms": 3600000},
@@ -6003,16 +6031,14 @@ fn install_pb_without_credential(setup: &support::Setup, url: &str) {
                 "base_url": format!("{url}/v1"), "context_window": 100000}]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        None,
+    );
 }
 
 /// The parent's durable kinds, in order, for the early-failure run below:
@@ -6106,7 +6132,14 @@ fn a_delegate_failing_before_session_reports_its_error_and_no_log_path() {
         support::hello()
     })
     .unwrap();
-    install_url(&setup, "pa", &parent.url(), "openai-responses", &json!({}));
+    install_url(
+        &setup,
+        "pa",
+        &parent.url(),
+        "openai-responses",
+        &json!({}),
+        None,
+    );
     install_pb_without_credential(&setup, &child.url());
     // Presence can come from any label; the selected default still fails
     // acquisition inside the child because its environment source is absent.
@@ -8186,6 +8219,7 @@ fn delegates_view_lists_every_delegate_and_opens_from_enter() {
         &child_late.url(),
         "openai-responses",
         &json!({}),
+        None,
     );
     standing_allow(&setup);
     // The hub exits a second after its last client leaves, so the run's
@@ -8454,6 +8488,7 @@ fn fork_providers(setup: &support::Setup, server: &ProviderServer) {
         &server.url(),
         "openai-responses",
         &json!({"thinking_levels": ["low", "high"], "thinking_default": "low"}),
+        None,
     );
     support::write_json(
         &setup.home().join("config.json"),

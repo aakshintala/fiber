@@ -447,7 +447,7 @@ dependencies = [
  "contract",
  "doors",
  "extensions",
- "fakes",
+ "fakes-contract",
  "log 0.0.0",
  "qrcode",
  "rustix",
@@ -851,7 +851,7 @@ dependencies = [
  "base64 0.23.1",
  "config",
  "contract",
- "fakes",
+ "fakes-contract",
  "log 0.0.0",
  "net",
  "rustix",
@@ -969,7 +969,7 @@ dependencies = [
  "base64 0.23.1",
  "config",
  "contract",
- "fakes",
+ "fakes-contract",
  "flate2",
  "log 0.0.0",
  "mlua",
@@ -987,12 +987,21 @@ dependencies = [
 name = "fakes"
 version = "0.0.0"
 dependencies = [
- "contract",
  "flate2",
  "libc",
  "rustix",
  "serde_json",
  "signal-hook",
+ "support",
+]
+
+[[package]]
+name = "fakes-contract"
+version = "0.0.0"
+dependencies = [
+ "contract",
+ "fakes",
+ "serde_json",
  "support",
 ]
 
@@ -1536,7 +1545,7 @@ name = "jobs"
 version = "0.0.0"
 dependencies = [
  "contract",
- "fakes",
+ "fakes-contract",
  "rustix",
  "serde_json",
  "support",
@@ -1660,7 +1669,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
  "contract",
- "fakes",
+ "fakes-contract",
  "jobs",
  "log 0.0.0",
  "proptest",
@@ -1749,7 +1758,7 @@ dependencies = [
  "dhat",
  "doors",
  "extensions",
- "fakes",
+ "fakes-contract",
  "hub",
  "insta",
  "jobs",
@@ -1787,7 +1796,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.23.1",
  "contract",
- "fakes",
+ "fakes-contract",
  "net",
  "ring",
  "rustix",
@@ -2697,7 +2706,7 @@ dependencies = [
  "config",
  "contract",
  "extensions",
- "fakes",
+ "fakes-contract",
  "provider",
  "serde_json",
 ]
@@ -3421,7 +3430,7 @@ dependencies = [
  "config",
  "contract",
  "encoding_rs",
- "fakes",
+ "fakes-contract",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",

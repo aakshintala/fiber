@@ -17,7 +17,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use contract::clock::{Clock, Wake};
+use support::clock::{Clock, Wake};
 
 use super::{
     AcceptMode, Connection, Limits, RequestBudget, SHUTDOWN_WITHIN, WaitEnd, guard_expired,

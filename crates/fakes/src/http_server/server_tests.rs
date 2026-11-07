@@ -9,7 +9,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock;
+use support::clock::Clock;
 
 use super::super::{CheckGate, Limits, RequestBudget, WaitAck, WaitEnd};
 use super::*;

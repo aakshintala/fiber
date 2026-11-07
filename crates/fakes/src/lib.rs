@@ -1,10 +1,11 @@
-//! The shared fakes that tests and jigs run against: stand-ins for everything
-//! outside Fiber that a test needs (`docs/testing.md`, "Fakes"). A test-only
-//! dependency of the crates that use it; no release binary contains it
+//! Contract-free helpers for tests and jigs: clocks, deadlines, temporary
+//! directories, HTTP servers, process helpers and fixtures
+//! (`docs/testing/fakes.md`, "Fakes"). Its only workspace dependency is
+//! `support`; contract-dependent fakes live in `fakes-contract`. Product crates
+//! use this crate only as a test dependency; no release binary contains it
 //! (`docs/architecture.md`, "The call rules").
 
 pub mod alloc;
-mod blocking;
 pub mod children;
 mod client;
 pub mod clock;
@@ -12,16 +13,12 @@ mod connect_proxy;
 #[cfg(target_os = "macos")]
 mod crash_ports;
 pub mod deadline;
-pub mod emit;
 mod fifo;
 mod finished;
 mod gated_http;
-mod handoff;
 mod hold;
 pub(crate) mod http_server;
 mod jig_start;
-pub mod jobs;
-mod locks;
 mod oauth_server;
 mod process_extension;
 mod process_group;
@@ -31,11 +28,7 @@ mod raw_http_server;
 mod record;
 pub mod refused;
 mod rerun;
-mod rules;
-mod scripted_provider;
-mod skills;
 mod temp_dir;
-mod tool_io;
 pub mod ustar;
 mod wait_output;
 mod wait_until;
@@ -46,27 +39,20 @@ mod within;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-pub use blocking::BlockingProvider;
 pub use client::Client;
 pub use clock::FakeClock;
 pub use connect_proxy::ConnectProxy;
 pub use deadline::Deadline;
-pub use emit::{EventLog, Recorder};
 pub use fifo::fifo;
 pub use finished::finished;
 pub use gated_http::GatedHttp;
 pub use jig_start::{START_BOUND, WarmedJig, warm_up};
-pub use jobs::StubJobs;
-pub use locks::{FakeLock, NoLock};
-pub use rules::{NoRules, RecordingRules};
-pub use skills::NoSkills;
 pub use support::cancel::Token as CancelToken;
 pub mod git;
+pub use hold::Hold;
 /// The dropped server's own state, read after the drop: the public path
 /// for integration tests, which reach only the public wrappers.
 #[doc(hidden)]
-pub use handoff::no_note;
-pub use hold::Hold;
 pub use http_server::server::DropProbe;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer, jwt};
 pub use process_extension::ProcessFixture;
@@ -78,11 +64,7 @@ pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use raw_http_server::RawHttpServer;
 pub use record::write_record;
 pub use rerun::{rerun, rerun_prepared, rerun_within};
-pub use scripted_provider::{
-    Scripted, ScriptedProvider, call_usage, reply, unnamed_usage, wire_tools,
-};
 pub use temp_dir::TempDir;
-pub use tool_io::{text_of, tool_args};
 pub use wait_output::wait_output;
 pub use wait_until::wait_until;
 pub use watchdog::Watchdog;
