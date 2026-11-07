@@ -751,6 +751,20 @@ pub(super) fn render(
                 BOX_TINT
             },
         );
+        // A pending session-only choice marks the model chip: the
+        // `ⓢ` overpaints dim over its own cell, leaving the brackets,
+        // the gap and the model name bright (`docs/tui.md`, "Home").
+        if chip.session_mark {
+            put(
+                buf,
+                area,
+                chip_x.saturating_add(1),
+                placed.chip,
+                "ⓢ",
+                box_end.saturating_sub(chip_x.saturating_add(1)),
+                BOX_TINT.add_modifier(Modifier::DIM),
+            );
+        }
         let wide = to_u16(width(text));
         if let Some(spot) = &chip.spot {
             let end = chip_x.saturating_add(wide).min(box_end);

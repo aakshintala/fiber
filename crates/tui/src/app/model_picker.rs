@@ -683,8 +683,9 @@ impl App {
     }
 
     /// The model and level on home: the pending session-only choice the
-    /// next `start` carries, else the home chips.
-    fn home_model(&self) -> Option<(String, Option<String>)> {
+    /// next `start` carries, else the home chips. The home chips read
+    /// it, so a pending choice shows there with its mark.
+    pub(in crate::app) fn home_model(&self) -> Option<(String, Option<String>)> {
         if let Some(choice) = self.model_picker.start_model.as_ref() {
             return Some((choice.reference.clone(), choice.level.clone()));
         }
