@@ -74,6 +74,20 @@ fiber.tool("codemode", {
       local outcome = real_tool(name, call_args)
       setmetatable(outcome, outcome_metatable)
       local row = { name = name, status = outcome.status }
+      -- A call that started a delegate answers with the receipt sentence
+      -- as its first text part; name its job id in the row. The tool-name
+      -- gate keeps every other tool's row byte-identical, even when its
+      -- content carries a receipt-shaped sentence. Delegate answers are
+      -- text-only, so a first part of another shape ends the search.
+      if name == "delegate_spawn" or name == "delegate_fork" then
+        local first = outcome.content[1]
+        if type(first) == "table" and first.type == "text" and type(first.text) == "string" then
+          local id = first.text:match("^Started delegate (%S+)%. Its log is (%S+)%.$")
+          if id ~= nil then
+            row.job = id
+          end
+        end
+      end
       if outcome.artifact ~= nil then
         row.artifact = outcome.artifact
       end
@@ -110,11 +124,14 @@ fiber.tool("codemode", {
       out[#out + 1] = "Script failed: " .. tostring(failure)
     end
     for _, row in ipairs(ledger) do
-      if row.artifact ~= nil then
-        out[#out + 1] = "- " .. row.name .. " " .. row.status .. " " .. row.artifact
-      else
-        out[#out + 1] = "- " .. row.name .. " " .. row.status
+      local line = "- " .. row.name .. " " .. row.status
+      if row.job ~= nil then
+        line = line .. " job " .. row.job
       end
+      if row.artifact ~= nil then
+        line = line .. " " .. row.artifact
+      end
+      out[#out + 1] = line
     end
     return table.concat(out, "\n")
   end,

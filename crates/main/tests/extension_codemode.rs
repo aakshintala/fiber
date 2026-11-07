@@ -15,11 +15,17 @@
 mod extension_harness;
 mod support;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Output;
+use std::sync::mpsc;
+use std::thread;
 
+use fakes::{ProviderServer, Request, Watchdog};
 use serde_json::{Value, json};
-use support::{Setup, run_to_exit, write_json};
+use support::{
+    KillGroup, SessionGuard, Setup, function_call, hello, run_to_exit, stream, text_reply,
+    write_json,
+};
 
 /// The first-party package under test.
 const CODEMODE_NAME: &str = "github.com/aakshintala/fiber/extensions/codemode";
@@ -507,6 +513,306 @@ fn a_printed_denied_outcome_shows_its_reason_and_status() {
         "the outcome ends with its reason then its status: {text:?}"
     );
     assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+/// Installs provider `name` with model `m` on `protocol` at `url`.
+fn install_url(setup: &Setup, name: &str, url: &str, protocol: &str) {
+    let source = setup.root.path().join(format!("src-{name}"));
+    let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
+    manifest["providers"] = Value::Object(
+        [(name.to_owned(), json!([format!("{url}/v1")]))]
+            .into_iter()
+            .collect(),
+    );
+    support::write_json(&source.join("extension.json"), &manifest);
+    let model = json!({"id": "m", "protocol": protocol, "base_url": format!("{url}/v1"), "context_window": 100000});
+    support::write_json(
+        &source.join(format!("providers/{name}.json")),
+        &json!({
+            "name": name,
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [model]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// Installs the parent's `pa/m` and the child's `pb/m` on
+/// `openai-responses`, and configures the parent's model and reviewer.
+fn providers(setup: &Setup, parent: &ProviderServer, child: &ProviderServer) {
+    install_url(setup, "pa", &parent.url(), "openai-responses");
+    install_url(setup, "pb", &child.url(), "openai-responses");
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"}}),
+    );
+}
+
+/// A standing allow for `delegate_spawn`.
+fn standing_allow(setup: &Setup) {
+    std::fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+        ),
+    )
+    .unwrap();
+}
+
+/// The session keeps serving instead of idling out: an exit proves the run
+/// ended on its own.
+fn slow_idle(setup: &Setup) {
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000}}),
+    );
+}
+
+/// Arms the watchdog for `setup`: every child holds the test root on its
+/// command line, so a failing test leaves no child behind. First, before
+/// any fallible step.
+fn arm(setup: &Setup) -> SessionGuard {
+    SessionGuard::arm(setup.deadline, &setup.root.path().to_string_lossy())
+}
+
+/// A `codemode` call running `source`: the parent's first reply.
+fn codemode_call(source: &str) -> Value {
+    function_call("call_codemode", "codemode", &json!({"source": source}))
+}
+
+/// The finished `fiber ask` under the delegate drive: its exit code, stdout
+/// lines and stderr.
+struct Finished {
+    code: Option<i32>,
+    lines: Vec<Value>,
+    stderr: String,
+}
+
+/// Runs `fiber ask` to its exit under the test's deadline, in its own
+/// process group with a watchdog beside it: expiry kills the group and
+/// reaps it, and the watchdog kills the group when the test dies first
+/// (`docs/testing.md`, "Running tests").
+fn run_ask(setup: &Setup, prompt: &str) -> Finished {
+    fakes::warm_up(Path::new(env!("CARGO_BIN_EXE_fiber")), &["--bogus"], 2);
+    let child = setup.fiber(&["ask", prompt]).spawn().unwrap();
+    let group = child.id();
+    let guard = KillGroup(group);
+    let watchdog = Watchdog::group(group);
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match setup.deadline.recv(&finished) {
+        Ok(output) => output.unwrap(),
+        Err(_) => support::expired(setup.deadline, group, &finished, "`fiber ask` to exit"),
+    };
+    assert!(
+        !fakes::group_alive(group),
+        "`fiber ask` left a process in its group behind"
+    );
+    // The group is empty. Skip the drop, which would kill it again, and
+    // tell the watchdog to exit without signalling.
+    std::mem::forget(guard);
+    watchdog.stand_down(setup.deadline.cleanup_phase());
+    Finished {
+        code: output.status.code(),
+        lines: String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+/// The `tool_call_completed` in `lines` whose text holds `needle`: the
+/// outer call's completion, since inner completions carry only one tool's
+/// output.
+#[track_caller]
+fn finished_holding<'a>(lines: &'a [Value], needle: &str) -> &'a Value {
+    lines
+        .iter()
+        .filter(|line| line["kind"] == "tool_call_completed")
+        .find(|line| {
+            line["payload"]["content"]
+                .as_array()
+                .is_some_and(|content| {
+                    content.iter().any(|part| {
+                        part["text"]
+                            .as_str()
+                            .is_some_and(|text| text.contains(needle))
+                    })
+                })
+        })
+        .unwrap_or_else(|| panic!("no tool_call_completed holding {needle:?}"))
+}
+
+/// The single text of a `tool_call_completed`'s one text part.
+#[track_caller]
+fn finished_text(completed: &Value) -> &str {
+    let content = completed["payload"]["content"]
+        .as_array()
+        .expect("content is a list of one text part");
+    assert_eq!(content.len(), 1, "content holds one part");
+    assert_eq!(content[0]["type"], "text");
+    content[0]["text"].as_str().expect("the part holds text")
+}
+
+#[test]
+fn a_spawn_row_names_its_job_id() {
+    const SOURCE: &str = "local o = host.tool(\"delegate_spawn\", { description = \"scan\", prompt = \"say hello\", model = \"fiber:pb/m\" })\nprint(o)";
+    let setup = Setup::new();
+    let _guard = arm(&setup);
+    let child = ProviderServer::start_responding(|_: &Request| hello()).unwrap();
+    // Reviewer requests carry no tools, so they answer allow; the first
+    // model request streams the codemode call; once its result is back the
+    // turn ends on hello.
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if text.contains("Script finished") || text.contains("Script failed:") {
+            return hello();
+        }
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        stream(&[codemode_call(SOURCE)])
+    })
+    .unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+    install_codemode(&setup);
+
+    let finished = run_ask(&setup, "run it");
+    assert_eq!(finished.code, Some(0), "stderr: {}", finished.stderr);
+    // The outer completion holding Script finished prints the receipt and
+    // carries the spawn row with the new job's id.
+    let completed = finished_holding(&finished.lines, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = finished_text(completed);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "printed receipt, status, one row: {text:?}");
+    assert_eq!(lines[1], "Script finished");
+    let id = lines[2]
+        .strip_prefix("- delegate_spawn completed job ")
+        .expect("the spawn row names its job id");
+    assert!(
+        !id.is_empty() && !id.contains(' '),
+        "the id is one token: {id:?}"
+    );
+    // The printed receipt names the same id: the outcome no longer hides
+    // the job the script started.
+    assert!(
+        lines[0].contains(id),
+        "the printed receipt names the job id: {text:?}"
+    );
+    // The id is the job the spawn started in this run.
+    let started = finished
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "job_started")
+        .expect("a job_started in the run");
+    assert_eq!(started["payload"]["job_id"].as_str(), Some(id));
+    assert_eq!(
+        child.requests().len(),
+        1,
+        "the child called its provider once"
+    );
+}
+
+#[test]
+fn a_fabricated_receipt_in_a_non_job_row_stays_plain() {
+    let source = "local o = host.tool(\"read\", { path = \"trap.txt\" })\nprint(o.content[1].text)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    std::fs::write(
+        setup.workspace().join("trap.txt"),
+        "Started delegate j_fake. Its log is /tmp/fake.log.",
+    )
+    .unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    // Receipt-shaped file content through another tool leaves the row
+    // byte-identical: no job id.
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "Started delegate j_fake. Its log is /tmp/fake.log.\nScript finished\n- read completed"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_denied_spawn_row_names_no_job() {
+    let source = "local o = host.tool(\"delegate_spawn\", { description = \"scan\", prompt = \"say hello\", model = \"fiber:pb/m\" })\nprint(o.status)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    setup.lua(
+        "deny",
+        "fiber.hook(\"before_tool\", { timeout = 30000, on_failure = \"blocking\",\n\
+           run = function(call) if call.tool == \"delegate_spawn\" then return { refuse = \"nope\" } end end })\n",
+    );
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    // A refused spawn carries denial text, not the receipt sentence: the
+    // row stays plain.
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "denied\nScript finished\n- delegate_spawn denied"
+    );
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn a_redacted_spawn_receipt_row_names_no_job() {
+    const SOURCE: &str = "local o = host.tool(\"delegate_spawn\", { description = \"scan\", prompt = \"say hello\", model = \"fiber:pb/m\" })\nprint(\"hello\")";
+    let setup = Setup::new();
+    let _guard = arm(&setup);
+    let child = ProviderServer::start_responding(|_: &Request| hello()).unwrap();
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if text.contains("Script finished") || text.contains("Script failed:") {
+            return hello();
+        }
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        stream(&[codemode_call(SOURCE)])
+    })
+    .unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+    install_codemode(&setup);
+    // A hook emptying the spawn's content removes the receipt sentence the
+    // script sees: with no id to read the row stays id-less, exactly as
+    // without the matcher.
+    setup.lua(
+        "redact",
+        r#"fiber.hook("after_tool", { timeout = 30000, on_failure = "blocking",
+           run = function(call) if call.tool == "delegate_spawn" then return { content = "" } end end })"#,
+    );
+
+    let finished = run_ask(&setup, "run it");
+    assert_eq!(finished.code, Some(0), "stderr: {}", finished.stderr);
+    let completed = finished_holding(&finished.lines, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        finished_text(completed),
+        "hello\nScript finished\n- delegate_spawn completed"
+    );
 }
 
 #[test]
