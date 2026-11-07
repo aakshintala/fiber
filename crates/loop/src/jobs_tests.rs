@@ -2175,7 +2175,7 @@ fn a_session_message_kept_by_a_cancelled_turn_runs_after_close_with_no_jobs() {
 /// What the ending notice reads for `ids`.
 fn ending_text(ids: &[&str]) -> String {
     format!(
-        "Fiber: this session is about to end, and these background jobs are still running: {}. Stop any you do not need with `jobs stop`; the rest will be waited for.",
+        "Fiber: this session is about to end, and these background jobs are still running: {}. Stop any you do not need with `jobs stop`; the rest will be waited for. A process meant to outlive the session must be started with `shell` and `detach: true`.",
         ids.join(", ")
     )
 }
