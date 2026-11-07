@@ -641,20 +641,9 @@ fn a_non_model_key_skips_the_model_check() {
     setup.set(Layer::Global, "roles.fast", "zz/top").unwrap();
 }
 
-#[test]
-fn distance_pins_known_edit_counts() {
-    assert_eq!(super::distance("", "ab"), 2);
-    assert_eq!(super::distance("abc", ""), 3);
-    assert_eq!(super::distance("kitten", "sitting"), 3);
-    assert_eq!(super::distance("ab", "ba"), 2);
-}
-
-#[test]
-fn distance_ranks_a_shared_prefix_closer_than_a_single_letter() {
-    assert_eq!(super::distance("abc", "ab"), 1);
-    assert_eq!(super::distance("abc", "a"), 2);
-    assert!(super::distance("abc", "ab") < super::distance("abc", "a"));
-}
+/// The edit-count pins moved with the shared `distance` helper they pin
+/// (`extensions::providers::suggest`); the closest-model pins above keep
+/// covering the CLI's own ranking through it.
 
 /// As [`install`], with model `m` at `https://{workspace}/v1` read through
 /// `placeholders`: no `env` naming means the process environment can never
