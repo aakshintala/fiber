@@ -379,9 +379,7 @@ fn status_right(app: &App) -> Joined {
         spans: Vec::new(),
         spots: Vec::new(),
     };
-    let model = panel
-        .model()
-        .or_else(|| panel.status().map(|status| status.model.as_str()));
+    let model = panel.session_model();
     let mut spans = Vec::new();
     if let Some(model) = model {
         spans.push(Span::styled(model.to_owned(), style(Role::Accent)));
@@ -542,9 +540,7 @@ fn row_input(app: &App, flat: bool) -> InputStatus<'_> {
     });
     InputStatus {
         workspace: status.map(|status| status.workspace.as_str()),
-        model: panel
-            .model()
-            .or_else(|| status.map(|status| status.model.as_str())),
+        model: panel.session_model(),
         thinking: panel.thinking(),
         context: known.map(|(window, context)| Context {
             tokens: context.tokens,
