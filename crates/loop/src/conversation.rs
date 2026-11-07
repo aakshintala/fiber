@@ -878,7 +878,10 @@ fn controlled(completed: &ToolCallCompleted) -> Option<&Control> {
 /// What an `instruction_file` line appends to the conversation, if
 /// anything: `own_edit` and `sent: none` render nothing. A diff renders
 /// from the content the model last had and the file's content now, both
-/// in the log (`docs/system-prompt.md`, "Recording").
+/// in the log (`docs/system-prompt.md`, "Recording"). A stub renders
+/// from the line alone: the persisted size and the headings of the full
+/// content it carries, for a `subdirectory` first touch and for a later
+/// `changed` or `created` send of a stubbed path.
 fn changed_message(file: &InstructionFile, had: &BTreeMap<String, String>) -> Option<String> {
     let content = file.content.as_deref().unwrap_or("");
     let text = match (&file.reason, &file.sent) {
@@ -923,12 +926,48 @@ fn changed_message(file: &InstructionFile, had: &BTreeMap<String, String>) -> Op
                 ("content", content),
             ],
         ),
+        (InstructionReason::Subdirectory, InstructionSent::Stub)
+        | (InstructionReason::Changed, InstructionSent::Stub)
+        | (InstructionReason::Created, InstructionSent::Stub) => {
+            // The stub's size is the raw byte length read at emit time,
+            // carried on the line so a rebuild renders the identical
+            // bytes; a pre-change line without one falls back to the
+            // logged content's length.
+            let size = file
+                .size
+                .map(|size| size.to_string())
+                .unwrap_or_else(|| content.len().to_string());
+            let headings = stub_headings(content);
+            fill(
+                message("subdirectory-stub"),
+                &[
+                    ("path", file.path.as_str()),
+                    ("dir", dir_of(&file.path).as_str()),
+                    ("size", size.as_str()),
+                    ("headings", headings.as_str()),
+                ],
+            )
+        }
         (InstructionReason::Deleted, InstructionSent::Deleted) => {
             fill(message("deleted-file"), &[("path", file.path.as_str())])
         }
         _ => return None,
     };
     Some(text)
+}
+
+/// A stub's headings block: every line starting with `#` once leading
+/// whitespace is stripped, in file order with duplicates kept, or `(no
+/// headings)` when the file holds none.
+fn stub_headings(content: &str) -> String {
+    let headings: Vec<&str> = content
+        .lines()
+        .filter(|line| line.trim_start().starts_with('#'))
+        .collect();
+    if headings.is_empty() {
+        return "(no headings)".to_owned();
+    }
+    headings.join("\n")
 }
 
 /// The file's parent directory: `{dir}` for every section that has it.
