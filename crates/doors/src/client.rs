@@ -1253,6 +1253,11 @@ pub(crate) fn session_command_refusal(
         | Command::OfferedFile(_)
         | Command::Unknown => return None,
     };
+    // The socket and the hub relay read one shared refusal set: a name
+    // the set does not hold is never refused, whatever it classifies as.
+    if !contract::commands::is_from_session_command(command_name) {
+        return None;
+    }
     let refusal = || FromSessionRefusal::SessionCommand {
         command: command_name,
         target,
