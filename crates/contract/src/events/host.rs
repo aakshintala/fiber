@@ -281,9 +281,18 @@ pub struct DelegateFinished {
     pub job_id: JobId,
     /// The final message, bounded.
     pub text: String,
-    /// The full final message's path, when cut.
+    /// The file holding the final message, relative to the session
+    /// directory that owns it: `artifacts/final.md` in the delegate's own
+    /// directory, except when a hook returned artifact text for the
+    /// finish, then that hook's `artifacts/<job_id>.txt` in the parent's.
+    /// Absent when no file was written or the harness is not Fiber.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
+    /// The final-message file's absolute path, which the wake and
+    /// `jobs wait` name. Absent when the file was not written, on another
+    /// harness, and on a line logged before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_absolute: Option<String>,
     /// When the delegate's turn ended on `ask_user`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub questions: Option<Vec<Question>>,

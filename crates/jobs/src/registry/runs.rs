@@ -4,6 +4,7 @@
 //! under a registry-wide gate, so two messages to one finished delegate
 //! start one run.
 
+use std::path::Path;
 use std::sync::{Arc, Weak};
 use std::time::Instant;
 
@@ -19,6 +20,41 @@ use super::park::Parked;
 use super::{Registry, final_text, lock};
 use crate::delegate::outcome::empty;
 use crate::error::JobsError;
+
+/// `finished` naming the file a Fiber delegate's final message is delivered
+/// to: `artifacts/final.md` in the delegate's own session directory, the
+/// parent of its `events.jsonl`. Another harness's finish names none.
+fn with_final_file(job: &super::Job, mut finished: DelegateFinished) -> DelegateFinished {
+    let fiber = job
+        .delegate
+        .as_ref()
+        .is_some_and(|started| started.harness == "fiber");
+    if let (true, Some(dir)) = (fiber, job.path.parent()) {
+        finished.artifact = Some(contract::events::FINAL_MESSAGE.to_owned());
+        finished.artifact_absolute = Some(
+            dir.join(contract::events::FINAL_MESSAGE)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    finished
+}
+
+/// `finished` without the file name when the file's session directory is
+/// gone: the delivery writes the file only under an existing session
+/// directory and creates none, so no file will exist for a `wait` to name.
+fn without_unwritable_file(finished: &DelegateFinished) -> DelegateFinished {
+    let mut finished = finished.clone();
+    let session_exists = finished
+        .artifact_absolute
+        .as_deref()
+        .and_then(|file| Path::new(file).parent()?.parent())
+        .is_some_and(Path::is_dir);
+    if !session_exists {
+        finished.artifact_absolute = None;
+    }
+    finished
+}
 
 /// What `id` names in this session's registry.
 #[derive(Debug)]
@@ -440,7 +476,8 @@ impl Registry {
         } else {
             finished
         };
-        let text = final_text(&job.path, completed, finished);
+        let unwritable = finished.map(without_unwritable_file);
+        let text = final_text(&job.path, completed, unwritable.as_ref());
         Some(Answer {
             text,
             settle: Some(self.settle_through(id, Mark::end(run))),
@@ -485,6 +522,10 @@ impl Registry {
             job.phase = super::Phase::Ended(Box::new(completed.clone()));
             // The terminal closes with the job.
             job.input = None;
+            // The one value both the wake and a `wait` read, so they name
+            // the same file. Nothing is written here: the delivery writes
+            // the file after the hooks.
+            let delegate = delegate.map(|finished| with_final_file(job, finished));
             // A delegate's finish is kept past the end, for a later
             // `wait` and its text.
             job.finished = delegate.clone();
