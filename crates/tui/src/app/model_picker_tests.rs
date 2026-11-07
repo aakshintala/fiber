@@ -1924,6 +1924,80 @@ fn ctrl_s_sends_one_model_command_and_waits_on_nothing() {
     assert!(app.model_picker.awaiting.is_empty());
 }
 
+/// A `session_status` naming `model`, mirroring `streaming` but idle.
+fn status_model(model: &str) -> crate::link::Line {
+    session_line(
+        SESSION,
+        "session_status",
+        json!({
+            "name": "fix the parser",
+            "workspace": "/w",
+            "project": "-w",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": model,
+            "delegates": 0,
+            "jobs": 0,
+            "clients": 0,
+            "state": "idle",
+        }),
+    )
+}
+
+/// The status row's line: the one line joining a side to the `ctx`
+/// segment with `│`.
+fn status_row(app: &App) -> String {
+    let (width, height) = app.screen_size();
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    let rows: Vec<String> = crate::view::text(&buf)
+        .lines()
+        .filter(|row| row.contains("ctx") && row.contains("│"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(rows.len(), 1, "one status row, got {rows:?}");
+    rows.into_iter().next().expect("a status row")
+}
+
+/// Mid-session Ctrl+S holds the old model until the session accepts:
+/// the row still names it after the send, and names the new model
+/// once the accept, the switch and the fresh status land. The accept
+/// alone changes no display; the session's switch envelopes do, so
+/// this fails with them reverted (`docs/tui.md`, "The input box").
+#[test]
+fn ctrl_s_mid_session_updates_the_row_once_the_session_accepts() {
+    let (mut app, _) = choosing_app();
+    app.on_line(preamble_line("test/model", Some("high")));
+    app.on_line(status_model("test/model"));
+    let row = status_row(&app);
+    assert!(row.contains("test/model"), "{row:?}");
+    // Idle, Ctrl+S another model: the `model` command goes out, and
+    // the row still names the old model before the accept.
+    open(&mut app);
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert_eq!(selected(&app).as_deref(), Some("acme/m2"));
+    let line = sent(ctrl_s(&mut app));
+    assert_eq!(line["command"], json!("model"));
+    assert_eq!(line["args"]["model"], json!("acme/m2"));
+    let row = status_row(&app);
+    assert!(row.contains("test/model"), "{row:?}");
+    assert!(!row.contains("acme/m2"), "{row:?}");
+    // The accept books the mark but draws nothing new.
+    let id = line["id"].as_str().expect("an id").to_owned();
+    app.on_line(accepted(SESSION, &id));
+    let row = status_row(&app);
+    assert!(row.contains("test/model"), "{row:?}");
+    // The switch lands: the fresh status names the new model first.
+    app.on_line(changed_line("acme/m2", None));
+    app.on_line(status_model("acme/m2"));
+    let row = status_row(&app);
+    assert!(row.contains("acme/m2"), "{row:?}");
+    assert!(!row.contains("test/model"), "{row:?}");
+}
+
 #[test]
 fn ctrl_s_with_the_quit_question_up_sends_nothing_from_a_choosable_row() {
     let mut app = quitting();
