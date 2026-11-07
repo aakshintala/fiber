@@ -1547,6 +1547,55 @@ mod refusal_tests {
     }
 
     #[test]
+    fn socket_refuses_exactly_the_shared_from_session_set() {
+        use contract::commands::{SubscribeArgs, SubscribeLevel};
+        fn line_for(command: &str) -> Command {
+            match command {
+                "prompt" => prompt(),
+                "steer" => steer(),
+                "reply" => labels_reply(),
+                "sandbox" => sandbox(true),
+                _ => unreachable!("the shared set names its members"),
+            }
+        }
+        for command in contract::commands::FROM_SESSION_COMMANDS {
+            let script = host_target(session_argv(OWNED));
+            let denied = refused(
+                &local(PEER, &[HOST]),
+                &line_for(command),
+                &other_id(),
+                &script,
+            )
+            .unwrap_or_else(|| panic!("{command} sharing a session process is refused"));
+            assert_eq!(denied.code, contract::ErrorCode::FromSession, "{command}");
+            assert!(
+                denied.message.contains(command),
+                "{command}: {}",
+                denied.message
+            );
+            assert!(
+                denied.message.contains(OTHER),
+                "{command}: {}",
+                denied.message
+            );
+        }
+        // Commands outside the shared set stay reachable, including an
+        // unrecognized wire name and the near miss of the newest member
+        // (both read as `Unknown`, never refused).
+        let script = host_target(session_argv(OWNED));
+        let subscribe = Command::Subscribe(SubscribeArgs {
+            level: SubscribeLevel::Full,
+            credential: None,
+        });
+        for command in [message(), subscribe, Command::Cancel, Command::Unknown] {
+            assert!(
+                refused(&local(PEER, &[HOST]), &command, &other_id(), &script).is_none(),
+                "a command outside the shared set is never refused"
+            );
+        }
+    }
+
+    #[test]
     fn prompt_and_steer_sharing_a_session_process_are_refused() {
         let script = host_target(session_argv(OWNED));
         for command in [prompt(), steer(), labels_reply()] {
@@ -1639,7 +1688,13 @@ mod refusal_tests {
     #[test]
     fn the_direct_parent_reaches_its_session_but_never_an_approval() {
         let script = parent_target();
-        for command in [prompt(), steer(), question_reply(), labels_reply()] {
+        for command in [
+            prompt(),
+            steer(),
+            question_reply(),
+            labels_reply(),
+            sandbox(true),
+        ] {
             assert!(
                 refused(&local(PEER, &[HOST]), &command, &other_id(), &script).is_none(),
                 "the delegate's own client reaches it"
