@@ -2056,15 +2056,18 @@ through the `input_status` slot ("Extension seams").
   `shell` for `!` or `shell · not sent` for `!!`, right-aligned. A bare `!`
   already marks the draft. Backspace past the `!` clears the marker, and an
   image draft shows none. The label is chrome and sheds first when the box
-  is cut short. The `! ` prompt stays. While a run is in flight, the box
-  carries the run's label instead, and the draft prompt stays plain. Each
-  run shows as one transcript row: `! <command>`, then `sent with your next
-  prompt` for `!` or `only you see this` for `!!`, then the output as it
-  arrived, then `exit N` (`exit 0` included) or `signal S`. A run with
-  neither ending shows no ending. A command that could not start shows
-  `! <command>` then `<code>: <message>` as it arrived. A refused run puts
-  that row on its session beside the notice. Shell rows show the full
-  output with no 20-line cap.
+  is cut short. The `! ` prompt stays. While a run is in flight and
+  the draft is outside shell mode, the box carries the run's label
+  instead, and the draft prompt stays plain. A shell draft keeps its own
+  marker and `! ` prompt. Each run shows as one transcript row:
+  `! <command>`, then `sent with your next
+  prompt` for `!` or `only you see this` for `!!`, then the output with
+  trailing whitespace dropped, then `exit N` (`exit 0` included) or
+  `signal S`. A run with neither ending shows no ending. A command that
+  could not start shows `! <command>` then `<code>: <message>` as it
+  arrived. A refused run puts that row on the attached screen beside the
+  notice. A session `duplicate_command` refusal draws neither a row nor a
+  notice. Shell rows show the full output with no 20-line cap.
 
 ### Bindings
 
