@@ -466,6 +466,8 @@ pub enum InstructionSent {
     Deleted,
     /// Nothing.
     None,
+    /// A stub was sent instead of the full text: path, size and headings.
+    Stub,
 }
 
 /// `instruction_file`.
@@ -484,7 +486,15 @@ pub struct InstructionFile {
     pub content: Option<String>,
     /// What the model was sent.
     pub sent: InstructionSent,
+    /// The raw byte length read when the line was emitted, present on
+    /// `stub` lines for replay; absent on every other line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
 }
+
+#[cfg(test)]
+#[path = "context_tests.rs"]
+mod tests;
 
 /// `date_changed`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

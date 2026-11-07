@@ -1270,6 +1270,7 @@ fn known_hosts_history_and_fork_fold_each_parent_only_to_its_point() {
             extension: None,
             content: Some("https://instructions.test/".into()),
             sent: InstructionSent::Full,
+            size: None,
         }),
         Event::ToolCallCompleted(surfaced),
         Event::PermissionResolved(allowed),
@@ -1328,6 +1329,7 @@ fn known_hosts_resume_and_fork_keep_changes_without_surfaced_hosts() {
         extension: None,
         content: Some("https://instructions.test/".into()),
         sent: InstructionSent::Full,
+        size: None,
     });
     let mut changed = crate::completion::completed(String::new(), None);
     changed.changes = Some(vec![FileChange {

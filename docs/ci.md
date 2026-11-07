@@ -29,6 +29,14 @@ more jobs ran, and the macOS cap held jobs back for 85 of 3,250 queued
 minutes. A change that saves jobs, such as fewer mutants shards, shortens the
 queue; one that saves only macOS jobs does not.
 
+Nightly releases share the backstop pushes' concurrency group (`ci-main` in
+both `.github/workflows/release.yml` and `.github/workflows/ci.yml`). A
+nightly never overlaps a backstop run while either waits on the 5-slot macOS
+cap. The group does not cover the whole cap. Pull-request macOS legs
+(`bug_red_macos`), stable push releases (the `release-push` group), manually
+dispatched workflows, and other repositories on the account still use macOS
+slots beside a nightly.
+
 Every runner has a C compiler, which `mlua` needs to build Lua
 ([ADR 0006](adr/0006-extension-runtime-lua.md)).
 
@@ -537,7 +545,7 @@ opened.
 
 ## The backstop on `main`
 
-Every push to `main` runs the backstop. It runs the lint, test_linux, test,
+Each push to `main` queues a backstop run. It runs the lint, test_linux, test,
 stress and release jobs the selection chooses from the diff
 since the last `main` commit whose backstop passed. The tests run on all
 three platforms, and it compiles
@@ -551,12 +559,19 @@ artifact, both for a later pull request's base. A push runs every gating row, as
 stripped binary's size in bytes, so a size history is one artifact per commit.
 
 One backstop runs and one waits. All pushes to `main` share a concurrency group
-that cancels nothing, so the running backstop finishes, which lets `main` record
-a pass during a stream of merges, and GitHub replaces a waiting backstop with
-the newest push. The newest backstop's selection covers every commit it
-replaced, because it diffs from the last passing commit. A replaced commit
-stores no release binary; a pull request based on one compares against the
-nearest ancestor that has one ("On every pull request that changes code").
+(`ci-main`) with non-rehearsal nightly releases, and the group never cancels
+a running run, so the running backstop finishes, which lets `main` record
+a pass during a stream of merges. GitHub keeps one pending run per group:
+a newer push replaces a waiting backstop, and a nightly joining the group
+evicts a waiting push. The newest backstop's selection covers every commit it
+replaced, including commits evicted by a nightly, because it diffs from the
+last passing commit. A replaced or evicted commit stores no release binary
+until that next backstop runs; a pull request based on one compares against
+the nearest ancestor that has one ("On every pull request that changes code").
+When `main` is quiet, that next backstop does not run until the next push,
+so an evicted commit has no backstop result and no stored release binary
+until then. If nightly evictions keep happening, the remedy is to move the
+05:00Z nightly cron, not to widen the fence.
 
 The backstop runs no mutants. Each pull request already tests its own diff
 ("On every pull request that changes code"), and a second run on `main` would
@@ -636,6 +651,16 @@ directory and environment, against a throwaway pre-release version it deletes,
 with its tag, in an always-run cleanup step; it does not prove the archives,
 which carry stand-in bytes while the release gate proves the real ones. Only
 `main` can run it: the `release` environment deploys only from `main`.
+
+A nightly shares the backstop pushes' concurrency group (`ci-main`). A
+nightly and a backstop push serialize in either order: whichever run starts
+first finishes before the other starts. The two never overlap while the
+nightly runs. GitHub keeps one pending run per group, so a push landing while
+a nightly waits replaces the queued nightly. A replaced run reads as
+cancelled, never green, so the pause (`docs/workflow.md`, "Merging") does not
+end falsely. The next scheduled nightly recovers. A rehearsal dispatch
+(`-f rehearse=true`) keeps its own group and never joins the hold. Stable
+push releases (the `release-push` group) still overlap nightlies.
 
 ### The nightly update check
 
