@@ -829,10 +829,11 @@ fn a_configured_cap_above_the_default_shows_more() {
 
 #[test]
 fn an_uncapped_read_returns_a_200kb_single_line_file_whole() {
-    // The inner path runs the read uncapped (`with_cap(usize::MAX)` in
-    // `Loop::start_inner`): a default-cap file that the outer path would
-    // cut at its own 16 KiB slice reaches the caller whole, with no
-    // long-line notice. The outer cut stays pinned by the tests below.
+    // The inner path runs a head-only own cut uncapped (the loop keeps a
+    // head-only `with_cap(usize::MAX)` form and discards a both-ends one):
+    // a default-cap file that the outer path would cut at its own 16 KiB
+    // slice reaches the caller whole, with no long-line notice. The outer
+    // cut stays pinned by the tests below.
     let dir = TempDir::new("fiber-read-uncapped-200kb");
     let body = "R".repeat(200 * 1024);
     fs::write(dir.path().join("a.txt"), &body).unwrap();

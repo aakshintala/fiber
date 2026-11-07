@@ -792,3 +792,165 @@ fn inner_untruncated_denied_completion_is_unchanged() {
     assert!(done.artifact.is_none());
     assert!(done.kept.is_none());
 }
+
+/// A tool with a settable bound and `with_cap` answer, recording what
+/// `with_cap` was asked, for the head-only bypass.
+struct Uncap {
+    bound: contract::tool::Bound,
+    answer: Option<Arc<dyn contract::tool::Tool>>,
+    calls: std::sync::Mutex<Vec<usize>>,
+}
+
+impl contract::tool::Tool for Uncap {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "uncap".into(),
+            description: "A head-only bypass probe.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+                confined: false,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            review_when_confined: false,
+            hosts: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output::default()
+    }
+
+    fn bound(&self) -> contract::tool::Bound {
+        self.bound
+    }
+
+    fn with_cap(&self, cap: usize) -> Option<Arc<dyn contract::tool::Tool>> {
+        self.calls.lock().unwrap().push(cap);
+        self.answer.clone()
+    }
+}
+
+fn uncap_tool(
+    bound: contract::tool::Bound,
+    answer: Option<Arc<dyn contract::tool::Tool>>,
+) -> Arc<Uncap> {
+    Arc::new(Uncap {
+        bound,
+        answer,
+        calls: std::sync::Mutex::new(Vec::new()),
+    })
+}
+
+#[test]
+fn inner_head_only_own_cut_runs_uncapped() {
+    // A head-only tool whose uncapped form stays head-only is bypassed.
+    let uncapped = uncap_tool(
+        contract::tool::Bound {
+            start: usize::MAX,
+            end: 0,
+        },
+        None,
+    );
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 16_384,
+            end: 0,
+        },
+        Some(uncapped.clone() as Arc<dyn contract::tool::Tool>),
+    );
+    let out = super::uncap_head_only(tool.clone() as Arc<dyn contract::tool::Tool>);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(uncapped.clone() as Arc<dyn contract::tool::Tool>)
+    ));
+    assert_eq!(tool.calls.lock().unwrap().as_slice(), &[usize::MAX]);
+}
+
+#[test]
+fn inner_both_ends_tool_runs_as_prepared_without_asking_for_uncapped() {
+    // A both-ends bound keeps its tail: the bypass never asks for an
+    // uncapped form, so the spill that follows the bound stays as it is.
+    let uncapped = uncap_tool(
+        contract::tool::Bound {
+            start: usize::MAX / 2,
+            end: usize::MAX / 2,
+        },
+        None,
+    );
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 8192,
+            end: 8192,
+        },
+        Some(uncapped as Arc<dyn contract::tool::Tool>),
+    );
+    let before: Arc<dyn contract::tool::Tool> = tool.clone();
+    let out = super::uncap_head_only(before);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(tool.clone() as Arc<dyn contract::tool::Tool>)
+    ));
+    assert!(tool.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn inner_head_only_tool_whose_uncapped_grows_a_tail_runs_as_prepared() {
+    // A head-only bound whose uncapped form grows a tail is discarded.
+    let uncapped = uncap_tool(
+        contract::tool::Bound {
+            start: usize::MAX / 2,
+            end: usize::MAX / 2,
+        },
+        None,
+    );
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 16_384,
+            end: 0,
+        },
+        Some(uncapped as Arc<dyn contract::tool::Tool>),
+    );
+    let out = super::uncap_head_only(tool.clone() as Arc<dyn contract::tool::Tool>);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(tool.clone() as Arc<dyn contract::tool::Tool>)
+    ));
+}
+
+#[test]
+fn inner_tool_without_its_own_cut_runs_as_prepared() {
+    // No own cut answers `None` and runs as prepared.
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 16_384,
+            end: 0,
+        },
+        None,
+    );
+    let out = super::uncap_head_only(tool.clone() as Arc<dyn contract::tool::Tool>);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(tool.clone() as Arc<dyn contract::tool::Tool>)
+    ));
+    assert_eq!(tool.calls.lock().unwrap().as_slice(), &[usize::MAX]);
+}
