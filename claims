@@ -227,3 +227,4 @@ crates/main/tests/delegates.rs	fiber-4189	grant	2026-11-07T11:26:32Z	roundhouse-
 docs/delegates.md	fiber-4189	grant	2026-11-07T11:26:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/delegates/4189-invalid-model-closest	
 docs/tools.md	fiber-4189	grant	2026-11-07T11:26:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/delegates/4189-invalid-model-closest	
 crates/tools/src/shell/background.rs,crates/tools/src/shell/background_tests.rs,crates/tools/tests/shell.rs,crates/loop/src/kept.rs,crates/loop/src/kept_tests.rs,crates/jobs/src/tool_tests.rs,crates/loop/src/jobs_tests.rs,docs/tools.md,docs/events.md,crates/contract/src/events/host.rs	fiber-4240	grant	2026-11-07T11:57:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/jobs/4240-wait-output-tail	
+scripts/test-bug-red	fiber-4369	plan	2026-11-07T15:34:42Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4371
