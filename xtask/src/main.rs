@@ -848,6 +848,10 @@ fn report(name: &str, failures: &[String], ok: &str) -> Result<bool, String> {
 /// The system clock in whole seconds since the epoch: `break-glass-audit`
 /// reads it only as the CLI default when `--now` is omitted; the scheduled job
 /// always passes `--now`.
+// Exempt: the only caller is the CLI default when `--now` is omitted, which
+// `scheduled.yml` never does; a test would read the real clock, which
+// docs/testing.md forbids, so no test can tell `Ok(0)` or `Ok(1)` apart.
+#[cfg_attr(false, mutants::skip)]
 #[allow(
     clippy::disallowed_methods,
     reason = "the audit window is relative to the real day the job runs; tests pass --now"

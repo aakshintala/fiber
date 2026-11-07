@@ -274,6 +274,11 @@ fn the_newest_ci_run_decides_wherever_it_is_listed() {
             include_str!("../fixtures/break_glass_audit/checks_draft_newer.json"),
             false,
         ),
+        // Runs sharing an id: the first listed decides.
+        (
+            include_str!("../fixtures/break_glass_audit/checks_tied_id.json"),
+            true,
+        ),
     ] {
         let report = audit(
             &one(
@@ -363,6 +368,28 @@ fn the_window_opens_exactly_two_days_before_now() {
     assert_eq!(
         window_since(1_772_323_200 + 172_800),
         "2026-03-01T00:00:00Z"
+    );
+}
+
+#[test]
+fn the_cutoff_is_exact_past_the_century_and_400_year_leap_days() {
+    // 2100 is not a leap year: the century term of the civil-date maths bites.
+    assert_eq!(
+        window_since(4_107_542_400 + 172_800),
+        "2100-03-01T00:00:00Z"
+    );
+    assert_eq!(
+        window_since(4_107_542_399 + 172_800),
+        "2100-02-28T23:59:59Z"
+    );
+    // 2400 is: its leap day is the last day of the 400-year era.
+    assert_eq!(
+        window_since(13_574_608_245 + 172_800),
+        "2400-02-29T12:30:45Z"
+    );
+    assert_eq!(
+        window_since(13_574_649_600 + 172_800),
+        "2400-03-01T00:00:00Z"
     );
 }
 
