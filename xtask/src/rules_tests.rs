@@ -3105,6 +3105,145 @@ fn the_kinds_ratchet_ignores_files_outside_crates() {
     assert!(kinds_ratchet(&files, COMMITTED_KINDS_MAX, COMMITTED_SUPPORT_KINDS_MAX).is_empty());
 }
 
+fn support_jig(name: &str, source: &str) -> RustFile {
+    file("main", &format!("tests/{name}.rs"), source.to_owned())
+}
+
+fn support_module(name: &str, source: &str) -> RustFile {
+    file("main", &format!("tests/support/{name}"), source.to_owned())
+}
+
+#[test]
+fn support_tests_fails_a_shared_support_file_with_tests() {
+    let files = [
+        support_module("mod.rs", "fn helper() {}\n#[test]\nfn helper_holds() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_counts_every_mod_support_declarer_for_a_root_reached_file() {
+    let files = [
+        support_module("mod.rs", "pub(crate) mod pty;\n"),
+        support_module("pty.rs", "#[test]\nfn pty_holds() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+        support_jig("three.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/pty.rs holds 1 #[test] collected by 3 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_passes_a_single_declarer_probe_chain() {
+    let files = [
+        file(
+            "provider",
+            "tests/probe_jig.rs",
+            "#[path = \"support/probe.rs\"]\nmod support;\n".to_owned(),
+        ),
+        file(
+            "provider",
+            "tests/support/probe.rs",
+            "#[cfg(test)]\n#[path = \"probe_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "provider",
+            "tests/support/probe_tests.rs",
+            "#[test]\nfn first() {}\n#[test]\nfn second() {}\n".to_owned(),
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_passes_a_direct_path_support_module_with_tests() {
+    let files = [
+        file(
+            "provider",
+            "tests/record_jig.rs",
+            "#[path = \"support/record.rs\"]\nmod support;\n".to_owned(),
+        ),
+        file(
+            "provider",
+            "tests/support/record.rs",
+            "#[test]\nfn records() {}\n".to_owned(),
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_passes_a_shared_tree_without_tests() {
+    let files = [
+        support_module("mod.rs", "pub(crate) mod pty;\nfn helper() {}\n"),
+        support_module("pty.rs", "fn helper() {}\n"),
+        support_module("hub_start.rs", "pub(crate) fn helper() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig(
+            "two.rs",
+            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\nmod support;\n",
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_passes_zero_or_one_declarer() {
+    let alone = [support_module("mod.rs", "#[test]\nfn lonely() {}\n")];
+    assert!(support_tests(&alone).is_empty());
+    let single = [
+        support_module("mod.rs", "#[test]\nfn lonely() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+    ];
+    assert!(support_tests(&single).is_empty());
+}
+
+#[test]
+fn support_tests_ignores_test_mentions_in_comments_and_strings() {
+    let files = [
+        support_module(
+            "mod.rs",
+            "//! a `#[test]` under support runs in every binary\nfn helper() {}\nfn name() -> &'static str { \"#[test]\" }\n// #[test]\n",
+        ),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_ignores_a_cfg_test_module_without_tests() {
+    let files = [
+        support_module("journey.rs", "#[cfg(test)]\nmod tests;\nfn helper() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_fails_closed_when_a_support_file_does_not_tokenise() {
+    let files = [support_module("mod.rs", "fn broken() { \\ }\n")];
+    let hits = support_tests(&files);
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].starts_with("crates/main/tests/support/mod.rs: does not tokenise as Rust: "),
+        "{hits:?}"
+    );
+}
+
 #[test]
 fn unrecognized_tool_names_reject_nearby_owned_string_spellings() {
     let source = "name: Other::from(\"x\"); name: String X: from(\"x\"); name: String::to_owned(\"x\"); name: Other . to_string(); name: \"x\": to_string(); name String::from(\"wrong\"); other: String::from(\"wrong\");";

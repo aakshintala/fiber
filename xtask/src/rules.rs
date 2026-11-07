@@ -672,6 +672,256 @@ pub(crate) fn signal_sites(files: &[RustFile]) -> Vec<String> {
     failures
 }
 
+/// A support helper file's own tests, and the test binaries compiling
+/// them: a support file reached by more than one test binary holds no
+/// `#[test]`, so each test runs once. Counts test-binary declarers, not
+/// text matches.
+pub(crate) fn support_tests(files: &[RustFile]) -> Vec<String> {
+    let by_path: BTreeMap<&str, &RustFile> = files.iter().map(|f| (f.path.as_str(), f)).collect();
+    let mut failures = Vec::new();
+    for f in files {
+        let Some(tests_dir) = support_tests_dir(f) else {
+            continue;
+        };
+        // A file that does not tokenise could hide a `#[test]`, so it
+        // fails the check rather than being skipped.
+        let count = match test_attr_count(&f.source) {
+            Ok(count) => count,
+            Err(error) => {
+                failures.push(format!("{}: does not tokenise as Rust: {error}", f.path));
+                continue;
+            }
+        };
+        if count == 0 {
+            continue;
+        }
+        let declarers = support_declarers(&f.path, tests_dir, &by_path);
+        if declarers > 1 {
+            failures.push(format!(
+                "{} holds {count} #[test] collected by {declarers} binaries; move it to crates/main/tests/support_helpers.rs",
+                f.path
+            ));
+        }
+    }
+    failures
+}
+
+/// The repo-relative `tests` directory holding `f`, when `f` is a file
+/// under a crate's `tests/support/` tree.
+fn support_tests_dir(f: &RustFile) -> Option<&str> {
+    let rel = f.rel.strip_prefix("tests/support/")?;
+    if rel.is_empty() || !f.path.starts_with("crates/") {
+        return None;
+    }
+    f.path
+        .strip_suffix(&format!("support/{rel}"))
+        .map(|dir| dir.strip_suffix('/').unwrap_or(dir))
+}
+
+/// Every top-level `tests/*.rs` file compiling `support`, as module
+/// declarations name them: `mod support;` compiles the support root with
+/// its declared children, and each `#[path]` declaration compiles its
+/// target with its children. Counts files, so a binary declaring both
+/// counts once.
+fn support_declarers(support: &str, tests_dir: &str, by_path: &BTreeMap<&str, &RustFile>) -> usize {
+    let prefix = format!("{tests_dir}/");
+    by_path
+        .values()
+        .filter(|t| {
+            let rel = t.path.strip_prefix(&prefix).unwrap_or_default();
+            !rel.contains('/') && rel.ends_with(".rs")
+        })
+        .filter(|t| compiled_modules(t, by_path).contains(support))
+        .count()
+}
+
+/// Every file the test target `target` compiles: its declared modules and
+/// their declared children, resolved against the declaring file's
+/// directory. A declaration that resolves to no known file ends its
+/// branch, so an unfamiliar spelling compiles nothing here rather than
+/// everything.
+fn compiled_modules(target: &RustFile, by_path: &BTreeMap<&str, &RustFile>) -> BTreeSet<String> {
+    let mut compiled = BTreeSet::new();
+    let mut stack: Vec<String> = module_decls(&target.source)
+        .into_iter()
+        .filter_map(|(name, path)| resolve_module(&target.path, &name, path.as_deref()))
+        .collect();
+    while let Some(path) = stack.pop() {
+        if !compiled.insert(path.clone()) {
+            continue;
+        }
+        let Some(file) = by_path.get(path.as_str()) else {
+            continue;
+        };
+        stack.extend(
+            module_decls(&file.source)
+                .into_iter()
+                .filter_map(|(child, target)| resolve_module(&path, &child, target.as_deref())),
+        );
+    }
+    compiled
+}
+
+/// The `(name, path)` of every `mod name;` declaration in `source`,
+/// with the `#[path]` above it when one names a file. Tokens carry no
+/// comments, so only real declarations count; `mod name { ... }` holds
+/// its body inline and declares no file.
+fn module_decls(source: &str) -> Vec<(String, Option<String>)> {
+    let Ok(stream) = source.parse::<TokenStream>() else {
+        return Vec::new();
+    };
+    let trees: Vec<TokenTree> = stream.into_iter().collect();
+    let mut decls = Vec::new();
+    decl_mods(&trees, &mut decls);
+    decls
+}
+
+/// Each `mod name;` in `trees`, carrying the nearest `#[path]` above it
+/// in the same token sequence. A pending path survives other attributes
+/// (`#[cfg(test)]` precedes the `#[path]` it guards) but dies on the
+/// next item keyword, so it never leaks past the declaration it names.
+fn decl_mods(trees: &[TokenTree], decls: &mut Vec<(String, Option<String>)>) {
+    let mut pending: Option<String> = None;
+    let mut i = 0;
+    while let Some(tree) = trees.get(i) {
+        match tree {
+            TokenTree::Punct(head) if head.as_char() == '#' => {
+                if let Some(TokenTree::Group(group)) = trees.get(i + 1) {
+                    pending = path_value(group).or(pending);
+                    i += 1;
+                }
+            }
+            TokenTree::Ident(name) if name == "mod" => {
+                if let Some(TokenTree::Ident(child)) = trees.get(i + 1) {
+                    match trees.get(i + 2) {
+                        Some(TokenTree::Punct(end)) if end.as_char() == ';' => {
+                            decls.push((child.to_string(), pending.take()));
+                            i += 2;
+                        }
+                        Some(TokenTree::Group(body))
+                            if body.delimiter() == proc_macro2::Delimiter::Brace =>
+                        {
+                            pending = None;
+                            let inner: Vec<TokenTree> = body.stream().into_iter().collect();
+                            decl_mods(&inner, decls);
+                            i += 2;
+                        }
+                        _ => pending = None,
+                    }
+                }
+            }
+            TokenTree::Ident(name)
+                if matches!(
+                    name.to_string().as_str(),
+                    "fn" | "struct"
+                        | "enum"
+                        | "union"
+                        | "trait"
+                        | "impl"
+                        | "type"
+                        | "const"
+                        | "static"
+                        | "use"
+                        | "extern"
+                ) =>
+            {
+                pending = None;
+            }
+            TokenTree::Group(group) => {
+                let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+                decl_mods(&inner, decls);
+            }
+            TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+        i += 1;
+    }
+}
+
+/// The file of a `#[path]` attribute group, when it holds `path = "..."`.
+fn path_value(group: &proc_macro2::Group) -> Option<String> {
+    let mut inner = group.stream().into_iter();
+    if !is_ident(inner.next().as_ref(), "path") {
+        return None;
+    }
+    if !is_punct(inner.next().as_ref(), '=') {
+        return None;
+    }
+    match inner.next() {
+        Some(TokenTree::Literal(literal)) => {
+            let spelled = literal.to_string();
+            spelled
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .map(str::to_owned)
+        }
+        _ => None,
+    }
+}
+
+/// The file `mod name` (with `#[path]` `path`) in `declaring` resolves
+/// to: the `#[path]` target under the declaring file's directory, the
+/// support root for a bare `mod support`, or the usual sibling file.
+fn resolve_module(declaring: &str, name: &str, path: Option<&str>) -> Option<String> {
+    let dir = declaring.rsplit_once('/')?.0;
+    if let Some(target) = path {
+        if target.is_empty() {
+            return None;
+        }
+        return Some(format!("{dir}/{target}"));
+    }
+    if name == "support" {
+        return Some(format!("{dir}/support/mod.rs"));
+    }
+    Some(format!("{dir}/{name}.rs"))
+}
+
+/// The count of `#[test]` attributes in `source`, read from tokens so
+/// mentions in comments and strings never count. `#[cfg(test)]` and
+/// `#[allow]` name other attributes and never match.
+fn test_attr_count(source: &str) -> Result<usize, String> {
+    let stream: TokenStream = source
+        .parse()
+        .map_err(|error: proc_macro2::LexError| error.to_string())?;
+    let trees: Vec<TokenTree> = stream.into_iter().collect();
+    Ok(count_test_attrs(&trees))
+}
+
+/// Each `#[test]` in `trees`, recursing into groups so attributes nested
+/// in inline modules count with the file that holds them.
+fn count_test_attrs(trees: &[TokenTree]) -> usize {
+    let mut count = 0;
+    let mut i = 0;
+    while let Some(tree) = trees.get(i) {
+        match tree {
+            TokenTree::Punct(head) if head.as_char() == '#' => {
+                if let Some(TokenTree::Group(group)) = trees.get(i + 1) {
+                    if group.delimiter() == proc_macro2::Delimiter::Bracket && is_test_group(group)
+                    {
+                        count += 1;
+                    }
+                    i += 1;
+                }
+            }
+            TokenTree::Group(group) => {
+                let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+                count += count_test_attrs(&inner);
+            }
+            TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+        }
+        i += 1;
+    }
+    count
+}
+
+/// Whether a `[...]` group holds exactly the `test` attribute.
+fn is_test_group(group: &proc_macro2::Group) -> bool {
+    let mut inner = group.stream().into_iter();
+    match inner.next() {
+        Some(TokenTree::Ident(name)) if name == "test" => inner.next().is_none(),
+        _ => false,
+    }
+}
+
 /// Each failure where `trees` holds a process signal. Tokens carry no
 /// comments, so only code and string contents count; a bare `kill` names
 /// nothing on its own. Groups recurse, so signals nested in bodies count
