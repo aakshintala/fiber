@@ -18,12 +18,6 @@ const H3: &str = "3333333333333333333333333333333333333333";
 
 const COUNT_NONE: &str = "audited 2 merges, 0 without green CI, 0 undeclared";
 
-macro_rules! fx {
-    ($name:literal) => {
-        include_str!(concat!("../fixtures/break_glass_audit/", $name, ".json"))
-    };
-}
-
 fn parse(text: &str) -> Value {
     serde_json::from_str(text).expect("a fixture is valid JSON")
 }
@@ -52,7 +46,11 @@ fn rendered(input: &Value) -> Vec<String> {
 
 /// One audited commit `A` whose only PR is `pulls`, checked by `checks`.
 fn one(pulls: &str, checks: &str) -> Value {
-    input(fx!("commits_one"), &[(A, pulls)], &[(H1, checks)])
+    input(
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[(A, pulls)],
+        &[(H1, checks)],
+    )
 }
 
 fn unreadable(input: &Value) -> String {
@@ -62,9 +60,27 @@ fn unreadable(input: &Value) -> String {
 #[test]
 fn green_merges_print_only_the_count() {
     let input = input(
-        fx!("commits_two"),
-        &[(A, fx!("pulls_plain")), (B, fx!("pulls_second"))],
-        &[(H1, fx!("checks_success")), (H2, fx!("checks_success"))],
+        include_str!("../fixtures/break_glass_audit/commits_two.json"),
+        &[
+            (
+                A,
+                include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+            ),
+            (
+                B,
+                include_str!("../fixtures/break_glass_audit/pulls_second.json"),
+            ),
+        ],
+        &[
+            (
+                H1,
+                include_str!("../fixtures/break_glass_audit/checks_success.json"),
+            ),
+            (
+                H2,
+                include_str!("../fixtures/break_glass_audit/checks_success.json"),
+            ),
+        ],
     );
     let report = audit(&input, NOW).expect("readable");
     assert_eq!(report.render(), [COUNT_NONE]);
@@ -73,7 +89,10 @@ fn green_merges_print_only_the_count() {
 
 #[test]
 fn an_undeclared_merge_without_green_ci_fails_and_is_listed() {
-    let input = one(fx!("pulls_plain"), fx!("checks_failure"));
+    let input = one(
+        include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+    );
     let report = audit(&input, NOW).expect("readable");
     assert_eq!(
         report.render(),
@@ -87,7 +106,10 @@ fn an_undeclared_merge_without_green_ci_fails_and_is_listed() {
 
 #[test]
 fn a_declared_merge_is_listed_and_passes() {
-    let input = one(fx!("pulls_declared"), fx!("checks_failure"));
+    let input = one(
+        include_str!("../fixtures/break_glass_audit/pulls_declared.json"),
+        include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+    );
     let report = audit(&input, NOW).expect("readable");
     assert_eq!(
         report.render(),
@@ -102,9 +124,27 @@ fn a_declared_merge_is_listed_and_passes() {
 #[test]
 fn one_undeclared_merge_among_declared_ones_fails_the_run() {
     let input = input(
-        fx!("commits_two"),
-        &[(A, fx!("pulls_declared")), (B, fx!("pulls_second"))],
-        &[(H1, fx!("checks_failure")), (H2, fx!("checks_failure"))],
+        include_str!("../fixtures/break_glass_audit/commits_two.json"),
+        &[
+            (
+                A,
+                include_str!("../fixtures/break_glass_audit/pulls_declared.json"),
+            ),
+            (
+                B,
+                include_str!("../fixtures/break_glass_audit/pulls_second.json"),
+            ),
+        ],
+        &[
+            (
+                H1,
+                include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+            ),
+            (
+                H2,
+                include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+            ),
+        ],
     );
     let report = audit(&input, NOW).expect("readable");
     assert_eq!(
@@ -140,11 +180,23 @@ fn only_the_exact_prefix_declares_break_glass() {
 #[test]
 fn near_miss_bodies_stay_undeclared_in_a_whole_run() {
     for (pulls, ticket_text) in [
-        (fx!("pulls_lowercase"), "#4101"),
-        (fx!("pulls_leading_space"), "#4101"),
-        (fx!("pulls_null_body"), "-"),
+        (
+            include_str!("../fixtures/break_glass_audit/pulls_lowercase.json"),
+            "#4101",
+        ),
+        (
+            include_str!("../fixtures/break_glass_audit/pulls_leading_space.json"),
+            "#4101",
+        ),
+        (
+            include_str!("../fixtures/break_glass_audit/pulls_null_body.json"),
+            "-",
+        ),
     ] {
-        let lines = rendered(&one(pulls, fx!("checks_failure")));
+        let lines = rendered(&one(
+            pulls,
+            include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+        ));
         assert_eq!(
             lines[0],
             format!("merge {A} head {H1} PR #4021 ticket {ticket_text} undeclared")
@@ -168,14 +220,21 @@ fn the_ticket_is_the_first_hash_number_in_the_body() {
 #[test]
 fn a_head_without_a_completed_successful_ci_run_is_not_green() {
     for checks in [
-        fx!("checks_absent"),
-        fx!("checks_in_progress"),
-        fx!("checks_in_progress_success"),
-        fx!("checks_draft_only"),
-        fx!("checks_cancelled"),
-        fx!("checks_failure"),
+        include_str!("../fixtures/break_glass_audit/checks_absent.json"),
+        include_str!("../fixtures/break_glass_audit/checks_in_progress.json"),
+        include_str!("../fixtures/break_glass_audit/checks_in_progress_success.json"),
+        include_str!("../fixtures/break_glass_audit/checks_draft_only.json"),
+        include_str!("../fixtures/break_glass_audit/checks_cancelled.json"),
+        include_str!("../fixtures/break_glass_audit/checks_failure.json"),
     ] {
-        let report = audit(&one(fx!("pulls_plain"), checks), NOW).expect("readable");
+        let report = audit(
+            &one(
+                include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+                checks,
+            ),
+            NOW,
+        )
+        .expect("readable");
         assert_eq!(report.without_green, 1, "{checks}");
         assert!(!report.passed(), "{checks}");
     }
@@ -183,7 +242,14 @@ fn a_head_without_a_completed_successful_ci_run_is_not_green() {
 
 #[test]
 fn a_completed_successful_ci_run_is_green() {
-    let report = audit(&one(fx!("pulls_plain"), fx!("checks_success")), NOW).expect("readable");
+    let report = audit(
+        &one(
+            include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+            include_str!("../fixtures/break_glass_audit/checks_success.json"),
+        ),
+        NOW,
+    )
+    .expect("readable");
     assert_eq!(report.without_green, 0);
     assert!(report.passed());
 }
@@ -191,13 +257,32 @@ fn a_completed_successful_ci_run_is_green() {
 #[test]
 fn the_newest_ci_run_decides_wherever_it_is_listed() {
     for (checks, green) in [
-        (fx!("checks_newer_failure"), false),
-        (fx!("checks_newer_success"), true),
-        (fx!("checks_newer_success_first"), true),
+        (
+            include_str!("../fixtures/break_glass_audit/checks_newer_failure.json"),
+            false,
+        ),
+        (
+            include_str!("../fixtures/break_glass_audit/checks_newer_success.json"),
+            true,
+        ),
+        (
+            include_str!("../fixtures/break_glass_audit/checks_newer_success_first.json"),
+            true,
+        ),
         // A newer `CI (draft)` success is not a `CI` run.
-        (fx!("checks_draft_newer"), false),
+        (
+            include_str!("../fixtures/break_glass_audit/checks_draft_newer.json"),
+            false,
+        ),
     ] {
-        let report = audit(&one(fx!("pulls_plain"), checks), NOW).expect("readable");
+        let report = audit(
+            &one(
+                include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+                checks,
+            ),
+            NOW,
+        )
+        .expect("readable");
         assert_eq!(report.without_green == 0, green, "{checks}");
     }
 }
@@ -205,12 +290,16 @@ fn the_newest_ci_run_decides_wherever_it_is_listed() {
 #[test]
 fn a_commit_with_no_merged_pull_on_main_is_a_direct_push() {
     for pulls in [
-        fx!("pulls_empty"),
-        fx!("pulls_unmerged"),
-        fx!("pulls_other_base"),
+        include_str!("../fixtures/break_glass_audit/pulls_empty.json"),
+        include_str!("../fixtures/break_glass_audit/pulls_unmerged.json"),
+        include_str!("../fixtures/break_glass_audit/pulls_other_base.json"),
     ] {
         // No check-runs lookup exists: a push has no head to read.
-        let input = input(fx!("commits_one"), &[(A, pulls)], &[]);
+        let input = input(
+            include_str!("../fixtures/break_glass_audit/commits_one.json"),
+            &[(A, pulls)],
+            &[],
+        );
         let report = audit(&input, NOW).expect("readable");
         assert_eq!(
             report.render(),
@@ -228,9 +317,15 @@ fn a_commit_with_no_merged_pull_on_main_is_a_direct_push() {
 fn the_first_merged_pull_on_main_is_the_commits_pull() {
     // #4001 is unmerged, #4002 is the first merged, #4003 comes later.
     let input = input(
-        fx!("commits_one"),
-        &[(A, fx!("pulls_several"))],
-        &[(H1, fx!("checks_failure"))],
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[(
+            A,
+            include_str!("../fixtures/break_glass_audit/pulls_several.json"),
+        )],
+        &[(
+            H1,
+            include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+        )],
     );
     assert_eq!(
         rendered(&input)[0],
@@ -241,9 +336,15 @@ fn the_first_merged_pull_on_main_is_the_commits_pull() {
 #[test]
 fn a_pull_on_the_second_page_of_the_pulls_response_is_found() {
     let input = input(
-        fx!("commits_one"),
-        &[(A, fx!("pulls_two_pages"))],
-        &[(H1, fx!("checks_failure"))],
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[(
+            A,
+            include_str!("../fixtures/break_glass_audit/pulls_two_pages.json"),
+        )],
+        &[(
+            H1,
+            include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+        )],
     );
     assert_eq!(
         rendered(&input)[0],
@@ -268,7 +369,11 @@ fn the_window_opens_exactly_two_days_before_now() {
 #[test]
 fn a_commit_older_than_the_window_is_not_audited() {
     // One second before the cutoff. No pulls lookup exists for it.
-    let input = input(fx!("commits_just_before_cutoff"), &[], &[]);
+    let input = input(
+        include_str!("../fixtures/break_glass_audit/commits_just_before_cutoff.json"),
+        &[],
+        &[],
+    );
     assert_eq!(
         rendered(&input),
         ["audited 0 merges, 0 without green CI, 0 undeclared"]
@@ -278,9 +383,15 @@ fn a_commit_older_than_the_window_is_not_audited() {
 #[test]
 fn a_commit_exactly_on_the_cutoff_is_audited() {
     let input = input(
-        fx!("commits_on_cutoff"),
-        &[(A, fx!("pulls_plain"))],
-        &[(H1, fx!("checks_success"))],
+        include_str!("../fixtures/break_glass_audit/commits_on_cutoff.json"),
+        &[(
+            A,
+            include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        )],
+        &[(
+            H1,
+            include_str!("../fixtures/break_glass_audit/checks_success.json"),
+        )],
     );
     assert_eq!(
         rendered(&input),
@@ -292,9 +403,15 @@ fn a_commit_exactly_on_the_cutoff_is_audited() {
 fn a_commit_inside_the_window_is_audited() {
     // 47 h 59 m old.
     let input = input(
-        fx!("commits_inside_window"),
-        &[(A, fx!("pulls_plain"))],
-        &[(H1, fx!("checks_success"))],
+        include_str!("../fixtures/break_glass_audit/commits_inside_window.json"),
+        &[(
+            A,
+            include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        )],
+        &[(
+            H1,
+            include_str!("../fixtures/break_glass_audit/checks_success.json"),
+        )],
     );
     assert_eq!(
         rendered(&input),
@@ -305,16 +422,37 @@ fn a_commit_inside_the_window_is_audited() {
 #[test]
 fn commits_arriving_as_pages_are_all_read() {
     let input = input(
-        fx!("commits_pages"),
-        &[(A, fx!("pulls_plain")), (B, fx!("pulls_second"))],
-        &[(H1, fx!("checks_success")), (H2, fx!("checks_success"))],
+        include_str!("../fixtures/break_glass_audit/commits_pages.json"),
+        &[
+            (
+                A,
+                include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+            ),
+            (
+                B,
+                include_str!("../fixtures/break_glass_audit/pulls_second.json"),
+            ),
+        ],
+        &[
+            (
+                H1,
+                include_str!("../fixtures/break_glass_audit/checks_success.json"),
+            ),
+            (
+                H2,
+                include_str!("../fixtures/break_glass_audit/checks_success.json"),
+            ),
+        ],
     );
     assert_eq!(rendered(&input), [COUNT_NONE]);
 }
 
 #[test]
 fn an_empty_window_passes() {
-    for commits in [fx!("commits_empty"), fx!("commits_empty_page")] {
+    for commits in [
+        include_str!("../fixtures/break_glass_audit/commits_empty.json"),
+        include_str!("../fixtures/break_glass_audit/commits_empty_page.json"),
+    ] {
         let report = audit(&input(commits, &[], &[]), NOW).expect("readable");
         assert_eq!(
             report.render(),
@@ -327,36 +465,62 @@ fn an_empty_window_passes() {
 #[test]
 fn a_failed_lookup_is_an_error_never_a_pass() {
     let failed = json!({"ok": false});
-    let mut commits = one(fx!("pulls_plain"), fx!("checks_success"));
+    let mut commits = one(
+        include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        include_str!("../fixtures/break_glass_audit/checks_success.json"),
+    );
     commits["commits"] = failed.clone();
     assert!(unreadable(&commits).starts_with("commits:"));
 
-    let mut pulls = one(fx!("pulls_plain"), fx!("checks_success"));
+    let mut pulls = one(
+        include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        include_str!("../fixtures/break_glass_audit/checks_success.json"),
+    );
     pulls["pulls"][A] = failed.clone();
     assert!(unreadable(&pulls).starts_with("pulls"));
 
-    let mut checks = one(fx!("pulls_plain"), fx!("checks_success"));
+    let mut checks = one(
+        include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        include_str!("../fixtures/break_glass_audit/checks_success.json"),
+    );
     checks["checks"][H1] = failed;
     assert!(unreadable(&checks).starts_with("check-runs"));
 }
 
 #[test]
 fn a_lookup_without_a_flag_or_body_is_an_error() {
-    let mut no_flag = one(fx!("pulls_plain"), fx!("checks_success"));
+    let mut no_flag = one(
+        include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        include_str!("../fixtures/break_glass_audit/checks_success.json"),
+    );
     no_flag["commits"] = json!({"body": []});
     unreadable(&no_flag);
 
-    let mut no_body = one(fx!("pulls_plain"), fx!("checks_success"));
+    let mut no_body = one(
+        include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        include_str!("../fixtures/break_glass_audit/checks_success.json"),
+    );
     no_body["commits"] = json!({"ok": true});
     unreadable(&no_body);
 }
 
 #[test]
 fn a_missing_lookup_for_a_needed_commit_or_head_is_an_error() {
-    let no_pulls = input(fx!("commits_one"), &[], &[]);
+    let no_pulls = input(
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[],
+        &[],
+    );
     assert!(unreadable(&no_pulls).contains(A));
 
-    let no_checks = input(fx!("commits_one"), &[(A, fx!("pulls_plain"))], &[]);
+    let no_checks = input(
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[(
+            A,
+            include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+        )],
+        &[],
+    );
     assert!(unreadable(&no_checks).contains(H1));
 
     let no_commits = json!({"pulls": {}, "checks": {}});
@@ -366,17 +530,20 @@ fn a_missing_lookup_for_a_needed_commit_or_head_is_an_error() {
 #[test]
 fn a_pulls_response_of_the_wrong_shape_is_an_error() {
     for pulls in [
-        fx!("pulls_object"),
-        fx!("pulls_null"),
-        fx!("pulls_missing_merged_at"),
-        fx!("pulls_missing_head"),
-        fx!("pulls_missing_body"),
-        fx!("pulls_null_entry"),
+        include_str!("../fixtures/break_glass_audit/pulls_object.json"),
+        include_str!("../fixtures/break_glass_audit/pulls_null.json"),
+        include_str!("../fixtures/break_glass_audit/pulls_missing_merged_at.json"),
+        include_str!("../fixtures/break_glass_audit/pulls_missing_head.json"),
+        include_str!("../fixtures/break_glass_audit/pulls_missing_body.json"),
+        include_str!("../fixtures/break_glass_audit/pulls_null_entry.json"),
     ] {
         let input = input(
-            fx!("commits_one"),
+            include_str!("../fixtures/break_glass_audit/commits_one.json"),
             &[(A, pulls)],
-            &[(H1, fx!("checks_success"))],
+            &[(
+                H1,
+                include_str!("../fixtures/break_glass_audit/checks_success.json"),
+            )],
         );
         let message = unreadable(&input);
         assert!(message.starts_with("pulls:"), "{pulls}: {message}");
@@ -386,36 +553,54 @@ fn a_pulls_response_of_the_wrong_shape_is_an_error() {
 #[test]
 fn a_check_runs_response_of_the_wrong_shape_is_an_error() {
     for checks in [
-        fx!("checks_null_runs"),
-        fx!("checks_missing_runs"),
-        fx!("checks_missing_total"),
-        fx!("checks_total_exceeds"),
-        fx!("checks_missing_status"),
-        fx!("checks_array"),
-        fx!("checks_bad_id"),
+        include_str!("../fixtures/break_glass_audit/checks_null_runs.json"),
+        include_str!("../fixtures/break_glass_audit/checks_missing_runs.json"),
+        include_str!("../fixtures/break_glass_audit/checks_missing_total.json"),
+        include_str!("../fixtures/break_glass_audit/checks_total_exceeds.json"),
+        include_str!("../fixtures/break_glass_audit/checks_missing_status.json"),
+        include_str!("../fixtures/break_glass_audit/checks_array.json"),
+        include_str!("../fixtures/break_glass_audit/checks_bad_id.json"),
     ] {
-        let message = unreadable(&one(fx!("pulls_plain"), checks));
+        let message = unreadable(&one(
+            include_str!("../fixtures/break_glass_audit/pulls_plain.json"),
+            checks,
+        ));
         assert!(message.starts_with("check-runs:"), "{checks}: {message}");
     }
 }
 
 #[test]
 fn a_commits_response_of_the_wrong_shape_is_an_error() {
-    for commits in [fx!("commits_object"), fx!("commits_no_date")] {
+    for commits in [
+        include_str!("../fixtures/break_glass_audit/commits_object.json"),
+        include_str!("../fixtures/break_glass_audit/commits_no_date.json"),
+    ] {
         let message = unreadable(&input(commits, &[], &[]));
         assert!(message.starts_with("commits:"), "{commits}: {message}");
     }
-    let mut odd_date = input(fx!("commits_one"), &[], &[]);
+    let mut odd_date = input(
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[],
+        &[],
+    );
     odd_date["commits"]["body"][0]["commit"]["committer"]["date"] =
         json!("2026-11-06T20:00:00+00:00");
     assert!(unreadable(&odd_date).starts_with("commits:"));
 
-    let mut fractional = input(fx!("commits_one"), &[], &[]);
+    let mut fractional = input(
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[],
+        &[],
+    );
     fractional["commits"]["body"][0]["commit"]["committer"]["date"] =
         json!("2026-11-06T20:00:00.000Z");
     assert!(unreadable(&fractional).starts_with("commits:"));
 
-    let mut no_sha = input(fx!("commits_one"), &[], &[]);
+    let mut no_sha = input(
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[],
+        &[],
+    );
     no_sha["commits"]["body"][0] =
         json!({"commit": {"committer": {"date": "2026-11-06T20:00:00Z"}}});
     assert!(unreadable(&no_sha).starts_with("commits:"));
@@ -464,12 +649,24 @@ fn a_later_merged_pull_is_never_read() {
     // `H3` heads the unmerged #4001 and `H2` the later merged #4003; only
     // `H1`, the first merged pull's head, is read.
     let input = input(
-        fx!("commits_one"),
-        &[(A, fx!("pulls_several"))],
+        include_str!("../fixtures/break_glass_audit/commits_one.json"),
+        &[(
+            A,
+            include_str!("../fixtures/break_glass_audit/pulls_several.json"),
+        )],
         &[
-            (H1, fx!("checks_success")),
-            (H2, fx!("checks_failure")),
-            (H3, fx!("checks_failure")),
+            (
+                H1,
+                include_str!("../fixtures/break_glass_audit/checks_success.json"),
+            ),
+            (
+                H2,
+                include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+            ),
+            (
+                H3,
+                include_str!("../fixtures/break_glass_audit/checks_failure.json"),
+            ),
         ],
     );
     assert_eq!(
