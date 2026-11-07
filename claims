@@ -391,3 +391,9 @@ xtask/src/main.rs	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users
 scripts/check	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/code-quality.md	fiber-4101	plan	2026-11-07T07:29:32Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/hub_list.rs	fiber-4101	plan	2026-11-07T07:32:40Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/4101-support-tests-one-binary	
+crates/tui/src/event_loop.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop/hub.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/screen.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/screen_tests.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop/attach_tests.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
