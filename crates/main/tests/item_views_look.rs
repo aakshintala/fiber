@@ -185,6 +185,10 @@ fn job_setup() -> (Setup, Hold, String) {
     (setup, hold, command)
 }
 
+/// The panel row of the parked delegate: the `●` the panel draws for a
+/// delegate whose job is running, then its description.
+const PARKED_ROW: &str = "● review the parser";
+
 /// The binary started at 160x48 and prompted, so the target item starts.
 fn start_run(setup: &Setup) -> Run {
     let mut run = Run::spawn(setup, 160, 48, &[], &TRUECOLOUR);
@@ -193,43 +197,203 @@ fn start_run(setup: &Setup) -> Run {
     run
 }
 
+/// Every session log under `sessions` as its complete events, in
+/// directory order. A missing sessions dir or log is no events yet, not
+/// an error; a trailing fragment is a line still being written and is
+/// left out.
+fn session_events(sessions: &std::path::Path) -> Vec<Vec<serde_json::Value>> {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    let mut logs = Vec::new();
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        match fs::read_to_string(&path) {
+            Ok(text) => logs.push(support::complete_lines(&text)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        }
+    }
+    logs
+}
+
 /// Whether the session log holds the parent turn's completion after its
 /// "Done." text: the turn is durably done, so the panel rows it drew are
 /// final until the test's own click expands them. The finished title
 /// never emits while an item is held, so no byte wait can read it; the
 /// log's `turn_completed` is the readiness signal instead.
 fn turn_completed_after_done(sessions: &std::path::Path) -> bool {
-    let entries = match fs::read_dir(sessions) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
-    };
-    for entry in entries {
-        let entry = entry.unwrap();
-        let path = entry.path().join("events.jsonl");
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => panic!("read session log {}: {error}", path.display()),
-        };
-        let events = support::complete_lines(&text);
+    session_events(sessions).iter().any(|events| {
         let Some(done) = events.iter().position(|event| {
             event["kind"] == "text_completed" && event["payload"]["text"] == "Done."
         }) else {
-            continue;
+            return false;
         };
         let Some(turn_id) = events[done]["turn_id"].as_str() else {
-            continue;
+            return false;
         };
-        if events
+        events
             .iter()
             .skip(done + 1)
             .any(|event| event["kind"] == "turn_completed" && event["turn_id"] == turn_id)
-        {
-            return true;
+    })
+}
+
+/// Whether the delegate's own session log shows its turns done: the
+/// log (the one holding the "Reviewed." text) holds the wake turn that
+/// answers the jobs-pending notice ("Steered.") completed, and every
+/// `turn_started` has its `turn_completed`. The delegate's log is absent
+/// at the parent's `turn_completed`, and the wake turn starts after
+/// "Reviewed." completes, so neither the parent's completion nor the
+/// first turn's end proves the delegate has stopped moving the panel row.
+fn delegate_turns_done(sessions: &std::path::Path) -> bool {
+    session_events(sessions).iter().any(|events| {
+        let said = |words: &str| {
+            events.iter().find(|event| {
+                event["kind"] == "text_completed" && event["payload"]["text"] == words
+            })
+        };
+        if said("Reviewed.").is_none() {
+            return false;
         }
-    }
-    false
+        let completed = |turn_id: &serde_json::Value| {
+            events
+                .iter()
+                .any(|event| event["kind"] == "turn_completed" && event["turn_id"] == *turn_id)
+        };
+        let woke = said("Steered.").is_some_and(|event| completed(&event["turn_id"]));
+        let paired = events
+            .iter()
+            .filter(|event| event["kind"] == "turn_started")
+            .all(|event| completed(&event["turn_id"]));
+        woke && paired
+    })
+}
+
+/// Writes `events` as one session's log under `sessions`, one JSON line
+/// each, the last one newline-terminated.
+fn write_session_log(sessions: &std::path::Path, name: &str, events: &[serde_json::Value]) {
+    let dir = sessions.join(name);
+    fs::create_dir_all(&dir).unwrap();
+    let mut text = events
+        .iter()
+        .map(|event| event.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    text.push('\n');
+    fs::write(dir.join("events.jsonl"), text).unwrap();
+}
+
+fn turn(kind: &str, turn_id: &str) -> serde_json::Value {
+    json!({"kind": kind, "turn_id": turn_id})
+}
+
+fn said(words: &str, turn_id: &str) -> serde_json::Value {
+    json!({"kind": "text_completed", "turn_id": turn_id, "payload": {"text": words}})
+}
+
+/// The first turn done, then the wake turn: `wake` is how much of it the
+/// log holds.
+fn delegate_events(wake: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let mut events = vec![
+        turn("turn_started", "t1"),
+        said("Reviewed.", "t1"),
+        turn("turn_completed", "t1"),
+    ];
+    events.extend_from_slice(wake);
+    events
+}
+
+fn full_wake() -> Vec<serde_json::Value> {
+    vec![
+        turn("turn_started", "t2"),
+        said("Steered.", "t2"),
+        turn("turn_completed", "t2"),
+    ]
+}
+
+#[test]
+fn delegate_turns_done_is_false_without_a_sessions_dir() {
+    let root = fakes::TempDir::new("fd");
+    assert!(!delegate_turns_done(&root.path().join("absent")));
+}
+
+#[test]
+fn delegate_turns_done_is_false_before_the_delegate_log_exists() {
+    let root = fakes::TempDir::new("fd");
+    write_session_log(
+        root.path(),
+        "parent",
+        &[said("Done.", "p1"), turn("turn_completed", "p1")],
+    );
+    assert!(!delegate_turns_done(root.path()));
+}
+
+#[test]
+fn delegate_turns_done_is_false_for_a_log_that_never_said_reviewed() {
+    let root = fakes::TempDir::new("fd");
+    write_session_log(root.path(), "other", &full_wake());
+    assert!(!delegate_turns_done(root.path()));
+}
+
+#[test]
+fn delegate_turns_done_is_false_while_a_turn_is_open() {
+    let root = fakes::TempDir::new("fd");
+    let open = [turn("turn_started", "t1"), said("Reviewed.", "t1")];
+    write_session_log(root.path(), "d", &open);
+    assert!(!delegate_turns_done(root.path()));
+}
+
+#[test]
+fn delegate_turns_done_is_false_while_the_wake_turn_is_open() {
+    let root = fakes::TempDir::new("fd");
+    let wake = [turn("turn_started", "t2"), said("Steered.", "t2")];
+    write_session_log(root.path(), "d", &delegate_events(&wake));
+    assert!(!delegate_turns_done(root.path()));
+}
+
+#[test]
+fn delegate_turns_done_is_false_before_the_wake_turn_starts() {
+    let root = fakes::TempDir::new("fd");
+    write_session_log(root.path(), "d", &delegate_events(&[]));
+    assert!(!delegate_turns_done(root.path()));
+}
+
+#[test]
+fn delegate_turns_done_is_false_while_a_later_turn_is_open() {
+    let root = fakes::TempDir::new("fd");
+    let mut wake = full_wake();
+    wake.push(turn("turn_started", "t3"));
+    write_session_log(root.path(), "d", &delegate_events(&wake));
+    assert!(!delegate_turns_done(root.path()));
+}
+
+#[test]
+fn delegate_turns_done_is_true_when_every_turn_is_paired_and_the_wake_ran() {
+    let root = fakes::TempDir::new("fd");
+    write_session_log(root.path(), "d", &delegate_events(&full_wake()));
+    assert!(delegate_turns_done(root.path()));
+}
+
+#[test]
+fn delegate_turns_done_ignores_a_trailing_fragment() {
+    let root = fakes::TempDir::new("fd");
+    // The wake turn's completion is on disk but its newline has not
+    // landed, so the line is still being written and does not count.
+    let mut events = delegate_events(&full_wake());
+    let last = events.pop().unwrap().to_string();
+    write_session_log(root.path(), "d", &events);
+    let mut log = fs::OpenOptions::new()
+        .append(true)
+        .open(root.path().join("d").join("events.jsonl"))
+        .unwrap();
+    log.write_all(last.as_bytes()).unwrap();
+    assert!(!delegate_turns_done(root.path()));
+    log.write_all(b"\n").unwrap();
+    assert!(delegate_turns_done(root.path()));
 }
 
 /// The job row, wherever the panel lays it out, or none before it draws.
@@ -306,9 +470,11 @@ fn assert_dim(grid: &Grid, y: u16, needle: &str) {
 }
 
 /// Opens the panel row holding `needle`: clicks its text, then waits
-/// for the item view's top row. The caller waits for the turn's
-/// `turn_completed` session-log event first, so the row's position is
-/// final: the parent's turn is done and the one held item parks on the
+/// for the item view's top row. The caller waits for the delegate's
+/// own turns to finish (`delegate_turns_done`) first, so the row's
+/// position is final: the parent's `turn_completed` alone is not
+/// enough, since the delegate's jobs-pending wake can still move the
+/// row after it. With the wake done the one held item parks on the
 /// test-held FIFO, so later folds only tick in place.
 fn open_row(run: &mut Run, needle: &str, top: &str) -> Grid {
     run.wait_screen("the panel lists the row", |grid| {
@@ -338,22 +504,27 @@ fn the_delegate_view_matches_the_doc() {
     let (setup, hold) = delegate_setup();
     let mut run = start_run(&setup);
     let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
-    fakes::wait_until("the parent turn's completion", setup.deadline, move || {
-        turn_completed_after_done(&sessions)
+    fakes::wait_until("the parent turn's completion", setup.deadline, {
+        let sessions = sessions.clone();
+        move || turn_completed_after_done(&sessions)
     });
-    // The parent's turn completes before the click, so the panel row's
-    // position is final: the completed footer proves the turn is done,
-    // and the delegate parks on the test-held FIFO, so no further
-    // session event can move rows before the click. The finished title
-    // never emits while an item is held, so the turn's completion —
-    // not `turn_finished` — is the readiness signal here.
+    // The parent's turn completing does not park the delegate: its log
+    // does not exist yet, and after "Reviewed." the jobs-pending notice
+    // starts a wake turn that can still move the panel row. The row is
+    // final once the delegate's own turns are done. The finished title
+    // never emits while an item is held, so the session log, not
+    // `turn_finished`, is the readiness signal here.
+    fakes::wait_until("the delegate's turns to complete", setup.deadline, {
+        let sessions = sessions.clone();
+        move || delegate_turns_done(&sessions)
+    });
     run.wait_screen("the delegate parks", |grid| {
-        grid.contents.contains("● review the parser")
+        grid.contents.contains(PARKED_ROW)
             && grid.contents.contains("Done.")
             && grid.contents.contains("completed")
     });
     let top = "Delegate  ◆ review the parser";
-    let grid = open_row(&mut run, "● review the parser", top);
+    let grid = open_row(&mut run, PARKED_ROW, top);
     // The top row names the view; the breadcrumb is bold.
     let y_top = row_with(&grid, top);
     assert_bold(&grid, y_top, "Delegate");
