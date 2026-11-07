@@ -1,6 +1,8 @@
-//! The shared fakes that tests and jigs run against: stand-ins for everything
-//! outside Fiber that a test needs (`docs/testing.md`, "Fakes"). A test-only
-//! dependency of the crates that use it; no release binary contains it
+//! Contract-free helpers for tests and jigs: clocks, deadlines, temporary
+//! directories, HTTP servers, process helpers and fixtures
+//! (`docs/testing/fakes.md`, "Fakes"). Its only workspace dependency is
+//! `support`; contract-dependent fakes live in `fakes-contract`. Product crates
+//! use this crate only as a test dependency; no release binary contains it
 //! (`docs/architecture.md`, "The call rules").
 
 pub mod alloc;
