@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Child, ExitStatus};
 use std::sync::{Arc, mpsc::Receiver};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use contract::JobId;
 use contract::clock::Clock;
@@ -24,6 +24,12 @@ use super::spill::Config;
 pub(super) struct Hosted {
     pub(super) host: Arc<dyn CommandHost>,
     pub(super) id: String,
+    /// The wall time the keeper enforces the command's timeout at, captured
+    /// where the timeout is handed to the host. The drive keeps
+    /// `timeout_at` as `None` for a hosted command so only the keeper stops
+    /// it (`docs/tools.md`, "The keeper"); the receipt reads this wall
+    /// instead (`docs/tools.md`, "Moving to the background").
+    pub(super) deadline: Option<SystemTime>,
 }
 
 pub(super) enum Waiter {
@@ -190,10 +196,14 @@ pub(super) fn execute(
     let started = host
         .start(spec, sender)
         .map_err(|error| io::Error::other(error.to_string()))?;
+    // The keeper enforces the timeout the spec carried, so the drive keeps
+    // `timeout_at` as `None`; the receipt still names when it fires, from
+    // the wall handed over here.
+    let deadline = timeout.and_then(|timeout| clock.wall().checked_add(timeout));
     command::finish_spawned(
         Waiter::Host {
             started,
-            hosted: Hosted { host, id },
+            hosted: Hosted { host, id, deadline },
             events,
             monitor: policy == MovePolicy::Monitor,
             terminal: policy == MovePolicy::Terminal,

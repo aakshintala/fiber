@@ -1180,6 +1180,11 @@ pub(crate) fn timeout_line(timeout_ms: u64) -> String {
     format!("Timed out after {timeout_ms} ms; Fiber stopped the whole process group.")
 }
 
+/// What a moved job's receipt and kill notice add when the job kept its
+/// timeout: how to keep a long-running process instead (`docs/tools.md`,
+/// "Moving to the background").
+pub(crate) const MOVED_JOB_HINT: &str = "To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`.";
+
 /// What a monitor stopped at its deadline says (`docs/tools.md`,
 /// "Background jobs").
 pub(crate) fn deadline_line(timeout_ms: u64) -> String {

@@ -2989,9 +2989,11 @@ fn a_closed_answer_channel_ends_the_wait_hung_up() {
     drop(tx);
     // The channel is closed, so the wait ends at once instead of hanging
     // the suite: no thread and no deadline needed.
+    let target = lp.app.session().cloned().expect("attached");
     let result = lp.hub.answer(
         &rx,
         "a_1",
+        &target,
         &mut lp.app,
         &lp.tick,
         lp.clock.as_ref(),
@@ -3228,9 +3230,11 @@ fn a_signal_during_a_history_wait_keeps_the_connection() {
         .name("loop-signal-kept".to_owned())
         .spawn(move || {
             let mut lp = lp;
+            let target = lp.app.session().cloned().expect("attached");
             let result = lp.hub.answer(
                 &rx,
                 "a_1",
+                &target,
                 &mut lp.app,
                 &lp.tick,
                 lp.clock.as_ref(),

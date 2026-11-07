@@ -87,6 +87,18 @@ pub(crate) enum ShellError {
         /// The timeout in milliseconds.
         ms: u64,
     },
+    /// A moved job ran past the timeout it kept and was stopped: the same
+    /// line as [`TimedOut`], plus how to keep a long-running process
+    /// instead. Foreground kills keep [`TimedOut`] exactly.
+    #[error(
+        "{} {}",
+        crate::shell::timeout_line(*ms),
+        crate::shell::MOVED_JOB_HINT
+    )]
+    TimedOutMoved {
+        /// The timeout in milliseconds.
+        ms: u64,
+    },
     /// A monitor ran past its deadline and was stopped.
     #[error("{}", crate::shell::deadline_line(*ms))]
     DeadlinePassed {
@@ -136,7 +148,9 @@ impl ShellError {
                 ErrorCode::ToolError
             }
             Self::Indeterminate => ErrorCode::Indeterminate,
-            Self::TimedOut { .. } | Self::DeadlinePassed { .. } => ErrorCode::Timeout,
+            Self::TimedOut { .. } | Self::TimedOutMoved { .. } | Self::DeadlinePassed { .. } => {
+                ErrorCode::Timeout
+            }
             Self::Killed { .. } => ErrorCode::Signal,
             Self::Exited { .. } => ErrorCode::NonzeroExit,
             Self::Capped => ErrorCode::OutputCap,

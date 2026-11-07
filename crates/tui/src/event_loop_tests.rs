@@ -3331,9 +3331,13 @@ fn a_signal_ends_a_history_wait_at_once() {
         .name("lib-signal-wait".to_owned())
         .spawn(move || {
             let mut lp = lp;
+            // No command is routed here: only the signal arrives, so no
+            // `stream_reopened` ever compares against this target.
+            let target = contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
             let result = lp.hub.answer(
                 &rx,
                 "a_1",
+                &target,
                 &mut lp.app,
                 &lp.tick,
                 lp.clock.as_ref(),

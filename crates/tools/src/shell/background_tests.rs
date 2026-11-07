@@ -7,7 +7,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use contract::clock::{Clock, Wake};
 use contract::events::{JobStarted, Outcome};
@@ -28,9 +28,9 @@ use super::super::drive::{Phase, Run};
 use super::super::moved::Moved;
 use super::super::output::{OUTPUT_CAP, Shared, align_char_boundary, lock, note_eof};
 use super::{
-    GroupMembers, MoveAsk, PS_BOUND, description_of, format_rows, group_members, output_tail,
-    parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt, to_completed,
-    with_spill_line,
+    GroupMembers, MoveAsk, PS_BOUND, deadline_note, description_of, format_rows, group_members,
+    output_tail, parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt, to_completed,
+    with_deadline, with_spill_line,
 };
 
 fn finished(
@@ -210,15 +210,68 @@ fn a_shell_exit_names_members_or_says_the_group_is_still_occupied() {
     assert!(!unnamed.contains("leaving"), "{unnamed}");
 }
 
-/// Hands off a move whose saved listing names members: the receipt reuses
-/// those names instead of running `ps` a second time. The job's own drive
-/// is already settled, so its thread ends on its own.
-fn hand_off_with_saved(
+#[test]
+fn members_listing_moves_at_once_and_names_the_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-members-receipt");
+    let (text, job) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Members("sleep (12), my cmd (34)".to_owned()),
+        None,
+        Some(Limit {
+            ms: 5_000,
+            monitor: false,
+        }),
+        false,
+    );
+    let path = dir.path().join("j_0000000000000001.log");
+    assert_eq!(
+        text,
+        format!(
+            "The shell exited with code 3, leaving sleep (12), my cmd (34) running, so it moved to the background.\nJob {job}. Output: {path}. Read it with `read`; `jobs wait` waits for it.\n",
+            path = path.display(),
+        )
+    );
+}
+
+#[test]
+fn unavailable_listing_moves_with_unnamed_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-unavailable-receipt");
+    let (text, job) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Unavailable,
+        None,
+        Some(Limit {
+            ms: 5_000,
+            monitor: false,
+        }),
+        false,
+    );
+    let path = dir.path().join("j_0000000000000001.log");
+    assert_eq!(
+        text,
+        format!(
+            "The shell exited with code 3, so it moved to the background. Processes are still running in its group.\nJob {job}. Output: {path}. Read it with `read`; `jobs wait` waits for it.\n",
+            path = path.display(),
+        )
+    );
+}
+
+/// Hands off a move whose saved listing names members, with the drive's
+/// timeout deadline `lead` past the move when given, and `limit` as the
+/// call's limit: the receipt names when the timeout fires. The job's own
+/// drive is already settled, so its thread ends on its own.
+fn hand_off_with_timeout(
     dir: &std::path::Path,
     code: i32,
     members: GroupMembers,
+    lead: Option<Duration>,
+    limit: Option<Limit>,
+    terminal: bool,
 ) -> (String, String) {
     let clock = FakeClock::new();
+    let timeout_at = lead.and_then(|lead| clock.now().checked_add(lead));
     let shared = Arc::new(Shared::default());
     note_eof(&shared);
     {
@@ -237,7 +290,7 @@ fn hand_off_with_saved(
             sent_signal: false,
             seen_empty: true,
             stream_carry: Vec::new(),
-            timeout_at: None,
+            timeout_at,
             move_at: None,
             members: Some(members),
             pgid: 99,
@@ -259,11 +312,8 @@ fn hand_off_with_saved(
         jobs,
         clock,
         "true",
-        Some(Limit {
-            ms: 5_000,
-            monitor: false,
-        }),
-        false,
+        limit,
+        terminal,
         &CancelToken::new(),
         &Recorder::default(),
         None,
@@ -279,35 +329,133 @@ fn hand_off_with_saved(
 }
 
 #[test]
-fn members_listing_moves_at_once_and_names_the_receipt() {
-    let dir = fakes::TempDir::new("fiber-shell-members-receipt");
-    let (text, job) = hand_off_with_saved(
+fn moved_receipt_names_the_stop_time_and_timeout() {
+    // The fake clock's wall starts at 2023-11-14T22:13:20Z, so a deadline
+    // 30 s past the move stops the job at 2023-11-14T22:13:50Z.
+    let dir = fakes::TempDir::new("fiber-shell-moved-receipt-deadline");
+    let (text, job) = hand_off_with_timeout(
         dir.path(),
         3,
-        GroupMembers::Members("sleep (12), my cmd (34)".to_owned()),
+        GroupMembers::Members("sleep (12)".to_owned()),
+        Some(Duration::from_secs(30)),
+        Some(Limit {
+            ms: 60_000,
+            monitor: false,
+        }),
+        false,
     );
     let path = dir.path().join("j_0000000000000001.log");
     assert_eq!(
         text,
         format!(
-            "The shell exited with code 3, leaving sleep (12), my cmd (34) running, so it moved to the background.\nJob {job}. Output: {path}. Read it with `read`; `jobs wait` waits for it.\n",
+            "The shell exited with code 3, leaving sleep (12) running, so it moved to the background.\nJob {job}. Output: {path}. Read it with `read`; `jobs wait` waits for it.\nFiber stops it at 2023-11-14T22:13:50Z (timeout_ms 60000). To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`.\n",
             path = path.display(),
         )
     );
 }
 
 #[test]
-fn unavailable_listing_moves_with_unnamed_receipt() {
-    let dir = fakes::TempDir::new("fiber-shell-unavailable-receipt");
-    let (text, job) = hand_off_with_saved(dir.path(), 3, GroupMembers::Unavailable);
+fn moved_timeout_error_carries_the_hint() {
+    let dir = fakes::TempDir::new("fiber-shell-moved-timeout-hint");
+    let path = dir.path().join("out");
+    std::fs::write(&path, "partial\n").unwrap();
+    let end = to_completed(
+        JobId("j_1".into()),
+        &path,
+        finished(None, Some(StopKind::Timeout), false, true, false),
+        Some(Limit {
+            ms: 5_000,
+            monitor: false,
+        }),
+    );
+    assert_eq!(end.status, Outcome::Failed);
+    let error = end.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert_eq!(
+        error.message,
+        "Timed out after 5000 ms; Fiber stopped the whole process group. To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`."
+    );
+}
+
+#[test]
+fn monitor_timeout_names_no_hint() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-timeout-no-hint");
+    let path = dir.path().join("out");
+    std::fs::write(&path, "partial\n").unwrap();
+    let end = to_completed(
+        JobId("j_1".into()),
+        &path,
+        finished(None, Some(StopKind::Timeout), false, true, false),
+        Some(Limit {
+            ms: 5_000,
+            monitor: true,
+        }),
+    );
+    assert_eq!(end.status, Outcome::Failed);
+    let error = end.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert_eq!(
+        error.message,
+        "The monitor's deadline of 5000 ms passed; start it again if you still need it."
+    );
+}
+
+#[test]
+fn deadline_note_names_the_stop_wall_and_timeout() {
+    // A wall a minute past the fake clock's 2023-11-14T22:13:20Z origin.
+    let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_060);
+    assert_eq!(
+        deadline_note(60_000, wall),
+        "Fiber stops it at 2023-11-14T22:14:20Z (timeout_ms 60000). To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`."
+    );
+}
+
+#[test]
+fn terminal_receipt_with_a_timeout_names_the_stop_time() {
+    let dir = fakes::TempDir::new("fiber-shell-terminal-receipt-deadline");
+    let (text, job) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Members("sleep (12)".to_owned()),
+        Some(Duration::from_secs(30)),
+        Some(Limit {
+            ms: 60_000,
+            monitor: false,
+        }),
+        true,
+    );
     let path = dir.path().join("j_0000000000000001.log");
     assert_eq!(
         text,
         format!(
-            "The shell exited with code 3, so it moved to the background. Processes are still running in its group.\nJob {job}. Output: {path}. Read it with `read`; `jobs wait` waits for it.\n",
+            "The shell exited with code 3, leaving sleep (12) running, so it moved to the background.\nJob {job}. Output: {path}. Type into it with `jobs write`; `jobs wait` waits for it.\nFiber stops it at 2023-11-14T22:13:50Z (timeout_ms 60000). To keep a long-running process such as a server, start it with `run_in_background` and no timeout, or with `detach`.\n",
             path = path.display(),
         )
     );
+}
+
+#[test]
+fn moved_receipt_with_no_timeout_names_no_deadline() {
+    let dir = fakes::TempDir::new("fiber-shell-moved-receipt-no-timeout");
+    // No limit: nothing to name.
+    let (text, _) =
+        hand_off_with_timeout(dir.path(), 3, GroupMembers::Unavailable, None, None, false);
+    assert!(!text.contains("Fiber stops it at"), "{text}");
+    assert!(!text.contains("timeout_ms"), "{text}");
+    // A limit with no deadline in hand: still nothing to name.
+    let (text, _) = hand_off_with_timeout(
+        dir.path(),
+        3,
+        GroupMembers::Unavailable,
+        None,
+        Some(Limit {
+            ms: 5_000,
+            monitor: false,
+        }),
+        false,
+    );
+    assert!(!text.contains("Fiber stops it at"), "{text}");
+    assert!(!text.contains("timeout_ms"), "{text}");
 }
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -826,4 +974,40 @@ fn the_receipt_gains_the_spills_extra_line() {
         text.ends_with("Output before the move is also in /s/s_1/artifacts/s_x.txt.\n"),
         "{text}"
     );
+}
+
+#[test]
+fn the_deadline_closes_the_receipt_after_the_spill_line() {
+    // `docs/tools.md`, "Moving to the background": the receipt ends with the
+    // stop sentence, so the deadline comes after any spill line.
+    let started = JobStarted {
+        job_id: JobId("j_1".into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "echo hi".into(),
+        output_path: "j_1.log".into(),
+    };
+    let path = Path::new("/tmp/j_1.log");
+    let plain = receipt(&started, path, &MoveReason::StartedInBackground, None);
+    // A wall a minute past the fake clock's 2023-11-14T22:13:20Z origin.
+    let wall = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_060);
+    let composed = with_deadline(
+        with_spill_line(
+            plain,
+            Some("Output before the move is also in /s/s_1/artifacts/s_x.txt.".to_owned()),
+        ),
+        Some((60_000, wall)),
+    );
+    let ContentPart::Text { text } = &composed.content[0] else {
+        panic!("receipt text");
+    };
+    assert!(text.contains("Output before the move is also in"), "{text}");
+    assert!(
+        text.contains("Fiber stops it at 2023-11-14T22:14:20Z (timeout_ms 60000)"),
+        "{text}"
+    );
+    assert!(text.ends_with("or with `detach`.\n"), "{text}");
+    let spill_at = text.find("Output before the move").expect("spill line");
+    let deadline_at = text.find("Fiber stops it at").expect("deadline line");
+    assert!(spill_at < deadline_at, "{text}");
 }
