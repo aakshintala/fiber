@@ -1644,7 +1644,7 @@ fn detached_arguments(command: &str) -> Map<String, Value> {
 }
 
 fn detach_error(arguments: &Map<String, Value>, dir: &Path) -> ShellError {
-    match parse(&arguments, dir, 600_000, false) {
+    match parse(arguments, dir, 600_000, false) {
         Ok(parsed) => panic!("a bad detach combination parsed: {}", parsed.command),
         Err(error) => error,
     }
