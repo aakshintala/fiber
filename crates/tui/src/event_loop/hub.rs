@@ -393,7 +393,7 @@ impl Connection {
         &mut self,
         rx: &Receiver<Input>,
         id: &str,
-        _target: &SessionId,
+        target: &SessionId,
         app: &mut App,
         tick: &TickThread,
         clock: &dyn Clock,
@@ -428,12 +428,20 @@ impl Connection {
                     return link::history_answer(&line).map(Answer::Lines);
                 }
                 Input::Hub(Line::Hub(line)) if line.kind() == HubEventKind::StreamReopened => {
-                    if let Some(session) = line
+                    let reopened = line
                         .payload
                         .get("session_id")
-                        .and_then(serde_json::Value::as_str)
-                    {
+                        .and_then(serde_json::Value::as_str);
+                    if let Some(session) = reopened {
                         app.reopen_pending(SessionId(session.to_owned()));
+                    }
+                    // The wait belongs to the history command's target: a
+                    // reopening for any other session, or with no session
+                    // at all, waits stashed like every other held line,
+                    // and the wait holds for its answer.
+                    if reopened != Some(target.0.as_str()) {
+                        self.push_stash(Input::Hub(Line::Hub(line)));
+                        continue;
                     }
                     app.abandon_history(id.to_owned());
                     self.push_stash(Input::Hub(Line::Hub(line)));
