@@ -842,6 +842,7 @@ Sessions:
   sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
   sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                                                                                      List the models the installed providers serve
+  reviewer evidence --json                                                                                        Print the evidence behind the reviewer's notes as JSON
 
 Fiber itself:
   setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]  Ask the questions a new install needs, applying each answer
@@ -2721,6 +2722,7 @@ fn two_runs_send_byte_identical_preambles() {
             "jobs",
             "name_session",
             "read",
+            "reviewer_notes_save",
             "session_list",
             "session_message",
             "session_search",
