@@ -567,7 +567,8 @@ fn narrow_status_rows_match_the_doc() {
         // (`docs/testing.md`, "Waits and timeouts").
         if !(grid.contents.contains("ctx")
             && grid.contents.contains("1 delegate running")
-            && grid.contents.contains("1 job running"))
+            && grid.contents.contains("1 job running")
+            && ctx_size_drawn(grid))
         {
             return false;
         }
@@ -736,18 +737,41 @@ fn narrow_settled() -> (Setup, ProviderServer, Hold, Run, Grid) {
     (setup, server, hold, run, grid)
 }
 
-/// The input box's status row above the kept status lines: the nearest
-/// row above the counts row carrying `ctx`.
-fn status_row(grid: &Grid) -> u16 {
-    let height = grid.rows.len() as u16;
-    let second = (0..height)
+/// The last row carrying the kept status lines' counts.
+fn counts_row(grid: &Grid) -> Option<u16> {
+    (0..grid.rows.len() as u16)
         .rev()
         .find(|y| grid.rows[*y as usize].contains("1 job running"))
-        .unwrap_or_else(|| panic!("a counts row"));
-    (0..second)
+}
+
+/// The input box's status row above the kept status lines: the nearest
+/// row above the counts row carrying `ctx`. `None` while either is absent.
+fn find_status_row(grid: &Grid) -> Option<u16> {
+    (0..counts_row(grid)?)
         .rev()
         .find(|y| grid.rows[*y as usize].contains("ctx"))
-        .unwrap_or_else(|| panic!("the input box status row"))
+}
+
+/// `find_status_row`, panicking when a row is missing.
+fn status_row(grid: &Grid) -> u16 {
+    counts_row(grid).unwrap_or_else(|| panic!("a counts row"));
+    find_status_row(grid).unwrap_or_else(|| panic!("the input box status row"))
+}
+
+/// Whether the status row's ctx segment shows a size: until the panel
+/// holds a window and a context figure it draws `— · —`, which leaves the
+/// working directory a different width. Only the text after `ctx` counts,
+/// so a digit in the directory is not a size.
+fn ctx_size_drawn(grid: &Grid) -> bool {
+    let Some(status) = find_status_row(grid) else {
+        return false;
+    };
+    let row = &grid.rows[status as usize];
+    let Some(at) = row.find("ctx") else {
+        return false;
+    };
+    let after = &row[at + "ctx".len()..];
+    !after.contains('—') && after.chars().any(|c| c.is_ascii_digit())
 }
 
 /// A narrow width cuts the working directory from the left first: the
@@ -773,6 +797,7 @@ fn narrow_width_cuts_the_working_directory_first() {
         grid.contents.contains("ctx")
             && grid.contents.contains("1 delegate running")
             && grid.contents.contains("1 job running")
+            && ctx_size_drawn(grid)
     });
     let status = status_row(&grid);
     let row: String = (1..68).map(|x| grid.cell(x, status).symbol).collect();
