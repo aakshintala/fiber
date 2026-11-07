@@ -733,29 +733,26 @@ fn narrow_settled() -> (Setup, ProviderServer, Hold, Run, Grid) {
         grid.contents.contains("ctx")
             && grid.contents.contains("1 delegate running")
             && grid.contents.contains("1 job running")
+            && ctx_size_drawn(grid)
     });
     (setup, server, hold, run, grid)
 }
 
-/// The last row carrying the kept status lines' counts.
-fn counts_row(grid: &Grid) -> Option<u16> {
-    (0..grid.rows.len() as u16)
-        .rev()
-        .find(|y| grid.rows[*y as usize].contains("1 job running"))
+/// The input box's status row and its text: the nearest row carrying
+/// `ctx` above the last row carrying the kept status lines' counts.
+/// `None` while either is absent.
+fn status_row_text(grid: &Grid) -> Option<(u16, &str)> {
+    let rows = &grid.rows;
+    let counts = rows.iter().rposition(|r| r.contains("1 job running"))?;
+    let status = rows[..counts].iter().rposition(|r| r.contains("ctx"))?;
+    Some((status as u16, rows[status].as_str()))
 }
 
-/// The input box's status row above the kept status lines: the nearest
-/// row above the counts row carrying `ctx`. `None` while either is absent.
-fn find_status_row(grid: &Grid) -> Option<u16> {
-    (0..counts_row(grid)?)
-        .rev()
-        .find(|y| grid.rows[*y as usize].contains("ctx"))
-}
-
-/// `find_status_row`, panicking when a row is missing.
+/// `status_row_text`'s row, panicking when a row is missing.
 fn status_row(grid: &Grid) -> u16 {
-    counts_row(grid).unwrap_or_else(|| panic!("a counts row"));
-    find_status_row(grid).unwrap_or_else(|| panic!("the input box status row"))
+    status_row_text(grid)
+        .unwrap_or_else(|| panic!("the input box status row"))
+        .0
 }
 
 /// Whether the status row's ctx segment shows a size: until the panel
@@ -763,10 +760,9 @@ fn status_row(grid: &Grid) -> u16 {
 /// working directory a different width. Only the text after `ctx` counts,
 /// so a digit in the directory is not a size.
 fn ctx_size_drawn(grid: &Grid) -> bool {
-    let Some(status) = find_status_row(grid) else {
+    let Some((_, row)) = status_row_text(grid) else {
         return false;
     };
-    let row = &grid.rows[status as usize];
     let Some(at) = row.find("ctx") else {
         return false;
     };
