@@ -31,15 +31,6 @@ docs/errors.md	fiber-4244	plan	2026-11-07T07:25:04Z	Amoghs-MacBook-Pro:/Users/aa
 crates/loop/src/questions.rs	fiber-4244	plan	2026-11-07T07:25:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 *.snap	fiber-4244	plan	2026-11-07T07:25:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/completion_tests.rs	fiber-4244	plan	2026-11-07T07:25:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop/hub.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/screen.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/screen_tests.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop/attach_tests.rs	fiber-4192	plan	2026-11-07T07:44:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/home.rs	fiber-4192	grant	2026-11-07T09:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/4192-diagnose-resume-hang	
-crates/tui/src/window.rs	fiber-4192	grant	2026-11-07T09:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/4192-diagnose-resume-hang	
-crates/tui/src/window/residency.rs	fiber-4192	grant	2026-11-07T09:04:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/4192-diagnose-resume-hang	
 crates/tools/src/read.rs	fiber-4245	plan	2026-11-07T09:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4356
 crates/tools/src/read_tests.rs	fiber-4245	plan	2026-11-07T09:39:04Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4356
 crates/contract/src/events/context_tests.rs	fiber-4244	plan	2026-11-07T10:40:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
