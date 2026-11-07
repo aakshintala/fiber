@@ -3128,6 +3128,81 @@ fn support_tests_fails_a_shared_support_file_with_tests() {
     );
 }
 
+/// A file of the `main` crate's tests, under `tests/`.
+fn main_test(path: &str, source: &str) -> RustFile {
+    file("main", &format!("tests/{path}"), source.to_owned())
+}
+
+const SHARED_WITH_TEST: &str = "#[test]\nfn shared_holds() {}\n";
+const REACH_SHARED: &str = "#[path = \"../support/shared.rs\"]\nmod shared;\n";
+
+#[test]
+fn support_tests_counts_each_area_root_as_a_binary() {
+    // `tests/<dir>/main.rs` is a cargo test target, so two area roots
+    // compiling one support file run its test twice.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+        main_test("b/main.rs", REACH_SHARED),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/shared.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_counts_an_area_root_beside_a_top_level_binary() {
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+        main_test("b.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/shared.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_passes_a_file_reached_from_one_area_root() {
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_does_not_count_a_member_of_an_area_as_a_binary() {
+    // `tests/a/other.rs` is a module file, not a target, so declaring the
+    // file from it adds no binary beside `tests/b.rs`.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/other.rs", REACH_SHARED),
+        main_test("b.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_does_not_count_a_nested_main_rs_as_a_binary() {
+    // Cargo discovers only `tests/<dir>/main.rs`, one level down.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test(
+            "a/b/main.rs",
+            "#[path = \"../../support/shared.rs\"]\nmod shared;\n",
+        ),
+        main_test("c.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
 #[test]
 fn support_tests_counts_every_mod_support_declarer_for_a_root_reached_file() {
     let files = [
