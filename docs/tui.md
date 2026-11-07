@@ -2052,7 +2052,25 @@ through the `input_status` slot ("Extension seams").
   `!!cmd` runs it and shows the output only to the person (`shell` with
   `send` false, `docs/invocation.md`). A `!` or `!!` command has no
   timeout: it runs until it exits, until `cancel` stops it, or until the
-  session shuts down.
+  session shuts down. A draft is in shell mode when its
+  trimmed text starts with `!` and it carries no image. Its first row then
+  opens with `! ` instead of `› `, and the box's top-edge row carries
+  `shell` for `!` or `shell · not sent` for `!!`, right-aligned. A bare `!`
+  already marks the draft. Backspace past the `!` clears the marker, and an
+  image draft shows none. The label is chrome and sheds first when the box
+  is cut short. The `! ` prompt stays. While a run is in flight and
+  the draft is outside shell mode, the box carries the run's label
+  instead, and the draft prompt stays plain. A shell draft keeps its own
+  marker and `! ` prompt. Each run shows as one transcript row:
+  `! <command>`, then `sent with your next
+  prompt` for `!` or `only you see this` for `!!`, then the output with
+  trailing whitespace dropped, then `exit N` (`exit 0` included) or
+  `signal S`. A run with neither ending shows no ending. A command that
+  could not start shows `! <command>` then `<code>: <message>` as it
+  arrived. A refused run puts that row on the attached screen beside the
+  notice. A session `duplicate_command` refusal draws neither a row nor a
+  notice. Shell rows show at most 20 lines, the same way an opened call
+  is.
 
 ### Bindings
 
