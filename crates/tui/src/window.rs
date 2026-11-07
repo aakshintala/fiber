@@ -812,6 +812,15 @@ impl Pages {
         self.residency.fail(session, seq, &self.index);
     }
 
+    /// The page holding exactly `range` of `session` could not be
+    /// loaded: it is not asked for again until the width changes. The
+    /// seq lookup misses a page whose bounds the seq no longer falls
+    /// in, while the range always resolves to the page `needs`
+    /// yields.
+    pub(crate) fn fail_range(&mut self, session: &SessionId, range: &RangeInclusive<Seq>) {
+        self.residency.fail_range(session, range, &self.index);
+    }
+
     /// The seq ranges to load, in order, each with its segment's session:
     /// the window's pages not resident, then the pages whose row counts
     /// are stale, then the pages a pending copy asked for. A page may be

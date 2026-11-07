@@ -184,6 +184,26 @@ impl Residency {
         }
     }
 
+    /// The page holding exactly `range` of `session` could not be
+    /// loaded: it is not asked for again until the width changes. The
+    /// lookup walks the same index `needs` enumerates, so a range
+    /// `needs` yields always resolves — unlike the seq lookup, which
+    /// misses a page whose bounds the seq no longer falls in.
+    pub(crate) fn fail_range(
+        &mut self,
+        session: &SessionId,
+        range: &RangeInclusive<Seq>,
+        index: &Index,
+    ) {
+        if let Some(at) = index.pages().iter().position(|page| {
+            &page.session == session
+                && page.first_seq == *range.start()
+                && page.last_seq == *range.end()
+        }) {
+            self.failed.insert(at);
+        }
+    }
+
     /// The seq ranges to load, in order, each with its segment's
     /// session: the window's pages not resident, then the pages whose
     /// row counts are stale, then the pages a pending copy asked for. A

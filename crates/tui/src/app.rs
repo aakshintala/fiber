@@ -1420,6 +1420,11 @@ impl App {
         message: &str,
     ) {
         self.screen.pages_mut().fail(session, *range.start());
+        // The seq lookup misses a page whose bounds the seq no longer
+        // falls in, while the range always resolves: failing both
+        // clears the still-needed range instead of re-requesting it
+        // forever.
+        self.screen.pages_mut().fail_range(session, range);
         if !self.pass_open() {
             self.screen.pages_mut().clear_anchor();
         }

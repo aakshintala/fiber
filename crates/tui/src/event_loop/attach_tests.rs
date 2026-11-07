@@ -14,11 +14,12 @@ use contract::ErrorCode;
 use contract::clock::Clock;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -7082,6 +7083,307 @@ fn fetch_cursor_advances_past_a_window_answered_below_its_start() {
         windows,
         vec![(5, 9), (6, 9), (7, 9), (8, 9), (9, 9)],
         "each window starts past the last window's start"
+    );
+    drop(lp);
+}
+
+/// A history answer covering none of its window ends the fetch as
+/// a failed range: `page_in` fails the range once instead of
+/// re-requesting a window that never fills (#4192).
+#[test]
+fn fetch_fails_a_window_answered_empty() {
+    use contract::Seq;
+    use std::ops::RangeInclusive;
+    let (mut lp, theirs, tx, rx) = opened();
+    demand_top(&mut lp);
+    let needed = lp.app.needs();
+    assert!(!needed.is_empty(), "the top page still needs its lines");
+    let (segment, span) = needed[0].clone();
+    // One `history` command answers 256 lines at most: the span's
+    // first chunk, answered empty.
+    let from = span.start().0;
+    let end = from
+        .saturating_add(super::super::hub::HISTORY_LINES - 1)
+        .min(span.end().0);
+    let range: RangeInclusive<Seq> = Seq(from)..=Seq(end);
+    let seen = serve(
+        theirs,
+        tx,
+        Box::new(move |command: &serde_json::Value| {
+            if command["command"] != "history" {
+                return Vec::new();
+            }
+            let id = command["id"].as_str().unwrap_or_default().to_owned();
+            vec![Input::Hub(Line::Session(command_answer(&id, Vec::new())))]
+        }),
+    );
+    let fetched = lp.hub.fetch(
+        &rx,
+        &segment,
+        &range,
+        &mut lp.app,
+        &lp.tick,
+        lp.clock.as_ref(),
+        lp.tick.armed(),
+    );
+    assert_eq!(
+        fetched,
+        Err("the answer held none of its lines".to_owned()),
+        "an empty answer fails the range instead of returning no lines"
+    );
+    let windows: Vec<(u64, u64)> = seen
+        .lock()
+        .unwrap_or_else(|err| panic!("seen: {err}"))
+        .iter()
+        .filter(|command| command["command"] == "history")
+        .map(|command| {
+            (
+                command["args"]["from_seq"].as_u64().unwrap_or(u64::MAX),
+                command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    assert_eq!(
+        windows,
+        vec![(from, end)],
+        "the failed range goes out once, never again"
+    );
+    drop(lp);
+}
+
+/// Serves the hub's end of a cold resume: the first `history` command
+/// waits for the test's go-ahead, later ones answer at once from the
+/// log's tail, and every command is recorded for the test's counts.
+/// Ends at EOF, when the loop hangs up.
+fn serve_cold_resume(
+    theirs: UnixStream,
+    tx: mpsc::Sender<Input>,
+    log: Vec<contract::Envelope>,
+    go: mpsc::Receiver<()>,
+    first: mpsc::Sender<()>,
+) -> (Arc<Mutex<Vec<Value>>>, std::thread::JoinHandle<()>) {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&seen);
+    let handle = std::thread::Builder::new()
+        .name("attach-cold".to_owned())
+        .spawn(move || {
+            let mut reader = BufReader::new(theirs);
+            let mut text = String::new();
+            let mut go = Some(go);
+            let mut first = Some(first);
+            loop {
+                text.clear();
+                match reader.read_line(&mut text) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+                let command: Value = serde_json::from_str(&text).unwrap_or_default();
+                if let Ok(mut held) = record.lock() {
+                    held.push(command.clone());
+                }
+                if command["command"] != "history" {
+                    continue;
+                }
+                if let Some(first) = first.take() {
+                    first.send(()).unwrap_or(());
+                }
+                if let Some(go) = go.take() {
+                    // The test's go-ahead; a dropped sender releases a
+                    // panicking test's thread.
+                    if go.recv().is_err() {
+                        break;
+                    }
+                }
+                let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+                let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+                let id = command["id"].as_str().unwrap_or_default().to_owned();
+                let result = super::tail_history(&log, from, to);
+                let answer = command_answer(&id, result);
+                if tx.send(Input::Hub(Line::Session(answer))).is_err() {
+                    break;
+                }
+            }
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    (seen, handle)
+}
+
+/// Counts the commands `seen` holds by name.
+fn command_counts(seen: &Arc<Mutex<Vec<Value>>>) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for command in seen
+        .lock()
+        .unwrap_or_else(|err| panic!("seen: {err}"))
+        .iter()
+    {
+        *counts
+            .entry(command["command"].as_str().unwrap_or_default().to_owned())
+            .or_insert(0) += 1;
+    }
+    counts
+}
+
+/// After an idle exit the prompt resumes the session through the hub:
+/// the prompt goes out once, the resumed turn folds with the full
+/// transcript kept, and a Ctrl+C held behind the first history answer
+/// runs after the release, then quits on the second press (#4192).
+#[test]
+fn exited_prompt_keeps_transcript_and_keys() {
+    let log = exited_log();
+    let (mut lp, theirs, tx, rx, summary) = opened_exited(&log[..307]);
+    opening_as(&mut lp.app, &summary, 318);
+    let (go_tx, go_rx) = mpsc::channel();
+    let (first_tx, first) = mpsc::channel();
+    let (seen, server) = serve_cold_resume(theirs, tx.clone(), log, go_rx, first_tx);
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done_tx
+                .send((code, lp))
+                .unwrap_or_else(|err| panic!("send: {err}"));
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    // The prompt and its Enter go out first, then the test waits for
+    // the held history wait: the Ctrl+C below lands in its stash.
+    tx.send(Input::Bytes(b"take up the resumed work".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(Input::Bytes(b"\r".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    Deadline::after(DEADLINE).recv_or_fail(&first, "the hub to see the first history command");
+    // The draft is empty after Enter, so one Ctrl+C only arms: it
+    // stashes behind the held answer and arms after the release.
+    tx.send(Input::Bytes(vec![0x03]))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    go_tx.send(()).unwrap_or_else(|err| panic!("go: {err}"));
+    // A second press inside the quit window quits the loop.
+    tx.send(Input::Bytes(vec![0x03]))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "Ctrl+C quits after the replay");
+    assert_eq!(code, 0, "Ctrl+C quits after the replay");
+    let screen = shown(&lp);
+    assert!(
+        screen.contains("prompt forty-two"),
+        "the replay folds the resumed turn: its user message shows"
+    );
+    assert!(
+        screen.contains("resumed reply forty-two"),
+        "the screen keeps the full transcript through the log tail, not a prefix"
+    );
+    assert!(
+        lp.hub.answer_stash_peak() >= 1,
+        "the held answer stashed the Ctrl+C"
+    );
+    let counts = command_counts(&seen);
+    assert_eq!(
+        counts.get("prompt"),
+        Some(&1),
+        "the post-exit prompt goes out exactly once: {counts:?}"
+    );
+    drop(lp);
+    server.join().unwrap_or_else(|_| panic!("join: server"));
+}
+
+/// Probe: the #4259 app-level refusal shape, driven here to bisect
+/// the loop-level silence.
+/// A refused resume surfaces its reason as a notice, returns the
+/// draft, and the loop still handles a follow-up input; a refusal for
+/// another session's id settles nothing on the attached session
+/// (#4192).
+#[test]
+fn failed_resume_keeps_draft_and_loop() {
+    let log = exited_log();
+    let (mut lp, theirs, tx, rx, summary) = opened_exited(&log[..307]);
+    opening_as(&mut lp.app, &summary, 318);
+    // The first `prompt` command gets a `session_not_found` refusal
+    // naming the attached session, then the follow-up Enter and the
+    // quit: one sender keeps the refusal first, so the follow-up runs
+    // after the refusal restores the draft. Later prompts go
+    // unanswered. A foreign refusal names an unknown command id on
+    // another session.
+    let mut refused = false;
+    let seen = serve(
+        theirs,
+        tx.clone(),
+        Box::new(move |command: &serde_json::Value| {
+            if command["command"] != "history" {
+                if command["command"] == "prompt" && !refused {
+                    refused = true;
+                    let id = command["id"].as_str().unwrap_or_default().to_owned();
+                    let rejected = line(
+                        "command_rejected",
+                        None,
+                        None,
+                        json!({"command_id": id, "code": "session_not_found",
+                            "message": "No such session."}),
+                    );
+                    return vec![
+                        Input::Hub(Line::Session(rejected)),
+                        Input::Bytes(b"\r".to_vec()),
+                        quit(),
+                    ];
+                }
+                return Vec::new();
+            }
+            let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+            let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+            let id = command["id"].as_str().unwrap_or_default().to_owned();
+            vec![Input::Hub(Line::Session(command_answer(
+                &id,
+                super::tail_history(&log, from, to),
+            )))]
+        }),
+    );
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done_tx
+                .send((code, lp))
+                .unwrap_or_else(|err| panic!("send: {err}"));
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    tx.send(Input::Bytes(b"take up the resumed work".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(Input::Bytes(b"\r".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    // A foreign refusal settles nothing: the draft stays empty and no
+    // prompt goes out for it.
+    let foreign = line(
+        "command_rejected",
+        None,
+        None,
+        json!({"command_id": "c_ffffffffffffffff", "code": "session_not_found",
+            "message": "Foreign refusal.", "session_id": "s_bbbbbbbbbbbbbbbb"}),
+    );
+    tx.send(Input::Hub(Line::Session(foreign)))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit");
+    assert_eq!(code, 0, "the loop still quits after a refused resume");
+    let counts = command_counts(&seen);
+    assert_eq!(
+        counts.get("prompt"),
+        Some(&2),
+        "the follow-up prompt goes out after the refusal: {counts:?}"
+    );
+    assert_eq!(lp.app.draft(), "", "the follow-up Enter consumes the draft");
+    assert!(
+        lp.app.notices().iter().any(|line| matches!(
+            line,
+            crate::app::NoticeLine::Notice { code, text, .. }
+            if *code == contract::ErrorCode::SessionNotFound && text == "No such session."
+        )),
+        "the refused resume surfaces its reason as a notice"
+    );
+    assert!(
+        !lp
+            .app
+            .notices()
+            .iter()
+            .any(|line| matches!(line, crate::app::NoticeLine::Notice { text, .. } if text == "Foreign refusal.")),
+        "a refusal for another session's id settles nothing locally"
     );
     drop(lp);
 }
