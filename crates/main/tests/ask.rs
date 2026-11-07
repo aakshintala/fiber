@@ -437,6 +437,10 @@ fn install_docs_skills(home: &Path) {
             "using-fiber",
             include_str!("../../../docs/skills/using-fiber/SKILL.md"),
         ),
+        (
+            "reviewer-setup",
+            include_str!("../../../docs/skills/reviewer-setup/SKILL.md"),
+        ),
     ] {
         let dir = home.join("docs/skills").join(name);
         fs::create_dir_all(&dir).unwrap();
@@ -485,6 +489,11 @@ fn the_opening_message_lists_the_built_in_skills_from_home_docs() {
             (
                 "cache-warming".to_owned(),
                 docs.join("cache-warming/SKILL.md").display().to_string(),
+                "builtin".to_owned(),
+            ),
+            (
+                "reviewer-setup".to_owned(),
+                docs.join("reviewer-setup/SKILL.md").display().to_string(),
                 "builtin".to_owned(),
             ),
             (
