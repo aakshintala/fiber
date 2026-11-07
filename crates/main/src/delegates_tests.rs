@@ -359,8 +359,9 @@ fn an_unknown_bare_reference_names_the_typed_argument() {
 
 #[test]
 fn a_bare_reference_on_a_switched_off_provider_is_refused() {
-    // Installed but never logged in: no stored label and no credential,
-    // so the switched-on narrowing from #4190 leaves it out.
+    // Installed but never logged in: the fake's only credential source
+    // is its unset `FIBER_TEST_FAKE_KEY` variable and no label is
+    // stored, so the switched-on narrowing from #4190 leaves it out.
     let (providers, config) = rig(json!({}));
     let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!(

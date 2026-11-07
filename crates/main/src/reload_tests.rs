@@ -586,8 +586,10 @@ fn tool_text(
     text.clone()
 }
 
-/// The held `delegate_spawn` and `delegate_models` definitions, as the
-/// pre-reload tools declare them.
+/// The held `delegate_spawn` definition, as the pre-reload tools declare
+/// it. `delegate_models` is pinned separately in the jobs crate
+/// (`models_tests.rs`): its schema takes the `filter` argument, so the
+/// reload swap does not pin it here.
 fn held_definitions(fixture: &Fixture) -> Vec<(String, Vec<u8>)> {
     fixture
         .state
@@ -597,7 +599,7 @@ fn held_definitions(fixture: &Fixture) -> Vec<(String, Vec<u8>)> {
         .iter()
         .filter(|(_, tool)| {
             let name = tool.definition().name;
-            name == "delegate_spawn" || name == "delegate_models"
+            name == "delegate_spawn"
         })
         .map(|(_, tool)| {
             let definition = tool.definition();
@@ -630,9 +632,17 @@ fn provider_reload_refreshes_the_spawn_catalogue() {
         (snapshot.lookup)("fiber:fake/m:high"),
         Ok("fake/m:high".to_owned())
     );
-    // `delegate_models` from the installed set lists the new level.
+    // `delegate_models` from the installed set lists the new level,
+    // grouped under its provider beneath the session line.
     let text = tool_text(&models, &serde_json::Map::new());
-    assert!(text.contains("fiber:fake/m (thinking: high)"), "{text}");
+    assert!(
+        text.contains("Session model: fiber:scripted/s.json"),
+        "{text}"
+    );
+    assert!(
+        text.contains("fake (2):\nfiber:fake/m (thinking: high)\nfiber:fake/plain"),
+        "{text}"
+    );
     // The installed `delegate_spawn`, run with a level `plain` does not
     // take, fails with the tool's own refusal before any process
     // starts: the refusal ships the fresh catalogue.
@@ -640,7 +650,14 @@ fn provider_reload_refreshes_the_spawn_catalogue() {
         serde_json::json!({"description": "d", "prompt": "p", "model": "fiber:fake/plain:high"});
     let text = tool_text(&spawn, arguments.as_object().unwrap());
     assert!(text.contains("not one model `fake/plain` takes"), "{text}");
-    assert!(text.contains("fiber:fake/m (thinking: high)"), "{text}");
+    assert!(
+        text.contains("Session model: fiber:scripted/s.json"),
+        "{text}"
+    );
+    assert!(
+        text.contains("fake (2):\nfiber:fake/m (thinking: high)"),
+        "{text}"
+    );
     // The rebuilt definitions are byte-equal to the pre-reload held
     // ones: the swap changes no tool definition.
     for (name, before) in &held {
