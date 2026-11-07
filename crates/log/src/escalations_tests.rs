@@ -291,6 +291,79 @@ fn a_home_with_no_projects_directory_gives_nothing() {
     assert!(allowed_escalations(home.path()).is_empty());
 }
 
+#[test]
+fn an_unknown_kind_line_is_skipped_and_the_walk_continues() {
+    let home = fakes::TempDir::new("log-escalations-unknown-kind");
+    let mut log = started_line(&json!({"workspace": "/repo-a"}));
+    log.push_str(&line(
+        "permission_requested",
+        "s_1",
+        1,
+        &request("r1", &blocks(), &rule("gh pr merge")),
+    ));
+    // An unfamiliar kind joins nothing: the walk skips it and still
+    // counts the request its resolution answers.
+    log.push_str(&line("future_kind", "s_1", 2, &json!({"note": "new"})));
+    log.push_str(&line(
+        "permission_resolved",
+        "s_1",
+        3,
+        &resolved(Some("r1"), "allow", "person"),
+    ));
+    write_log(&session_dir(home.path(), "proj-a", "s_1"), log.as_bytes());
+    let found = allowed_escalations(home.path());
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].prefix, "gh pr merge");
+}
+
+#[test]
+fn a_missing_or_non_string_kind_stops_the_walk_keeping_what_came_before() {
+    for (name, bad) in [
+        (
+            "missing-kind",
+            r#"{"session_id":"s_1","ts":2,"schema_version":1,"seq":2,"payload":{}}"#,
+        ),
+        (
+            "non-string-kind",
+            r#"{"kind":7,"session_id":"s_1","ts":2,"schema_version":1,"seq":2,"payload":{}}"#,
+        ),
+    ] {
+        let home = fakes::TempDir::new(&format!("log-escalations-{name}"));
+        let mut log = started_line(&json!({"workspace": "/repo-a"}));
+        log.push_str(&line(
+            "permission_requested",
+            "s_1",
+            1,
+            &request("r1", &blocks(), &rule("gh pr merge")),
+        ));
+        log.push_str(&line(
+            "permission_resolved",
+            "s_1",
+            2,
+            &resolved(Some("r1"), "allow", "person"),
+        ));
+        // The unreadable kind ends the walk: the pair after it never counts.
+        log.push_str(bad);
+        log.push('\n');
+        log.push_str(&line(
+            "permission_requested",
+            "s_1",
+            3,
+            &request("r2", &blocks(), &rule("npm test")),
+        ));
+        log.push_str(&line(
+            "permission_resolved",
+            "s_1",
+            4,
+            &resolved(Some("r2"), "allow", "person"),
+        ));
+        write_log(&session_dir(home.path(), "proj-a", "s_1"), log.as_bytes());
+        let found = allowed_escalations(home.path());
+        assert_eq!(found.len(), 1, "{name}");
+        assert_eq!(found[0].prefix, "gh pr merge", "{name}");
+    }
+}
+
 fn setup_population() -> fakes::TempDir {
     let home = fakes::TempDir::new("log-escalations-place");
     let root = home.path();
