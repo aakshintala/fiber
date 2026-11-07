@@ -82,7 +82,9 @@ fiber.tool("codemode", {
       if name == "delegate_spawn" or name == "delegate_fork" then
         local first = outcome.content[1]
         if type(first) == "table" and first.type == "text" and type(first.text) == "string" then
-          local id = first.text:match("^Started delegate (%S+)%. Its log is (%S+)%.$")
+          -- The log path keeps spaces from the project key or home
+          -- directory, so only the id prefix is matched.
+          local id = first.text:match("^Started delegate (%S+)%. Its log is ")
           if id ~= nil then
             row.job = id
           end

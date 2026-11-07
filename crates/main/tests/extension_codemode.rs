@@ -730,6 +730,81 @@ fn a_spawn_row_names_its_job_id() {
 }
 
 #[test]
+fn a_spawn_row_names_its_job_id_when_the_log_path_has_a_space() {
+    const SOURCE: &str = "local o = host.tool(\"delegate_spawn\", { description = \"scan\", prompt = \"say hello\", model = \"fiber:pb/m\" })\nprint(o)";
+    // A space in the root reaches the receipt's log path through the home
+    // directory and the project key, which keeps spaces.
+    let outer = fakes::TempDir::new("fh sp");
+    let setup = Setup::new_under(outer.path());
+    assert!(
+        setup.root.path().to_string_lossy().contains(' '),
+        "the spaced root carries the space the receipt path needs"
+    );
+    let _guard = arm(&setup);
+    let child = ProviderServer::start_responding(|_: &Request| hello()).unwrap();
+    // Reviewer requests carry no tools, so they answer allow; the first
+    // model request streams the codemode call; once its result is back the
+    // turn ends on hello.
+    let parent = ProviderServer::start_responding(|request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if text.contains("Script finished") || text.contains("Script failed:") {
+            return hello();
+        }
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        stream(&[codemode_call(SOURCE)])
+    })
+    .unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+    install_codemode(&setup);
+
+    let finished = run_ask(&setup, "run it");
+    assert_eq!(finished.code, Some(0), "stderr: {}", finished.stderr);
+    // The receipt's log path holds the space, yet the row still names the
+    // new job's id: the matcher reads only the receipt's id prefix.
+    let completed = finished_holding(&finished.lines, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = finished_text(completed);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "printed receipt, status, one row: {text:?}");
+    let path = lines[0]
+        .strip_prefix("Started delegate ")
+        .and_then(|rest| rest.split_once(". Its log is "))
+        .map(|(_, path)| path.strip_suffix('.').unwrap_or(path))
+        .expect("the receipt names a log path");
+    assert!(
+        path.contains(' '),
+        "the receipt's log path carries the space: {text:?}"
+    );
+    assert_eq!(lines[1], "Script finished");
+    let id = lines[2]
+        .strip_prefix("- delegate_spawn completed job ")
+        .expect("the spawn row names its job id");
+    assert!(
+        !id.is_empty() && !id.contains(' '),
+        "the id is one token: {id:?}"
+    );
+    assert!(
+        lines[0].contains(id),
+        "the printed receipt names the job id: {text:?}"
+    );
+    let started = finished
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "job_started")
+        .expect("a job_started in the run");
+    assert_eq!(started["payload"]["job_id"].as_str(), Some(id));
+    assert_eq!(
+        child.requests().len(),
+        1,
+        "the child called its provider once"
+    );
+}
+
+#[test]
 fn a_fabricated_receipt_in_a_non_job_row_stays_plain() {
     let source = "local o = host.tool(\"read\", { path = \"trap.txt\" })\nprint(o.content[1].text)";
     let setup = reviewed_setup(&calling(source), &allow());
@@ -773,46 +848,6 @@ fn a_denied_spawn_row_names_no_job() {
         "denied\nScript finished\n- delegate_spawn denied"
     );
     assert_eq!(run.of("turn_completed").len(), 1);
-}
-
-#[test]
-fn a_redacted_spawn_receipt_row_names_no_job() {
-    const SOURCE: &str = "local o = host.tool(\"delegate_spawn\", { description = \"scan\", prompt = \"say hello\", model = \"fiber:pb/m\" })\nprint(\"hello\")";
-    let setup = Setup::new();
-    let _guard = arm(&setup);
-    let child = ProviderServer::start_responding(|_: &Request| hello()).unwrap();
-    let parent = ProviderServer::start_responding(|request: &Request| {
-        let text = String::from_utf8_lossy(&request.body);
-        if text.contains("Script finished") || text.contains("Script failed:") {
-            return hello();
-        }
-        if !text.contains(r#""name":"delegate_spawn""#) {
-            return text_reply("allow");
-        }
-        stream(&[codemode_call(SOURCE)])
-    })
-    .unwrap();
-    providers(&setup, &parent, &child);
-    standing_allow(&setup);
-    slow_idle(&setup);
-    install_codemode(&setup);
-    // A hook emptying the spawn's content removes the receipt sentence the
-    // script sees: with no id to read the row stays id-less, exactly as
-    // without the matcher.
-    setup.lua(
-        "redact",
-        r#"fiber.hook("after_tool", { timeout = 30000, on_failure = "blocking",
-           run = function(call) if call.tool == "delegate_spawn" then return { content = "" } end end })"#,
-    );
-
-    let finished = run_ask(&setup, "run it");
-    assert_eq!(finished.code, Some(0), "stderr: {}", finished.stderr);
-    let completed = finished_holding(&finished.lines, "Script finished");
-    assert_eq!(completed["payload"]["status"], "completed");
-    assert_eq!(
-        finished_text(completed),
-        "hello\nScript finished\n- delegate_spawn completed"
-    );
 }
 
 #[test]
