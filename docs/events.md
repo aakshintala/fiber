@@ -1056,7 +1056,7 @@ Durable.
 | `extension` | string | no | the section's extension, when the file is a section file; absent for an instruction file |
 | `content` | string | no | the file's content now; absent when deleted |
 | `sent` | string | yes | what the model was sent: `full`, `diff`, `deleted`, `none` or `stub`; a closed set |
-| `size` | number | no | the raw byte length read when the line was emitted, present whenever `content` is |
+| `size` | number | no | the raw byte length read when the line was emitted, present on `stub` lines for replay; absent on every other line |
 
 #### `date_changed`
 

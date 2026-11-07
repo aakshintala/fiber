@@ -26,12 +26,14 @@ use crate::prompt::PromptInputs;
 const SUBDIRECTORY_STUB_BYTES: u64 = 32768;
 
 /// The `instructions_large` notice for a stubbed subdirectory file: it
-/// names the path and size and says a stub was sent.
+/// names the path and size and says a stub was sent. The wording stays
+/// true for a later send of a stubbed path at any size: a stubbed path
+/// stays a stub whatever its size now.
 fn stub_notice(path: &str, size: u64) -> Notice {
     Notice {
         code: ErrorCode::InstructionsLarge,
         message: format!(
-            "Instruction file {path} is {size} bytes, over the 32 KiB subdirectory limit, so it was sent as a stub instead of the full text."
+            "Instruction file {path} is {size} bytes, so it was sent as a stub instead of the full text."
         ),
         extension: None,
     }
@@ -395,13 +397,15 @@ impl State {
                     return;
                 }
                 let extension = self.extension_of(path).map(str::to_owned);
-                // The raw byte length read now, on every line carrying
-                // content; the stub renderer reads it back, falling back
-                // to the content's length on pre-change lines.
-                let size = Some(bytes.len() as u64);
+                // The raw byte length read now, on stub lines only; the
+                // stub renderer reads it back, falling back to the
+                // content's length on pre-change lines. Every other line
+                // omits it.
+                let raw = bytes.len() as u64;
                 // A path once sent as a stub stays a stub through growth,
                 // shrinkage and delete/recreate; the reason still follows
-                // what the model had.
+                // what the model had. Each stub send is followed by its
+                // `instructions_large` notice naming the path and size.
                 if self.stubbed.contains(path) {
                     out.files.push(InstructionFile {
                         path: path.to_owned(),
@@ -413,8 +417,9 @@ impl State {
                         extension,
                         content: Some(content),
                         sent: InstructionSent::Stub,
-                        size,
+                        size: Some(raw),
                     });
+                    out.notices.push(stub_notice(path, raw));
                 } else {
                     out.files.push(match old {
                         Some(old) => {
@@ -432,7 +437,7 @@ impl State {
                                 extension: extension.clone(),
                                 content: Some(content.clone()),
                                 sent,
-                                size,
+                                size: None,
                             }
                         }
                         None => InstructionFile {
@@ -441,7 +446,7 @@ impl State {
                             extension,
                             content: Some(content),
                             sent: InstructionSent::Full,
-                            size,
+                            size: None,
                         },
                     });
                 }
@@ -550,7 +555,7 @@ impl State {
                         extension: None,
                         content: Some(content),
                         sent: InstructionSent::Full,
-                        size: Some(bytes.len() as u64),
+                        size: None,
                     }),
                     None,
                 )
@@ -622,7 +627,7 @@ impl State {
                             extension,
                             content: Some(content),
                             sent: InstructionSent::None,
-                            size: Some(bytes.len() as u64),
+                            size: None,
                         });
                     }
                 }
@@ -743,18 +748,8 @@ impl State {
                         continue;
                     }
                     let raw = bytes.len() as u64;
-                    // The queued size holds unless the re-read content
-                    // differs, when the emit-time raw length replaces it.
-                    let size = if file.content.as_deref() == Some(content.as_str()) {
-                        file.size
-                    } else {
-                        Some(raw)
-                    };
-                    // A first touch over the limit goes out as a stub,
-                    // with the full content in the log and one
-                    // `instructions_large` notice naming it; anything
-                    // smaller, and any other reason, keeps today's
-                    // mapping.
+                    // The stub carries the emit-time raw length for
+                    // replay; every other line omits it.
                     if file.reason == InstructionReason::Subdirectory
                         && raw > SUBDIRECTORY_STUB_BYTES
                     {
@@ -763,14 +758,15 @@ impl State {
                         out.push(Event::InstructionFile(InstructionFile {
                             content: Some(content),
                             sent: InstructionSent::Stub,
-                            size,
+                            size: Some(raw),
                             ..file
                         }));
                         out.push(Event::Notice(notice));
                     } else {
+                        // No stub, no size: the queued line already omits
+                        // it, so the re-read carries it through unchanged.
                         out.push(Event::InstructionFile(InstructionFile {
                             content: Some(content),
-                            size,
                             ..file
                         }));
                     }

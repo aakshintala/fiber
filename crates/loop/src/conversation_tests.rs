@@ -367,6 +367,40 @@ fn subdirectory_stub_invalid_utf8_size_is_raw_bytes_live_and_rebuild_equal() {
 }
 
 #[test]
+fn subdirectory_shrunk_stub_renders_small_size_without_over_limit_claim() {
+    // A stubbed path stays a stub after shrinking below the limit: the
+    // later send carries the new size, and the render must not claim a
+    // 100-byte file is over the 32 KiB limit.
+    let (text, had) = rendered_stub(&stub_file(
+        "/w/sub/AGENTS.md",
+        InstructionReason::Changed,
+        "# Tiny\nBody prose that stays logged.\n",
+        100,
+    ));
+    assert!(text.contains("100 bytes"), "len {}", text.len());
+    assert!(text.contains("# Tiny"), "len {}", text.len());
+    assert!(
+        text.contains("Read it before working in that directory."),
+        "len {}",
+        text.len()
+    );
+    assert!(
+        !text.contains("Body prose that stays logged."),
+        "len {}",
+        text.len()
+    );
+    assert!(
+        !text.contains("over the 32 KiB limit"),
+        "len {}",
+        text.len()
+    );
+    assert_eq!(
+        had.get("/w/sub/AGENTS.md"),
+        Some(&"# Tiny\nBody prose that stays logged.\n".to_owned())
+    );
+}
+
+#[test]
 fn subdirectory_small_file_still_renders_full() {
     let mut had = BTreeMap::new();
     let mut conversation = Vec::new();

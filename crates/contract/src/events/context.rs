@@ -486,60 +486,15 @@ pub struct InstructionFile {
     pub content: Option<String>,
     /// What the model was sent.
     pub sent: InstructionSent,
-    /// The raw byte length read when the line was emitted, present
-    /// whenever `content` is; absent on pre-change lines.
+    /// The raw byte length read when the line was emitted, present on
+    /// `stub` lines for replay; absent on every other line.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<u64>,
 }
 
 #[cfg(test)]
-mod stub_tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
-
-    use serde_json::{Value, json};
-
-    use super::{InstructionFile, InstructionReason, InstructionSent};
-
-    #[test]
-    fn stub_sent_round_trips_as_stub() {
-        assert_eq!(
-            serde_json::to_value(InstructionSent::Stub).expect("serializable"),
-            Value::String("stub".to_owned())
-        );
-        assert_eq!(
-            serde_json::from_value::<InstructionSent>(Value::String("stub".to_owned()))
-                .expect("deserializable"),
-            InstructionSent::Stub
-        );
-    }
-
-    #[test]
-    fn stub_size_present_round_trips() {
-        let file = InstructionFile {
-            path: "/w/sub/AGENTS.md".to_owned(),
-            reason: InstructionReason::Subdirectory,
-            extension: None,
-            content: Some("text".to_owned()),
-            sent: InstructionSent::Stub,
-            size: Some(40_000),
-        };
-        let value = serde_json::to_value(&file).expect("serializable");
-        assert_eq!(value.get("size"), Some(&json!(40_000)));
-        assert_eq!(
-            serde_json::from_value::<InstructionFile>(value).expect("deserializable"),
-            file
-        );
-    }
-
-    #[test]
-    fn stub_size_absent_stays_absent() {
-        let value = json!({"path": "/a", "reason": "subdirectory", "content": "c", "sent": "stub"});
-        let file: InstructionFile = serde_json::from_value(value).expect("deserializable");
-        assert_eq!(file.size, None);
-        let round_tripped = serde_json::to_value(&file).expect("serializable");
-        assert_eq!(round_tripped.get("size"), None);
-    }
-}
+#[path = "context_tests.rs"]
+mod tests;
 
 /// `date_changed`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

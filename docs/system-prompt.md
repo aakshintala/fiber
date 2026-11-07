@@ -392,9 +392,9 @@ modification time, then content when those differ.
 | Change | What the model is sent |
 |---|---|
 | Changed by a call in this session | Nothing. The model saw its own edit. |
-| Changed from outside | A unified diff against the version the model was last given, or the full text when the diff is longer than the new file |
+| Changed from outside | A unified diff against the version the model was last given, or the full text when the diff is longer than the new file; a path already sent as a stub re-sends a stub ("Subdirectory files") |
 | Deleted | One line saying its instructions no longer apply |
-| Created | The full text |
+| Created | The full text; a path already sent as a stub re-sends a stub ("Subdirectory files") |
 
 A change counts as the session's own when the file still matches what Fiber
 recorded after the last call whose declared paths included it. Outside changes

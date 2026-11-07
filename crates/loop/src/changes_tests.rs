@@ -830,7 +830,7 @@ fn subdirectory_32kib_boundary_sends_full() {
     assert_eq!(queued.len(), 1);
     let line = stub_line(&queued);
     assert_eq!(line.sent, InstructionSent::Full);
-    assert_eq!(line.size, Some(32768));
+    assert_eq!(line.size, None);
 }
 
 #[test]
@@ -885,13 +885,13 @@ fn queued_created_over_limit_32kib_stays_full() {
             extension: None,
             content: Some(content),
             sent: InstructionSent::Full,
-            size: Some(40 * 1024),
+            size: None,
         }));
     let queued = state.take_queued();
     assert_eq!(queued.len(), 1);
     let line = stub_line(&queued);
     assert_eq!(line.sent, InstructionSent::Full);
-    assert_eq!(line.size, Some(40 * 1024));
+    assert_eq!(line.size, None);
     assert!(!state.stubbed.contains(&key));
 }
 
@@ -912,12 +912,16 @@ fn stubbed_subdirectory_growth_keeps_stub() {
     assert_eq!(grown.len(), 50 * 1024);
     std::fs::write(&path, &grown).unwrap();
     let out = state.check(&*fake);
-    assert!(out.notices.is_empty());
     assert_eq!(out.files.len(), 1);
     let line = &out.files[0];
     assert_eq!(line.reason, InstructionReason::Changed);
     assert_eq!(line.sent, InstructionSent::Stub);
     assert_eq!(line.size, Some(50 * 1024));
+    assert_eq!(out.notices.len(), 1);
+    assert_eq!(out.notices[0].code, contract::ErrorCode::InstructionsLarge);
+    assert!(out.notices[0].message.contains(&line.path));
+    assert!(out.notices[0].message.contains("51200 bytes"));
+    assert!(out.notices[0].message.contains("stub"));
     let content = line.content.as_deref().unwrap();
     assert_eq!(content.len(), 50 * 1024);
     assert!(
@@ -960,6 +964,73 @@ fn stubbed_subdirectory_delete_recreate_sends_created_stub() {
     assert_eq!(line.reason, InstructionReason::Created);
     assert_eq!(line.sent, InstructionSent::Stub);
     assert_eq!(line.size, Some(40 * 1024));
+    assert_eq!(out.notices.len(), 1);
+    assert_eq!(out.notices[0].code, contract::ErrorCode::InstructionsLarge);
+    assert!(out.notices[0].message.contains(&key));
+    assert!(out.notices[0].message.contains("40960 bytes"));
+    assert!(out.notices[0].message.contains("stub"));
+}
+
+#[test]
+fn queued_subdirectory_edited_before_emit_sends_reread_content() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let workspace = canon(&workspace);
+    // Queued but not yet emitted: a later call in the same batch edits
+    // the file, so the emit re-reads and sends the new content.
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/notes.txt"])));
+    assert!(own.is_empty());
+    let mut revised = String::from("# Revised rules.\n");
+    revised.push_str(&"x".repeat(44 * 1024 - revised.len()));
+    assert_eq!(revised.len(), 44 * 1024);
+    std::fs::write(&path, &revised).unwrap();
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 2);
+    let line = stub_line(&queued);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(44 * 1024));
+    assert_eq!(line.content.as_deref(), Some(revised.as_str()));
+    assert!(
+        line.content
+            .as_deref()
+            .unwrap()
+            .contains("# Revised rules.")
+    );
+}
+
+#[test]
+fn stubbed_subdirectory_shrink_keeps_stub_with_notice() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let path = sized_subdirectory_file(&workspace, 40 * 1024);
+    let key = canon(&path).display().to_string();
+    queue_subdirectory(&mut state, &canon(&workspace));
+    // Shrunk outside the session to 100 bytes: the re-send stays a stub
+    // with the new size, and its notice names the new size.
+    let mut small = String::from("# Tiny.\n");
+    small.push_str(&"x".repeat(100 - small.len()));
+    assert_eq!(small.len(), 100);
+    std::fs::write(&path, &small).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    let line = &out.files[0];
+    assert_eq!(line.path, key);
+    assert_eq!(line.reason, InstructionReason::Changed);
+    assert_eq!(line.sent, InstructionSent::Stub);
+    assert_eq!(line.size, Some(100));
+    assert_eq!(out.notices.len(), 1);
+    assert_eq!(out.notices[0].code, contract::ErrorCode::InstructionsLarge);
+    assert!(out.notices[0].message.contains(&key));
+    assert!(out.notices[0].message.contains("100 bytes"));
+    assert!(out.notices[0].message.contains("stub"));
+    assert!(!out.notices[0].message.contains("over the 32 KiB"));
 }
 
 #[test]
@@ -1027,7 +1098,7 @@ fn resumed_state_restores_stubbed_set_from_stub_lines() {
         extension: None,
         content: Some("Leaf.\n".into()),
         sent: InstructionSent::Full,
-        size: Some(6),
+        size: None,
     });
     let lines = vec![
         envelope("opening_message", &Event::OpeningMessage(message)),
