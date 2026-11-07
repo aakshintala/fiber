@@ -77,10 +77,10 @@ pub(crate) struct Delegates {
     jobs: Arc<jobs::Registry>,
     /// The session clock.
     clock: Arc<dyn Clock>,
-    /// Resolves a `delegate_spawn` `model` argument, and lists the
-    /// catalogue every refusal carries. The reload install swaps the
-    /// whole snapshot at once, so the stored one and the installed
-    /// tools never disagree.
+    /// Resolves a `delegate_spawn` `model` argument, and carries the
+    /// roles line and closest references every refusal lists. The reload
+    /// install swaps the whole snapshot at once, so the stored one and
+    /// the installed tools never disagree.
     resolve: Mutex<jobs::Resolve>,
     /// Builds the child's command.
     launch: jobs::Launch,
@@ -319,9 +319,10 @@ impl Delegates {
 /// anything else is a full `fiber:<provider>/<model>[:<level>]` reference
 /// (`docs/delegates.md`, "Choosing a model"). An explicit level must be
 /// one the model takes, checked with the same rule `--model` uses. A
-/// role's target is resolved as a reference only: roles never chain. Both
-/// the lookup and the catalogue are built from one providers and
-/// configuration snapshot, so they never disagree within a session.
+/// role's target is resolved as a reference only: roles never chain. The
+/// lookup, the catalogue, the refusal's roles line and its closest
+/// references are built from one providers and configuration snapshot, so
+/// they never disagree within a session.
 /// A reload rebuilds the snapshot from the reloaded providers and
 /// swaps it onto the session whole: the lookup and the catalogue the
 /// reloaded tools check against never disagree either, while a running
@@ -335,11 +336,18 @@ pub(crate) fn resolver(
     let config = config.clone();
     let listed = providers.clone();
     let read = config.clone();
+    let roles_config = config.clone();
+    let closest_providers = providers.clone();
+    let closest_config = config.clone();
     let credential_providers = providers.clone();
     let credential_config = config.clone();
     jobs::Resolve {
         lookup: Arc::new(move |argument| lookup(&providers, &config, argument)),
         catalogue: Arc::from(catalogue(&listed, &read)),
+        roles: Arc::from(extensions::roles_line(&roles_config)),
+        closest: Arc::new(move |typed| {
+            extensions::closest_refs(&closest_providers, &closest_config, typed)
+        }),
         credential: Arc::new(move |argument| {
             credential_for(&credential_providers, &credential_config, argument)
         }),
@@ -570,10 +578,11 @@ fn resolve_reference(
     Ok(resolved.reference())
 }
 
-/// The catalogue text `delegate_models` returns and every model refusal
-/// lists: the configured roles, what each maps to now, and the full
-/// references available. Roles and references are each sorted by name. A
-/// role whose target is not a usable reference is marked ` (unavailable)`.
+/// The catalogue text `delegate_models` returns: the configured roles,
+/// what each maps to now, and the full references available. Roles and
+/// references are each sorted by name. A role whose target is not a usable
+/// reference is marked ` (unavailable)`. A refusal never lists this text
+/// whole: it carries the roles line and closest references instead.
 fn catalogue(providers: &extensions::Providers, config: &config::Config) -> String {
     let mut roles: Vec<(String, String)> = config
         .merged(None)
