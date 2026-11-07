@@ -597,9 +597,27 @@ fn another_installed_provider_reads_its_command_once() {
     );
 }
 
+/// The installed models tool's text: the catalogue with the quota
+/// section appended. The loop keeps this instance across the switch,
+/// so it must follow the swapped snapshot.
+fn installed_models_text(models: &crate::delegates::LiveModels) -> String {
+    use contract::tool::Tool as _;
+    let output = models.run(
+        &Map::new(),
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{:?}", output.error);
+    let [contract::shapes::ContentPart::Text { text }] = &output.content[..] else {
+        panic!("one text part: {:?}", output.content);
+    };
+    text.clone()
+}
+
 /// A `/model` switch rebuilds the delegate resolver around the new model:
 /// applying it swaps the snapshot whole, so `delegate_models` leads with
-/// the switched model instead of the stale one.
+/// the switched model instead of the stale one, and the already-installed
+/// tools read the swapped snapshot on their next call.
 #[test]
 fn a_model_switch_rebuilds_the_delegate_resolver_around_the_new_model() {
     let fixture = fixture("fiber-switch-delegates");
@@ -629,6 +647,10 @@ fn a_model_switch_rebuilds_the_delegate_resolver_around_the_new_model() {
         })),
     ));
     switching.set_delegates(&delegates);
+    // The tools the session installed before the switch: the loop keeps
+    // these instances, so they must follow the swapped snapshot.
+    let installed_models = delegates.models();
+    let installed_spawn = delegates.tool();
     let before = delegates.resolve_snapshot().catalogue.to_string();
     assert!(
         before.starts_with("Session model: fiber:fake/m\n"),
@@ -644,6 +666,20 @@ fn a_model_switch_rebuilds_the_delegate_resolver_around_the_new_model() {
         "{after}"
     );
     assert!(after.contains("fake ("), "{after}");
+    // The already-installed tools follow the switch: the models text
+    // leads with the new session model, and the installed spawn tool
+    // reads the new catalogue. Cloned snapshots would still name
+    // `fake/m` here.
+    let installed = installed_models_text(&installed_models);
+    assert!(
+        installed.starts_with("Session model: fiber:other/m\n"),
+        "{installed}"
+    );
+    let installed_catalogue = installed_spawn.resolve().catalogue.to_string();
+    assert!(
+        installed_catalogue.starts_with("Session model: fiber:other/m\n"),
+        "{installed_catalogue}"
+    );
 }
 
 /// A failed read rejects with the credential's own code, names the

@@ -2112,7 +2112,7 @@ fn models_rig(catalogue: &str) -> super::Delegates {
     )
 }
 
-fn models_text(models: &jobs::DelegateModels) -> String {
+fn models_text(models: &super::LiveModels) -> String {
     use contract::tool::Tool as _;
     let output = models.run(
         &serde_json::Map::new(),
@@ -2220,11 +2220,11 @@ fn refreshed_tools_share_one_resolve() {
     // The declared tools read the same snapshot: both carry the fresh
     // catalogue, and neither holds the wired-in stub.
     assert_eq!(
-        delegates.tool().resolve.catalogue.to_string(),
+        delegates.tool().resolve().catalogue.to_string(),
         models.catalogue.to_string()
     );
     assert_eq!(
-        delegates.models().catalogue.to_string(),
+        delegates.models().catalogue().to_string(),
         models.catalogue.to_string()
     );
 }

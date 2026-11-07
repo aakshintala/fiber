@@ -706,9 +706,11 @@ fn provider_reload_failure_keeps_the_old_catalogue() {
     };
     assert!(reason.contains("takes no thinking level"), "{reason}");
     assert_eq!(snapshot.catalogue.to_string(), before);
-    // The installed models catalogue is unchanged too.
+    // The installed models catalogue is unchanged too: the held tool
+    // reads the stored snapshot, which the failed reload left alone,
+    // so it still lists the last good catalogue with its fake entries.
     let text = tool_text(&models, &serde_json::Map::new());
-    assert!(!text.contains("fiber:fake/"), "{text}");
+    assert_eq!(text, format!("{before}\nQuota: none"), "{text}");
     // The failure reaches the session as a notice naming the extension.
     assert!(
         notices.iter().any(|notice| {
