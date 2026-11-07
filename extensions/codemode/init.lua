@@ -4,7 +4,9 @@
 -- them (`status`, `content`, `artifact`, and `reason` or `error` when the
 -- call did not complete). Printed output comes only from `print()`; a chunk
 -- return value is ignored. The result is the printed lines, then one status
--- line, then one ledger row per inner call that finished.
+-- line, then one ledger row per inner call that finished. A printed outcome
+-- shows its text parts in order, then its error message or reason when it
+-- carries one, then its status when that status is not `completed`.
 --
 -- The tool declares `executes`, so admission reviews the script
 -- (`docs/extensions.md`, "Running a tool"). An inner call runs inside the
@@ -12,7 +14,12 @@
 -- the outer call cancels its inner calls.
 
 fiber.tool("codemode", {
-  description = "Runs a Lua script. The script calls session tools through host.tool; the result is the printed lines, then one status line and a ledger.",
+  description = "Runs a Lua script. The script calls session tools through host.tool(name, args); "
+    .. "each call returns its outcome table: status, content, artifact, and reason or error when the call "
+    .. "did not complete. Printing an outcome prints its text content. Example:\n"
+    .. "local o = host.tool(\"read\", { path = \"x\" })\n"
+    .. "print(o)\n"
+    .. "print(o.content[1].text)",
   input_schema = {
     type = "object",
     properties = { source = { type = "string", description = "The Lua to run." } },
@@ -42,9 +49,47 @@ fiber.tool("codemode", {
     -- raises instead of returning finishes nothing and leaves no row.
     local ledger = {}
     local real_tool = host.tool
+    -- How a printed outcome reads: its text parts in order, then its error
+    -- message or reason when it carries one, then its status when that
+    -- status is not `completed`. Non-text parts print nothing.
+    local function outcome_text(outcome)
+      local lines = {}
+      for _, part in ipairs(outcome.content) do
+        if part.type == "text" then
+          lines[#lines + 1] = part.text
+        end
+      end
+      if outcome.error ~= nil then
+        lines[#lines + 1] = outcome.error.message
+      elseif outcome.reason ~= nil then
+        lines[#lines + 1] = outcome.reason
+      end
+      if outcome.status ~= "completed" then
+        lines[#lines + 1] = outcome.status
+      end
+      return table.concat(lines, "\n")
+    end
+    local outcome_metatable = { __tostring = outcome_text }
     local function observing_tool(name, call_args)
       local outcome = real_tool(name, call_args)
+      setmetatable(outcome, outcome_metatable)
       local row = { name = name, status = outcome.status }
+      -- A call that started a delegate answers with the receipt sentence
+      -- as its first text part; name its job id in the row. The tool-name
+      -- gate keeps every other tool's row byte-identical, even when its
+      -- content carries a receipt-shaped sentence. Delegate answers are
+      -- text-only, so a first part of another shape ends the search.
+      if name == "delegate_spawn" or name == "delegate_fork" then
+        local first = outcome.content[1]
+        if type(first) == "table" and first.type == "text" and type(first.text) == "string" then
+          -- The log path keeps spaces from the project key or home
+          -- directory, so only the id prefix is matched.
+          local id = first.text:match("^Started delegate (%S+)%. Its log is ")
+          if id ~= nil then
+            row.job = id
+          end
+        end
+      end
       if outcome.artifact ~= nil then
         row.artifact = outcome.artifact
       end
@@ -81,11 +126,14 @@ fiber.tool("codemode", {
       out[#out + 1] = "Script failed: " .. tostring(failure)
     end
     for _, row in ipairs(ledger) do
-      if row.artifact ~= nil then
-        out[#out + 1] = "- " .. row.name .. " " .. row.status .. " " .. row.artifact
-      else
-        out[#out + 1] = "- " .. row.name .. " " .. row.status
+      local line = "- " .. row.name .. " " .. row.status
+      if row.job ~= nil then
+        line = line .. " job " .. row.job
       end
+      if row.artifact ~= nil then
+        line = line .. " " .. row.artifact
+      end
+      out[#out + 1] = line
     end
     return table.concat(out, "\n")
   end,

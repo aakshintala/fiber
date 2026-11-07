@@ -9,7 +9,7 @@ use std::time::Duration;
 use super::{lua_fixture, mcp_fixture, script};
 use crate::deadline::Deadline;
 use crate::{MUST_SUCCEED_WITHIN, TempDir};
-use contract::clock::Clock;
+use support::clock::Clock;
 
 /// How long a script child may take. A wait that reaches it fails the test.
 const DEADLINE: Duration = Duration::from_secs(10);

@@ -13,7 +13,7 @@ use crate::MUST_SUCCEED_WITHIN;
 use crate::children::Ready;
 use crate::clock::FakeClock;
 use crate::deadline::Deadline;
-use contract::clock::Clock;
+use support::clock::Clock;
 
 /// The child test [`a_killed_run_leaves_a_directory_a_later_one_does_not_reuse`]
 /// re-executes. Unset, the test does nothing.

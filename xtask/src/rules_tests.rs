@@ -574,10 +574,28 @@ fn a_member_whose_tree_names_a_tui_crate_is_reported_and_tui_and_main_are_exempt
 fn crate_edge_table_has_no_self_or_test_only_targets() {
     for row in CALLS {
         assert!(!row.depends_on.contains(&row.krate), "{}", row.krate);
-        assert!(!row.depends_on.contains(&"support"), "{}", row.krate);
-        assert!(!row.depends_on.contains(&"fakes"), "{}", row.krate);
-        assert!(!row.depends_on.contains(&"xtask"), "{}", row.krate);
+        assert!(test_only_targets_allowed(row), "{}", row.krate);
     }
+}
+
+fn test_only_targets_allowed(row: &Calls) -> bool {
+    TEST_ONLY_CRATES.contains(&row.krate)
+        || row
+            .depends_on
+            .iter()
+            .all(|target| !TEST_ONLY_CRATES.contains(target))
+}
+
+#[test]
+fn crate_edge_table_allows_fakes_contract_to_fakes() {
+    let row = call_row("fakes-contract", &["fakes"], FAKES_CONTRACT_QUOTE);
+    assert!(test_only_targets_allowed(&row));
+}
+
+#[test]
+fn crate_edge_table_rejects_product_to_fakes_contract() {
+    let row = call_row("cli", &["fakes-contract"], CLI_QUOTE);
+    assert!(!test_only_targets_allowed(&row));
 }
 
 fn calls_architecture(rules: &str) -> String {

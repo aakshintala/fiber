@@ -21,7 +21,7 @@ thiserror.workspace = true
 worktree = { path = "../worktree" }
 
 [dev-dependencies]
-fakes = { path = "../fakes" }
+fakes = { package = "fakes-contract", path = "../fakes-contract" }
 
 [lints]
 workspace = true

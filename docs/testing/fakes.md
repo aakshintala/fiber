@@ -104,9 +104,20 @@ is a real child session process, because it is Fiber. The fakes are:
 
 A fake keeps the order of what it replaces. Where the real thing makes one effect visible before another (a job listed before its first output, a release before the next hold, a reply after the request it answers), the fake does too, and a test in the fake's own crate pins that order. A test synchronises on the fake's order only where the fake's test pins it.
 
-The fakes live in one crate, `fakes`, which depends only on `contract` and `support` and
-is a test-only dependency of the crates that use it (`docs/architecture.md`,
-"The call rules").
+The contract-free helpers live in `fakes`: clocks, deadlines, temporary
+directories, HTTP servers, process helpers and fixtures. Its only workspace
+dependency is `support`. The contract-dependent helpers live in
+`fakes-contract`: scripted and blocking providers, event recorders, jobs,
+locks, rules, skills, handoff answers and tool-output helpers. It depends on
+`contract`, `support` and `fakes`, and re-exports the free helpers without
+copying their types.
+
+Callers that need contract-dependent helpers use the dependency key `fakes`
+as an alias for package `fakes-contract`, keeping their Rust imports unchanged.
+Product crates use either package only as a test dependency; no release binary
+contains either (`docs/architecture.md`, "The call rules"). The split removes
+the `contract`/`fakes` dependency cycle. The `support`/`fakes` dev-dependency
+cycle remains; see [#4286](https://github.com/aakshintala/fiber/issues/4286).
 
 The concrete scenarios each area needs are that area's acceptance criteria,
 written when its implementation tickets are.

@@ -26,7 +26,13 @@ use support::{KillGroup, SessionGuard, function_call, hello, stream, text_reply}
 const PROVIDER_MESSAGE: &str = "content cannot be empty if is_error is true";
 
 /// Installs provider `name` with model `m` on `protocol` at `url`.
-fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
+fn install_url(
+    setup: &support::Setup,
+    name: &str,
+    url: &str,
+    protocol: &str,
+    probe: Option<std::sync::mpsc::Sender<()>>,
+) {
     let source = setup.root.path().join(format!("src-{name}"));
     let mut manifest = json!({"name": name, "version": "v0.0.0", "fiber": "0.0.0", "api": 1});
     manifest["providers"] = Value::Object(
@@ -44,23 +50,21 @@ fn install_url(setup: &support::Setup, name: &str, url: &str, protocol: &str) {
             "models": [model]
         }),
     );
-    extensions::plan(
+    let request = extensions::Request::Path(source);
+    support::install_with_retry(
         &setup.home(),
-        &extensions::Request::Path(source),
+        setup.deadline.start_wait(),
+        &request,
         "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
+        probe,
+    );
 }
 
 /// Installs the parent's `pa/m` and the child's `pb/m` on
 /// `openai-responses`, and configures the parent's model and reviewer.
 fn providers(setup: &support::Setup, parent: &ProviderServer, child: &ProviderServer) {
-    install_url(setup, "pa", &parent.url(), "openai-responses");
-    install_url(setup, "pb", &child.url(), "openai-responses");
+    install_url(setup, "pa", &parent.url(), "openai-responses", None);
+    install_url(setup, "pb", &child.url(), "openai-responses", None);
     support::write_json(
         &setup.home().join("config.json"),
         &json!({"model": "pa/m", "reviewer": {"model": "pa/m"}}),

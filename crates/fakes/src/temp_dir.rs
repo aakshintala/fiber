@@ -14,7 +14,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use contract::clock::Clock;
+use support::clock::Clock;
 
 use crate::MUST_SUCCEED_WITHIN;
 use crate::clock::SystemClock;
