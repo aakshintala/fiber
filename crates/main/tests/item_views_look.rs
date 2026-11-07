@@ -197,43 +197,49 @@ fn start_run(setup: &Setup) -> Run {
     run
 }
 
+/// Every session log under `sessions` as its complete events, in
+/// directory order. A missing sessions dir or log is no events yet, not
+/// an error; a trailing fragment is a line still being written and is
+/// left out.
+fn session_events(sessions: &std::path::Path) -> Vec<Vec<serde_json::Value>> {
+    let entries = match fs::read_dir(sessions) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
+    };
+    let mut logs = Vec::new();
+    for entry in entries {
+        let entry = entry.unwrap();
+        let path = entry.path().join("events.jsonl");
+        match fs::read_to_string(&path) {
+            Ok(text) => logs.push(support::complete_lines(&text)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("read session log {}: {error}", path.display()),
+        }
+    }
+    logs
+}
+
 /// Whether the session log holds the parent turn's completion after its
 /// "Done." text: the turn is durably done, so the panel rows it drew are
 /// final until the test's own click expands them. The finished title
 /// never emits while an item is held, so no byte wait can read it; the
 /// log's `turn_completed` is the readiness signal instead.
 fn turn_completed_after_done(sessions: &std::path::Path) -> bool {
-    let entries = match fs::read_dir(sessions) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
-    };
-    for entry in entries {
-        let entry = entry.unwrap();
-        let path = entry.path().join("events.jsonl");
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => panic!("read session log {}: {error}", path.display()),
-        };
-        let events = support::complete_lines(&text);
+    session_events(sessions).iter().any(|events| {
         let Some(done) = events.iter().position(|event| {
             event["kind"] == "text_completed" && event["payload"]["text"] == "Done."
         }) else {
-            continue;
+            return false;
         };
         let Some(turn_id) = events[done]["turn_id"].as_str() else {
-            continue;
+            return false;
         };
-        if events
+        events
             .iter()
             .skip(done + 1)
             .any(|event| event["kind"] == "turn_completed" && event["turn_id"] == turn_id)
-        {
-            return true;
-        }
-    }
-    false
+    })
 }
 
 /// Whether the delegate's own session log shows its turns done: the
@@ -244,27 +250,14 @@ fn turn_completed_after_done(sessions: &std::path::Path) -> bool {
 /// "Reviewed." completes, so neither the parent's completion nor the
 /// first turn's end proves the delegate has stopped moving the panel row.
 fn delegate_turns_done(sessions: &std::path::Path) -> bool {
-    let entries = match fs::read_dir(sessions) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return false,
-        Err(error) => panic!("read sessions {}: {error}", sessions.display()),
-    };
-    for entry in entries {
-        let entry = entry.unwrap();
-        let path = entry.path().join("events.jsonl");
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => panic!("read session log {}: {error}", path.display()),
-        };
-        let events = support::complete_lines(&text);
+    session_events(sessions).iter().any(|events| {
         let said = |words: &str| {
             events.iter().find(|event| {
                 event["kind"] == "text_completed" && event["payload"]["text"] == words
             })
         };
         if said("Reviewed.").is_none() {
-            continue;
+            return false;
         }
         let completed = |turn_id: &serde_json::Value| {
             events
@@ -276,21 +269,13 @@ fn delegate_turns_done(sessions: &std::path::Path) -> bool {
             .iter()
             .filter(|event| event["kind"] == "turn_started")
             .all(|event| completed(&event["turn_id"]));
-        if woke && paired {
-            return true;
-        }
-    }
-    false
+        woke && paired
+    })
 }
 
 /// Writes `events` as one session's log under `sessions`, one JSON line
-/// each; `tail` follows the last line (a `"\n"` completes it).
-fn write_session_log(
-    sessions: &std::path::Path,
-    name: &str,
-    events: &[serde_json::Value],
-    tail: &str,
-) {
+/// each, the last one newline-terminated.
+fn write_session_log(sessions: &std::path::Path, name: &str, events: &[serde_json::Value]) {
     let dir = sessions.join(name);
     fs::create_dir_all(&dir).unwrap();
     let mut text = events
@@ -298,7 +283,7 @@ fn write_session_log(
         .map(|event| event.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-    text.push_str(tail);
+    text.push('\n');
     fs::write(dir.join("events.jsonl"), text).unwrap();
 }
 
@@ -343,7 +328,6 @@ fn delegate_turns_done_is_false_before_the_delegate_log_exists() {
         root.path(),
         "parent",
         &[said("Done.", "p1"), turn("turn_completed", "p1")],
-        "\n",
     );
     assert!(!delegate_turns_done(root.path()));
 }
@@ -351,7 +335,7 @@ fn delegate_turns_done_is_false_before_the_delegate_log_exists() {
 #[test]
 fn delegate_turns_done_is_false_for_a_log_that_never_said_reviewed() {
     let root = fakes::TempDir::new("fd");
-    write_session_log(root.path(), "other", &full_wake(), "\n");
+    write_session_log(root.path(), "other", &full_wake());
     assert!(!delegate_turns_done(root.path()));
 }
 
@@ -359,7 +343,7 @@ fn delegate_turns_done_is_false_for_a_log_that_never_said_reviewed() {
 fn delegate_turns_done_is_false_while_a_turn_is_open() {
     let root = fakes::TempDir::new("fd");
     let open = [turn("turn_started", "t1"), said("Reviewed.", "t1")];
-    write_session_log(root.path(), "d", &open, "\n");
+    write_session_log(root.path(), "d", &open);
     assert!(!delegate_turns_done(root.path()));
 }
 
@@ -367,14 +351,14 @@ fn delegate_turns_done_is_false_while_a_turn_is_open() {
 fn delegate_turns_done_is_false_while_the_wake_turn_is_open() {
     let root = fakes::TempDir::new("fd");
     let wake = [turn("turn_started", "t2"), said("Steered.", "t2")];
-    write_session_log(root.path(), "d", &delegate_events(&wake), "\n");
+    write_session_log(root.path(), "d", &delegate_events(&wake));
     assert!(!delegate_turns_done(root.path()));
 }
 
 #[test]
 fn delegate_turns_done_is_false_before_the_wake_turn_starts() {
     let root = fakes::TempDir::new("fd");
-    write_session_log(root.path(), "d", &delegate_events(&[]), "\n");
+    write_session_log(root.path(), "d", &delegate_events(&[]));
     assert!(!delegate_turns_done(root.path()));
 }
 
@@ -383,14 +367,14 @@ fn delegate_turns_done_is_false_while_a_later_turn_is_open() {
     let root = fakes::TempDir::new("fd");
     let mut wake = full_wake();
     wake.push(turn("turn_started", "t3"));
-    write_session_log(root.path(), "d", &delegate_events(&wake), "\n");
+    write_session_log(root.path(), "d", &delegate_events(&wake));
     assert!(!delegate_turns_done(root.path()));
 }
 
 #[test]
 fn delegate_turns_done_is_true_when_every_turn_is_paired_and_the_wake_ran() {
     let root = fakes::TempDir::new("fd");
-    write_session_log(root.path(), "d", &delegate_events(&full_wake()), "\n");
+    write_session_log(root.path(), "d", &delegate_events(&full_wake()));
     assert!(delegate_turns_done(root.path()));
 }
 
@@ -401,7 +385,7 @@ fn delegate_turns_done_ignores_a_trailing_fragment() {
     // landed, so the line is still being written and does not count.
     let mut events = delegate_events(&full_wake());
     let last = events.pop().unwrap().to_string();
-    write_session_log(root.path(), "d", &events, "\n");
+    write_session_log(root.path(), "d", &events);
     let mut log = fs::OpenOptions::new()
         .append(true)
         .open(root.path().join("d").join("events.jsonl"))
@@ -486,9 +470,11 @@ fn assert_dim(grid: &Grid, y: u16, needle: &str) {
 }
 
 /// Opens the panel row holding `needle`: clicks its text, then waits
-/// for the item view's top row. The caller waits for the turn's
-/// `turn_completed` session-log event first, so the row's position is
-/// final: the parent's turn is done and the one held item parks on the
+/// for the item view's top row. The caller waits for the delegate's
+/// own turns to finish (`delegate_turns_done`) first, so the row's
+/// position is final: the parent's `turn_completed` alone is not
+/// enough, since the delegate's jobs-pending wake can still move the
+/// row after it. With the wake done the one held item parks on the
 /// test-held FIFO, so later folds only tick in place.
 fn open_row(run: &mut Run, needle: &str, top: &str) -> Grid {
     run.wait_screen("the panel lists the row", |grid| {
