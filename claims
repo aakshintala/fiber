@@ -420,3 +420,4 @@ crates/log/src/history.rs	fiber-4059	plan	2026-11-07T10:39:00Z	Amoghs-MacBook-Pr
 crates/log/src/offsets.rs	fiber-4059	plan	2026-11-07T10:39:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/paging_session.rs	fiber-4059	plan	2026-11-07T10:39:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/performance.md	fiber-4059	plan	2026-11-07T10:39:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/contract/src/events/context_tests.rs	fiber-4244	plan	2026-11-07T10:40:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
