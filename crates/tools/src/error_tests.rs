@@ -1015,10 +1015,10 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
          To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
          every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
     );
+    let text = error.to_string();
     assert!(
-        !error.to_string().contains("until while"),
-        "a loop rest is not a check command: {}",
-        error.to_string()
+        !text.contains("until while"),
+        "a loop rest is not a check command: {text}"
     );
     let error = ShellError::BareWait {
         command: "sleep 30; # waiting".to_owned(),
@@ -1042,10 +1042,10 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
          To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
          every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
     );
+    let text = error.to_string();
     assert!(
-        !error.to_string().contains("until &"),
-        "a separator-led rest is not a check command: {}",
-        error.to_string()
+        !text.contains("until &"),
+        "a separator-led rest is not a check command: {text}"
     );
     let error = ShellError::BareWait {
         command: "sleep 60".to_owned(),
@@ -1058,10 +1058,10 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
          To wait for a condition instead, start a monitor with `monitor: true` and a command like `until <check command>; do sleep 5; done`; \
          every monitor has a deadline, 5 minutes (300000 ms) by default, at most 30 minutes (1800000 ms), and at most 10 minutes (600000 ms) in a non-interactive run."
     );
+    let text = error.to_string();
     assert!(
-        !error.to_string().contains("until ; do"),
-        "no rest never emits an empty command: {}",
-        error.to_string()
+        !text.contains("until ; do"),
+        "no rest never emits an empty command: {text}"
     );
     for command in [
         "sleep 30; until ready; do sleep 1; done",
@@ -1072,21 +1072,19 @@ fn a_bad_shell_argument_keeps_its_text_and_code() {
             command: command.to_owned(),
         };
         assert_eq!(error.code(), ErrorCode::InvalidArguments);
+        let text = error.to_string();
         assert!(
-            error
-                .to_string()
-                .contains("until <check command>; do sleep 5; done"),
-            "other loop keywords and empty rest fall back: {}",
-            error.to_string()
+            text.contains("until <check command>; do sleep 5; done"),
+            "other loop keywords and empty rest fall back: {text}"
         );
     }
     let error = ShellError::BareWait {
         command: "sleep 25\nls".to_owned(),
     };
+    let text = error.to_string();
     assert!(
-        error.to_string().contains("until ls; do sleep 5; done"),
-        "a newline rest names its check command: {}",
-        error.to_string()
+        text.contains("until ls; do sleep 5; done"),
+        "a newline rest names its check command: {text}"
     );
 }
 
