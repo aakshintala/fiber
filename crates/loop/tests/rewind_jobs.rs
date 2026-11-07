@@ -1442,6 +1442,7 @@ fn a_delegate_end_during_the_rewind_stop_wait_is_hooked_in_full_and_artifacted()
             job_id: JobId("j_1".into()),
             text: long.clone(),
             artifact: None,
+            artifact_absolute: None,
             questions: None,
             usage: no_usage(),
             worktree: None,

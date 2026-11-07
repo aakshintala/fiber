@@ -369,11 +369,15 @@ fn finished_delegate(message: &str) -> (Vec<Value>, String, PathBuf) {
         .find(|text| text.contains("call_read"))
         .expect("a parent request after the read");
     assert_names(&wake_path(&woken), &file);
-    assert_eq!(
-        result_of(&lines, "read"),
-        message,
+    // The `read` tool bounds its own result near 16 KiB, on a line
+    // boundary; a shorter file comes back whole.
+    let read = result_of(&lines, "read");
+    let kept = message.len().min(4 * 1024);
+    assert!(
+        read.starts_with(&message[..kept]),
         "the parent reads the file the wake names"
     );
+    assert_eq!(read.len() == message.len(), message.len() <= 16 * 1024);
     (lines, woken, file)
 }
 

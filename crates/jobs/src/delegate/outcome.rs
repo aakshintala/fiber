@@ -157,6 +157,7 @@ pub(crate) fn empty(job_id: &JobId) -> DelegateFinished {
         job_id: job_id.clone(),
         text: String::new(),
         artifact: None,
+        artifact_absolute: None,
         questions: None,
         usage: Usage::default(),
         worktree: None,

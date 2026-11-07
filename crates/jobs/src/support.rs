@@ -82,6 +82,7 @@ pub(crate) fn delegate_finished(id: &str, text: &str) -> contract::events::Deleg
         job_id: contract::JobId(id.into()),
         text: text.to_owned(),
         artifact: None,
+        artifact_absolute: None,
         questions: None,
         usage: usage(),
         worktree: None,

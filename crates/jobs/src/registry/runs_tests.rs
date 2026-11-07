@@ -157,9 +157,17 @@ fn end_run(finish: Unreported, id: &contract::JobId, text: &str) {
     finish.report(ended_ok(&id.0), Some(delegate_finished(&id.0, text)));
 }
 
+/// The finish as `finish_run` stores it for a Fiber delegate whose
+/// output is `OUTPUT`.
+fn named(mut finished: contract::events::DelegateFinished) -> contract::events::DelegateFinished {
+    finished.artifact = Some("artifacts/final.md".into());
+    finished.artifact_absolute = Some("/sessions/s_x/artifacts/final.md".into());
+    finished
+}
+
 fn df(id: &contract::JobId, text: &str) -> Taken {
     Taken {
-        record: JobRecord::DelegateFinished(delegate_finished(&id.0, text)),
+        record: JobRecord::DelegateFinished(named(delegate_finished(&id.0, text))),
         action: None,
     }
 }
@@ -1251,4 +1259,124 @@ fn a_refused_claim_after_a_later_take_leaves_later_starts() {
             delegate_started_taken(&id, Some(c)),
         ]
     );
+}
+
+/// Opens a delegate whose output is `events` and starts with `harness`.
+fn open_delegate_on(
+    registry: &Arc<Registry>,
+    events: &std::path::Path,
+    harness: &str,
+) -> (contract::JobId, Unreported) {
+    let id = crate::registry::mint_job_id();
+    let mut start = delegate_started(&id.0);
+    start.harness = harness.into();
+    let (_started, finish) = registry.open_started(
+        id.clone(),
+        "delegate_spawn".into(),
+        "scan".into(),
+        events.to_string_lossy().into_owned(),
+        Stop(Box::new(|| {})),
+        start,
+    );
+    (id, finish)
+}
+
+#[test]
+fn finish_run_names_the_final_file_and_writes_none() {
+    let (_dir, registry) = world();
+    let session = TempDir::new("fiber-final-file");
+    let events = session.path().join("events.jsonl");
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let (id, finish) = open_delegate_on(&registry, &events, "fiber");
+    end_run(finish, &id, "Done.");
+    let file = session.path().join("artifacts/final.md");
+    let file = file.to_str().unwrap();
+
+    // The notice's copy and the stored copy name the same file.
+    let sent = take_notice(&rx).delegate.expect("a delegate's notice");
+    assert_eq!(sent.artifact.as_deref(), Some("artifacts/final.md"));
+    assert_eq!(sent.artifact_absolute.as_deref(), Some(file));
+    let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
+    let mut lines = answer.text.lines();
+    assert_eq!(
+        lines.next(),
+        Some(format!("Job {} completed.", id.0).as_str())
+    );
+    assert_eq!(
+        lines.next(),
+        Some(format!("Full final message: {file}").as_str())
+    );
+    let taken = call(&answer.settle.unwrap());
+    assert!(
+        taken.iter().any(|taken| matches!(
+            &taken.record,
+            JobRecord::DelegateFinished(stored) if stored == &sent
+        )),
+        "{taken:?}"
+    );
+    // Naming the file writes nothing: the delivery writes it.
+    assert!(!session.path().join("artifacts").exists());
+}
+
+#[test]
+fn another_harnesss_finish_names_no_file() {
+    let (_dir, registry) = world();
+    let session = TempDir::new("fiber-final-file");
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let (id, finish) = open_delegate_on(&registry, &session.path().join("out.jsonl"), "other");
+    end_run(finish, &id, "Done.");
+    let sent = take_notice(&rx).delegate.expect("a delegate's notice");
+    assert_eq!(sent.artifact, None);
+    assert_eq!(sent.artifact_absolute, None);
+    let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
+    assert!(
+        !answer.text.contains("Full final message"),
+        "{}",
+        answer.text
+    );
+}
+
+/// A wait after the loop delivered the finish with `delivered` as its
+/// text: the stored copy still answers the raw text and the same path.
+fn wait_after_delivery_as(delivered: &str) {
+    let (_dir, registry) = world();
+    let session = TempDir::new("fiber-final-file");
+    let events = session.path().join("events.jsonl");
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let (id, finish) = open_delegate_on(&registry, &events, "fiber");
+    end_run(finish, &id, "RAW-TOKEN");
+    let notice = take_notice(&rx);
+    let mut copy = notice.delegate.clone().expect("a delegate's notice");
+    copy.text = delivered.into();
+    assert!((notice.claim.0)().is_some(), "the claim holds");
+    let answer = registry.wait(&id.0, 0, &CancelToken::new()).unwrap();
+    let file = session.path().join("artifacts/final.md");
+    let mut lines = answer.text.lines();
+    lines.next();
+    assert_eq!(
+        lines.next(),
+        Some(format!("Full final message: {}", file.display()).as_str())
+    );
+    assert!(
+        answer.text.contains("Final message:\nRAW-TOKEN\n"),
+        "{}",
+        answer.text
+    );
+    assert_eq!(
+        copy.artifact_absolute,
+        notice.delegate.unwrap().artifact_absolute
+    );
+}
+
+#[test]
+fn a_wait_after_a_changed_delivery_returns_the_stored_raw_text_and_path() {
+    wait_after_delivery_as("REDACTED");
+}
+
+#[test]
+fn a_wait_after_a_withheld_delivery_names_the_same_path() {
+    wait_after_delivery_as("[withheld by an extension]");
 }

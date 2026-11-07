@@ -1916,3 +1916,48 @@ fn retain_extensions_waits_for_a_start_holding_the_gate_then_stops_it() {
         "the job is still listed running"
     );
 }
+
+/// `registry`'s one delegate on `/sessions/s_x/events.jsonl`, ended with
+/// `completed` and `text`, and the answer to a wait on it.
+fn answer_for_end(completed: JobCompleted, text: &str) -> String {
+    let (_dir, registry) = world();
+    let id = completed.job_id.clone();
+    let (_started, finish) = registry.open_started(
+        id.clone(),
+        "delegate_spawn".into(),
+        "scan".into(),
+        "/sessions/s_x/events.jsonl".into(),
+        Stop(Box::new(|| {})),
+        delegate_started(&id.0),
+    );
+    finish.report(completed, Some(delegate_finished(&id.0, text)));
+    registry.wait(&id.0, 0, &CancelToken::new()).unwrap().text
+}
+
+#[test]
+fn a_delegate_wait_names_the_final_file_right_after_the_header() {
+    let text = answer_for_end(ended_ok("j_one"), "Done.");
+    assert_eq!(
+        text,
+        "Job j_one completed.\n\
+         Full final message: /sessions/s_x/artifacts/final.md\n\
+         Exit code 0.\n\
+         Final message:\nDone.\n\
+         Output: /sessions/s_x/events.jsonl\n"
+    );
+}
+
+#[test]
+fn a_failed_delegate_with_an_error_over_16_kib_names_the_file_inside_the_first_16_kib() {
+    let mut end = failure();
+    end.job_id = JobId("j_one".into());
+    end.error.as_mut().unwrap().message = "e".repeat(20_000);
+    let text = answer_for_end(end, "");
+    let line = "Full final message: /sessions/s_x/artifacts/final.md\n";
+    assert_eq!(text.lines().nth(1), Some(line.trim_end()));
+    let head = &text.as_bytes()[..16_384];
+    assert!(
+        String::from_utf8_lossy(head).contains(line),
+        "the retained prefix keeps the path line"
+    );
+}

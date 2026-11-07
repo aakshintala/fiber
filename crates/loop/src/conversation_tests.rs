@@ -567,6 +567,7 @@ fn a_settled_delegate_renders_notice_and_final_text() {
         job_id: JobId("j_settle".into()),
         text: "migrated 3 queries".into(),
         artifact: None,
+        artifact_absolute: None,
         questions: None,
         usage: contract::shapes::Usage {
             tokens: contract::shapes::Tokens {
@@ -706,6 +707,7 @@ fn a_settled_pair_behind_a_suspended_batch_holds_notice_and_final_text() {
         job_id: JobId("j_settle".into()),
         text: "migrated 3 queries".into(),
         artifact: None,
+        artifact_absolute: None,
         questions: None,
         usage: contract::shapes::Usage {
             tokens: contract::shapes::Tokens {
@@ -846,6 +848,7 @@ fn an_owned_settled_pair_behind_a_suspended_batch_still_logs_its_finish() {
         job_id: JobId("j_owned_settle".into()),
         text: "migrated 3 queries".into(),
         artifact: None,
+        artifact_absolute: None,
         questions: None,
         usage: contract::shapes::Usage {
             tokens: contract::shapes::Tokens {
@@ -972,6 +975,7 @@ fn finished(id: &str, text: &str, questions: Option<Vec<contract::shapes::Questi
         job_id: JobId(id.into()),
         text: text.into(),
         artifact: None,
+        artifact_absolute: None,
         questions,
         usage: contract::shapes::Usage {
             tokens: contract::shapes::Tokens {

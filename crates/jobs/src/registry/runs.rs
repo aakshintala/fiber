@@ -20,6 +20,25 @@ use super::{Registry, final_text, lock};
 use crate::delegate::outcome::empty;
 use crate::error::JobsError;
 
+/// `finished` naming the file a Fiber delegate's final message is delivered
+/// to: `artifacts/final.md` in the delegate's own session directory, the
+/// parent of its `events.jsonl`. Another harness's finish names none.
+fn with_final_file(job: &super::Job, mut finished: DelegateFinished) -> DelegateFinished {
+    let fiber = job
+        .delegate
+        .as_ref()
+        .is_some_and(|started| started.harness == "fiber");
+    if let (true, Some(dir)) = (fiber, job.path.parent()) {
+        finished.artifact = Some(contract::events::FINAL_MESSAGE.to_owned());
+        finished.artifact_absolute = Some(
+            dir.join(contract::events::FINAL_MESSAGE)
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    finished
+}
+
 /// What `id` names in this session's registry.
 #[derive(Debug)]
 pub(crate) enum Target {
@@ -485,6 +504,10 @@ impl Registry {
             job.phase = super::Phase::Ended(Box::new(completed.clone()));
             // The terminal closes with the job.
             job.input = None;
+            // The one value both the wake and a `wait` read, so they name
+            // the same file. Nothing is written here: the delivery writes
+            // the file after the hooks.
+            let delegate = delegate.map(|finished| with_final_file(job, finished));
             // A delegate's finish is kept past the end, for a later
             // `wait` and its text.
             job.finished = delegate.clone();

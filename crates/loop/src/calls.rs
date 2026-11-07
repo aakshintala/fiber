@@ -261,6 +261,79 @@ impl Loop {
         )
     }
 
+    /// A call's settle, written in queue order. A delegate's finish first
+    /// runs the `delegate` delivery, with the status and process of the
+    /// end paired with it in the same take, which writes the final-message
+    /// file from the chain's output (`docs/delegates.md`, "Results"). The
+    /// chain's output goes only to the file: the line is logged as the
+    /// call's own result saw it, keeping its path fields when the file was
+    /// written and losing them when it was not. A finish with no file to
+    /// write, or with no end taken beside it, runs no chain and names no
+    /// file. Every record then goes through [`Loop::write_taken`].
+    fn write_call_settle(
+        &mut self,
+        taken: Vec<Taken>,
+        turn: Option<&TurnId>,
+        action: Option<&ActionId>,
+    ) -> Result<(), Error> {
+        use contract::jobs::JobRecord;
+        let ends: Vec<_> = taken
+            .iter()
+            .enumerate()
+            .map(|(at, queued)| match &queued.record {
+                JobRecord::DelegateFinished(finished) => {
+                    taken
+                        .iter()
+                        .skip(at + 1)
+                        .find_map(|later| match &later.record {
+                            JobRecord::Completed(end) if end.job_id == finished.job_id => {
+                                Some((end.status, end.process.clone()))
+                            }
+                            JobRecord::Started(_)
+                            | JobRecord::DelegateStarted(_)
+                            | JobRecord::DelegateFinished(_)
+                            | JobRecord::Completed(_) => None,
+                        })
+                }
+                JobRecord::Started(_) | JobRecord::DelegateStarted(_) | JobRecord::Completed(_) => {
+                    None
+                }
+            })
+            .collect();
+        for (taken, end) in taken.into_iter().zip(ends) {
+            let Taken {
+                record: contract::jobs::JobRecord::DelegateFinished(mut finished),
+                action: owner,
+            } = taken
+            else {
+                self.write_taken(taken, turn, action)?;
+                continue;
+            };
+            let named = match end {
+                Some((status, process)) if finished.artifact_absolute.is_some() => {
+                    let delivered =
+                        self.deliver_finish(finished.clone(), status, process.as_ref(), turn)?;
+                    delivered.artifact_absolute.is_some()
+                }
+                _ => false,
+            };
+            if !named {
+                finished.artifact = None;
+                finished.artifact_absolute = None;
+            }
+            let record = contract::jobs::JobRecord::DelegateFinished(finished);
+            self.write_taken(
+                Taken {
+                    record,
+                    action: owner,
+                },
+                turn,
+                action,
+            )?;
+        }
+        Ok(())
+    }
+
     /// [`Loop::write_taken`] without the `completion` hook: records
     /// `write_end` already ran through `deliver_end`.
     pub(crate) fn write_taken_raw(
@@ -1395,9 +1468,7 @@ impl Loop {
         // The call's prefix of its jobs' queues, written under the
         // queuing call's action and turn, before its own job lines.
         if let Some(settle) = settle {
-            for taken in (settle.0)() {
-                self.write_taken(taken, turn, Some(id))?;
-            }
+            self.write_call_settle((settle.0)(), turn, Some(id))?;
         }
         for record in jobs {
             let event = job_event(&self.log, record);

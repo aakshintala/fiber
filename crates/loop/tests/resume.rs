@@ -6129,3 +6129,32 @@ fn a_backfill_copies_the_good_prefix_past_a_corrupt_line() {
     assert!(copies_of(&history.new_lines(), "g_2").is_empty());
     assert_eq!(exited_cost(&history, looped.summary()), Some(0.10));
 }
+
+#[test]
+fn a_settled_message_is_written_whole_to_the_delegates_final_file() {
+    for message in ["Done.", ""] {
+        let mut history = History::new(Vec::new());
+        history.write(job_started("j_file"), None);
+        history.write(delegate_started("j_file", "s_file", "fiber"), None);
+        let delegate = stage_delegate(&history, "s_file");
+        delegate.append(&fiber_started(), None, None).unwrap();
+        delegate
+            .append(&settle_exit(0, Some(message), None), None, None)
+            .unwrap();
+        let file = delegate.dir().join("artifacts/final.md");
+        drop(delegate);
+        history.freeze();
+
+        drop(resume_for_backfill(&mut history));
+        let lines = history.new_lines();
+        assert_eq!(lines[0].payload["job_id"], "j_file");
+        assert_eq!(lines[0].payload["artifact"], "artifacts/final.md");
+        assert_eq!(
+            lines[0].payload["artifact_absolute"],
+            file.display().to_string()
+        );
+        // No hook runs on a settle: the file holds the message as the
+        // delegate wrote it.
+        assert_eq!(std::fs::read(&file).unwrap(), message.as_bytes());
+    }
+}
