@@ -10,10 +10,6 @@
     clippy::indexing_slicing,
     reason = "test helpers; a failure is the test's"
 )]
-#![allow(
-    dead_code,
-    reason = "each test binary uses its own subset of the helpers"
-)]
 
 use std::fs;
 use std::net::TcpListener;
