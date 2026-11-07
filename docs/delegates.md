@@ -146,7 +146,9 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 
 - When a delegate finishes, the parent is woken as for any job. The wake carries
   the delegate's final message, bounded as `docs/tools.md`, "Bounded results",
-  says: the first 16 KiB in the notice, the full text in `artifacts/`.
+  says: the first 16 KiB in the notice, the full text in `artifacts/`. A
+  delegate the parent settles from its own log after a resume carries the
+  same bounded final message.
 - A delegate that asks with `ask_user` ends its turn, and the wake carries its
   questions from `delegate_finished`. The parent answers with
   `delegate_message`, which resumes the delegate, or asks the person first
@@ -270,6 +272,11 @@ final message, any questions, usage totals and worktree state. Their keys are
   writes the `delegate_finished` from the delegate's own log when it
   delivers the result, and it reads each delegate's log for the
   `usage_recorded` lines it is missing.
+- Before marking a delegate job orphaned, the resumed parent reads its
+  session log. When the log's latest run holds `fiber_exited`, the parent
+  settles the job from it: its exit code, its outcome and its final message,
+  as a live finish would. Only a delegate whose log's latest run has no
+  `fiber_exited` is marked orphaned. Shell jobs are unchanged.
 - A crash of any kind in a delegate, in Rust or in Lua's C code, ends that
   delegate `failed` and nothing else.
 

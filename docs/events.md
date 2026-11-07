@@ -1532,7 +1532,7 @@ What the reader can tell about work that was in flight, from the log alone:
 | `tool_call_requested` with `provider_item` | the provider ran it; Fiber never reviews, runs or answers it on resume |
 | `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown, unless a `fiber_exited` with `suspended_on` names an `interaction_requested` with `resumes: true` that call raised: the call was waiting on the person, and resuming runs it again, with no second `tool_call_started`, so it raises the request again |
 | `tool_call_completed` | ran, with its outcome |
-| `job_started`, no `job_completed`, no keeper answers | the job's keeper died, or the session had none; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned` |
+| `job_started`, no `job_completed`, no keeper answers | the job's keeper died, or the session had none; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, except for a Fiber delegate whose own log's latest run holds `fiber_exited`, which is settled from it |
 | `job_started`, no `job_completed`, the keeper answers | the job is still running under the keeper; the resumed session takes it back (`docs/tools.md`, "The keeper") |
 | `job_completed` written while the session was gone | the keeper wrote it; the model is sent it with the next turn |
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |

@@ -10206,7 +10206,7 @@ fn an_ask_that_ends_while_its_command_delegate_runs_cancels_it_before_the_exit()
 }
 
 #[test]
-fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
+fn killing_the_parent_backfills_unseen_usage() {
     let setup = support::Setup::new();
     let _guard = arm(&setup);
     fs::write(setup.workspace().join("note.txt"), "the note\n").unwrap();
@@ -10334,11 +10334,11 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     let exited = lines.last().unwrap();
     assert_eq!(exited["payload"]["exit_code"], 129);
 
-    // The resume marks the orphan, then backfills every unseen record
-    // after the marking: the copies arrive in delegate-log order, each
-    // naming the child as the originator. The close below only answers
-    // once the resume (marking plus backfill) is done serving, so the
-    // log then holds everything the resume wrote.
+    // The resume settles the child's recorded exit, then backfills every
+    // unseen record after the settlement: the copies arrive in
+    // delegate-log order, each naming the child as the originator. The
+    // close below only answers once the resume (settlement plus backfill)
+    // is done serving, so the log then holds everything the resume wrote.
     let mut resumed = Running::start(&setup, &id, &["--resume"]);
     resumed.wait_line("the orphan marking", |line| {
         line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id
@@ -10418,8 +10418,8 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
         ]
     );
 
-    // The log pins the order the resume wrote: the orphan marking first,
-    // then exactly the child's records, and no copy before the marking,
+    // The log pins the order the resume wrote: the settled end first,
+    // then exactly the child's records, and no copy before the end,
     // so none arrived live while the parent was stalled.
     let parent_lines = read_lines(
         &sessions_in(&setup.home(), &setup.workspace())
@@ -10429,14 +10429,14 @@ fn killing_the_parent_backfills_the_orphan_s_unseen_usage() {
     let at = parent_lines
         .iter()
         .position(|line| line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id)
-        .expect("the orphan marking stands in the log");
+        .expect("the settled end stands in the log");
     let ends: Vec<_> = parent_lines
         .iter()
         .filter(|line| line["kind"] == "job_completed" && line["payload"]["job_id"] == job_id)
         .collect();
     assert_eq!(ends.len(), 1, "one end for the job: {ends:?}");
     assert_eq!(ends[0]["payload"]["status"], "failed");
-    assert_eq!(ends[0]["payload"]["error"]["code"], "orphaned");
+    assert_eq!(ends[0]["payload"]["error"]["code"], "nonzero_exit");
     let logged: Vec<(String, Value)> = parent_lines
         .iter()
         .filter(|line| {

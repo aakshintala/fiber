@@ -42,20 +42,7 @@ pub(crate) fn outcome(
     let mut process = process_of(status);
     process.timed_out = matches!(termination, Some(Termination::Timeout));
     let finished = match exited {
-        Some(exited) => DelegateFinished {
-            job_id: job_id.clone(),
-            text: exited
-                .final_message
-                .as_ref()
-                .map(|message| message.text.clone())
-                .unwrap_or_default(),
-            artifact: None,
-            questions: exited.questions.clone(),
-            usage: exited.usage.clone(),
-            worktree: None,
-
-            changed_by: None,
-        },
+        Some(exited) => exited.delegate_finished(job_id),
         None => empty(job_id),
     };
     let completed = match termination {

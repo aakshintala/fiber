@@ -49,7 +49,7 @@ use fakes::{Scripted, ScriptedProvider, StubJobs};
 use log::{Log, Watcher};
 use serde_json::{Map, Value, json};
 
-use super::{line_text, notice_text};
+use super::{OrphanEnd, line_text, notice_text};
 use crate::{Loop, Model};
 
 /// Reads `watcher` on its own thread with blocking `recv` until `done`
@@ -5569,7 +5569,7 @@ fn mark_orphans_runs_no_hook_and_writes_the_end_raw() {
         .looped
         .as_mut()
         .unwrap()
-        .mark_orphans(vec![end])
+        .mark_orphans(vec![OrphanEnd::Orphaned(end)])
         .unwrap();
     assert!(hooks.calls().is_empty());
     let lines: Vec<Envelope> = log::read(&world.dir).unwrap();
