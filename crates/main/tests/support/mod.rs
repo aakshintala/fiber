@@ -506,13 +506,13 @@ impl HubLogWatch {
 }
 
 #[cfg(target_os = "linux")]
-struct PlatformWatch {
+pub(crate) struct PlatformWatch {
     notify: rustix::fd::OwnedFd,
 }
 
 #[cfg(target_os = "linux")]
 impl PlatformWatch {
-    fn register(log: &Path) -> io::Result<Self> {
+    pub(crate) fn register(log: &Path) -> io::Result<Self> {
         let notify = rustix::fs::inotify::init(
             rustix::fs::inotify::CreateFlags::CLOEXEC | rustix::fs::inotify::CreateFlags::NONBLOCK,
         )?;
@@ -520,7 +520,7 @@ impl PlatformWatch {
         Ok(Self { notify })
     }
 
-    fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
+    pub(crate) fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
         let mut fds = [rustix::event::PollFd::new(
             &self.notify,
             rustix::event::PollFlags::IN,
@@ -554,7 +554,7 @@ impl PlatformWatch {
 }
 
 #[cfg(target_os = "macos")]
-struct PlatformWatch {
+pub(crate) struct PlatformWatch {
     queue: rustix::fd::OwnedFd,
     file: rustix::fd::OwnedFd,
 }
@@ -567,7 +567,7 @@ impl PlatformWatch {
         unsafe_code,
         reason = "kqueue registration for hub.log writes on macOS: the registered vnode fd is the watch's own open file, alive for every wait, and the event buffer is an empty stack array the kernel writes nothing into"
     )]
-    fn register(log: &Path) -> io::Result<Self> {
+    pub(crate) fn register(log: &Path) -> io::Result<Self> {
         use rustix::event::kqueue::{Event, EventFilter, EventFlags, VnodeEvents, kevent, kqueue};
         let file = rustix::fs::open(
             log,
@@ -608,7 +608,7 @@ impl PlatformWatch {
         unsafe_code,
         reason = "kqueue waits for hub.log writes on macOS: the registered vnode fd is the watch's own open file, alive for every wait, and the event buffer is a stack array the kernel writes only within its length"
     )]
-    fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
+    pub(crate) fn wait_once(&self, timeout: Duration) -> io::Result<ParkExit> {
         use rustix::event::kqueue::{Event, kevent};
         let mut events = [std::mem::MaybeUninit::<Event>::uninit(); 1];
         // SAFETY: registration added the vnode `WRITE` kevent in
@@ -1927,8 +1927,19 @@ pub(crate) fn await_first_request(server: &ProviderServer, deadline: Deadline) {
 #[track_caller]
 pub(crate) fn close_session(socket: &Socket) {
     socket.send(r#"{"id":"c_close_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let ack = recv(socket, "the subscribe acknowledgement");
+    let ack = recv_answer(socket, "c_close_sub", "the subscribe acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    socket.send(r#"{"id":"c_close","command":"close"}"#);
+    until_close(socket);
+}
+
+/// Closes the session on a socket that already holds a `full` subscription,
+/// and waits for it to leave. The caller must already be subscribed at
+/// `full` on this socket: [`until_close`] needs the session's leaving event,
+/// which only a `full` subscription delivers. A socket that is not, or is
+/// subscribed lower, uses [`close_session`].
+#[track_caller]
+pub(crate) fn close_subscribed_session(socket: &Socket) {
     socket.send(r#"{"id":"c_close","command":"close"}"#);
     until_close(socket);
 }

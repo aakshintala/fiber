@@ -1515,6 +1515,7 @@ fn a_start_a_dropped_call_queued_is_written_by_the_notice_claim_under_its_action
                 job_id: JobId(job.into()),
                 text: "Done.".into(),
                 artifact: None,
+                artifact_absolute: None,
                 questions: None,
                 usage: Usage {
                     tokens: Tokens {

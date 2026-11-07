@@ -199,7 +199,11 @@ by content.
 
 ## Bounded results
 
-- A tool that declares no cap is cut at 16 KiB of model-facing content.
+- A tool that declares no cap is cut at 16 KiB of model-facing content. The
+  cut bounds what the model sees: an inner call's result reaches the calling
+  script whole — neither the loop's cut nor the read tool's own cut applies
+  on that path. The shell's 1 MiB spill is the one bound that still applies
+  to an inner call ("Shell", "Result and output").
   Image parts do not count toward the cap and are never cut; their limit is
   `docs/model-routing.md`, "Image limits".
   Configuration can override any tool's cap (`docs/configuration.md`). A tool may declare a larger or
@@ -1003,8 +1007,9 @@ The kinds are `docs/events.md`.
 - Its optional properties and the `minimum` limit put its schema outside the
   strict subset, so it is sent with `strict: false`.
 - `delegate_spawn`'s `model` is neither required nor typed in its schema, because
-  the tool checks it and lists the valid roles and references (`docs/delegates.md`,
-  "Choosing a model"), so `delegate_spawn` is sent with `strict: false`.
+  the tool checks it and lists the roles, up to 3 closest references, and names
+  `delegate_models` for the rest (`docs/delegates.md`, "Choosing a model"), so
+  `delegate_spawn` is sent with `strict: false`.
 - `delegate_fork`'s `timeout_ms` is optional and carries a `minimum` limit, so
   `delegate_fork` is sent with `strict: false`.
 - The model-facing tool is one `jobs` tool with actions `list`, `wait`,

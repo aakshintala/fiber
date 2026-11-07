@@ -377,7 +377,8 @@ host.oauth.poll(opts)              -- poll a device-code token endpoint; returns
 host.oauth.refresh(fn)             -- lock the call's stored credential file, re-read it, refresh once
 host.sha256(bytes)                 -- SHA-256; returns hex
 host.hmac_sha256(key, bytes)       -- HMAC-SHA256; returns raw bytes
-json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none built in)
+host.utf8_lossy(bytes)             -- bytes as a string with each invalid UTF-8 sequence replaced by U+FFFD; only codemode's print capture calls it
+json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (Lua has none built in); { lenient = true } escapes raw control characters inside strings, strict stays the default
 ```
 
 - **`host.secret`** reads only a name the manifest's `secrets` lists. Any
@@ -526,10 +527,15 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
 ### Running a tool
 
 `host.tool(name, args)` runs any tool the session can call: a built-in, an MCP
-server's tool or another extension's. It returns the call's outcome as the
-model would see it: `status`, `content`, `artifact`, and `reason` or `error`
-when the call did not complete. It carries no `details` or `changes`, which
-the model never sees. A call that does not complete is an ordinary return, not a
+server's tool or another extension's. It returns the call's outcome: `status`,
+`content`, `artifact`, and `reason` or `error` when the call did not complete.
+It carries no `details` or `changes`, which the model never sees. The outcome
+reaches the script whole: an inner call bypasses the loop's cut, and the
+read tool's own cut does not apply to it, while the outer call's own result
+to the model stays bounded (`docs/tools.md`, "Bounded results"). The shell's
+1 MiB spill is the one tool-level bound that still applies on the inner path:
+a shell call past 1 MiB names its artifact as it does outside (`docs/tools.md`,
+"Shell", "Result and output"). A call that does not complete is an ordinary return, not a
 Lua error, so the extension decides what to do next. A codemode extension is
 built on it: the model sends one script, and the script calls tools, filters
 their output and returns only what the model needs
@@ -1736,7 +1742,7 @@ nothing.
   extension that holds it.
 - Give your extension a version tag for every release (see [Versions](#versions)). Dependents name a
   minimum version, and Fiber installs nothing newer than someone asked for.
-- JSON is `json.decode` / `json.encode`, provided by the host. Lua has none. `json.encode({})` is `{}`, while a callback returning `{}` gives `[]`.
+- JSON is `json.decode` / `json.encode`, provided by the host. Lua has none. `json.encode({})` is `{}`, while a callback returning `{}` gives `[]`. JSON `null` decodes to the null value: compare with `json.decode('null')` for equality, since indexing null raises an error.
 - In Lua, do not reach for `io`, `os`, `fetch`, sockets or environment
   variables — they are absent. Route every side effect through `host`.
 - Keep what must survive a resume in `state`, never in globals.

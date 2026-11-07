@@ -405,9 +405,16 @@ impl PanelState {
         self.status.as_ref()
     }
 
-    /// The model the latest `preamble_built` or `model_changed` names.
-    pub(crate) fn model(&self) -> Option<&str> {
-        self.model.as_deref()
+    /// The model the session runs on: the latest `session_status`
+    /// model first, else the latest `preamble_built` or
+    /// `model_changed` model; `None` while neither has landed, so no
+    /// display falls back to the configured default
+    /// (`docs/tui.md`, "The input box").
+    pub(crate) fn session_model(&self) -> Option<&str> {
+        self.status
+            .as_ref()
+            .map(|status| status.model.as_str())
+            .or(self.model.as_deref())
     }
 
     /// The thinking level the latest `preamble_built` or `model_changed`

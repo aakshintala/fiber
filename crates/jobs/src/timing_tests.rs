@@ -264,6 +264,8 @@ fn resolve() -> Resolve {
             _ => Err(format!("Unknown delegate model {model:?}.")),
         }),
         catalogue: Arc::from("References:\nfiber:fake/m"),
+        roles: Arc::from("Roles: none"),
+        closest: Arc::new(|_| Vec::new()),
         credential: Arc::new(|_| Ok(None)),
     }
 }

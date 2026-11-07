@@ -903,6 +903,9 @@ rationale and the rejected layouts are
   `session_held`, so the person can close it or let it exit. A resume that
   finds the session's keeper at a version it cannot read declines the same
   way, naming the keeper's version, and works once the keeper exits.
+  An additive change (a new kind, a new optional field, or a new value in an
+  open set, `docs/events.md`, "Versioning") never bumps `schema_version`, so a
+  different integer means breaking.
 
 The socket is the only path into a running session. The terminal, a parent
 session, a GUI and a phone through the hub are the same kind of client, as map
