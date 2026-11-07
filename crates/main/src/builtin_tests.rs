@@ -1440,7 +1440,7 @@ fn driver_shell_has_no_foreground_default() {
             }
         })
         .unwrap();
-    Deadline::after(CALL_WITHIN)
+    Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv_or_fail(&parked_rx, "the driver call to wait with no deadline");
     // The 10-minute foreground default parks nowhere: the driver's only
     // park carries no deadline. A moved default parks at some instant and
@@ -1461,7 +1461,7 @@ fn driver_shell_has_no_foreground_default() {
         None,
         Some(driver_thread),
         advance,
-        &Deadline::after(CALL_WITHIN),
+        &Deadline::after(fakes::MUST_SUCCEED_WITHIN),
     );
     assert!(
         finished.try_recv().is_err(),
