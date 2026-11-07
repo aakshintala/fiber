@@ -72,7 +72,6 @@ const DRAWN_ORDER: &[&str] = &[
     "panel",
     "rail",
     "rules",
-    "reviewer-setup",
     "settings",
     "theme",
     "keys",
@@ -329,7 +328,7 @@ fn an_empty_query_shows_every_row() {
 fn prefix_matches_come_before_contains_matches() {
     let all = rows(&[skill("prereview"), skill("Review")]);
     // `re`: prefix matches first, each group in the `/` list's drawn
-    // order (`docs/tui.md`, "Slash commands"): resume, release-notes, reviewer-setup,
+    // order (`docs/tui.md`, "Slash commands"): resume, release-notes,
     // rewind, name by its alias `rename`, reload, and the skill `Review`
     // (case ignored); then the contains matches, credential and
     // `prereview`.
@@ -338,7 +337,6 @@ fn prefix_matches_come_before_contains_matches() {
         [
             "resume",
             "release-notes",
-            "reviewer-setup",
             "rewind",
             "name",
             "reload",

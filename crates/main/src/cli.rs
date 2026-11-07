@@ -25,6 +25,7 @@ Sessions:
   sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
   sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                                                                                      List the models the installed providers serve
+  reviewer evidence --json                                                                                        Print the evidence behind the reviewer's notes as JSON
 
 Fiber itself:
   setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]  Ask the questions a new install needs, applying each answer
@@ -214,6 +215,9 @@ pub(crate) enum Commands {
     },
     /// List sessions, or delete, export or prune them
     Sessions(SessionsArgs),
+    /// Show the evidence behind the reviewer's notes
+    #[command(subcommand)]
+    Reviewer(ReviewerCommands),
     /// List the models the installed providers serve
     Models(ModelsArgs),
     /// Manage extensions
@@ -519,6 +523,17 @@ pub(crate) enum SessionsCommands {
         /// The text to find, as a literal.
         #[arg(value_name = "text", value_parser = clap::builder::NonEmptyStringValueParser::new())]
         text: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+#[command(disable_help_subcommand = true)]
+pub(crate) enum ReviewerCommands {
+    /// Print each topic's evidence as one JSON object keyed by topic
+    Evidence {
+        /// Print the evidence as JSON.
+        #[arg(long, required = true)]
+        json: bool,
     },
 }
 

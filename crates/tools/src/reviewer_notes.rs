@@ -8,51 +8,6 @@ use std::ops::Range;
 use contract::notes::Topic;
 use similar::{Algorithm, DiffTag, capture_diff_slices};
 
-/// The notes layer a line goes to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NotesLayer {
-    /// The project's own `config.json`.
-    PerProject,
-    /// Fiber home's `config.json`.
-    Global,
-}
-
-impl NotesLayer {
-    /// The tag a proposed line carries.
-    pub(crate) fn tag(self) -> &'static str {
-        match self {
-            Self::PerProject => "[per-project]",
-            Self::Global => "[global]",
-        }
-    }
-}
-
-/// Where a proposed line's evidence comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Source {
-    /// The project's own files.
-    Files,
-    /// The person's answer to the topic's question.
-    Answer,
-    /// Escalations a person answered allow, from this project only when
-    /// `all_here`.
-    Session {
-        /// Whether every escalation behind the line came from this project.
-        all_here: bool,
-    },
-}
-
-/// The layer a line goes to before the person flips it: a line from the
-/// project's files goes to the per-project notes, an answer to the global
-/// notes, and a session line to the per-project notes only when every
-/// escalation behind it came from this project.
-pub(crate) fn default_layer(source: Source) -> NotesLayer {
-    match source {
-        Source::Files | Source::Session { all_here: true } => NotesLayer::PerProject,
-        Source::Answer | Source::Session { all_here: false } => NotesLayer::Global,
-    }
-}
-
 /// Unicode 15's format characters (category Cf). `std` has no category
 /// query and no crate for one is a dependency this file's job needs.
 const FORMAT: &[(u32, u32)] = &[
@@ -394,5 +349,5 @@ pub(crate) fn diff(before: &str, after: &str) -> Vec<DiffRow> {
 }
 
 #[cfg(test)]
-#[path = "template_tests.rs"]
+#[path = "reviewer_notes_tests.rs"]
 mod tests;

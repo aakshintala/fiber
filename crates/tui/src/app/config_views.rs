@@ -1054,7 +1054,6 @@ impl App {
                 | super::Waiting::Branch
                 | super::Waiting::Quota
                 | super::Waiting::ArtifactPage
-                | super::Waiting::ProposeNotes
                 | super::Waiting::JobStop
                 | super::Waiting::JobInput,
             )

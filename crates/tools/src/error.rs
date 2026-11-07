@@ -16,6 +16,7 @@ mod web_fetch;
 
 pub(crate) use file_tools::{EditError, ReadError, WriteError};
 pub(crate) use media::{ImageReadError, PdfError};
+pub(crate) use misc::ReviewerNotesError;
 pub(crate) use misc::{AskUserError, SkillError, WebSearchError};
 pub(crate) use session::{SessionListError, SessionMessageError};
 pub(crate) use shell::ShellError;
@@ -68,6 +69,9 @@ pub(crate) enum ToolError {
     /// `shell` refused the call, or the command failed.
     #[error(transparent)]
     Shell(#[from] ShellError),
+    /// `reviewer_notes_save` cannot save.
+    #[error(transparent)]
+    ReviewerNotes(#[from] ReviewerNotesError),
 }
 
 impl ToolError {
@@ -76,6 +80,7 @@ impl ToolError {
     pub(crate) fn code(&self) -> ErrorCode {
         match self {
             Self::Arguments(error) => error.code(),
+            Self::ReviewerNotes(error) => error.code(),
             Self::File(error) => error.code(),
             Self::SessionList(error) => error.code(),
             Self::SessionMessage(error) => error.code(),

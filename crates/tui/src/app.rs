@@ -88,7 +88,6 @@ mod paste;
 pub(crate) mod rail;
 mod reconnect;
 pub(crate) mod results;
-mod reviewer_setup;
 mod rewind;
 mod screen;
 mod select;
@@ -150,6 +149,11 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
+
+/// What the notice says the first time in a session the reviewer blocks a
+/// call while both layers of the notes are empty: the skill that sets them
+/// up (`docs/permissions.md`, "Setting up the notes").
+const FIRST_BLOCK_NOTICE: &str = "The reviewer blocked a call while both layers of the notes are empty. Set them up with the reviewer-setup skill: run /reviewer-setup.";
 
 /// What a key does.
 #[derive(Debug, PartialEq, Eq)]
@@ -420,9 +424,11 @@ pub(crate) struct App {
     motion: crate::motion::Motion,
     /// The slabs the last frame drew for its framed surfaces.
     frames: top::Frames,
-    /// The reviewer notes setup, while open (`docs/permissions.md`,
-    /// "Setting up the notes").
-    reviewer_setup: reviewer_setup::State,
+    /// Sessions whose first-block notice showed or whose notes were
+    /// found, by id: the notes are fixed for the session, so neither is
+    /// read again (`docs/permissions.md`, "Setting up the notes"). Held
+    /// in memory only.
+    first_block_notice_done: BTreeSet<SessionId>,
 }
 
 impl App {
@@ -501,7 +507,7 @@ impl App {
             hooks_failed: None,
             motion: crate::motion::Motion::default(),
             frames: top::Frames::default(),
-            reviewer_setup: reviewer_setup::State::default(),
+            first_block_notice_done: BTreeSet::new(),
         };
         // One install reaches every page the screen draws.
         app.screen.pages_mut().ext.handle = app.handle;
@@ -514,7 +520,6 @@ impl App {
     /// Attaches straight to `session`. The `draw` jig uses it: an events
     /// file is one session's stream.
     pub(crate) fn attach(&mut self, session: SessionId) {
-        self.reviewer_setup_attached(&session);
         self.end_overlay();
         // A `/copy` waiting on a pass was for the screen before this one.
         self.copy_owed = false;
@@ -853,6 +858,55 @@ impl App {
     /// Shows `text` as a notice under `code`.
     pub(crate) fn push_notice(&mut self, code: ErrorCode, text: String) {
         self.notices.push(code, text);
+    }
+
+    /// The first live block of the attached session while both layers of
+    /// the reviewer notes are empty shows the notice naming the skill
+    /// that sets them up. A later block stays silent, as does a block for
+    /// another session, a failed read, or a session the terminal cannot
+    /// bind: the notes are fixed for the session, so neither is read
+    /// again.
+    fn first_block_notice(&mut self, envelope: &Envelope) {
+        if !is_block(envelope)
+            || self.pass_open()
+            || self.first_block_notice_done.contains(&envelope.session_id)
+        {
+            return;
+        }
+        if self.session() != Some(&envelope.session_id) {
+            return;
+        }
+        let session = envelope.session_id.clone();
+        let seam = self.configure_seam();
+        let Ok(workspace) = self.reviewer_binding(&session) else {
+            return;
+        };
+        let Ok(notes) = seam.reviewer_notes(&workspace) else {
+            return;
+        };
+        self.first_block_notice_done.insert(session);
+        if !(notes.global.text.trim().is_empty() && notes.project.text.trim().is_empty()) {
+            return;
+        }
+        self.push_notice(
+            ErrorCode::Other("reviewer-setup".to_owned()),
+            FIRST_BLOCK_NOTICE.to_owned(),
+        );
+    }
+
+    /// The workspace of `session`'s own row on home's list, and nothing
+    /// else: the picked, chosen and launch workspaces can name another
+    /// project's directory, or none on a remote home.
+    fn reviewer_binding(&self, session: &SessionId) -> Result<PathBuf, &'static str> {
+        let row = self
+            .home
+            .as_ref()
+            .and_then(|home| home.sessions.row(session))
+            .ok_or("the session has not loaded yet")?;
+        if row.workspace.is_empty() || row.project.is_empty() {
+            return Err("this session has no project");
+        }
+        Ok(PathBuf::from(&row.workspace))
     }
 
     /// Births unborn notices and removes expired events; the frame calls
@@ -1622,7 +1676,6 @@ impl App {
                         | Waiting::ConfigAsk
                         | Waiting::Credentials
                         | Waiting::CredentialSwitch
-                        | Waiting::ProposeNotes
                         | Waiting::JobStop
                         | Waiting::JobInput,
                     ) => {}
@@ -1703,7 +1756,7 @@ impl App {
                             self.outbox.settled(id);
                         }
                         Some(Waiting::Branch) | Some(Waiting::Quota) => {}
-                        Some(Waiting::ArtifactPage) | Some(Waiting::ProposeNotes) => {}
+                        Some(Waiting::ArtifactPage) => {}
                         Some(Waiting::JobStop) | Some(Waiting::JobInput) => {
                             self.outbox.settled(id);
                         }
@@ -1998,20 +2051,11 @@ impl App {
                 | Waiting::ConfigAsk
                 | Waiting::Credentials
                 | Waiting::CredentialSwitch
-                | Waiting::ProposeNotes
                 | Waiting::JobStop
                 | Waiting::JobInput,
             ) => None,
             None => None,
         };
-        // The reviewer setup's `propose_notes` answers settle first, and
-        // reach no other path. The tag settles here so a second answer
-        // for the id falls through to the generic path below.
-        if answer.and_then(|answer| answer.waiting.as_ref()) == Some(&Waiting::ProposeNotes)
-            && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
-        {
-            self.outbox.settled(id);
-        }
         // A `job_stop` or `job_input` answer settles its tag here so the
         // item-session and other-session exits below, which clear the
         // pending entry and return before `items_line`, do not leave it.
@@ -2020,9 +2064,6 @@ impl App {
             && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
         {
             self.outbox.settled(id);
-        }
-        if self.reviewer_setup_settled(envelope) {
-            return Vec::new();
         }
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
@@ -2266,7 +2307,7 @@ impl App {
         }
         send.extend(self.panel_line(envelope, answer));
         self.pwd_arrived(envelope);
-        self.reviewer_block(envelope);
+        self.first_block_notice(envelope);
         self.items_line(envelope);
         self.output_line(envelope);
         send.extend(self.session_views_line(envelope, answer));
@@ -2477,6 +2518,96 @@ fn hub_code(payload: &Map<String, Value>) -> ErrorCode {
     match hub_string(payload, "code") {
         Some(code) => ErrorCode::from_name(&code),
         None => ErrorCode::Malformed,
+    }
+}
+
+/// Whether a session line is the reviewer blocking a call: its deny, or an
+/// escalation to the person whose cause is a block (`docs/events.md`,
+/// `permission_requested`).
+fn is_block(envelope: &Envelope) -> bool {
+    let payload = &envelope.payload;
+    let word = |key: &str| payload.get(key).and_then(Value::as_str);
+    match envelope.kind() {
+        EventKind::PermissionResolved => {
+            word("decided_by") == Some("reviewer") && word("decision") == Some("deny")
+        }
+        EventKind::PermissionRequested => matches!(
+            payload
+                .get("escalation")
+                .and_then(|escalation| escalation.get("cause"))
+                .and_then(Value::as_str),
+            Some("consecutive_blocks" | "session_blocks" | "reviewer_failed")
+        ),
+        EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::HandoffStarted
+        | EventKind::HandoffCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => false,
     }
 }
 

@@ -4,7 +4,7 @@
 
 use contract::notes::Topic;
 
-use super::{DiffRow, NotesLayer, Source, clean_line, default_layer, diff, merge, owned};
+use super::{DiffRow, clean_line, diff, merge, owned};
 
 fn s(text: &str) -> String {
     text.to_string()
@@ -477,36 +477,6 @@ fn clean_line_removes_every_character_inside_every_format_range() {
             assert_eq!(clean_line(&wrapped(code)), "ab", "U+{code:04X} stays");
         }
     }
-}
-
-// -------------------------------------------------------- default_layer
-
-#[test]
-fn a_files_line_goes_per_project() {
-    assert_eq!(default_layer(Source::Files), NotesLayer::PerProject);
-}
-
-#[test]
-fn an_answer_line_goes_global() {
-    assert_eq!(default_layer(Source::Answer), NotesLayer::Global);
-}
-
-#[test]
-fn a_session_line_goes_per_project_only_when_every_escalation_came_from_here() {
-    assert_eq!(
-        default_layer(Source::Session { all_here: true }),
-        NotesLayer::PerProject
-    );
-    assert_eq!(
-        default_layer(Source::Session { all_here: false }),
-        NotesLayer::Global
-    );
-}
-
-#[test]
-fn the_layer_tags_name_the_layers() {
-    assert_eq!(NotesLayer::PerProject.tag(), "[per-project]");
-    assert_eq!(NotesLayer::Global.tag(), "[global]");
 }
 
 // ----------------------------------------------------------------- diff

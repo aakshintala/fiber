@@ -469,3 +469,18 @@ fn the_guideline_is_the_tool_search_section() {
         "{guideline:?}"
     );
 }
+
+#[test]
+fn reviewer_notes_save_is_reachable_by_name() {
+    let tmp = fakes::TempDir::new("fiber-tool-search-smoke");
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let save = crate::ReviewerNotesSave::new(home, config::ProjectKey::new("proj").unwrap());
+    let search = ToolSearch::new(vec![save.definition()], Vec::new());
+    let output = run(&search, &query("reviewer_notes_save"));
+
+    assert_eq!(
+        loaded(&output),
+        Some(vec!["reviewer_notes_save".to_owned()])
+    );
+}

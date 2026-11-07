@@ -120,6 +120,9 @@ groups, then the flags and examples.
 | `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
 | `sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
 | `models [<search>] [--json]` | Lists models only from installed providers with credential presence, merged with the current workspace's approved repository set: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. A model whose per-account setting has no value is omitted from the list; one grouped notice on stderr counts the omitted models ("A per-account host" in `docs/model-routing.md`). |
+| `reviewer evidence --json` | Prints the evidence behind the reviewer's notes as one JSON object keyed by topic, with credentials removed from URLs as the panel redacts them. |
+
+The `reviewer_notes_save` confirm is the exception to the idle-exit rule in Lifecycle (lines 676-686): it is raised with `suspends: false`, so it has no timeout and no resume — the session waits instead of idling out while this confirm is pending. A `close` or shutdown arriving while it is pending refuses the save with nothing written.
 
 `sessions`, `sessions search` and `sessions prune` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
