@@ -370,3 +370,7 @@ crates/main/tests/hub_delegate_resume.rs	fiber-4331	plan	2026-11-07T01:24:30Z	Am
 crates/loop/prompt/messages.md	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
 docs/tools.md	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
 crates/loop/src/jobs_tests.rs	fiber-4251	plan	2026-11-07T01:25:28Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4338,4335
+crates/doors/src/shell.rs	fiber-4252	plan	2026-11-07T01:42:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/shell.rs	fiber-4252	plan	2026-11-07T01:42:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tui.md	fiber-4252	plan	2026-11-07T01:42:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/invocation.md	fiber-4252	plan	2026-11-07T01:42:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
