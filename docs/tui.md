@@ -1280,7 +1280,8 @@ arrived after `sessions` was sent.
   status. Nothing is hoisted above the fold.
 
 The summary line is one row, whatever runs: "● " dim, then the kinds in a
-fixed order, each "<verb> N <noun>" dim: read files, searched patterns,
+fixed order, each clause dim, "<verb> N <noun>" or, where the table below
+says so, "<verb> once" and "<verb> N times": read files, searched patterns,
 listed directories, edited files, wrote files, ran commands, started
 delegates, checked jobs, asked questions, fetched pages, searched the web,
 loaded skills, looked up tools, messaged delegates, messaged sessions,
@@ -1321,8 +1322,9 @@ failure's "<code>: <message>" are dim. A thinking row is "○ Thinking:
 ```
 
 Every built-in tool has a kind word and a summary phrase, so the word
-`other` and "called N tools" are for MCP and extension tools only; an
-extension that replaces a built-in name keeps that name's kind. A shell
+`other` and "called N tools" are for MCP and extension tools and for an
+`ask_user` call with no question list; an extension that replaces a
+built-in name keeps that name's kind. A shell
 call whose command starts with `grep` or `rg` is a search, and one that
 starts with `find`, `ls` or `fd` a listing; the `shell` row is for any
 other command. Each word fits the nine-column pad. A test reads this table and

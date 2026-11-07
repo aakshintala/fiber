@@ -1308,7 +1308,16 @@ fn a_message_view_never_panics_on_a_tiny_width() {
         json!({"id": "j_1", "message": "hello world"}),
         None,
     );
-    for width in 0..12 {
+    // Width 0 draws nothing; a width past the indent reaches the message
+    // rows, so the recipient row shows at the width that fits it.
+    assert!(lines(&drawn(&call, 0)).is_empty());
+    for width in 1..12 {
         let _ = drawn(&call, width);
     }
+    let narrow = drawn(&call, 14);
+    indented_and_narrow(&narrow, 14);
+    let rows = lines(&narrow);
+    assert_eq!(rows[0], "        to j_1", "{rows:?}");
+    let text = rows[1..].join(" ");
+    assert!(text.contains("hello") && text.contains("world"), "{rows:?}");
 }

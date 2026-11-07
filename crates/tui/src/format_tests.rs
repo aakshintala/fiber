@@ -6,8 +6,8 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 
 use super::{
-    Kind, Kinds, content_text, count, cut, duration, heading, headline, kind, money, seconds,
-    spend_against_budget, summary, tokens, warning_line, wrap, wrap_joined,
+    Kind, Kinds, capitalise, content_text, count, cut, duration, heading, headline, kind, money,
+    seconds, spend_against_budget, summary, tokens, warning_line, wrap, wrap_joined,
 };
 use crate::theme::{Role, style};
 
@@ -1266,20 +1266,15 @@ fn docs_kind_table_matches_code() {
         // `ask_user` counts questions, so two of them make "N" = 2.
         let many_text = text(&kinds_of(&found, 2));
         let one_text = text(&kinds_of(&found, 1));
-        assert_eq!(many_text, capital(&many.replace('N', "2")), "{tool}: many");
-        assert_eq!(one_text, capital(one), "{tool}: one");
+        assert_eq!(
+            many_text,
+            capitalise(&many.replace('N', "2")),
+            "{tool}: many"
+        );
+        assert_eq!(one_text, capitalise(one), "{tool}: one");
     }
     for name in contract::tool::BUILT_IN_TOOLS {
         assert!(tools.contains(name), "{name} has no row in the table");
     }
     assert_eq!(tools.len(), contract::tool::BUILT_IN_TOOLS.len());
-}
-
-/// `phrase` with its first letter upper case, as the summary line shows it.
-fn capital(phrase: &str) -> String {
-    let mut chars = phrase.chars();
-    chars
-        .next()
-        .map(|first| first.to_uppercase().chain(chars).collect())
-        .unwrap_or_default()
 }
