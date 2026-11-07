@@ -522,9 +522,7 @@ fn status_input<'a>(app: &'a App, files: &'a [ChangedFile<'a>], flat: bool) -> S
         session: SessionCard {
             workspace: status.map(|status| status.workspace.as_str()),
             branch: status.and_then(|_| branch_name(panel)),
-            model: panel
-                .model()
-                .or_else(|| status.map(|status| status.model.as_str())),
+            model: panel.session_model(),
             thinking: panel.thinking(),
             thinking_now: panel.thinking_now(),
             context: known.map(|(window, context)| SessionContext {

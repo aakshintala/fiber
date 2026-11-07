@@ -936,7 +936,7 @@ impl App {
     /// the session's first call.
     fn reload_cost(&self) -> Option<String> {
         let tokens = self.usage_on_screen()?;
-        let model = self.panel_state.model();
+        let model = self.panel_state.session_model();
         let price = self
             .model_picker
             .catalogue

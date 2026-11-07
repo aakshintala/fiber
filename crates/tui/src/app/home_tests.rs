@@ -2600,6 +2600,145 @@ fn the_chip_defaults_to_the_launch_directory() {
     );
 }
 
+/// A session-only choice of `reference` at `level`, as Ctrl+S folds it.
+fn session_only_choice(reference: &str, level: Option<&str>) -> crate::model_picker::Choice {
+    crate::model_picker::Choice {
+        reference: reference.to_owned(),
+        level: level.map(str::to_owned),
+        level_chosen: true,
+        save_model: false,
+        session_only: true,
+    }
+}
+
+/// A pending session-only choice marks the model chip `[ⓢ <model>]`
+/// with the session-only thinking level, through the same `choose`
+/// path Ctrl+S drives (`docs/tui.md`, "Home").
+#[test]
+fn the_model_chip_marks_a_pending_session_only_choice() {
+    let mut app = home_with(80, 24, launch());
+    assert_eq!(
+        app.choose(session_only_choice("acme/m1", Some("high"))),
+        Effect::None
+    );
+    assert_eq!(
+        chips(&app),
+        [
+            "[w]",
+            "[ⓢ acme/m1]",
+            "[thinking: high]",
+            "Enter starts a session",
+        ]
+    );
+    // Only the mark dims: the model name stays bright.
+    let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+    let mut buf = ratatui::buffer::Buffer::empty(area);
+    crate::view::render(&app, area, &mut buf, None);
+    let mut marks = 0;
+    for y in 0..24 {
+        for x in 0..80 {
+            if buf[(x, y)].symbol() == "ⓢ" {
+                marks += 1;
+                assert!(
+                    buf[(x, y)].modifier.contains(ratatui::style::Modifier::DIM),
+                    "mark dims at ({x}, {y})"
+                );
+                assert_eq!(buf[(x + 1, y)].symbol(), " ");
+                assert!(
+                    !buf[(x + 1, y)]
+                        .modifier
+                        .contains(ratatui::style::Modifier::DIM)
+                );
+                assert_eq!(buf[(x + 2, y)].symbol(), "a");
+                assert!(
+                    !buf[(x + 2, y)]
+                        .modifier
+                        .contains(ratatui::style::Modifier::DIM),
+                    "model name stays bright at ({x}, {y})"
+                );
+            }
+        }
+    }
+    assert_eq!(marks, 1, "one session-only mark");
+}
+
+/// A saved model write supersedes the pending session-only choice:
+/// the mark is gone and the chips name the saved model
+/// (`docs/tui.md`, "Home").
+#[test]
+fn a_saved_model_pick_clears_the_pending_session_only_mark() {
+    let mut app = home_with(80, 24, launch());
+    app.set_configure(Arc::new(Fake::new(vec![])) as Arc<dyn Configure>);
+    assert_eq!(
+        app.choose(session_only_choice("acme/m1", Some("high"))),
+        Effect::None
+    );
+    assert_eq!(chips(&app)[1], "[ⓢ acme/m1]");
+    assert_eq!(
+        app.choose(crate::model_picker::Choice {
+            reference: "acme/m2".to_owned(),
+            level: None,
+            level_chosen: false,
+            save_model: true,
+            session_only: false,
+        }),
+        Effect::None
+    );
+    assert_eq!(
+        chips(&app),
+        [
+            "[w]",
+            "[acme/m2]",
+            "[thinking: default]",
+            "Enter starts a session",
+        ]
+    );
+}
+
+/// A pending choice's level follows the thinking chip while the model
+/// chip keeps its mark (`docs/tui.md`, "Home").
+#[test]
+fn a_pending_choice_level_follows_the_thinking_chip() {
+    let mut app = home_with(80, 24, launch());
+    assert_eq!(
+        app.choose(session_only_choice("acme/m1", Some("low"))),
+        Effect::None
+    );
+    assert_eq!(
+        chips(&app),
+        [
+            "[w]",
+            "[ⓢ acme/m1]",
+            "[thinking: low]",
+            "Enter starts a session",
+        ]
+    );
+}
+
+/// With no launch model the thinking chip still names the configured
+/// level, and no pending choice changes that (`docs/tui.md`, "Home").
+#[test]
+fn the_thinking_chip_names_the_configured_level_with_no_launch_model() {
+    let app = home_with(
+        80,
+        24,
+        Launch {
+            model: None,
+            thinking: Some("high".to_owned()),
+            ..launch()
+        },
+    );
+    assert_eq!(
+        chips(&app),
+        [
+            "[w]",
+            "[no model]",
+            "[thinking: high]",
+            "Enter starts a session",
+        ]
+    );
+}
+
 #[test]
 fn the_picker_lists_the_launch_directory_then_row_workspaces_once_each() {
     let mut app = home_with(80, 24, launch());
