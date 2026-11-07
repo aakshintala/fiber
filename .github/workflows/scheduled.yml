@@ -1,10 +1,11 @@
 name: Scheduled
 
-# docs/ci.md, "Advisories" and "Toolchain".
+# docs/ci.md, "Advisories", "Toolchain" and "The break-glass audit".
 on:
   schedule:
     - cron: "17 6 * * *" # advisories, daily
     - cron: "41 6 * * 1" # toolchain bump, weekly
+    - cron: "53 6 * * *" # break-glass audit, daily
   workflow_dispatch: {}
 
 permissions:
@@ -95,3 +96,22 @@ jobs:
           git push origin "$branch"
           gh pr create --head "$branch" --title "Bump the Rust toolchain to $latest" \
             --body "Pins Rust $latest, the newest stable release, in rust-toolchain.toml and docs/ci.md (docs/ci.md, \"Toolchain\")."
+
+  break-glass-audit:
+    name: break-glass audit
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '53 6 * * *'
+    runs-on: ubuntu-24.04
+    # No history; a gh API walk of 48 h of commits; generous bound.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: List merges with no green CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/break-glass-audit
