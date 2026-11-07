@@ -26,7 +26,7 @@ const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 /// A session line of `kind` from [`S_A`].
 fn session_line(kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -41,7 +41,7 @@ fn session_line(kind: &str, payload: Value) -> Line {
 fn attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -945,7 +945,7 @@ fn no_color_suppresses_box_edges_without_room() {
 /// A `tool_call_requested` from [`S_A`] for `action` running `command`.
 fn tool_call(action: &str, command: &str) -> contract::Envelope {
     contract::Envelope {
-        kind: EventKind::ToolCallRequested.name().to_owned(),
+        kind: EventKind::ToolCallRequested,
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -967,7 +967,7 @@ fn approval_request(id: &str, action: &str, keys: Value) -> contract::Envelope {
         into.extend(from.clone());
     }
     contract::Envelope {
-        kind: EventKind::PermissionRequested.name().to_owned(),
+        kind: EventKind::PermissionRequested,
         session_id: contract::SessionId(S_A.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

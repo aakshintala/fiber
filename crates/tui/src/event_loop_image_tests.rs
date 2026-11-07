@@ -50,14 +50,14 @@ fn loop_with_viewer(
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 12);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     }));
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::TurnStarted.name().to_owned(),
+        kind: EventKind::TurnStarted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -149,7 +149,7 @@ fn answer(theirs: &UnixStream) -> String {
 /// The hub's answer carrying `id`'s file in base64.
 fn accepted(id: &str, data: &str) -> Input {
     Input::Hub(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id,
@@ -265,7 +265,7 @@ fn a_failed_viewer_draws_the_notice() {
 /// converter is available.
 fn turn_started_jpeg() -> contract::Envelope {
     contract::Envelope {
-        kind: EventKind::TurnStarted.name().to_owned(),
+        kind: EventKind::TurnStarted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -304,7 +304,7 @@ fn converting_loop() -> (
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 12);
     app.on_line(Line::Hub(contract::HubLine {
-        kind: HubEventKind::HubHello.name().to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
@@ -402,7 +402,7 @@ fn jpeg_answer(id: &str) -> Input {
     use base64::Engine as _;
     let data = base64::engine::general_purpose::STANDARD.encode(b"jpeg-bytes");
     Input::Hub(Line::Hub(contract::HubLine {
-        kind: HubEventKind::CommandAccepted.name().to_owned(),
+        kind: HubEventKind::CommandAccepted,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: json!({"command_id": id,

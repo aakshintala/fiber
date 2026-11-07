@@ -159,7 +159,7 @@ type Typed = Option<(Event, Option<TurnId>, Option<ActionId>)>;
 /// completed here. Anything else failing to parse is a setup error naming
 /// the kind and line.
 fn typed(line: &Envelope, n: usize) -> Result<Typed, String> {
-    let failure = |why: &str| format!("session line {n} ({}): {why}", line.kind);
+    let failure = |why: &str| format!("session line {n} ({}): {why}", line.kind.name());
     match line.kind() {
         EventKind::FiberStarted | EventKind::SessionStarted => Ok(None),
         EventKind::ToolCallStarted => Ok(Some((

@@ -46,7 +46,7 @@ fn attached(width: u16, height: u16) -> App {
 /// One envelope of the attached session.
 fn session_line(kind: &str, payload: serde_json::Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -500,7 +500,7 @@ fn delegate_status(app: &mut App, job: &str, state: serde_json::Value) {
         payload[key] = value;
     }
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(format!("s_{job:0>16}")),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -515,7 +515,7 @@ fn delegate_status(app: &mut App, job: &str, state: serde_json::Value) {
 /// not read. Its payload still names the parent, as the hub's does.
 fn unreadable_status(app: &mut App, job: &str) {
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(format!("s_{job:0>16}")),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION + 1,

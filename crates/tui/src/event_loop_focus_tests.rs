@@ -14,7 +14,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
 fn session(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Input {
     Input::Hub(Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

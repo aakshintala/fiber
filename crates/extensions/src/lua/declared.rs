@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use contract::events::Event;
+use contract::events::{Event, EventKind};
 use contract::{Envelope, SCHEMA_VERSION, SessionId};
 use mlua::Table;
 use serde_json::Map;
@@ -224,7 +224,7 @@ impl DeclaredWatchers {
 /// check exact when a kind is added, with no second list to drift.
 pub(crate) fn is_known_kind(kind: &str) -> bool {
     let line = Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(String::new()),
         ts: 0,
         schema_version: SCHEMA_VERSION,

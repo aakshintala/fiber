@@ -12,7 +12,7 @@ use std::fs::File;
 /// One waiting `attention` line for `s_aaaaaaaaaaaaaaaa`.
 fn waiting() -> Input {
     Input::Hub(Line::Hub(contract::HubLine {
-        kind: HubEventKind::Attention.name().to_owned(),
+        kind: HubEventKind::Attention,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({
@@ -66,7 +66,7 @@ fn a_failed_write_keeps_the_terminal_running() {
 /// One finished `attention` line for `s_aaaaaaaaaaaaaaaa`.
 fn finished() -> Input {
     Input::Hub(Line::Hub(contract::HubLine {
-        kind: HubEventKind::Attention.name().to_owned(),
+        kind: HubEventKind::Attention,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({

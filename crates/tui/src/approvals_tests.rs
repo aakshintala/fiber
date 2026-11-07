@@ -20,7 +20,7 @@ fn envelope(
     action: &str,
 ) -> contract::Envelope {
     contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1045,7 +1045,7 @@ mod through_the_app {
     fn attached() -> App {
         let mut app = App::new(PathBuf::from("/w"));
         let hello = contract::HubLine {
-            kind: HubEventKind::HubHello.name().to_owned(),
+            kind: HubEventKind::HubHello,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
@@ -1069,7 +1069,7 @@ mod through_the_app {
         let asked = parse(first);
         assert_eq!(asked["command"], "commands");
         let answer = Line::Session(contract::Envelope {
-            kind: EventKind::CommandAccepted.name().to_owned(),
+            kind: EventKind::CommandAccepted,
             session_id: session,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
@@ -1461,7 +1461,7 @@ fn secondary_bold_style() -> Style {
 /// An `interaction_requested` form `id` from `session` with one question.
 fn form_asked(session: &str, id: &str) -> contract::Envelope {
     contract::Envelope {
-        kind: EventKind::InteractionRequested.name().to_owned(),
+        kind: EventKind::InteractionRequested,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1480,7 +1480,7 @@ fn form_asked(session: &str, id: &str) -> contract::Envelope {
 /// An `interaction_requested` confirm `id` from `session`.
 fn confirm_asked(session: &str, id: &str) -> contract::Envelope {
     contract::Envelope {
-        kind: EventKind::InteractionRequested.name().to_owned(),
+        kind: EventKind::InteractionRequested,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

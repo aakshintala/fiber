@@ -143,7 +143,7 @@ the session starts in a new worktree of the workspace, by the same rules a
 delegate's worktree follows (`docs/invocation.md`, "Isolation"). Outside a git
 repository the switch is not shown.
 
-**The model and thinking chips** name the configured model and its thinking level. Clicking the model or thinking chip opens the model picker. The thinking chip opens it on the model's thinking levels, with focus starting on the level chips.
+**The model and thinking chips** name the configured model and its thinking level, or the session-only choice while one is pending: then the model chip reads `[ⓢ <model>]` with only the `ⓢ` dim, until the session starts or the person picks again. Clicking the model or thinking chip opens the model picker. The thinking chip opens it on the model's thinking levels, with focus starting on the level chips.
 
 **The keyboard reaches every part of home.** Focus runs top to bottom: the
 session list, the entry bar, the chip row. Widening from a session focuses
@@ -2050,7 +2050,27 @@ through the `input_status` slot ("Extension seams").
   draft is left as it is.
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
-  `send` false, `docs/invocation.md`).
+  `send` false, `docs/invocation.md`). A `!` or `!!` command has no
+  timeout: it runs until it exits, until `cancel` stops it, or until the
+  session shuts down. A draft is in shell mode when its
+  trimmed text starts with `!` and it carries no image. Its first row then
+  opens with `! ` instead of `› `, and the box's top-edge row carries
+  `shell` for `!` or `shell · not sent` for `!!`, right-aligned. A bare `!`
+  already marks the draft. Backspace past the `!` clears the marker, and an
+  image draft shows none. The label is chrome and sheds first when the box
+  is cut short. The `! ` prompt stays. While a run is in flight and
+  the draft is outside shell mode, the box carries the run's label
+  instead, and the draft prompt stays plain. A shell draft keeps its own
+  marker and `! ` prompt. Each run shows as one transcript row:
+  `! <command>`, then `sent with your next
+  prompt` for `!` or `only you see this` for `!!`, then the output with
+  trailing whitespace dropped, then `exit N` (`exit 0` included) or
+  `signal S`. A run with neither ending shows no ending. A command that
+  could not start shows `! <command>` then `<code>: <message>` as it
+  arrived. A refused run puts that row on the attached screen beside the
+  notice. A session `duplicate_command` refusal draws neither a row nor a
+  notice. Shell rows show at most 20 lines, the same way an opened call
+  is.
 
 ### Bindings
 
@@ -2861,9 +2881,11 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   to `summary` end the pass too. The feed's `session_left` for a session
   ends that session's pass. Waiting work then runs against what is held,
   or fails as usual with no connection.
-  If `stream_reopened` arrives during a `history` wait, the wait ends at
-  once. A `history` wait with no answer after 10 seconds ends as a lost
-  connection, and the terminal reconnects as it does after a disconnect.
+  If `stream_reopened` for the session being waited on arrives during a
+  `history` wait, the wait ends at once; a reopening for any other
+  session leaves the wait alone. A `history` wait with no answer after
+  10 seconds ends as a lost connection, and the terminal reconnects as
+  it does after a disconnect.
   Stashed lines fold in order before the new fold, whose lines are
   never stashed. The late answer is discarded by its id, and the page
   loads in a frame after the pass ends.

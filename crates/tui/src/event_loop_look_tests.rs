@@ -235,7 +235,7 @@ fn the_rail_and_panel_regions_paint_in_the_panel_tint() {
     // Two live sessions, so the rail draws.
     for session in ["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"] {
         app.on_line(crate::link::Line::Session(contract::Envelope {
-            kind: EventKind::SessionStatus.name().to_owned(),
+            kind: EventKind::SessionStatus,
             session_id: contract::SessionId(session.to_owned()),
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,

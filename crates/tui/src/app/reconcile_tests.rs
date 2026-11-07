@@ -33,7 +33,7 @@ fn launch() -> Launch {
 /// A hub answer of `kind` with `payload`.
 fn hub(kind: &str, payload: Value) -> Line {
     Line::Hub(contract::HubLine {
-        kind: HubEventKind::from(kind.to_owned()).name().to_owned(),
+        kind: HubEventKind::from(kind.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: payload.as_object().cloned().unwrap_or_default(),
@@ -43,7 +43,7 @@ fn hub(kind: &str, payload: Value) -> Line {
 /// A line from `session` of `kind` with `payload`.
 fn from(session: &str, kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

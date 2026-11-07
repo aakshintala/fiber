@@ -1024,6 +1024,35 @@ fn import_source_reads_missing_and_empty_as_both() {
 }
 
 #[test]
+fn from_session_commands_names_exactly_the_refused_four() {
+    assert_eq!(
+        FROM_SESSION_COMMANDS,
+        &["prompt", "steer", "reply", "sandbox"]
+    );
+}
+
+#[test]
+fn is_from_session_command_covers_the_set_and_nothing_near_it() {
+    for command in ["prompt", "steer", "reply", "sandbox"] {
+        assert!(is_from_session_command(command), "{command} is refused");
+    }
+    for command in [
+        "",
+        "message",
+        "sandboxx",
+        "Prompt",
+        "subscribe",
+        "cancel",
+        "shell",
+    ] {
+        assert!(
+            !is_from_session_command(command),
+            "{command} is never refused"
+        );
+    }
+}
+
+#[test]
 fn import_refuses_anything_but_its_two_source_names() {
     for args in [
         json!({"source": 1}),

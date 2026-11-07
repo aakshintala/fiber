@@ -27,7 +27,7 @@ const DELEGATE_B: &str = "s_eeeeeeeeeeeeeeee";
 /// One envelope of another session.
 fn other_line(session: &str, kind: &str, payload: Value) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -41,7 +41,7 @@ fn other_line(session: &str, kind: &str, payload: Value) -> Line {
 /// A session `command_rejected` for `id` from `session` with `code`.
 fn session_refused(session: &str, id: &str, code: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandRejected.name().to_owned(),
+        kind: EventKind::CommandRejected,
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -1146,7 +1146,7 @@ fn completed_job_keeps_its_output_and_loses_its_stop() {
     assert!(app.item_open());
     let started = wall_ms(&clock).saturating_sub(11_000);
     app.on_line(Line::Session(contract::Envelope {
-        kind: EventKind::JobCompleted.name().to_owned(),
+        kind: EventKind::JobCompleted,
         session_id: SessionId(SESSION.to_owned()),
         ts: started.saturating_add(5_000),
         schema_version: contract::SCHEMA_VERSION,

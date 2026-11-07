@@ -78,7 +78,7 @@ fn envelope(
     payload: serde_json::Value,
 ) -> contract::Envelope {
     contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: seq.saturating_mul(1_000),
         schema_version: contract::SCHEMA_VERSION,

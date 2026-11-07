@@ -1051,6 +1051,29 @@ fn open_opens_a_line_of_an_unfolded_kind_that_fails_the_envelope_schema() {
 }
 
 #[test]
+fn open_opens_an_unknown_kind_line_without_a_full_parse() {
+    let sessions = fakes::TempDir::new("log-unit-open-unknown-kind");
+    let dir = sessions.path().join("s_1");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(fixture_line("turn_started", "s_1", 1, 0, &json!({})).as_bytes());
+    // An unfamiliar kind is not folded: the open skips the full parse
+    // exactly as it does for a known unfolded kind.
+    bytes.extend_from_slice(
+        fixture_line("future_kind", "s_1", 1, 1, &json!({"note": "new"})).as_bytes(),
+    );
+    session_log(&dir, &bytes);
+    let before = full_parses();
+    let log = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(full_parses() - before, 0);
+    assert_eq!(log.count(), 2);
+}
+
+#[test]
 fn open_refuses_a_folded_line_that_fails_the_envelope_schema() {
     let sessions = fakes::TempDir::new("log-unit-open-folded-bad");
     let dir = sessions.path().join("s_1");

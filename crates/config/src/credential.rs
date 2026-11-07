@@ -180,6 +180,7 @@ impl Credentials {
         let missing = |why: String| ConfigError::CredentialMissing {
             provider: name.clone(),
             why,
+            login_advice: provider.credential_from.advises_login(),
         };
         // The one precedence, shared with `credential_origins` and
         // `key_presence`: the stored credential owns the label, else the
@@ -203,6 +204,7 @@ impl Credentials {
                 .ok_or_else(|| ConfigError::CredentialFailed {
                     provider: name.clone(),
                     why: format!("credentials/{stored}/{label} is empty"),
+                    login_advice: provider.credential_from.advises_login(),
                 });
         }
         let from_config = sources_in(&self.providers, name)

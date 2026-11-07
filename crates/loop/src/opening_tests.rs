@@ -15,6 +15,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use contract::clock::Clock;
 use contract::events::Event;
+use contract::events::EventKind;
 use contract::provider::Input;
 use contract::{Envelope, Seq, SessionId};
 use fakes::clock::FakeClock;
@@ -618,7 +619,7 @@ fn live_and_resumed_conversations_render_the_same_opening() {
     );
     assert!(matches!(&live[0], Input::User { text , ..} if text == &rendered));
     let line = Envelope {
-        kind: "opening_message".into(),
+        kind: EventKind::OpeningMessage,
         session_id: SessionId("s_test".into()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

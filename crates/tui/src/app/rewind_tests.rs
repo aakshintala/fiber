@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::HubEventKind;
 use contract::clock::Clock;
+use contract::events::EventKind;
 use contract::{ActionId, Envelope, SessionId, TurnId};
 use serde_json::{Value, json};
 
@@ -26,7 +28,7 @@ fn history_line(
     payload: Value,
 ) -> Envelope {
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -196,7 +198,7 @@ const CANCEL: &str = "Cancel";
 /// A hub `command_rejected` for `id` with `code` and `message`.
 fn hub_refused(id: &Value, code: &str, message: &str) -> crate::link::Line {
     crate::link::Line::Hub(contract::HubLine {
-        kind: "command_rejected".to_owned(),
+        kind: HubEventKind::CommandRejected,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [
@@ -212,7 +214,7 @@ fn hub_refused(id: &Value, code: &str, message: &str) -> crate::link::Line {
 /// A hub `stream_closed` naming `session`.
 fn hub_closed(session: &str) -> crate::link::Line {
     crate::link::Line::Hub(contract::HubLine {
-        kind: "stream_closed".to_owned(),
+        kind: HubEventKind::StreamClosed,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: [("session_id".to_owned(), Value::String(session.to_owned()))]
@@ -802,7 +804,7 @@ fn stream_reopened_ends_the_wait_at_once() {
     let mut app = attached();
     let lines = open(&mut app, &clock);
     app.on_line(crate::link::Line::Hub(contract::HubLine {
-        kind: "stream_reopened".to_owned(),
+        kind: HubEventKind::StreamReopened,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),

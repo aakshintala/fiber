@@ -1107,7 +1107,7 @@ fn hook_failure(completed: &TurnCompleted) -> bool {
 mod started_arguments_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
-    use contract::events::{Event, ToolCallStarted};
+    use contract::events::{Event, EventKind, ToolCallStarted};
     use contract::shapes::DeclaredEffects;
     use contract::{ActionId, Envelope, Seq, SessionId};
     use serde_json::{Map, json};
@@ -1116,7 +1116,7 @@ mod started_arguments_tests {
 
     fn envelope(kind: &str, action: &str, payload: Map<String, serde_json::Value>) -> Envelope {
         Envelope {
-            kind: kind.into(),
+            kind: EventKind::from_name(kind),
             session_id: SessionId("s_test".into()),
             ts: 1,
             schema_version: contract::SCHEMA_VERSION,

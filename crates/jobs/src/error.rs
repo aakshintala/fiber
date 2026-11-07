@@ -52,24 +52,26 @@ pub enum JobsError {
     #[error("`timeout_ms` must be an integer of 1 or more.")]
     TimeoutNotPositive,
     /// The delegate start names no model.
-    #[error("Give model: a role or a full reference.\n{catalogue}")]
+    #[error("Give model: a role or a full reference.\n{roles}\n{}", POINTER)]
     ModelMissing {
-        /// The valid roles and references the call lists.
-        catalogue: String,
+        /// The one-line roles listing the call carries.
+        roles: String,
     },
     /// The delegate start's model is not a string.
-    #[error("model must be a string.\n{catalogue}")]
+    #[error("model must be a string.\n{roles}\n{}", POINTER)]
     ModelNotString {
-        /// The valid roles and references the call lists.
-        catalogue: String,
+        /// The one-line roles listing the call carries.
+        roles: String,
     },
     /// The delegate start's model resolves to nothing.
-    #[error("{reason}\n{catalogue}")]
+    #[error("{reason}\n{roles}\n{}\n{}", closest_line(closest), POINTER)]
     ModelUnresolved {
         /// Why the reference did not resolve.
         reason: String,
-        /// The valid roles and references the call lists.
-        catalogue: String,
+        /// The one-line roles listing the call carries.
+        roles: String,
+        /// Up to 3 closest references, nearest first.
+        closest: Vec<String>,
     },
     /// The delegate start's model names labels with no usable credential.
     /// The case carries the site's message text with the fixed code
@@ -390,6 +392,20 @@ fn allowed_lines(keys: &[String]) -> String {
         .map(|key| format!("`/{key}`: not allowed"))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The pointer every model refusal ends with, naming the tool that lists
+/// every reference.
+const POINTER: &str = "Call delegate_models for every reference.";
+
+/// The closest-references line of an unresolved-model refusal: the
+/// references joined, or `none` when the pool held nothing to compare.
+fn closest_line(closest: &[String]) -> String {
+    if closest.is_empty() {
+        String::from("Closest references: none")
+    } else {
+        format!("Closest references: {}", closest.join(", "))
+    }
 }
 
 #[cfg(test)]

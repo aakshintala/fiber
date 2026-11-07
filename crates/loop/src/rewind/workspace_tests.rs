@@ -218,7 +218,7 @@ fn rewound_from_decodes_a_moved_last_line() {
     let old = SessionId("s_old".into());
     let new = SessionId("s_new".into());
     let line = contract::Envelope {
-        kind: "moved".into(),
+        kind: contract::events::EventKind::Moved,
         session_id: old.clone(),
         ts: 0,
         schema_version: 1,
@@ -243,7 +243,7 @@ fn rewound_from_decodes_a_moved_last_line() {
     let other = SessionId("s_other".into());
     assert!(rewound_from(Some(line.clone()), &other, &old).is_err());
     let mut turn = line;
-    turn.kind = "turn_completed".into();
+    turn.kind = contract::events::EventKind::TurnCompleted;
     assert!(rewound_from(Some(turn), &new, &old).is_err());
     assert!(rewound_from(None, &new, &old).is_err());
 }

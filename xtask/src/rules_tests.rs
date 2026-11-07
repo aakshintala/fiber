@@ -3105,6 +3105,479 @@ fn the_kinds_ratchet_ignores_files_outside_crates() {
     assert!(kinds_ratchet(&files, COMMITTED_KINDS_MAX, COMMITTED_SUPPORT_KINDS_MAX).is_empty());
 }
 
+fn support_jig(name: &str, source: &str) -> RustFile {
+    file("main", &format!("tests/{name}.rs"), source.to_owned())
+}
+
+fn support_module(name: &str, source: &str) -> RustFile {
+    file("main", &format!("tests/support/{name}"), source.to_owned())
+}
+
+#[test]
+fn support_tests_fails_a_shared_support_file_with_tests() {
+    let files = [
+        support_module("mod.rs", "fn helper() {}\n#[test]\nfn helper_holds() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_counts_every_mod_support_declarer_for_a_root_reached_file() {
+    let files = [
+        support_module("mod.rs", "pub(crate) mod pty;\n"),
+        support_module("pty.rs", "#[test]\nfn pty_holds() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+        support_jig("three.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/pty.rs holds 1 #[test] collected by 3 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_fails_when_the_lib_harness_reaches_a_tested_support_file() {
+    // The `tools` shape: the `shell` integration binary and the lib's own
+    // test harness (through `#[cfg(test)]` chains climbing out of `src/`)
+    // compile the same support file.
+    let files = [
+        file("tools", "src/lib.rs", "pub mod shell;\n".to_owned()),
+        file(
+            "tools",
+            "src/shell.rs",
+            "#[cfg(test)]\n#[path = \"shell_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell_tests.rs",
+            "#[path = \"../tests/support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/shell.rs",
+            "#[path = \"support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/support/sandbox_home.rs",
+            "#[test]\nfn sandbox_home_is_owned_and_removed_on_drop() {}\n".to_owned(),
+        ),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_counts_the_lib_harness_once_for_many_cfg_test_paths() {
+    // Three `#[cfg(test)]` modules reach the file, but they compile into
+    // the one lib test harness: one integration binary plus the harness is
+    // two binaries, not four.
+    let files = [
+        file("tools", "src/lib.rs", "pub mod shell;\n".to_owned()),
+        file(
+            "tools",
+            "src/shell.rs",
+            "pub mod command;\n#[cfg(test)]\n#[path = \"shell_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell_tests.rs",
+            "#[path = \"../tests/support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell/command.rs",
+            "#[cfg(test)]\n#[path = \"command_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell/command_tests.rs",
+            "#[path = \"../../tests/support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/shell.rs",
+            "#[path = \"support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/support/sandbox_home.rs",
+            "#[test]\nfn sandbox_home_is_owned_and_removed_on_drop() {}\n".to_owned(),
+        ),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_passes_a_lib_reached_support_file_without_tests() {
+    // The current `sandbox_home.rs` shape: reached by the `shell` binary
+    // and the lib harness, but holding no `#[test]`, so nothing runs twice.
+    let files = [
+        file("tools", "src/lib.rs", "pub mod shell;\n".to_owned()),
+        file(
+            "tools",
+            "src/shell.rs",
+            "#[cfg(test)]\n#[path = \"shell_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell_tests.rs",
+            "#[path = \"../tests/support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/shell.rs",
+            "#[path = \"support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/support/sandbox_home.rs",
+            "pub(crate) struct SandboxHome;\n".to_owned(),
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_counts_tests_nested_in_inline_modules() {
+    // A `#[test]` inside an inline `mod` still runs in every binary that
+    // compiles the file, so the count reaches it through the group.
+    let files = [
+        support_module(
+            "mod.rs",
+            "#[test]\nfn top_holds() {}\nmod inner {\n#[test]\nfn nested_holds() {}\n}\n",
+        ),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/mod.rs holds 2 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_counts_tests_through_inline_module_declarers() {
+    // An inline `mod outer { mod support; }` compiles the support root, so
+    // its tests run in that binary too.
+    let files = [
+        support_module("mod.rs", "#[test]\nfn helper_holds() {}\n"),
+        support_jig("one.rs", "mod outer {\nmod support;\n}\n"),
+        support_jig("two.rs", "mod outer {\nmod support;\n}\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_ignores_non_test_bracket_attributes_in_the_count() {
+    // `#[allow(dead_code)]` names another attribute, so the file holds one
+    // test, not two; the failure names that count.
+    let files = [
+        support_module(
+            "mod.rs",
+            "#[allow(dead_code)]\nfn helper() {}\n#[test]\nfn helper_holds() {}\n",
+        ),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_ignores_a_single_ident_non_test_attribute() {
+    // A lone identifier that is not `test` (here `#[inline]`) holds no test:
+    // flipping the `name == "test"` guard to `true` would count it, so the
+    // failure would name 2 tests instead of 1.
+    let files = [
+        support_module(
+            "mod.rs",
+            "#[inline]\nfn helper() {}\n#[test]\nfn helper_holds() {}\n",
+        ),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_ignores_a_test_named_value_in_an_array() {
+    // Only `#` starts an attribute: `[test]` after `=` is an array holding
+    // a value, so the file holds one test, not two.
+    let files = [
+        support_module(
+            "mod.rs",
+            "#[test]\nfn helper_holds() {}\nfn uses_array() {\nlet test = 1;\nlet _ = [test];\n}\n",
+        ),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_skips_a_support_file_outside_crates() {
+    // The rule covers `crates/*/tests/support/`: a support-shaped file from
+    // another tree stays out even when two of its own binaries declare it.
+    let files = [
+        RustFile {
+            krate: "other".to_owned(),
+            path: "other/tests/support/mod.rs".to_owned(),
+            rel: "tests/support/mod.rs".to_owned(),
+            source: "#[test]\nfn helper_holds() {}\n".to_owned(),
+        },
+        RustFile {
+            krate: "other".to_owned(),
+            path: "other/tests/one.rs".to_owned(),
+            rel: "tests/one.rs".to_owned(),
+            source: "mod support;\n".to_owned(),
+        },
+        RustFile {
+            krate: "other".to_owned(),
+            path: "other/tests/two.rs".to_owned(),
+            rel: "tests/two.rs".to_owned(),
+            source: "mod support;\n".to_owned(),
+        },
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_resolves_a_dotted_path_climbing_out_of_src() {
+    // `#[path]` spellings with `.` name the same file: the lib harness
+    // still collects it, so the failure still names both binaries.
+    let files = [
+        file("tools", "src/lib.rs", "pub mod shell;\n".to_owned()),
+        file(
+            "tools",
+            "src/shell.rs",
+            "#[cfg(test)]\n#[path = \"shell_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell_tests.rs",
+            "#[path = \"./../tests/support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/shell.rs",
+            "#[path = \"support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/support/sandbox_home.rs",
+            "#[test]\nfn sandbox_home_is_owned_and_removed_on_drop() {}\n".to_owned(),
+        ),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_leaves_a_path_that_escapes_the_tree_unresolved() {
+    // A `#[path]` climbing past the tree root matches no known file, so it
+    // compiles nothing: the harness does not collect it.
+    let files = [
+        file("tools", "src/lib.rs", "pub mod shell;\n".to_owned()),
+        file(
+            "tools",
+            "src/shell.rs",
+            "#[path = \"../../../../escape.rs\"]\nmod escape;\n#[cfg(test)]\n#[path = \"shell_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell_tests.rs",
+            "#[path = \"../tests/support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/shell.rs",
+            "#[path = \"support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/support/sandbox_home.rs",
+            "pub(crate) struct SandboxHome;\n".to_owned(),
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_leaves_a_deeply_escaping_path_unresolved() {
+    // Four `..` from `src/` climbs past the tree root, so the `#[path]`
+    // matches no known file even though dropping the empty-pop guard would
+    // truncate it onto the support file the integration binary declares.
+    // The harness then collects nothing: one declarer, no failure.
+    let files = [
+        file("tools", "src/lib.rs", "pub mod shell;\n".to_owned()),
+        file(
+            "tools",
+            "src/shell.rs",
+            "#[cfg(test)]\n#[path = \"shell_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell_tests.rs",
+            "#[path = \"../../../../crates/tools/tests/support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/shell.rs",
+            "#[path = \"support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/support/sandbox_home.rs",
+            "#[test]\nfn sandbox_home_is_owned_and_removed_on_drop() {}\n".to_owned(),
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_passes_a_single_declarer_probe_chain() {
+    let files = [
+        file(
+            "provider",
+            "tests/probe_jig.rs",
+            "#[path = \"support/probe.rs\"]\nmod support;\n".to_owned(),
+        ),
+        file(
+            "provider",
+            "tests/support/probe.rs",
+            "#[cfg(test)]\n#[path = \"probe_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "provider",
+            "tests/support/probe_tests.rs",
+            "#[test]\nfn first() {}\n#[test]\nfn second() {}\n".to_owned(),
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_passes_a_direct_path_support_module_with_tests() {
+    let files = [
+        file(
+            "provider",
+            "tests/record_jig.rs",
+            "#[path = \"support/record.rs\"]\nmod support;\n".to_owned(),
+        ),
+        file(
+            "provider",
+            "tests/support/record.rs",
+            "#[test]\nfn records() {}\n".to_owned(),
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_passes_a_shared_tree_without_tests() {
+    let files = [
+        support_module("mod.rs", "pub(crate) mod pty;\nfn helper() {}\n"),
+        support_module("pty.rs", "fn helper() {}\n"),
+        support_module("hub_start.rs", "pub(crate) fn helper() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig(
+            "two.rs",
+            "#[path = \"support/hub_start.rs\"]\nmod hub_start;\nmod support;\n",
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_passes_zero_or_one_declarer() {
+    let alone = [support_module("mod.rs", "#[test]\nfn lonely() {}\n")];
+    assert!(support_tests(&alone).is_empty());
+    let single = [
+        support_module("mod.rs", "#[test]\nfn lonely() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+    ];
+    assert!(support_tests(&single).is_empty());
+}
+
+#[test]
+fn support_tests_ignores_test_mentions_in_comments_and_strings() {
+    let files = [
+        support_module(
+            "mod.rs",
+            "//! a `#[test]` under support runs in every binary\nfn helper() {}\nfn name() -> &'static str { \"#[test]\" }\n// #[test]\n",
+        ),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_ignores_a_cfg_test_module_without_tests() {
+    let files = [
+        support_module("journey.rs", "#[cfg(test)]\nmod tests;\nfn helper() {}\n"),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_fails_closed_when_a_support_file_does_not_tokenise() {
+    let files = [support_module("mod.rs", "fn broken() { \\ }\n")];
+    let hits = support_tests(&files);
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].starts_with("crates/main/tests/support/mod.rs: does not tokenise as Rust: "),
+        "{hits:?}"
+    );
+}
+
 #[test]
 fn unrecognized_tool_names_reject_nearby_owned_string_spellings() {
     let source = "name: Other::from(\"x\"); name: String X: from(\"x\"); name: String::to_owned(\"x\"); name: Other . to_string(); name: \"x\": to_string(); name String::from(\"wrong\"); other: String::from(\"wrong\");";

@@ -575,7 +575,7 @@ fn self_revocation_waits_for_the_output_pump_before_shutting_tcp() {
     };
     let mut accepted = connection::line(
         &hub,
-        "command_accepted",
+        contract::HubEventKind::CommandAccepted,
         serde_json::Map::from_iter([("command_id".to_owned(), Value::from("r"))]),
     );
     accepted.push(b'\n');
