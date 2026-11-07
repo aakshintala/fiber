@@ -1280,9 +1280,12 @@ fn a_large_subdirectory_file_is_sent_as_a_stub() {
     let texts: Vec<&str> = requests[1]
         .conversation
         .iter()
-        .filter_map(|input| match input {
-            Input::User { text, .. } => Some(text.as_str()),
-            _ => None,
+        .filter_map(|input| {
+            if let Input::User { text, .. } = input {
+                Some(text.as_str())
+            } else {
+                None
+            }
         })
         .collect();
     let stub = texts
