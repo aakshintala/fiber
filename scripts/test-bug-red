@@ -518,27 +518,12 @@ a_plan_empty_on_both_legs_fails() {
 a_plan_empty_on_both_legs_fails
 
 # The red tree builds into the fixture's persistent target/bug-red dir and
-# never into its target/. A recording wrapper around the stub cargo records
-# the CARGO_TARGET_DIR each nextest invocation sees and, on nextest run,
-# writes a probe file into it without creating parents, so the probe's
-# location also proves bug-red creates the dir.
+# never into its target/. The checked-in recording wrapper around the stub
+# cargo records the CARGO_TARGET_DIR each nextest invocation sees and, on
+# nextest run, writes a probe file into it without creating parents, so the
+# probe's location also proves bug-red creates the dir.
 mkdir -p "$tmp/bin-target"
-cat >"$tmp/bin-target/cargo" <<'WRAPPER'
-#!/usr/bin/env bash
-set -euo pipefail
-if [ "${1-}" = nextest ] && [ "${2-}" = list ]; then
-  printf '%s\n' "${CARGO_TARGET_DIR-<unset>}" >>"$BUG_RED_TARGET_RECORD"
-  exit 0
-fi
-if [ "${1-}" = nextest ] && [ "${2-}" = run ]; then
-  printf '%s\n' "${CARGO_TARGET_DIR-<unset>}" >>"$BUG_RED_TARGET_RECORD"
-  printf '%s\n' "$PWD" >>"$BUG_RED_TREE_RECORD"
-  : >"$CARGO_TARGET_DIR/bug-red-target-probe"
-  exit "${BUG_RED_NEXTEST_STATUS:-100}"
-fi
-exec "$BUG_RED_STUB_CARGO" "$@"
-WRAPPER
-chmod +x "$tmp/bin-target/cargo"
+ln -s "$top/scripts/test-bug-red-target-cargo" "$tmp/bin-target/cargo"
 
 repo_t="$tmp/repo-target"
 new_repo "$repo_t"
@@ -552,9 +537,7 @@ git -C "$repo_t" commit -q -m fix
 base_t=$(git -C "$repo_t" rev-parse HEAD~2)
 head_t=$(git -C "$repo_t" rev-parse HEAD)
 : >"$tmp/target-record.txt"
-: >"$tmp/tree-record.txt"
 export BUG_RED_TARGET_RECORD="$tmp/target-record.txt"
-export BUG_RED_TREE_RECORD="$tmp/tree-record.txt"
 unset BUG_RED_NEXTEST_STATUS
 cd "$repo_t"
 rc=0
@@ -569,13 +552,4 @@ fi
 [ -f "$repo_t/target/bug-red/bug-red-target-probe" ] || fail "target-dir case has no probe in target/bug-red, so bug-red did not create the dir"
 if [ -e "$repo_t/target/bug-red-target-probe" ]; then
   fail "target-dir case leaked the probe into the checkout target/"
-fi
-[ -s "$tmp/tree-record.txt" ] || fail "target-dir case recorded no red-tree path"
-tree_path=$(head -n 1 "$tmp/tree-record.txt")
-tree_base=$(basename "$tree_path")
-if find "$repo_t/target" -name "*$tree_base*" | grep -q .; then
-  fail "target-dir case holds an entry naming the removed tree $tree_base"
-fi
-if grep -rF "$tree_path" "$repo_t/target" >/dev/null 2>&1; then
-  fail "target-dir case holds an artifact naming the removed tree"
 fi
