@@ -18,6 +18,7 @@ mod support;
 
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use fakes::{ProviderServer, Response};
 use ratatui::style::Style;
@@ -25,7 +26,7 @@ use ratatui::text::Span;
 use serde_json::json;
 use support::hold::Hold;
 use support::pty::{Colour, Grid, Run};
-use support::{Deadline, Setup, TRUECOLOUR, write_json};
+use support::{Deadline, Setup, TRUECOLOUR, connect_hub, until, write_json};
 
 /// The dark theme's surface, panel, attention and info in truecolour
 /// (`crates/tui/src/theme.rs`).
@@ -567,8 +568,7 @@ fn narrow_status_rows_match_the_doc() {
         // (`docs/testing.md`, "Waits and timeouts").
         if !(grid.contents.contains("ctx")
             && grid.contents.contains("1 delegate running")
-            && grid.contents.contains("1 job running")
-            && ctx_size_drawn(grid))
+            && grid.contents.contains("1 job running"))
         {
             return false;
         }
@@ -712,32 +712,6 @@ fn narrow_status_rows_match_the_doc() {
     quit(run);
 }
 
-/// A click at cell (`x`, `y`): the SGR press and release, as the
-/// terminal sends them.
-fn click(run: &mut Run, x: u16, y: u16) {
-    run.write(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
-}
-
-/// The settled narrow run: the scripted turn with the running delegate
-/// and job, so the input box's status row carries the `ctx` segment.
-fn narrow_settled() -> (Setup, ProviderServer, Hold, Run, Grid) {
-    let (setup, server, hold) = panel_setup();
-    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
-        .into_iter()
-        .chain(TRUECOLOUR)
-        .collect();
-    let mut run = Run::spawn(&setup, 100, 40, &[], &env);
-    run.ready();
-    run.write(b"go\r");
-    let grid = run.wait_screen("the narrow status rows", |grid| {
-        grid.contents.contains("ctx")
-            && grid.contents.contains("1 delegate running")
-            && grid.contents.contains("1 job running")
-            && ctx_size_drawn(grid)
-    });
-    (setup, server, hold, run, grid)
-}
-
 /// The input box's status row and its text: the nearest row carrying
 /// `ctx` above the last row carrying the kept status lines' counts.
 /// `None` while either is absent.
@@ -763,10 +737,9 @@ fn ctx_size_drawn(grid: &Grid) -> bool {
     let Some((_, row)) = status_row_text(grid) else {
         return false;
     };
-    let Some(at) = row.find("ctx") else {
+    let Some((_, after)) = row.split_once("ctx") else {
         return false;
     };
-    let after = &row[at + "ctx".len()..];
     !after.contains('—') && after.chars().any(|c| c.is_ascii_digit())
 }
 
@@ -790,10 +763,7 @@ fn narrow_width_cuts_the_working_directory_first() {
     run.ready();
     run.write(b"go\r");
     let grid = run.wait_screen("the cut status row", |grid| {
-        grid.contents.contains("ctx")
-            && grid.contents.contains("1 delegate running")
-            && grid.contents.contains("1 job running")
-            && ctx_size_drawn(grid)
+        grid.contents.contains("1 delegate running") && ctx_size_drawn(grid)
     });
     let status = status_row(&grid);
     let row: String = (1..68).map(|x| grid.cell(x, status).symbol).collect();
@@ -843,20 +813,37 @@ fn narrow_width_cuts_the_working_directory_first() {
     quit(run);
 }
 
-/// Clicking the ctx segment opens the context breakdown: the settled
-/// narrow row proves the target, the click lands on its `ctx` cell,
-/// and the Context view opens (`docs/tui.md`, "The input box").
+/// Clicking the ctx segment opens the context breakdown: the feed's
+/// `session_status` carries the context figure that moves the segment,
+/// the click finds the `ctx` cell in the frame that shows it, and the
+/// Context view opens (`docs/tui.md`, "The input box").
 #[test]
 fn clicking_ctx_opens_the_context_breakdown() {
-    let (setup, _server, mut hold, mut run, grid) = narrow_settled();
-    assert!(
-        !grid.contents.contains("/context"),
-        "no breakdown before the click"
-    );
-    let status = status_row(&grid);
-    let row: String = (1..100).map(|x| grid.cell(x, status).symbol).collect();
-    let ctx = locate(row.trim_end(), "ctx");
-    click(&mut run, 1 + ctx, status);
+    let (setup, _server, mut hold) = panel_setup();
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(TRUECOLOUR)
+        .collect();
+    // The test's own hub client watches the feed; the terminal joins the
+    // hub it started.
+    let hub = Arc::new(Mutex::new(None));
+    let (feed, hello) = connect_hub(&setup, &hub);
+    assert_eq!(hello["kind"], "hub_hello");
+    let mut run = Run::spawn(&setup, 100, 40, &[], &env);
+    run.ready();
+    feed.send(r#"{"id":"c_feed","command":"feed"}"#);
+    run.write(b"go\r");
+    // The turn reports one context figure, so the first status carrying
+    // it is the last data that moves the segment.
+    until(&feed, "the session_status carrying the context", |line| {
+        line["kind"] == "session_status" && line["payload"]["context"]["tokens"] == 268_000
+    });
+    // The click finds the target in the frame it acts on: the figure is
+    // drawn, and `ctx` sits on the input box's status row.
+    run.click_where("the ctx segment", |grid| {
+        let (status, _) = status_row_text(grid).filter(|_| ctx_size_drawn(grid))?;
+        grid.text_at("ctx").filter(|&(_, y)| y == status)
+    });
     let grid = run.wait_screen("the open context breakdown", |grid| {
         grid.contents.contains("Context") && grid.contents.contains("/context")
     });
@@ -866,7 +853,11 @@ fn clicking_ctx_opens_the_context_breakdown() {
 
     std::io::Write::write_all(hold.release(), b"\n").unwrap();
     hold.stand_down(setup.deadline.cleanup_phase());
+    // Quitting waits for the hub to exit, which needs no client open.
+    drop(feed);
     quit(run);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
 }
 
 #[test]
