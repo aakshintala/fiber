@@ -199,7 +199,11 @@ by content.
 
 ## Bounded results
 
-- A tool that declares no cap is cut at 16 KiB of model-facing content.
+- A tool that declares no cap is cut at 16 KiB of model-facing content. The
+  cut bounds what the model sees: an inner call's result reaches the calling
+  script whole — neither the loop's cut nor the read tool's own cut applies
+  on that path. The shell's 1 MiB spill is the one bound that still applies
+  to an inner call ("Shell", "Result and output").
   Image parts do not count toward the cap and are never cut; their limit is
   `docs/model-routing.md`, "Image limits".
   Configuration can override any tool's cap (`docs/configuration.md`). A tool may declare a larger or
