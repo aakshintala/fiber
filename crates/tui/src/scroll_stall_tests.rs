@@ -94,6 +94,11 @@ fn shape_ticket_session() {
         durable >= 3_000,
         "ticket session holds thousands of entries, found {durable}"
     );
+    let steps = events
+        .lines()
+        .filter(|line| line.contains("\"step_started\""))
+        .count();
+    assert_eq!(steps, crate::paging_session::TICKET_LARGE_STEPS);
     let messages = message_texts(&events);
     let longest_message = messages.iter().map(|text| rows(text)).max().unwrap_or(0);
     assert_eq!(

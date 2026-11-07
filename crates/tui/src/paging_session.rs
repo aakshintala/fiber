@@ -155,6 +155,10 @@ pub const TICKET_LARGE_STEPS: usize = 400;
 /// Steps in a small ticket log linking the chain.
 pub const TICKET_SMALL_STEPS: usize = 100;
 
+const TICKET_TURNS: usize = 10;
+const TICKET_LARGE_STEPS_PER_TURN: usize = 40;
+const TICKET_SMALL_STEPS_PER_TURN: usize = 10;
+
 /// A ticket log writes one session's durable lines, numbered from 0.
 struct TicketLog {
     out: String,
@@ -183,12 +187,12 @@ impl TicketLog {
     }
 }
 
-/// One ticket session's log: `steps` steps with text and tool calls, plus
-/// one long message and one long tool output when `with_long` holds. The
-/// first line forks from `parent` when one is given.
+/// One ticket session's log: `steps_per_turn` steps with text and tool calls
+/// in each turn, plus one long message and one long tool output when
+/// `with_long` holds. The first line forks from `parent` when one is given.
 fn ticket_log(
     session: &str,
-    steps: usize,
+    steps_per_turn: usize,
     parent: Option<(&str, u64)>,
     with_long: bool,
     step_base: usize,
@@ -216,15 +220,14 @@ fn ticket_log(
         &serde_json::json!({"version": "0.0.0", "resumed": false}),
     );
     let mut step = step_base;
-    for turn in 0..10 {
+    for turn in 0..TICKET_TURNS {
         let prompt = words(200, turn);
         log.line(
             "turn_started",
             None,
             &serde_json::json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": prompt}]}]}),
         );
-        let per_turn = steps / 10;
-        for _ in 0..per_turn {
+        for _ in 0..steps_per_turn {
             step += 1;
             let message = format!("t_m{step}");
             log.line("step_started", None, &empty);
@@ -280,13 +283,8 @@ fn ticket_log(
 /// The ticket's single large session: thousands of entries with one long
 /// message and one long tool output of tens of thousands of rows.
 pub fn ticket_session(scale: usize) -> String {
-    let (log, _) = ticket_log(
-        "s_dddddddddddddddd",
-        TICKET_LARGE_STEPS.saturating_mul(scale),
-        None,
-        true,
-        0,
-    );
+    let steps_per_turn = TICKET_LARGE_STEPS_PER_TURN.saturating_mul(scale);
+    let (log, _) = ticket_log("s_dddddddddddddddd", steps_per_turn, None, true, 0);
     log
 }
 
@@ -295,24 +293,30 @@ pub fn ticket_session(scale: usize) -> String {
 /// middle links stay small. Each child's fork point is its parent's last
 /// line, so every ancestor scan covers almost the whole ancestor log.
 pub fn ticket_chain() -> Vec<(String, String)> {
-    let (root, root_count) = ticket_log("s_aaaaaaaaaaaaaaaa", TICKET_LARGE_STEPS, None, true, 0);
+    let (root, root_count) = ticket_log(
+        "s_aaaaaaaaaaaaaaaa",
+        TICKET_LARGE_STEPS_PER_TURN,
+        None,
+        true,
+        0,
+    );
     let (second, second_count) = ticket_log(
         "s_bbbbbbbbbbbbbbbb",
-        TICKET_SMALL_STEPS,
+        TICKET_SMALL_STEPS_PER_TURN,
         Some(("s_aaaaaaaaaaaaaaaa", root_count.saturating_sub(1))),
         false,
         100_000,
     );
     let (third, third_count) = ticket_log(
         "s_cccccccccccccccc",
-        TICKET_SMALL_STEPS,
+        TICKET_SMALL_STEPS_PER_TURN,
         Some(("s_bbbbbbbbbbbbbbbb", second_count.saturating_sub(1))),
         false,
         200_000,
     );
     let (child, _) = ticket_log(
         "s_dddddddddddddddd",
-        TICKET_LARGE_STEPS,
+        TICKET_LARGE_STEPS_PER_TURN,
         Some(("s_cccccccccccccccc", third_count.saturating_sub(1))),
         true,
         300_000,
@@ -422,6 +426,39 @@ pub fn paging_session(scale: usize) -> String {
     }
     log.running_turn();
     log.out
+}
+
+#[cfg(test)]
+mod ticket_log_tests {
+    use super::ticket_log;
+    use serde_json::Value;
+
+    #[test]
+    fn small_ticket_log_sequences_advance_consecutively() {
+        let (events, _) = ticket_log("s_aaaaaaaaaaaaaaaa", 2, None, false, 0);
+        let sequences: Vec<u64> = events
+            .lines()
+            .map(|line| {
+                let value: Value = serde_json::from_str(line).expect("ticket line parses");
+                value["seq"].as_u64().expect("ticket line has a sequence")
+            })
+            .collect();
+        let expected: Vec<u64> = (0..sequences.len() as u64).collect();
+        assert_eq!(
+            sequences, expected,
+            "durable sequence values are consecutive"
+        );
+    }
+
+    #[test]
+    fn small_ticket_log_writes_requested_steps_per_turn() {
+        let (events, _) = ticket_log("s_aaaaaaaaaaaaaaaa", 2, None, false, 0);
+        let steps = events
+            .lines()
+            .filter(|line| line.contains("\"step_started\""))
+            .count();
+        assert_eq!(steps, 20, "two steps in each of ten turns");
+    }
 }
 
 #[cfg(test)]
