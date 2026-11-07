@@ -255,6 +255,13 @@ fn every_kind_in_order_capitalised() {
         delegates: 2,
         jobs: 3,
         asked: 4,
+        fetched: 2,
+        web: 1,
+        skills: 1,
+        tool_lookups: 3,
+        messaged_delegates: 1,
+        messaged_sessions: 2,
+        sessions: 1,
         called: 3,
         thoughts: 4,
     };
@@ -262,6 +269,8 @@ fn every_kind_in_order_capitalised() {
         text(&kinds),
         "Read 34 files, searched 84 patterns, listed 12 directories, edited 24 files +175 −83, \
          wrote 5 files, ran 9 commands, started 2 delegates, checked 3 jobs, asked 4 questions, \
+         fetched 2 pages, searched the web once, loaded 1 skill, looked up tools 3 times, \
+         messaged delegates once, messaged sessions 2 times, looked at sessions once, \
          called 3 tools, thought 4 times"
     );
 }
@@ -280,14 +289,22 @@ fn every_kind_singular() {
         delegates: 1,
         jobs: 1,
         asked: 1,
+        fetched: 1,
+        web: 1,
+        skills: 1,
+        tool_lookups: 1,
+        messaged_delegates: 1,
+        messaged_sessions: 1,
+        sessions: 1,
         called: 1,
         thoughts: 1,
     };
     assert_eq!(
         text(&kinds),
         "Read 1 file, searched 1 pattern, listed 1 directory, edited 1 file +3 −1, wrote 1 file, \
-         ran 1 command, started 1 delegate, checked 1 job, asked 1 question, called 1 tool, \
-         thought once"
+         ran 1 command, started 1 delegate, checked 1 job, asked 1 question, fetched 1 page, \
+         searched the web once, loaded 1 skill, looked up tools once, messaged delegates once, \
+         messaged sessions once, looked at sessions once, called 1 tool, thought once"
     );
 }
 
@@ -687,6 +704,13 @@ fn ask_user_counts_its_questions_when_it_has_any() {
         | Kind::Shell
         | Kind::Delegate
         | Kind::Jobs
+        | Kind::Fetch
+        | Kind::Web
+        | Kind::Skill
+        | Kind::Tools
+        | Kind::DelegateMessage
+        | Kind::SessionMessage
+        | Kind::Session
         | Kind::Other => None,
     };
     assert_eq!(questions(json!({"questions": [{}]})), Some(1));
@@ -1046,4 +1070,115 @@ fn a_flat_error_line_replacement_drops_every_style() {
             assert_eq!(span.style, Style::default(), "{span:?}");
         }
     }
+}
+
+/// Every name in the table, with its kind word, for the mapping tests.
+const KIND_WORDS: [(&str, &str); 11] = [
+    ("web_fetch", "fetch"),
+    ("web_search", "web"),
+    ("skill", "skill"),
+    ("tool_search", "tools"),
+    ("delegate_message", "message"),
+    ("session_message", "message"),
+    ("delegate_models", "delegate"),
+    ("session_list", "session"),
+    ("session_search", "session"),
+    ("handoff", "session"),
+    ("name_session", "session"),
+];
+
+#[test]
+fn every_built_in_has_its_own_kind_word() {
+    for (name, word) in KIND_WORDS {
+        assert_eq!(kind(name, &json!({})).word(), word, "{name}");
+    }
+    assert!(matches!(
+        kind("delegate_models", &json!({})),
+        Kind::Delegate
+    ));
+    assert!(matches!(
+        kind("delegate_message", &json!({})),
+        Kind::DelegateMessage
+    ));
+    assert!(matches!(
+        kind("session_message", &json!({})),
+        Kind::SessionMessage
+    ));
+    assert!(matches!(kind("mystery", &json!({})), Kind::Other));
+}
+
+/// A new built-in cannot fall to `other` without this test failing.
+#[test]
+fn no_built_in_tool_is_other() {
+    for name in contract::tool::BUILT_IN_TOOLS {
+        // `ask_user` is `other` unless it asked something.
+        let kind = kind(name, &json!({"questions": [{}]}));
+        assert!(!matches!(kind, Kind::Other), "{name} falls to other");
+    }
+}
+
+#[test]
+fn every_kind_word_fits_the_nine_column_pad() {
+    for kind in [
+        Kind::Read,
+        Kind::Search,
+        Kind::List,
+        Kind::Edit,
+        Kind::Write,
+        Kind::Shell,
+        Kind::Delegate,
+        Kind::Jobs,
+        Kind::Ask(1),
+        Kind::Fetch,
+        Kind::Web,
+        Kind::Skill,
+        Kind::Tools,
+        Kind::DelegateMessage,
+        Kind::SessionMessage,
+        Kind::Session,
+        Kind::Other,
+    ] {
+        assert!(kind.word().chars().count() <= 9, "{}", kind.word());
+    }
+}
+
+#[test]
+fn each_added_count_alone_takes_plural_and_singular() {
+    let alone = |set: fn(&mut Kinds, u64), n: u64| {
+        let mut kinds = Kinds::default();
+        set(&mut kinds, n);
+        text(&kinds)
+    };
+    assert_eq!(alone(|k, n| k.fetched = n, 2), "Fetched 2 pages");
+    assert_eq!(alone(|k, n| k.fetched = n, 1), "Fetched 1 page");
+    assert_eq!(alone(|k, n| k.web = n, 2), "Searched the web 2 times");
+    assert_eq!(alone(|k, n| k.web = n, 1), "Searched the web once");
+    assert_eq!(alone(|k, n| k.skills = n, 2), "Loaded 2 skills");
+    assert_eq!(alone(|k, n| k.skills = n, 1), "Loaded 1 skill");
+    assert_eq!(
+        alone(|k, n| k.tool_lookups = n, 2),
+        "Looked up tools 2 times"
+    );
+    assert_eq!(alone(|k, n| k.tool_lookups = n, 1), "Looked up tools once");
+    assert_eq!(
+        alone(|k, n| k.messaged_delegates = n, 2),
+        "Messaged delegates 2 times"
+    );
+    assert_eq!(
+        alone(|k, n| k.messaged_delegates = n, 1),
+        "Messaged delegates once"
+    );
+    assert_eq!(
+        alone(|k, n| k.messaged_sessions = n, 2),
+        "Messaged sessions 2 times"
+    );
+    assert_eq!(
+        alone(|k, n| k.messaged_sessions = n, 1),
+        "Messaged sessions once"
+    );
+    assert_eq!(
+        alone(|k, n| k.sessions = n, 2),
+        "Looked at sessions 2 times"
+    );
+    assert_eq!(alone(|k, n| k.sessions = n, 1), "Looked at sessions once");
 }

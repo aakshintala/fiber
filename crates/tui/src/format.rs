@@ -104,6 +104,21 @@ pub(crate) struct Kinds {
     pub(crate) jobs: u64,
     /// Questions `ask_user` asked.
     pub(crate) asked: u64,
+    /// `web_fetch` calls.
+    pub(crate) fetched: u64,
+    /// `web_search` calls.
+    pub(crate) web: u64,
+    /// `skill` calls.
+    pub(crate) skills: u64,
+    /// `tool_search` calls.
+    pub(crate) tool_lookups: u64,
+    /// `delegate_message` calls.
+    pub(crate) messaged_delegates: u64,
+    /// `session_message` calls.
+    pub(crate) messaged_sessions: u64,
+    /// `session_list`, `session_search`, `handoff` and `name_session`
+    /// calls.
+    pub(crate) sessions: u64,
     /// Calls to any other tool.
     pub(crate) called: u64,
     /// Thinking blocks.
@@ -209,6 +224,51 @@ impl Kinds {
                 format!("asked {}", count(self.asked, "question", "questions")),
             );
         }
+        if self.fetched > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("fetched {}", count(self.fetched, "page", "pages")),
+            );
+        }
+        if self.web > 0 {
+            push(&mut out, &mut first, times("searched the web", self.web));
+        }
+        if self.skills > 0 {
+            push(
+                &mut out,
+                &mut first,
+                format!("loaded {}", count(self.skills, "skill", "skills")),
+            );
+        }
+        if self.tool_lookups > 0 {
+            push(
+                &mut out,
+                &mut first,
+                times("looked up tools", self.tool_lookups),
+            );
+        }
+        if self.messaged_delegates > 0 {
+            push(
+                &mut out,
+                &mut first,
+                times("messaged delegates", self.messaged_delegates),
+            );
+        }
+        if self.messaged_sessions > 0 {
+            push(
+                &mut out,
+                &mut first,
+                times("messaged sessions", self.messaged_sessions),
+            );
+        }
+        if self.sessions > 0 {
+            push(
+                &mut out,
+                &mut first,
+                times("looked at sessions", self.sessions),
+            );
+        }
         if self.called > 0 {
             push(
                 &mut out,
@@ -222,6 +282,14 @@ impl Kinds {
             n => push(&mut out, &mut first, format!("thought {n} times")),
         }
         out
+    }
+}
+
+/// "<verb> once" or "<verb> N times".
+fn times(verb: &str, n: u64) -> String {
+    match n {
+        1 => format!("{verb} once"),
+        n => format!("{verb} {n} times"),
     }
 }
 
@@ -359,7 +427,22 @@ pub(crate) enum Kind {
     Jobs,
     /// `ask_user`, with how many questions it asked.
     Ask(u64),
-    /// Any other tool.
+    /// `web_fetch`.
+    Fetch,
+    /// `web_search`.
+    Web,
+    /// `skill`.
+    Skill,
+    /// `tool_search`.
+    Tools,
+    /// `delegate_message`.
+    DelegateMessage,
+    /// `session_message`.
+    SessionMessage,
+    /// `session_list`, `session_search`, `handoff` and `name_session`.
+    Session,
+    /// An MCP or extension tool, or `ask_user` with no questions. An
+    /// extension that replaces a built-in name keeps that name's kind.
     Other,
 }
 
@@ -378,6 +461,12 @@ impl Kind {
             Kind::Delegate => "delegate",
             Kind::Jobs => "jobs",
             Kind::Ask(_) => "ask",
+            Kind::Fetch => "fetch",
+            Kind::Web => "web",
+            Kind::Skill => "skill",
+            Kind::Tools => "tools",
+            Kind::DelegateMessage | Kind::SessionMessage => "message",
+            Kind::Session => "session",
             Kind::Other => "other",
         }
     }
@@ -388,8 +477,15 @@ pub(crate) fn kind(name: &str, arguments: &Value) -> Kind {
         "read" => Kind::Read,
         "edit" => Kind::Edit,
         "write" => Kind::Write,
-        "delegate_spawn" | "delegate_fork" => Kind::Delegate,
+        "delegate_spawn" | "delegate_fork" | "delegate_models" => Kind::Delegate,
         "jobs" => Kind::Jobs,
+        "web_fetch" => Kind::Fetch,
+        "web_search" => Kind::Web,
+        "skill" => Kind::Skill,
+        "tool_search" => Kind::Tools,
+        "delegate_message" => Kind::DelegateMessage,
+        "session_message" => Kind::SessionMessage,
+        "session_list" | "session_search" | "handoff" | "name_session" => Kind::Session,
         "shell" => match argument(arguments, "command")
             .and_then(|command| command.split_whitespace().next())
         {
