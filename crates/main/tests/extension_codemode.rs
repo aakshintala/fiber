@@ -124,6 +124,11 @@ fn allow() -> Value {
     json!({"steps": [{"text": "allow"}]})
 }
 
+/// The reviewer script answering the first two stages with `allow`.
+fn allow_twice() -> Value {
+    json!({"steps": [{"text": "allow"}, {"text": "allow"}]})
+}
+
 /// A session script making one `codemode` call with `source`, then done.
 fn calling(source: &str) -> Value {
     json!({"steps": [
@@ -198,6 +203,80 @@ fn assert_large_eq(actual: &str, expected: &str) {
             expected.len()
         );
     }
+}
+
+#[test]
+fn invalid_utf8_prints_replacement_and_the_run_succeeds() {
+    let source = "print(\"a\" .. string.char(255) .. \"b\")\n\
+        print(\"mid\" .. string.char(255) .. string.char(254) .. \"end\")\n\
+        print(\"h\" .. string.char(195, 169) .. \"llo\")\n\
+        print(\"tail\" .. string.char(226, 130))";
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "a�b\nmid��end\nhéllo\ntail�\nScript finished"
+    );
+}
+
+#[test]
+fn utf8_sub_never_splits_a_multibyte_character() {
+    let source = "local s = \"h\" .. string.char(195, 169) .. \"llo\"\n\
+        print(utf8.sub(s, 2, 2))\n\
+        print(utf8.sub(s, 2, 3))\n\
+        print(utf8.sub(\"hello\", -2))\n\
+        print(utf8.sub(\"hi\", 1, 100))\n\
+        print(utf8.sub(string.char(240, 159, 152, 128) .. \"ab\", 1, 1))\n\
+        print(utf8.sub(s, -4, -4))\n\
+        print(\"[\" .. utf8.sub(\"hello\", 3, 2) .. \"]\")\n\
+        local ok = pcall(utf8.sub, \"a\" .. string.char(255))\n\
+        print(ok)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "é\nél\nlo\nhi\n😀\né\n[]\nfalse\nScript finished"
+    );
+}
+
+#[test]
+fn utf8_sub_stays_out_of_the_shared_table() {
+    // One VM serves the whole session, with a fresh env per call: a field
+    // the first call sets on its `utf8` table is gone in the second call
+    // only when each env carries a copy, never the shared table.
+    let session = json!({"steps": [
+        {"tool_calls": [{"name": "codemode", "arguments": {"source": "utf8.marker = 42\nprint(utf8.sub(\"hi\", 2))"}}]},
+        {"tool_calls": [{"name": "codemode", "arguments": {"source": "print(utf8.marker == nil)\nprint(utf8.sub(\"hi\", 2))"}}]},
+        {"text": "Done."},
+    ]});
+    let setup = reviewed_setup(&session, &allow_twice());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let first = completed_holding(&run, "i\nScript finished");
+    assert_eq!(completed_text(first), "i\nScript finished");
+    let second = completed_holding(&run, "true\ni\nScript finished");
+    assert_eq!(completed_text(second), "true\ni\nScript finished");
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn null_tests_by_equality_and_indexing_null_errors() {
+    let source = "local n = json.decode('null')\n\
+        print(n == json.decode('null'))\n\
+        local ok = pcall(function() return n.field end)\n\
+        print(ok)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(completed_text(completed), "true\nfalse\nScript finished");
 }
 
 #[test]
