@@ -2296,3 +2296,45 @@ fn the_input_status_builtin_row_reaches_a_decorating_renderer() {
     let row = shown.lines().nth(at + 1).expect("a row under the rule");
     assert!(row.contains("test/model"), "{row:?}");
 }
+
+/// The status row names the model the session runs on: a preamble
+/// naming the configured default with a `session_status` naming the
+/// session-only choice still draws the choice (`docs/tui.md`, "The
+/// input box").
+#[test]
+fn the_status_row_names_the_session_status_model_over_the_preamble() {
+    let window = 1_000_000;
+    let trigger = 400_000;
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(launch());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.set_size(100, 30);
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "preamble_built",
+        serde_json::json!({
+            "reason": "start", "model": "default/model", "context_window": window,
+            "trigger_at": trigger, "thinking": "high",
+            "tool_choice": "auto", "cache_lifetime": "5m",
+            "system_prompt": "", "tools": [],
+        }),
+    ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "session_status",
+        serde_json::json!({
+            "name": "one", "workspace": "/w/fiber", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "chosen/model", "delegates": 0, "jobs": 0, "clients": 0,
+            "context": {"tokens": 268_000, "window": window},
+        }),
+    ));
+    let shown = screen(&app, 100, 30);
+    let at = rule_row(&shown);
+    let row = shown.lines().nth(at + 1).expect("a row under the rule");
+    assert!(row.contains("chosen/model"), "{row:?}");
+    assert!(!row.contains("default/model"), "{row:?}");
+}
