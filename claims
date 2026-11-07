@@ -5,11 +5,6 @@ crates/fakes/src/provider_server.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-
 crates/fakes/src/temp_dir.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/fakes/src/lib.rs	fiber-4277	plan	2026-11-06T05:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/testing/fakes.md	fiber-4277	plan	2026-11-06T06:27:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4285,4284,4283,4259,4218,4213
-crates/log/src/write.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
-crates/log/src/write_tests.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
-crates/log/src/diag/memory.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
-crates/log/src/diag/memory_tests.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
-crates/log/src/old_diagnostics_tests.rs	arch/4276-log-diag-leaf	grant	2026-11-06T07:47:15Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4276-log-diag-leaf	
 crates/fakes/src/http_server/server.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes/src/children_tests.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
 crates/fakes/src/client_tests.rs	fiber-4277	grant	2026-11-06T11:00:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/arch/4277-fakes-split	
