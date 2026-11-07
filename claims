@@ -172,3 +172,5 @@ crates/main/tests/driver_shell_sent.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amog
 crates/main/tests/driver_shell_spill.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/hub.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/support_helpers.rs	fiber-4381	plan	2026-11-07T18:34:26Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/watchers.rs	fiber-3508	plan	2026-11-07T18:38:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/mod.rs	fiber-3508	plan	2026-11-07T18:38:41Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
