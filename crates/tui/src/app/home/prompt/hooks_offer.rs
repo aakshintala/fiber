@@ -543,7 +543,7 @@ impl App {
             .iter()
             .find_map(|(id, (kind, _))| matches!(kind, Kind::Start).then(|| id.clone()))?;
         let refused = crate::link::Line::Hub(contract::HubLine {
-            kind: "command_rejected".to_owned(),
+            kind: contract::HubEventKind::CommandRejected,
             ts: 0,
             schema_version: contract::SCHEMA_VERSION,
             payload: [

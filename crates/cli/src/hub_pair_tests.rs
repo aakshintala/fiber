@@ -1,6 +1,6 @@
 //! Pairing output, QR payloads and URL validation against a fake hub socket.
 use super::*;
-use contract::{ErrorCode, HubLine};
+use contract::{ErrorCode, HubEventKind, HubLine};
 use fakes::Deadline;
 use serde_json::{Map, json};
 use std::io::{BufRead as _, BufReader};
@@ -38,7 +38,7 @@ fn run_wait(
             Ok((
                 client.take().unwrap(),
                 HubLine {
-                    kind: "hub_hello".to_owned(),
+                    kind: HubEventKind::HubHello,
                     ts: 1,
                     schema_version: 1,
                     payload: Map::new(),
@@ -215,7 +215,7 @@ fn exit_code(answer: Option<Value>) -> i32 {
                     Ok((
                         client.take().unwrap(),
                         HubLine {
-                            kind: "hub_hello".to_owned(),
+                            kind: HubEventKind::HubHello,
                             ts: 1,
                             schema_version: 1,
                             payload: Map::new(),

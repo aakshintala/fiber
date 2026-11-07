@@ -1100,7 +1100,7 @@ fn unreadable_reasoning(seq: u64) -> Envelope {
 
 fn unreadable(kind: &str, seq: u64) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_9".into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,
@@ -5422,7 +5422,7 @@ fn a_backfill_skips_the_records_the_parent_already_copied() {
 /// `seq`, which no resume counts or copies.
 fn ephemeral(session: &str, event: &Event) -> Envelope {
     Envelope {
-        kind: event.kind().to_owned(),
+        kind: EventKind::from_name(event.kind()),
         session_id: SessionId(session.into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,

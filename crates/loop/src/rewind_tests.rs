@@ -101,7 +101,7 @@ fn started(effects: Vec<Effect>, paths: Option<Vec<&str>>, arguments: Option<Val
 
 fn envelope(seq: u64, action: &str, event: &Event) -> Envelope {
     Envelope {
-        kind: event.kind().to_owned(),
+        kind: EventKind::from_name(event.kind()),
         session_id: SessionId("s_1".to_owned()),
         ts: 1_759_150_000_000 + seq,
         schema_version: SCHEMA_VERSION,
@@ -341,7 +341,7 @@ fn a_rewound_loop_takes_its_thinking_and_its_trigger_from_the_logged_build() {
     let parent = home.join("s_parent00000001");
     std::fs::create_dir_all(&parent).unwrap();
     let line = |kind: &str, seq: u64, event: &Event| Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_parent00000001".to_owned()),
         ts: 1_759_150_000_000 + seq,
         schema_version: SCHEMA_VERSION,
@@ -458,7 +458,7 @@ fn a_rewound_loop_writes_no_model_changed_for_a_later_label_switch() {
     let parent = home.join("s_parent00000001");
     std::fs::create_dir_all(&parent).unwrap();
     let line = |kind: &str, seq: u64, event: &Event| Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_parent00000001".to_owned()),
         ts: 1_759_150_000_000 + seq,
         schema_version: SCHEMA_VERSION,
@@ -600,7 +600,7 @@ fn rewound_from_parent(
     for (index, (kind, event)) in events.iter().enumerate() {
         let seq = u64::try_from(index).unwrap();
         let line = Envelope {
-            kind: (*kind).to_owned(),
+            kind: EventKind::from_name(kind),
             session_id: SessionId(parent_id.to_owned()),
             ts: 1_759_150_000_000 + seq,
             schema_version: SCHEMA_VERSION,
@@ -888,7 +888,7 @@ fn handoff_envelope(
     event: &Event,
 ) -> Envelope {
     Envelope {
-        kind: event.kind().to_owned(),
+        kind: EventKind::from_name(event.kind()),
         session_id: SessionId(session.to_owned()),
         ts: 1_759_150_000_000 + seq,
         schema_version: SCHEMA_VERSION,
@@ -1663,7 +1663,7 @@ fn a_forked_loop_writes_no_model_changed_for_a_later_label_switch() {
     let parent = home.join("s_parent00000001");
     std::fs::create_dir_all(&parent).unwrap();
     let line = |kind: &str, seq: u64, event: &Event| Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_parent00000001".to_owned()),
         ts: 1_759_150_000_000 + seq,
         schema_version: SCHEMA_VERSION,

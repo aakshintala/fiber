@@ -21,7 +21,7 @@ const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 /// One line of `kind` at `ts` milliseconds.
 fn envelope(kind: &str, action: Option<&str>, ts: u64, payload: Value) -> contract::Envelope {
     contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts,
         schema_version: contract::SCHEMA_VERSION,

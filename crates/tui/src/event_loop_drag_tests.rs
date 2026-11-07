@@ -53,7 +53,7 @@ fn wide(seam: Arc<Fake>) -> super::Loop<TestBackend> {
 /// A live idle `session_status` for `session`.
 fn live(session: &str) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::SessionStatus.name().to_owned(),
+        kind: EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

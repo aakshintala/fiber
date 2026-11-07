@@ -24,7 +24,7 @@ use crate::CliError;
 use crate::sessions::Ask;
 use contract::clock::Clock;
 use contract::shapes::Failure;
-use contract::{ErrorCode, HubLine, SessionId};
+use contract::{ErrorCode, HubEventKind, HubLine, SessionId};
 use fakes::Deadline;
 use serde_json::{Map, Value, json};
 
@@ -152,7 +152,7 @@ impl FakeHub {
             }
         });
         let hello = HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: HubEventKind::HubHello,
             ts: 1,
             schema_version: 1,
             payload: Map::new(),

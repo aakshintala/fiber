@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use contract::events::Event;
+use contract::events::{Event, EventKind};
 use contract::{Envelope, SessionId};
 use fakes::ProviderServer;
 use fakes::clock::FakeClock;
@@ -34,7 +34,7 @@ fn event(kind: &str, payload: Value) -> Event {
         panic!("a payload is an object");
     };
     let line = Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s".to_owned()),
         ts: 0,
         schema_version: 1,

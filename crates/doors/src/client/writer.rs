@@ -431,7 +431,7 @@ pub(crate) fn control_line(session: &SessionId, kind: ControlKind, token: u64) -
     let mut payload = Map::new();
     payload.insert("token".to_owned(), Value::from(token));
     Envelope {
-        kind: kind.name().to_owned(),
+        kind: EventKind::from_name(kind.name()),
         session_id: session.clone(),
         ts: 0,
         schema_version: SCHEMA_VERSION,

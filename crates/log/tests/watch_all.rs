@@ -50,7 +50,7 @@ fn next(rx: &Receiver<Option<Envelope>>, wait: &Deadline) -> Option<Envelope> {
 
 fn marked(kind: &str) -> Envelope {
     Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: id("s_1"),
         ts: 1,
         schema_version: 1,

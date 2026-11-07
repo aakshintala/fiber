@@ -19,7 +19,7 @@ use crate::results_support::{SESSION, attached, now, reply};
 /// A line of the session.
 fn line(kind: &str, payload: Value, action: Option<&str>) -> Line {
     Line::Session(contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -521,7 +521,7 @@ fn numbered(
 ) -> Line {
     *seq += 1;
     let envelope = contract::Envelope {
-        kind: EventKind::from_name(kind).name().to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -571,7 +571,7 @@ fn hub_answer(id: &str, log: &[contract::Envelope], from: u64, to: u64) -> Line 
         .cloned()
         .collect();
     Line::Session(contract::Envelope {
-        kind: EventKind::CommandAccepted.name().to_owned(),
+        kind: EventKind::CommandAccepted,
         session_id: contract::SessionId(SESSION.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

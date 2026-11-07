@@ -1,4 +1,4 @@
-use contract::events::{Event, ExtensionStateSet, ExtensionStateUnset, OnFork};
+use contract::events::{Event, EventKind, ExtensionStateSet, ExtensionStateUnset, OnFork};
 use contract::{Envelope, Seq, SessionId};
 use serde_json::{Value, json};
 
@@ -6,7 +6,7 @@ use super::{Fold, Ruled, fold, fold_boundary, fold_from, seed};
 
 fn line(seq: u64, event: Event) -> Envelope {
     Envelope {
-        kind: event.kind().into(),
+        kind: EventKind::from_name(event.kind()),
         session_id: SessionId("state".into()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -133,7 +133,7 @@ fn state_fold_skips_bad_payloads_and_round_trips_the_maximum_value() {
     let mut malformed = set(0, "goal", "bad", json!(1), OnFork::AtPoint);
     malformed.payload.remove("on_fork");
     let mut unrelated = malformed.clone();
-    unrelated.kind = "notice".into();
+    unrelated.kind = EventKind::Notice;
     let lines = vec![
         malformed,
         unrelated,

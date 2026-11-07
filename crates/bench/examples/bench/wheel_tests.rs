@@ -4,6 +4,7 @@
 //! ordering is under test, and never a terminal.
 
 use contract::clock::Clock;
+use contract::events::EventKind;
 use contract::{ActionId, SessionId, TurnId};
 use serde_json::json;
 
@@ -146,7 +147,7 @@ fn conversation_cuts_each_row_to_101_columns() {
 
 fn envelope(kind: &str, payload: serde_json::Value) -> contract::Envelope {
     contract::Envelope {
-        kind: kind.to_owned(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_test".to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,

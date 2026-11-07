@@ -11,9 +11,9 @@
 use std::collections::BTreeMap;
 
 use contract::events::{
-    ContextAdded, DelegateFinished, Environment, Event, FiberStarted, InputItem, InstructionFile,
-    InstructionReason, InstructionSent, JobCompleted, OpeningMessage, Outcome, ReviewerKept,
-    SkillListed, SkillSource, SkillsChanged, ToolCallRequested, TurnStarted,
+    ContextAdded, DelegateFinished, Environment, Event, EventKind, FiberStarted, InputItem,
+    InstructionFile, InstructionReason, InstructionSent, JobCompleted, OpeningMessage, Outcome,
+    ReviewerKept, SkillListed, SkillSource, SkillsChanged, ToolCallRequested, TurnStarted,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, Origin, Sender};
@@ -26,7 +26,7 @@ use crate::prompt::PromptInputs;
 
 fn line(kind: &str, event: &Event, action: Option<&str>) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_test".into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,
@@ -3953,7 +3953,7 @@ fn a_durable_event_between_the_opening_and_a_context_clears_the_slot() {
 
 fn sent_line(seq: u64, kind: &str, event: &Event) -> Envelope {
     Envelope {
-        kind: kind.into(),
+        kind: EventKind::from_name(kind),
         session_id: SessionId("s_test".into()),
         ts: 1,
         schema_version: contract::SCHEMA_VERSION,
@@ -4534,7 +4534,7 @@ fn unreadable_line(kind: &str) -> Envelope {
         &Event::TurnStarted(TurnStarted { input: Vec::new() }),
         None,
     );
-    broken.kind = kind.into();
+    broken.kind = EventKind::from_name(kind);
     broken.payload = serde_json::Map::from_iter([("input".to_owned(), json!("not a list"))]);
     broken
 }

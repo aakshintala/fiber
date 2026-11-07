@@ -188,7 +188,7 @@ fn notice(hub: &Hub, change: &str, device: &str, by: &str) -> Notice {
     ]);
     Notice {
         line: crate::feed::to_line(&contract::HubLine {
-            kind: "device_changed".to_owned(),
+            kind: contract::HubEventKind::DeviceChanged,
             ts: wall_ms(hub.clock.wall()),
             schema_version: contract::SCHEMA_VERSION,
             payload,

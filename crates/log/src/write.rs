@@ -14,7 +14,7 @@ use std::time::Duration;
 use contract::clock::{Clock, wall_ms};
 use contract::diag::Op;
 use contract::emit::Emit;
-use contract::events::{Class, Event};
+use contract::events::{Class, Event, EventKind};
 use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
@@ -219,7 +219,7 @@ impl Log {
         }
         let sync = fsyncs(event, action_id.is_some());
         let mut line = Envelope {
-            kind: event.kind().to_owned(),
+            kind: EventKind::from_name(event.kind()),
             session_id: inner.session_id.clone(),
             ts: wall_ms(self.clock.wall()),
             schema_version: SCHEMA_VERSION,
@@ -789,7 +789,7 @@ fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
     if offer_kind(&line.kind()) {
         match contract::events::Event::from_envelope(line) {
             Ok(Some(contract::events::Event::RepositoryCodeOffered(_))) => {
-                latest.insert(line.kind.clone(), line.clone());
+                latest.insert(line.kind.name().to_owned(), line.clone());
             }
             Ok(Some(contract::events::Event::RepositoryCodeResolved(resolved))) => {
                 if let Some(pending) = latest.get("repository_code_offered")
@@ -806,7 +806,7 @@ fn keep_latest(latest: &mut BTreeMap<String, Envelope>, line: &Envelope) {
         latest.remove("repository_code_offered");
     }
     if latest_wins(&line.kind()) && line.kind() != contract::events::EventKind::ExtensionUi {
-        latest.insert(line.kind.clone(), line.clone());
+        latest.insert(line.kind.name().to_owned(), line.clone());
         return;
     }
     if line.kind() == contract::events::EventKind::ExtensionUi {

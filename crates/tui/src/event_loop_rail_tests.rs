@@ -48,7 +48,7 @@ fn wide() -> super::Loop<TestBackend> {
 /// `since`.
 fn live(session: &str, since: u64) -> Line {
     Line::Session(contract::Envelope {
-        kind: "session_status".to_owned(),
+        kind: contract::events::EventKind::SessionStatus,
         session_id: contract::SessionId(session.to_owned()),
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
@@ -110,7 +110,7 @@ fn alt_one_switches_in_the_loop() {
 /// A hub `session_left` for `session`, ended `how`.
 fn left(session: &str, how: &str) -> Line {
     Line::Hub(contract::HubLine {
-        kind: "session_left".to_owned(),
+        kind: contract::HubEventKind::SessionLeft,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::json!({"session_id": session, "how": how})

@@ -1,4 +1,5 @@
 use super::*;
+use crate::HubEventKind;
 
 #[test]
 fn session_kind_accessor_preserves_wire_and_reads_the_current_field() {
@@ -24,10 +25,13 @@ fn session_kind_accessor_preserves_wire_and_reads_the_current_field() {
         r#"{"kind":"turn_started","session_id":"s_x","ts":0,"schema_version":1,"payload":{}}"#,
     );
     assert_eq!(line.kind(), EventKind::TurnStarted);
-    line.kind = "text_completed".into();
+    assert_eq!(line.kind, EventKind::TurnStarted);
+    line.kind = EventKind::TextCompleted;
     assert_eq!(line.kind(), EventKind::TextCompleted);
-    line.kind = "future_kind_é".into();
+    assert_eq!(line.kind, EventKind::TextCompleted);
+    line.kind = EventKind::Unknown("future_kind_é".into());
     assert_eq!(line.kind(), EventKind::Unknown("future_kind_é".into()));
+    assert_eq!(line.kind, EventKind::Unknown("future_kind_é".into()));
 }
 
 #[test]
@@ -64,10 +68,13 @@ fn hub_kind_accessor_preserves_wire_and_reads_the_current_field() {
     )
     .unwrap();
     assert_eq!(line.kind(), HubEventKind::CommandAccepted);
-    line.kind = "command_rejected".into();
+    assert_eq!(line.kind, HubEventKind::CommandAccepted);
+    line.kind = HubEventKind::CommandRejected;
     assert_eq!(line.kind(), HubEventKind::CommandRejected);
-    line.kind = "future_kind_é".into();
+    assert_eq!(line.kind, HubEventKind::CommandRejected);
+    line.kind = HubEventKind::Unknown("future_kind_é".into());
     assert_eq!(line.kind(), HubEventKind::Unknown("future_kind_é".into()));
+    assert_eq!(line.kind, HubEventKind::Unknown("future_kind_é".into()));
 }
 
 /// The example lines under `docs/events.md`, "The envelope".
@@ -80,6 +87,46 @@ fn doc_examples() -> Vec<&'static str> {
 
 fn parse(line: &str) -> Envelope {
     serde_json::from_str(line).unwrap()
+}
+
+/// An unfamiliar `kind` keeps its exact text through both typed carriers:
+/// deserialize, read the getter, serialize to the same bytes, and read
+/// again. A non-string `kind` is rejected on both carriers.
+#[test]
+fn unknown_kind_round_trips_verbatim_through_typed_carriers() {
+    use crate::HubEventKind;
+    use crate::events::EventKind;
+
+    let unknown_names = ["future_kind_é", "", " \t", "turn_started_next"];
+    for name in unknown_names {
+        let encoded = serde_json::to_string(name).unwrap();
+        let wire = format!(
+            r#"{{"kind":{encoded},"session_id":"s_x","ts":0,"schema_version":1,"payload":{{}}}}"#
+        );
+        let line: Envelope = serde_json::from_str(&wire).unwrap();
+        assert_eq!(line.kind(), EventKind::Unknown(name.to_owned()));
+        assert_eq!(line.kind, EventKind::Unknown(name.to_owned()));
+        assert_eq!(serde_json::to_string(&line).unwrap(), wire);
+        let again: Envelope = serde_json::from_str(&wire).unwrap();
+        assert_eq!(again.kind(), EventKind::Unknown(name.to_owned()));
+        assert_eq!(again.kind, EventKind::Unknown(name.to_owned()));
+        assert_eq!(again.payload, line.payload);
+
+        let hub_wire = format!(r#"{{"kind":{encoded},"ts":0,"schema_version":1,"payload":{{}}}}"#);
+        let hub_line: HubLine = serde_json::from_str(&hub_wire).unwrap();
+        assert_eq!(hub_line.kind(), HubEventKind::Unknown(name.to_owned()));
+        assert_eq!(hub_line.kind, HubEventKind::Unknown(name.to_owned()));
+        assert_eq!(serde_json::to_string(&hub_line).unwrap(), hub_wire);
+        let hub_again: HubLine = serde_json::from_str(&hub_wire).unwrap();
+        assert_eq!(hub_again.kind(), HubEventKind::Unknown(name.to_owned()));
+        assert_eq!(hub_again.kind, HubEventKind::Unknown(name.to_owned()));
+        assert_eq!(hub_again.payload, hub_line.payload);
+    }
+    let session_number_kind =
+        r#"{"kind":42,"session_id":"s_x","ts":0,"schema_version":1,"payload":{}}"#;
+    assert!(serde_json::from_str::<Envelope>(session_number_kind).is_err());
+    let hub_number_kind = r#"{"kind":42,"ts":0,"schema_version":1,"payload":{}}"#;
+    assert!(serde_json::from_str::<HubLine>(hub_number_kind).is_err());
 }
 
 /// A session line without `session_id` fails to deserialize: every
@@ -144,7 +191,7 @@ fn hub_hello_serializes_kind_ts_schema_version_payload_in_order() {
         serde_json::Value::String("0.0.0".to_owned()),
     );
     let line = HubLine {
-        kind: "hub_hello".to_owned(),
+        kind: HubEventKind::HubHello,
         ts: 1_759_150_000_000,
         schema_version: SCHEMA_VERSION,
         payload,

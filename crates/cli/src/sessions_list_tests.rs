@@ -17,7 +17,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::shapes::Failure;
-use contract::{ErrorCode, HubLine};
+use contract::{ErrorCode, HubEventKind, HubLine};
 use serde_json::{Map, Value, json};
 
 use super::{latest_listed, list, resolve_listed, run};
@@ -58,7 +58,7 @@ impl FakeHub {
         });
         self.got = Some(rx);
         let hello = HubLine {
-            kind: "hub_hello".to_owned(),
+            kind: HubEventKind::HubHello,
             ts: 1,
             schema_version: 1,
             payload: Map::new(),

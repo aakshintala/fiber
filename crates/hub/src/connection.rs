@@ -27,7 +27,7 @@ use contract::commands::SentPart;
 use contract::diag::DebugLog;
 use contract::events::CommandResult;
 use contract::events::VariablesSource;
-use contract::{CommandId, ErrorCode, HubLine, SCHEMA_VERSION, SessionId};
+use contract::{CommandId, ErrorCode, HubEventKind, HubLine, SCHEMA_VERSION, SessionId};
 use log::diag::Severity;
 use serde_json::{Map, Value};
 
@@ -1787,7 +1787,7 @@ pub(crate) fn send(
 /// it as one websocket text message.
 pub(crate) fn line(hub: &Hub, kind: &str, payload: Map<String, Value>) -> Vec<u8> {
     let line = HubLine {
-        kind: kind.to_owned(),
+        kind: HubEventKind::from(kind.to_owned()),
         ts: wall_ms(hub.clock.wall()),
         schema_version: SCHEMA_VERSION,
         payload,
