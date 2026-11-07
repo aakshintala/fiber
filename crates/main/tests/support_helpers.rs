@@ -36,6 +36,17 @@ use support::pty::{
     Grid, Pause, Run, SYNC_BEGIN, SYNC_END, click_bytes, open, wait_for_workspace_holders,
 };
 use support::*;
+
+/// The name `--exact` selects the test `name` of this file by: its module
+/// path without the crate segment, so a bare `name` at a binary's crate root
+/// and `support_helpers::name` once the file is a module of an area binary.
+fn libtest_path(name: &str) -> String {
+    match module_path!().split_once("::") {
+        Some((_, module)) => format!("{module}::{name}"),
+        None => name.to_owned(),
+    }
+}
+
 /// Present in a re-executed child, absent in the parent: the child drives
 /// the support wrapper into a stalled listing under a derived cleanup
 /// budget.
@@ -125,7 +136,9 @@ fn kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_c
         std::env::var("PATH").expect("the parent reads PATH")
     );
     let output = fakes::rerun_within(
-        "kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_cleanup_budget",
+        &libtest_path(
+            "kill_matching_with_a_stalled_listing_times_out_naming_pgrep_with_the_halved_cleanup_budget",
+        ),
         &[
             (STALLED_LISTING_CHILD, "1"),
             ("PATH", path.as_str()),
@@ -1427,7 +1440,7 @@ fn holder_dies_with_the_test_process_that_parked_it() {
         .env("HOLDER_DIES_CHILD", "1")
         .args([
             "--exact",
-            "holder_dies_child_parks_a_holder",
+            libtest_path("holder_dies_child_parks_a_holder").as_str(),
             "--nocapture",
             "--test-threads=1",
             "--ignored",
