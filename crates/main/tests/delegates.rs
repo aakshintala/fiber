@@ -2087,10 +2087,7 @@ fn a_delegate_runs_to_its_end_and_its_finish_wakes_the_parent() {
     assert!(text.starts_with(&"x".repeat(16 * 1024)), "cut at 16 KiB");
     assert!(text.contains("4096 bytes cut"), "{text}");
     let artifact = finished["artifact"].as_str().unwrap();
-    assert_eq!(
-        fs::read(ask_sessions(&setup).join(ask.session_id()).join(artifact)).unwrap(),
-        full.as_bytes()
-    );
+    assert_eq!(fs::read(child_dir.join(artifact)).unwrap(), full.as_bytes());
     let done = one(&ask.lines, "job_completed");
     assert_eq!(done["job_id"], job_id);
     assert_eq!(done["status"], "completed");
