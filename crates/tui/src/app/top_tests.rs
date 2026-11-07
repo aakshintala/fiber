@@ -294,7 +294,6 @@ fn launch(app: &mut App, surface: Surface) {
         Surface::Keymap => {
             app.open_keymap();
         }
-        Surface::ReviewerSetup => open_reviewer_setup(app),
         Surface::Panel => {
             app.on_line(session_line(
                 "permission_requested",
@@ -660,18 +659,6 @@ fn open_keymap(app: &mut App) {
     open(app, Surface::Keymap);
 }
 
-/// Opens the reviewer setup the way a person does: the seam installed and
-/// `/reviewer-setup` typed on the attached session.
-pub(in crate::app) fn open_reviewer_setup(app: &mut App) {
-    let seam = Arc::new(crate::configure_fake::Fake::new(Vec::new()));
-    app.set_configure(seam as Arc<dyn crate::Configure>);
-    crate::app::commands::commands_testkit::enter(app, "/reviewer-setup");
-}
-
-fn open_setup(app: &mut App) {
-    open(app, Surface::ReviewerSetup);
-}
-
 fn open_picker(app: &mut App) {
     open(app, Surface::Picker);
 }
@@ -775,12 +762,6 @@ const OUTSIDE_CASES: &[OutsideCase] = &[
     ("session quit", session_app, open_quit, Surface::Quit),
     ("session report", session_app, open_report, Surface::Report),
     ("session keymap", session_app, open_keymap, Surface::Keymap),
-    (
-        "session reviewer setup",
-        session_app,
-        open_setup,
-        Surface::ReviewerSetup,
-    ),
     ("session picker", session_app, open_picker, Surface::Picker),
     (
         "session login",

@@ -185,8 +185,6 @@ codes! {
     NotStepBoundary = "not_step_boundary",
     /// A command arrived before `subscribe`.
     NotSubscribed = "not_subscribed",
-    /// `/reviewer-setup` ended with no change to either layer of the notes.
-    NotesUnchanged = "notes_unchanged",
     /// The job's keeper died before it wrote the job's end, or there was no keeper.
     Orphaned = "orphaned",
     /// A job's output file passed 5 GB.

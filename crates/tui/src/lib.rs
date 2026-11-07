@@ -71,7 +71,6 @@ mod remote;
 #[cfg(test)]
 mod results_support;
 mod retry;
-mod reviewer_setup;
 mod rows;
 mod rules_view;
 mod running_view;

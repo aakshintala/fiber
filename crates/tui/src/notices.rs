@@ -59,7 +59,6 @@ const KINDS: &[(ErrorCode, Kind)] = &[
     (ErrorCode::ModelsLoading, Kind::Condition),
     (ErrorCode::NoJobsRunning, Kind::Event),
     (ErrorCode::NoModel, Kind::Event),
-    (ErrorCode::NotesUnchanged, Kind::Event),
     (ErrorCode::ProtectedPathsRestored, Kind::Event),
     (ErrorCode::RepositoryCodeSkipped, Kind::Event),
     (ErrorCode::ReviewerSelectionFailed, Kind::Event),

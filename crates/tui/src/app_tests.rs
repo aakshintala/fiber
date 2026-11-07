@@ -1,13 +1,17 @@
 //! Tests for terminal state.
 
+use super::top::tests::{home_app, session_app};
 use super::{App, Effect, QUIT_WINDOW};
 use crate::app::testkit::{SESSION as S_A, sent, session_line};
+use crate::configure::{ConfigureError, NotesFile, ReviewerNotes};
+use crate::configure_fake::Fake;
 use crate::keys::{Edit, Key, Parser};
 use crate::link::Line;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The app's lines as text.
@@ -929,10 +933,7 @@ fn the_commands_answer_fills_the_list_with_hints_and_tags() {
     assert!(app.on_line(answer).is_empty());
     assert_eq!(
         slash_rows(&mut app, "rev", now),
-        [
-            "/reviewer-setup  Sets up the reviewer's notes with you.  command",
-            "/review [base]  Review a diff.  template"
-        ]
+        ["/review [base]  Review a diff.  template"]
     );
     assert_eq!(
         slash_rows(&mut app, "td", now),
@@ -2331,4 +2332,241 @@ fn read_ref_matches_the_clone_for_handoff_and_context() {
     // A trigger outside the enum never decodes.
     read_none::<HandoffStarted>(serde_json::json!({"trigger": "manual"}));
     read_none::<ContextNudged>(serde_json::json!({"tokens": 1}));
+}
+
+// --------------------------------------- the first-block notice
+
+/// Another session id, never the attached one.
+const OTHER: &str = "s_cccccccccccccccc";
+
+/// The session app with a fake seam answering empty notes.
+fn notice_app() -> (App, Arc<Fake>) {
+    let mut app = session_app();
+    let fake = Arc::new(Fake::new(Vec::new()));
+    set_notice_notes(&fake, "", "");
+    app.set_configure(fake.clone() as Arc<dyn crate::Configure>);
+    (app, fake)
+}
+
+fn notice_notes(global: &str, project: &str) -> ReviewerNotes {
+    ReviewerNotes {
+        global: NotesFile {
+            file: PathBuf::from("/home/fiber/config.json"),
+            text: global.to_owned(),
+            version: "global-v1".to_owned(),
+        },
+        project: NotesFile {
+            file: PathBuf::from("/home/fiber/projects/-w/config.json"),
+            text: project.to_owned(),
+            version: "project-v1".to_owned(),
+        },
+    }
+}
+
+fn set_notice_notes(fake: &Fake, global: &str, project: &str) {
+    *fake.notes.lock().expect("notes lock") = Ok(notice_notes(global, project));
+}
+
+fn notice_failure(message: &str) -> ConfigureError {
+    ConfigureError {
+        code: contract::ErrorCode::IoFailed,
+        message: message.to_owned(),
+    }
+}
+
+/// A home row for `session`, so the trigger can bind its workspace.
+fn notice_status(session: &str, workspace: &str, project: &str) -> Line {
+    session_line(
+        session,
+        "session_status",
+        serde_json::json!({
+            "name": "work", "workspace": workspace, "project": project,
+            "state": "idle", "since": 0, "started": 0, "calls": 0,
+            "delegates": 0, "jobs": 0, "clients": 0, "model": "test/model",
+            "spend": {"tokens": {"input": 1, "output": 2, "cache_read": 0,
+                "cache_write": {}}, "cost": 0.0, "subscription_cost": 0.0},
+        }),
+        None,
+    )
+}
+
+/// A deny verdict on the attached session, from `decided_by`.
+fn notice_verdict(decided_by: &str, decision: &str) -> Line {
+    session_line(
+        S_A,
+        "permission_resolved",
+        serde_json::json!({"request_id": "r_9", "decision": decision, "decided_by": decided_by}),
+        Some("a_1"),
+    )
+}
+
+/// An escalation to the person on the attached session, with `cause` when
+/// it has one.
+fn notice_escalation(cause: Option<&str>) -> Line {
+    let mut payload = serde_json::json!({"request_id": "r_8", "effects": ["executes"],
+        "reversible": true, "step": "review"});
+    if let (Some(cause), Some(map)) = (cause, payload.as_object_mut()) {
+        map.insert(
+            "escalation".to_owned(),
+            serde_json::json!({"cause": cause, "reason": "it blocked three in a row"}),
+        );
+    }
+    session_line(S_A, "permission_requested", payload, Some("a_1"))
+}
+
+#[test]
+fn first_block_notice_deny_names_the_skill() {
+    let (mut app, _) = notice_app();
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+    assert!(
+        app.notice()
+            .is_some_and(|text| text.contains("reviewer-setup")),
+        "the notice names the skill"
+    );
+}
+
+#[test]
+fn first_block_notice_second_block_stays_silent() {
+    let (mut app, _) = notice_app();
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert!(app.notice().is_some());
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notices().len(), 1, "no second notice");
+}
+
+#[test]
+fn first_block_notice_each_block_escalation_cause_shows() {
+    for cause in ["consecutive_blocks", "session_blocks", "reviewer_failed"] {
+        let (mut app, _) = notice_app();
+        app.on_line(notice_escalation(Some(cause)));
+        assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE), "{cause}");
+    }
+}
+
+#[test]
+fn first_block_notice_other_escalation_causes_stay_silent() {
+    for cause in [Some("escalate_rule"), Some("not_a_block"), None] {
+        let (mut app, _) = notice_app();
+        app.on_line(notice_escalation(cause));
+        assert_eq!(app.notice(), None, "{cause:?}");
+    }
+}
+
+#[test]
+fn first_block_notice_only_a_reviewer_deny_shows() {
+    for (by, decision) in [
+        ("person", "deny"),
+        ("reviewer", "allow"),
+        ("cancel", "deny"),
+        ("rule", "deny"),
+    ] {
+        let (mut app, _) = notice_app();
+        app.on_line(notice_verdict(by, decision));
+        assert_eq!(app.notice(), None, "{by} {decision}");
+    }
+}
+
+#[test]
+fn first_block_notice_opening_fold_replay_marks_nothing() {
+    let (mut app, _) = notice_app();
+    app.passes.push((
+        contract::SessionId(S_A.to_owned()),
+        crate::app::Pass::Pending,
+    ));
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), None);
+    app.passes.clear();
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(
+        app.notice(),
+        Some(super::FIRST_BLOCK_NOTICE),
+        "the replayed block did not use the notice up"
+    );
+}
+
+#[test]
+fn first_block_notice_notes_in_either_layer_end_reads_for_the_session() {
+    for (global, project) in [
+        ("### Source control\n- g\n", ""),
+        ("", "### Source control\n- p\n"),
+    ] {
+        let (mut app, fake) = notice_app();
+        set_notice_notes(&fake, global, project);
+        app.on_line(notice_verdict("reviewer", "deny"));
+        assert_eq!(app.notice(), None, "{global:?} {project:?}");
+        // The notes are fixed for the session: a later read is not made.
+        set_notice_notes(&fake, "", "");
+        app.on_line(notice_verdict("reviewer", "deny"));
+        assert_eq!(app.notice(), None, "read again");
+    }
+}
+
+#[test]
+fn first_block_notice_failed_read_shows_nothing_and_reads_again() {
+    let (mut app, fake) = notice_app();
+    *fake.notes.lock().expect("notes lock") = Err(notice_failure("config.json: unreadable"));
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), None);
+    set_notice_notes(&fake, "", "");
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_whitespace_only_layers_count_as_empty() {
+    let (mut app, fake) = notice_app();
+    set_notice_notes(&fake, "  \n\t", " \n");
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_whitespace_beside_notes_shows_none() {
+    let (mut app, fake) = notice_app();
+    set_notice_notes(&fake, "  \n", "### Source control\n- p\n");
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn first_block_notice_other_session_with_a_row_stays_silent() {
+    let (mut app, _) = notice_app();
+    app.on_line(notice_status(OTHER, "/w", "-w"));
+    app.on_line(session_line(
+        OTHER,
+        "permission_resolved",
+        serde_json::json!({"request_id": "r_9", "decision": "deny", "decided_by": "reviewer"}),
+        Some("a_1"),
+    ));
+    assert_eq!(app.notice(), None);
+    // The other session marked nothing: the attached session still shows.
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_session_with_no_project_waits_for_its_row() {
+    let (mut app, _) = notice_app();
+    app.on_line(notice_status(S_A, "/w", ""));
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), None);
+    app.on_line(notice_status(S_A, "/w", "-w"));
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_session_with_no_row_shows_nothing() {
+    let mut app = home_app();
+    let fake = Arc::new(Fake::new(Vec::new()));
+    app.set_configure(fake as Arc<dyn crate::Configure>);
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    app.on_line(session_line(
+        OTHER,
+        "permission_resolved",
+        serde_json::json!({"request_id": "r_9", "decision": "deny", "decided_by": "reviewer"}),
+        Some("a_1"),
+    ));
+    assert_eq!(app.notice(), None);
 }

@@ -727,7 +727,6 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "rail",
     "rules",
     "permissions",
-    "reviewer-setup",
     "settings",
     "config",
     "theme",
