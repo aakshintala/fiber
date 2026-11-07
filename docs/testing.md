@@ -246,7 +246,11 @@ per line, and needs no clock: a scoped thread reads the lines and sends them
 over a channel, and the test takes them with one receive through `fakes::Deadline`, as `until` in
 `crates/doors/tests/support/mod.rs` does. A binary-level test that must hand product
 code a `contract::clock::Clock` uses `fakes::clock::SystemClock`, the process clock, or `StretchedClock`
-in `crates/main/tests/support/mod.rs`, which runs it slower so a product deadline spans the test's own.
+in `crates/main/tests/support/mod.rs`, which runs it slower so a product deadline spans the test's own. The one exception is a frozen
+`fakes::clock::FakeClock`, never advanced: a test whose assertion reads state that a
+product timer would clear, such as a notice that clears after 10 s, freezes the clock so
+the timer cannot fire during the test. The test's own `fakes::Deadline` still bounds every
+wait, and a test that needs the timer to fire advances the clock under the rules below.
 
 A test receives from a channel through `fakes::Deadline`, never with a raw `recv_timeout`: `recv` takes what remains of the deadline, and `recv_or_fail` fails naming what the test waited for, at the caller's line, as does any helper that fails a test on a receive. A wait's deadline is made once, before its first receive. A loop that takes the parts of one wait, consecutive receives that drain one stream, and a helper that receives on its caller's behalf all take that one deadline, never a fresh one per receive. Receives separated by an action whose answer the next one awaits are separate waits. Each such wait gets its own bound, made when it starts; one slow step does not use up a later step's time. The test's overall budget is only the guard against a hang under nextest's kill. A poll pause inside a loop is not a deadline. `clippy.toml` disallows `std::sync::mpsc::Receiver::recv_timeout`; product code whose receive is bounded by an injected clock's wait, or is a poll pause, turns the lint off for that statement with its reason (`docs/code-quality.md`, "Lints").
 
