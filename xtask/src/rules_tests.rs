@@ -3315,6 +3315,27 @@ fn support_tests_ignores_non_test_bracket_attributes_in_the_count() {
 }
 
 #[test]
+fn support_tests_ignores_a_single_ident_non_test_attribute() {
+    // A lone identifier that is not `test` (here `#[inline]`) holds no test:
+    // flipping the `name == "test"` guard to `true` would count it, so the
+    // failure would name 2 tests instead of 1.
+    let files = [
+        support_module(
+            "mod.rs",
+            "#[inline]\nfn helper() {}\n#[test]\nfn helper_holds() {}\n",
+        ),
+        support_jig("one.rs", "mod support;\n"),
+        support_jig("two.rs", "mod support;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
 fn support_tests_ignores_a_test_named_value_in_an_array() {
     // Only `#` starts an attribute: `[test]` after `=` is an array holding
     // a value, so the file holds one test, not two.
@@ -3421,6 +3442,38 @@ fn support_tests_leaves_a_path_that_escapes_the_tree_unresolved() {
             "tools",
             "tests/support/sandbox_home.rs",
             "pub(crate) struct SandboxHome;\n".to_owned(),
+        ),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_leaves_a_deeply_escaping_path_unresolved() {
+    // Four `..` from `src/` climbs past the tree root, so the `#[path]`
+    // matches no known file even though dropping the empty-pop guard would
+    // truncate it onto the support file the integration binary declares.
+    // The harness then collects nothing: one declarer, no failure.
+    let files = [
+        file("tools", "src/lib.rs", "pub mod shell;\n".to_owned()),
+        file(
+            "tools",
+            "src/shell.rs",
+            "#[cfg(test)]\n#[path = \"shell_tests.rs\"]\nmod tests;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "src/shell_tests.rs",
+            "#[path = \"../../../../crates/tools/tests/support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/shell.rs",
+            "#[path = \"support/sandbox_home.rs\"]\nmod sandbox_home;\n".to_owned(),
+        ),
+        file(
+            "tools",
+            "tests/support/sandbox_home.rs",
+            "#[test]\nfn sandbox_home_is_owned_and_removed_on_drop() {}\n".to_owned(),
         ),
     ];
     assert!(support_tests(&files).is_empty());
