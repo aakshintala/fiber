@@ -428,9 +428,7 @@ fn session_rows(app: &App, text: usize, countdown: &mut Option<(usize, usize)>) 
         edge: false,
     });
     out.push(branch_row(app));
-    let model = panel
-        .model()
-        .or_else(|| panel.status().map(|status| status.model.as_str()));
+    let model = panel.session_model();
     // The model slot stays fixed from the first frame: blank until a
     // preamble names the model, with no placeholder text.
     match model {
