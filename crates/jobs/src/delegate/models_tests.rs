@@ -76,6 +76,23 @@ fn delegate_models_returns_the_catalogue_text() {
 }
 
 #[test]
+fn delegate_models_successful_call_returns_content() {
+    let output = tool().run(
+        &serde_json::Map::new(),
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    let [contract::shapes::ContentPart::Text { text }] = &output.content[..] else {
+        panic!("one text part: {:?}", output.content);
+    };
+    assert_eq!(
+        text,
+        "Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m\nQuota: none"
+    );
+}
+
+#[test]
 fn delegate_models_appends_the_quota_text() {
     let loading = DelegateModels {
         catalogue: Arc::from("Roles:\ndeep: fiber:fake/m\nReferences:\nfiber:fake/m"),
