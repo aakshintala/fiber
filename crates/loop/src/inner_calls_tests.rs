@@ -1,6 +1,6 @@
 //! The inner-call seam, slots and cancellation.
 
-use fakes::MUST_SUCCEED_WITHIN;
+use fakes::{MUST_SUCCEED_WITHIN, NoRules};
 use std::sync::Arc;
 
 use contract::ActionId;
@@ -524,4 +524,433 @@ fn an_anchor_finished_during_the_checks_never_runs_the_request() {
     let taken = take(false, false, Window::FinishAnchor);
     assert_eq!(taken.status, Some(contract::events::CallStatus::Cancelled));
     assert_eq!(taken.runs, 0);
+}
+
+/// A tool answering one text part, completed or failed.
+struct Answer {
+    text: String,
+    failed: bool,
+}
+
+impl contract::tool::Tool for Answer {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "inner".into(),
+            description: "An inner tool.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+                confined: false,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            review_when_confined: false,
+            hosts: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output {
+            content: vec![contract::shapes::ContentPart::Text {
+                text: self.text.clone(),
+            }],
+            error: self.failed.then(|| contract::shapes::Failure {
+                code: contract::ErrorCode::InvalidArguments,
+                message: "nope".into(),
+                retry_after_ms: None,
+                provider: None,
+            }),
+            ..contract::tool::Output::default()
+        }
+    }
+}
+
+/// Rules that fail closed: the loop denies the inner call before it runs.
+struct Unreadable;
+
+impl contract::rules::Rules for Unreadable {
+    fn read(&self) -> Result<contract::rules::StandingRules, contract::rules::RulesError> {
+        Err(contract::rules::RulesError("gone".into()))
+    }
+
+    fn remember(
+        &self,
+        _: &str,
+        _: &str,
+        _: &contract::SessionId,
+    ) -> Result<(), contract::rules::RulesError> {
+        Ok(())
+    }
+}
+
+/// Raises one inner call and serves it to its answer, returning the
+/// completion the script's `host.tool` call resumes with.
+fn serve(
+    tool: Arc<Answer>,
+    rules: Arc<dyn contract::rules::Rules>,
+) -> Box<contract::events::ToolCallCompleted> {
+    let deadline = fakes::Deadline::after(MUST_SUCCEED_WITHIN);
+    let home = fakes::TempDir::new("fiber-inner-serve");
+    let workspace = home.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        log::Log::create(
+            home.path(),
+            contract::SessionId("s_test".into()),
+            Arc::clone(&clock),
+        )
+        .unwrap(),
+    );
+    let turn = Arc::new(crate::TurnCancel::default());
+    assert!(turn.arm());
+    let (woke_tx, woke) = std::sync::mpsc::channel();
+    let notice: Arc<dyn contract::clock::Wake> = Arc::new(Notice(woke_tx));
+    let wake = Arc::new(SharedWake::default());
+    wake.forward(Some(notice));
+    let anchor_id = ActionId("a_outer".into());
+    let slot = Arc::new(super::InnerSlot::new(
+        Arc::clone(&wake),
+        anchor_id.clone(),
+        "outer".into(),
+        0,
+    ));
+    let anchor = Arc::new(
+        crate::progress::Stream::new(Arc::clone(&wake), anchor_id.clone(), true)
+            .with_inner(Arc::clone(&slot)),
+    );
+    let answered = raise(Arc::clone(&slot), "inner");
+    deadline.recv_or_fail(&woke, "raised inner call");
+    let (_inbox, rx) = std::sync::mpsc::channel();
+    let mut looped = crate::Loop::start(
+        crate::Session {
+            log,
+            provider: Arc::new(fakes::ScriptedProvider::new(Vec::new()))
+                as Arc<dyn contract::provider::Provider>,
+            model: crate::Model {
+                reference: "fake/model".into(),
+                cost: None,
+                subscription: false,
+            },
+            prompt: crate::prompt::PromptInputs::new(
+                home.path().to_path_buf(),
+                "/bin/sh".into(),
+                home.path()
+                    .join("s_test/events.jsonl")
+                    .display()
+                    .to_string(),
+                Arc::clone(&clock),
+                fakes::CONTEXT_WINDOW,
+            ),
+            inbox: rx,
+            tools: vec![(
+                "builtin".to_owned(),
+                Arc::clone(&tool) as Arc<dyn contract::tool::Tool>,
+            )],
+            permissions: crate::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: home.path().join("credentials"),
+                credential_files: Vec::new(),
+                rules,
+            },
+        },
+        None,
+    )
+    .unwrap()
+    .cancelled_by(Arc::clone(&turn));
+    let streams = [(&anchor_id, anchor.as_ref())];
+    let mut inner = Vec::new();
+    let mut release = crate::asking::Release::default();
+    let turn_id = contract::TurnId("t_test".into());
+    // The scope joins the tool's worker, so the output waits when served.
+    std::thread::scope(|scope| {
+        looped
+            .take_inner(
+                scope,
+                &streams,
+                &mut inner,
+                &mut release,
+                &wake,
+                Some(&turn_id),
+            )
+            .unwrap();
+    });
+    looped
+        .serve_inner(&mut inner, &|_| false, Some(&turn_id))
+        .unwrap();
+    assert!(inner.is_empty(), "the served call leaves no running inner");
+    drop(inner);
+    drop(release);
+    // A second wait: the raise already answered, and serving ran since, so
+    // this receive gets its own bound, made when it starts
+    // (`docs/testing.md`, "Waits and timeouts").
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&answered, "served inner call")
+        .unwrap()
+}
+
+fn served(text: String, failed: bool) -> Box<contract::events::ToolCallCompleted> {
+    serve(Arc::new(Answer { text, failed }), Arc::new(NoRules))
+}
+
+/// Asserts two large strings hold the same bytes without printing either
+/// whole on failure: only the two lengths and the first differing offset
+/// (`docs/testing.md`, "Event streams").
+#[track_caller]
+fn assert_large_eq(actual: &str, expected: &str) {
+    if actual.len() != expected.len() {
+        let offset = actual
+            .bytes()
+            .zip(expected.bytes())
+            .position(|(left, right)| left != right)
+            .unwrap_or_else(|| actual.len().min(expected.len()));
+        panic!(
+            "large strings differ: actual {} bytes, expected {} bytes, first differing offset {offset}",
+            actual.len(),
+            expected.len()
+        );
+    }
+    if let Some(offset) = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right)
+    {
+        panic!(
+            "large strings differ: actual {} bytes, expected {} bytes, first differing offset {offset}",
+            actual.len(),
+            expected.len()
+        );
+    }
+}
+
+#[test]
+fn inner_untruncated_completion_arrives_whole_without_artifact() {
+    // Past the 16 KiB outer bound: the old cut would have kept 16384 bytes
+    // with an artifact and kept ranges.
+    let text = "x".repeat(20_000);
+    let done = served(text.clone(), false);
+    assert_eq!(done.status, contract::events::CallStatus::Completed);
+    assert_eq!(done.content.len(), 1, "one part holds the whole text");
+    let contract::shapes::ContentPart::Text { text: actual } = &done.content[0] else {
+        panic!("the one part is text");
+    };
+    assert_large_eq(actual, &text);
+    assert!(done.artifact.is_none());
+    assert!(done.kept.is_none());
+}
+
+#[test]
+fn inner_untruncated_failed_completion_passes_through_unchanged() {
+    let done = served("nope".into(), true);
+    assert_eq!(done.status, contract::events::CallStatus::Failed);
+    assert_eq!(
+        done.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "nope".into()
+        }]
+    );
+    assert!(done.artifact.is_none());
+    assert!(done.kept.is_none());
+}
+
+#[test]
+fn inner_untruncated_denied_completion_is_unchanged() {
+    // Unreadable rules fail closed: the deny answers before the call runs,
+    // so the cut never sees it.
+    let done = serve(
+        Arc::new(Answer {
+            text: "never runs".into(),
+            failed: false,
+        }),
+        Arc::new(Unreadable),
+    );
+    assert_eq!(done.status, contract::events::CallStatus::Denied);
+    assert_eq!(
+        done.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "gone It did not run.".into()
+        }]
+    );
+    assert!(done.artifact.is_none());
+    assert!(done.kept.is_none());
+}
+
+/// A tool with a settable bound and `with_cap` answer, recording what
+/// `with_cap` was asked, for the head-only bypass.
+struct Uncap {
+    bound: contract::tool::Bound,
+    answer: Option<Arc<dyn contract::tool::Tool>>,
+    calls: std::sync::Mutex<Vec<usize>>,
+}
+
+impl contract::tool::Tool for Uncap {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "uncap".into(),
+            description: "A head-only bypass probe.".into(),
+            input_schema: serde_json::json!({"type": "object"}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+    ) -> Result<contract::tool::Effects, contract::tool::EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: contract::shapes::DeclaredEffects {
+                effects: vec![contract::shapes::Effect::Reads],
+                reversible: true,
+                paths: None,
+                confined: false,
+            },
+            subject: None,
+            prefix: None,
+            always_reviewed: false,
+            review_when_confined: false,
+            hosts: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, serde_json::Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        contract::tool::Output::default()
+    }
+
+    fn bound(&self) -> contract::tool::Bound {
+        self.bound
+    }
+
+    fn with_cap(&self, cap: usize) -> Option<Arc<dyn contract::tool::Tool>> {
+        self.calls.lock().unwrap().push(cap);
+        self.answer.clone()
+    }
+}
+
+fn uncap_tool(
+    bound: contract::tool::Bound,
+    answer: Option<Arc<dyn contract::tool::Tool>>,
+) -> Arc<Uncap> {
+    Arc::new(Uncap {
+        bound,
+        answer,
+        calls: std::sync::Mutex::new(Vec::new()),
+    })
+}
+
+#[test]
+fn inner_head_only_own_cut_runs_uncapped() {
+    // A head-only tool whose uncapped form stays head-only is bypassed.
+    let uncapped = uncap_tool(
+        contract::tool::Bound {
+            start: usize::MAX,
+            end: 0,
+        },
+        None,
+    );
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 16_384,
+            end: 0,
+        },
+        Some(uncapped.clone() as Arc<dyn contract::tool::Tool>),
+    );
+    let out = super::uncap_head_only(tool.clone() as Arc<dyn contract::tool::Tool>);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(uncapped.clone() as Arc<dyn contract::tool::Tool>)
+    ));
+    assert_eq!(tool.calls.lock().unwrap().as_slice(), &[usize::MAX]);
+}
+
+#[test]
+fn inner_both_ends_tool_runs_as_prepared_without_asking_for_uncapped() {
+    // A both-ends bound keeps its tail: the bypass never asks for an
+    // uncapped form, so the spill that follows the bound stays as it is.
+    let uncapped = uncap_tool(
+        contract::tool::Bound {
+            start: usize::MAX / 2,
+            end: usize::MAX / 2,
+        },
+        None,
+    );
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 8192,
+            end: 8192,
+        },
+        Some(uncapped as Arc<dyn contract::tool::Tool>),
+    );
+    let before: Arc<dyn contract::tool::Tool> = tool.clone();
+    let out = super::uncap_head_only(before);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(tool.clone() as Arc<dyn contract::tool::Tool>)
+    ));
+    assert!(tool.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn inner_head_only_tool_whose_uncapped_grows_a_tail_runs_as_prepared() {
+    // A head-only bound whose uncapped form grows a tail is discarded.
+    let uncapped = uncap_tool(
+        contract::tool::Bound {
+            start: usize::MAX / 2,
+            end: usize::MAX / 2,
+        },
+        None,
+    );
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 16_384,
+            end: 0,
+        },
+        Some(uncapped as Arc<dyn contract::tool::Tool>),
+    );
+    let out = super::uncap_head_only(tool.clone() as Arc<dyn contract::tool::Tool>);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(tool.clone() as Arc<dyn contract::tool::Tool>)
+    ));
+}
+
+#[test]
+fn inner_tool_without_its_own_cut_runs_as_prepared() {
+    // No own cut answers `None` and runs as prepared.
+    let tool = uncap_tool(
+        contract::tool::Bound {
+            start: 16_384,
+            end: 0,
+        },
+        None,
+    );
+    let out = super::uncap_head_only(tool.clone() as Arc<dyn contract::tool::Tool>);
+    assert!(Arc::ptr_eq(
+        &out,
+        &(tool.clone() as Arc<dyn contract::tool::Tool>)
+    ));
+    assert_eq!(tool.calls.lock().unwrap().as_slice(), &[usize::MAX]);
 }
