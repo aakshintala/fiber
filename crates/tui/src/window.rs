@@ -806,12 +806,6 @@ impl Pages {
         Some((rows, texts, turns, call_paths(&part)))
     }
 
-    /// The page holding segment `session`'s `seq` could not be loaded:
-    /// it is not asked for again until the width changes.
-    pub(crate) fn fail(&mut self, session: &SessionId, seq: Seq) {
-        self.residency.fail(session, seq, &self.index);
-    }
-
     /// The page holding exactly `range` of `session` could not be
     /// loaded: it is not asked for again until the width changes. The
     /// seq lookup misses a page whose bounds the seq no longer falls

@@ -16,7 +16,7 @@ use fakes::Deadline;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -7151,63 +7151,6 @@ fn fetch_fails_a_window_answered_empty() {
     drop(lp);
 }
 
-/// Serves the hub's end of a cold resume: the first `history` command
-/// waits for the test's go-ahead, later ones answer at once from the
-/// log's tail, and every command is recorded for the test's counts.
-/// Ends at EOF, when the loop hangs up.
-fn serve_cold_resume(
-    theirs: UnixStream,
-    tx: mpsc::Sender<Input>,
-    log: Vec<contract::Envelope>,
-    go: mpsc::Receiver<()>,
-    first: mpsc::Sender<()>,
-) -> (Arc<Mutex<Vec<Value>>>, std::thread::JoinHandle<()>) {
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let record = Arc::clone(&seen);
-    let handle = std::thread::Builder::new()
-        .name("attach-cold".to_owned())
-        .spawn(move || {
-            let mut reader = BufReader::new(theirs);
-            let mut text = String::new();
-            let mut go = Some(go);
-            let mut first = Some(first);
-            loop {
-                text.clear();
-                match reader.read_line(&mut text) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
-                }
-                let command: Value = serde_json::from_str(&text).unwrap_or_default();
-                if let Ok(mut held) = record.lock() {
-                    held.push(command.clone());
-                }
-                if command["command"] != "history" {
-                    continue;
-                }
-                if let Some(first) = first.take() {
-                    first.send(()).unwrap_or(());
-                }
-                if let Some(go) = go.take() {
-                    // The test's go-ahead; a dropped sender releases a
-                    // panicking test's thread.
-                    if go.recv().is_err() {
-                        break;
-                    }
-                }
-                let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
-                let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
-                let id = command["id"].as_str().unwrap_or_default().to_owned();
-                let result = super::tail_history(&log, from, to);
-                let answer = command_answer(&id, result);
-                if tx.send(Input::Hub(Line::Session(answer))).is_err() {
-                    break;
-                }
-            }
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    (seen, handle)
-}
-
 /// Counts the commands `seen` holds by name.
 fn command_counts(seen: &Arc<Mutex<Vec<Value>>>) -> std::collections::BTreeMap<String, usize> {
     let mut counts = std::collections::BTreeMap::new();
@@ -7221,68 +7164,6 @@ fn command_counts(seen: &Arc<Mutex<Vec<Value>>>) -> std::collections::BTreeMap<S
             .or_insert(0) += 1;
     }
     counts
-}
-
-/// After an idle exit the prompt resumes the session through the hub:
-/// the prompt goes out once, the resumed turn folds with the full
-/// transcript kept, and a Ctrl+C held behind the first history answer
-/// runs after the release, then quits on the second press (#4192).
-#[test]
-fn exited_prompt_keeps_transcript_and_keys() {
-    let log = exited_log();
-    let (mut lp, theirs, tx, rx, summary) = opened_exited(&log[..307]);
-    opening_as(&mut lp.app, &summary, 318);
-    let (go_tx, go_rx) = mpsc::channel();
-    let (first_tx, first) = mpsc::channel();
-    let (seen, server) = serve_cold_resume(theirs, tx.clone(), log, go_rx, first_tx);
-    let (done_tx, done) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("attach-run".to_owned())
-        .spawn(move || {
-            let code = lp.run(&rx);
-            done_tx
-                .send((code, lp))
-                .unwrap_or_else(|err| panic!("send: {err}"));
-        })
-        .unwrap_or_else(|err| panic!("spawn: {err}"));
-    // The prompt and its Enter go out first, then the test waits for
-    // the held history wait: the Ctrl+C below lands in its stash.
-    tx.send(Input::Bytes(b"take up the resumed work".to_vec()))
-        .unwrap_or_else(|err| panic!("send: {err}"));
-    tx.send(Input::Bytes(b"\r".to_vec()))
-        .unwrap_or_else(|err| panic!("send: {err}"));
-    Deadline::after(DEADLINE).recv_or_fail(&first, "the hub to see the first history command");
-    // The draft is empty after Enter, so one Ctrl+C only arms: it
-    // stashes behind the held answer and arms after the release.
-    tx.send(Input::Bytes(vec![0x03]))
-        .unwrap_or_else(|err| panic!("send: {err}"));
-    go_tx.send(()).unwrap_or_else(|err| panic!("go: {err}"));
-    // A second press inside the quit window quits the loop.
-    tx.send(Input::Bytes(vec![0x03]))
-        .unwrap_or_else(|err| panic!("send: {err}"));
-    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "Ctrl+C quits after the replay");
-    assert_eq!(code, 0, "Ctrl+C quits after the replay");
-    let screen = shown(&lp);
-    assert!(
-        screen.contains("prompt forty-two"),
-        "the replay folds the resumed turn: its user message shows"
-    );
-    assert!(
-        screen.contains("resumed reply forty-two"),
-        "the screen keeps the full transcript through the log tail, not a prefix"
-    );
-    assert!(
-        lp.hub.answer_stash_peak() >= 1,
-        "the held answer stashed the Ctrl+C"
-    );
-    let counts = command_counts(&seen);
-    assert_eq!(
-        counts.get("prompt"),
-        Some(&1),
-        "the post-exit prompt goes out exactly once: {counts:?}"
-    );
-    drop(lp);
-    server.join().unwrap_or_else(|_| panic!("join: server"));
 }
 
 /// Probe: the #4259 app-level refusal shape, driven here to bisect

@@ -340,6 +340,62 @@ fn still_needed_range_fails() {
     );
 }
 
+/// `fail_range` marks only the named session's page: a page on another
+/// session with the same seq bounds stays needed, so a later fetch
+/// still loads it. Joining either `&&` with `||` instead would mark
+/// the other session's same-bounded page (it sits earlier in the
+/// index with the same last seq), silently dropping a range no fetch
+/// ever failed.
+#[test]
+fn fail_range_leaves_the_same_range_on_another_session() {
+    let mut screen = Screen::new();
+    let mut aseq = 0u64;
+    for turn in 0..20 {
+        for line in segment_turn(&mut aseq, ANCESTOR, turn) {
+            screen.pages_mut().apply(&line);
+        }
+    }
+    let mut dseq = 0u64;
+    for turn in 0..20 {
+        for line in segment_turn(&mut dseq, SESSION, turn) {
+            screen.pages_mut().apply(&line);
+        }
+    }
+    // Away and back, the tail pages drop: each session's tail is
+    // asked under its own session.
+    screen.jump(0);
+    screen.settle(10);
+    // Both sessions hold the same tail bounds: ancestor and
+    // descendant logs both start at Seq(0) with the same turns.
+    let before = screen.pages().needs(0, total(&screen));
+    let shared = before
+        .iter()
+        .filter(|(session, _)| session.0 == ANCESTOR)
+        .filter(|(_, range)| {
+            before
+                .iter()
+                .any(|(other, other_range)| other.0 == SESSION && other_range == range)
+        })
+        .map(|(_, range)| range.clone())
+        .next()
+        .expect("both sessions hold the same tail range");
+    // Fail the second session's copy: the first session's same-bounded
+    // page sits earlier in the index, so an `||` mutant marks that one
+    // instead and this copy stays needed.
+    screen
+        .pages_mut()
+        .fail_range(&SessionId(SESSION.to_owned()), &shared);
+    let after = screen.pages().needs(0, total(&screen));
+    assert!(
+        !after.contains(&(SessionId(SESSION.to_owned()), shared.clone())),
+        "the failed range leaves the needs"
+    );
+    assert!(
+        after.contains(&(SessionId(ANCESTOR.to_owned()), shared)),
+        "the other session's same range stays needed"
+    );
+}
+
 #[test]
 fn reveal_scrolls_up_to_a_row_above_the_top_and_follows_at_the_bottom() {
     let mut screen = screen(6);
