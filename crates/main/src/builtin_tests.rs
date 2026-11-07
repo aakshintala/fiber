@@ -1433,10 +1433,18 @@ fn driver_shell_has_no_foreground_default() {
         .spawn({
             let fake = fake.clone();
             move || {
-                while !fake.parked().contains(&None) {
+                let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+                loop {
+                    let parked = fake.parked();
+                    if parked.contains(&None) {
+                        parked_tx.send(()).unwrap_or(());
+                        return;
+                    }
+                    if bound.left().is_zero() {
+                        panic!("the driver call never waited with no deadline: {parked:?}");
+                    }
                     std::thread::yield_now();
                 }
-                parked_tx.send(()).unwrap_or(());
             }
         })
         .unwrap();

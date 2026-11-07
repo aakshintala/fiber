@@ -1601,10 +1601,18 @@ fn with_no_timeout_parks_without_a_deadline() {
         .spawn({
             let clock = clock.clone();
             move || {
-                while !clock.parked().contains(&None) {
+                let bound = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+                loop {
+                    let parked = clock.parked();
+                    if parked.contains(&None) {
+                        parked_tx.send(()).unwrap_or(());
+                        return;
+                    }
+                    if bound.left().is_zero() {
+                        panic!("the no-timeout call never waited with no deadline: {parked:?}");
+                    }
                     std::thread::yield_now();
                 }
-                parked_tx.send(()).unwrap_or(());
             }
         })
         .unwrap();
