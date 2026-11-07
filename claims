@@ -225,3 +225,13 @@ crates/tui/src/paging_session.rs	fiber-4059	plan	2026-11-07T10:39:00Z	Amoghs-Mac
 docs/performance.md	fiber-4059	plan	2026-11-07T10:39:00Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/events/context_tests.rs	fiber-4244	plan	2026-11-07T10:40:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/prompt/4244-subdir-instruction-stub	
 crates/tui/src/scroll_stall_tests.rs	fiber-4059	grant	2026-11-07T10:43:32Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4059-scroll-up-stall	
+crates/tui/src/app/panel.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+crates/tui/src/view/input_box.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+crates/tui/src/view/panel.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+crates/tui/src/view/status_rows.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+crates/tui/src/app/home.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+docs/tui.md	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+crates/tui/src/view/input_box_tests.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+crates/tui/src/view/panel_tests.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+crates/tui/src/app/home_tests.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
+crates/tui/src/app/model_picker_tests.rs	fiber-4183	plan	2026-11-07T11:06:52Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4183-session-model-status-row	
