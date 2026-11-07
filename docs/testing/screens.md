@@ -38,7 +38,7 @@ temp path reaches a snapshot. Before comparing, filters replace session ids,
 clock times, the working line's spinner and elapsed time, closing-row
 durations, tool-group spinner and duration, and provider-heading freshness
 status, so no unfiltered live value reaches a snapshot. The snapshots live in
-`crates/main/tests/snapshots/`, and CI never writes one.
+`crates/main/tests/screens/snapshots/`, and CI never writes one.
 
 The binary-level tests in `crates/main/tests` that assert on the terminal
 UI's screen use one driver, `crates/main/tests/support/pty.rs`. It feeds
