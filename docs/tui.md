@@ -516,8 +516,8 @@ cut with "…". The cards draw:
   "+N" in `added` and "−N" in `removed` right-aligned. The last row is
   "… N more" dim, when there are more, and the totals.
 - **Delegates.** The title's figure is "N running", in `attention` while one
-  runs and dim otherwise. Each delegate is "●" in `attention` while it runs or
-  "✓" in `success` once done, then its description; under it, dim, its calls,
+  runs and dim otherwise. Each delegate is a spinner in `attention` while it runs
+  ("●" when still; "The working line") or "✓" in `success` once done, then its description; under it, dim, its calls,
   elapsed time and its last step, or "done", or "failed" or "cancelled"
   when it did not complete.
 - **Jobs.** "N running" in `attention` while one runs, then a dim "▸".
