@@ -176,10 +176,11 @@ while IFS=$'\t' read -r -a fields; do
   fi
 done <<<"$plan"
 
-# Build the red commit into the checkout's absolute top-level target/ so
-# the list and run below reuse the job's restored dependency tree instead
-# of compiling registry dependencies fresh inside the worktree.
-target_dir=$(git rev-parse --show-toplevel)/target
+# Build the red commit into the checkout's persistent target/bug-red dir:
+# reusing one target keeps the compiled dependencies across runs while
+# keeping red-tree artifacts out of the checkout's target/.
+target_dir=$(git rev-parse --show-toplevel)/target/bug-red
+mkdir -p "$target_dir"
 # The red commit is what this leg compiles. Listing there, with the same
 # packages and filter, names the tests this platform built. A planned test
 # missing from that list is compiled out: say so, drop it from the filter,

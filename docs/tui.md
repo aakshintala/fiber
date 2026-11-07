@@ -2050,7 +2050,9 @@ through the `input_status` slot ("Extension seams").
   draft is left as it is.
 - `!cmd` runs a shell command and sends its output with the next prompt.
   `!!cmd` runs it and shows the output only to the person (`shell` with
-  `send` false, `docs/invocation.md`). A draft is in shell mode when its
+  `send` false, `docs/invocation.md`). A `!` or `!!` command has no
+  timeout: it runs until it exits, until `cancel` stops it, or until the
+  session shuts down. A draft is in shell mode when its
   trimmed text starts with `!` and it carries no image. Its first row then
   opens with `! ` instead of `› `, and the box's top-edge row carries
   `shell` for `!` or `shell · not sent` for `!!`, right-aligned. A bare `!`
