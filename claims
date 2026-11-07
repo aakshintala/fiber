@@ -391,3 +391,4 @@ crates/tui/src/app/panel.rs	fiber-4030	plan	2026-11-07T06:28:39Z	Amoghs-MacBook-
 crates/tui/src/app/panel_tests.rs	fiber-4030	plan	2026-11-07T06:28:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/panel.rs	fiber-4030	plan	2026-11-07T06:28:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/loop/src/calls.rs::finish	fiber-4030	plan	2026-11-07T06:28:39Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/src/lib.rs	fiber-4237	grant	2026-11-07T06:35:03Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4237-reviewer-setup-skill	
