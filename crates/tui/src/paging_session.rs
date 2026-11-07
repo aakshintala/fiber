@@ -119,6 +119,201 @@ fn words(len: usize, seed: usize) -> String {
     source.chars().cycle().skip(seed).take(len).collect()
 }
 
+/// One long row of text, about 70 characters. The row is fixed so building
+/// tens of thousands of rows stays fast: varying it by seed would rescan
+/// the word source once per row.
+fn long_row() -> String {
+    "the session log holds every durable line and the terminal pages it; ".to_owned()
+}
+
+/// Text holding `count` rows: one durable line that draws as `count`
+/// paragraphs. Double newlines in the payload render as separate rows,
+/// so a single message or tool output can fill thousands of rows while
+/// staying one line in the log. Single newlines would fold as soft breaks.
+fn long_text(count: usize) -> String {
+    (0..count)
+        .map(|_| long_row())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// Session ids for the ticket chain: `s_` plus 16 lowercase hex digits,
+/// so the history walk accepts every link.
+pub const TICKET_IDS: [&str; 4] = [
+    "s_aaaaaaaaaaaaaaaa",
+    "s_bbbbbbbbbbbbbbbb",
+    "s_cccccccccccccccc",
+    "s_dddddddddddddddd",
+];
+
+/// Rows in one long message or tool output of the ticket shape.
+pub const TICKET_LONG_ROWS: usize = 20_000;
+
+/// Steps in a large ticket log (thousands of durable entries).
+pub const TICKET_LARGE_STEPS: usize = 400;
+
+/// Steps in a small ticket log linking the chain.
+pub const TICKET_SMALL_STEPS: usize = 100;
+
+/// A ticket log writes one session's durable lines, numbered from 0.
+struct TicketLog {
+    out: String,
+    seq: u64,
+    session: String,
+}
+
+impl TicketLog {
+    fn line(&mut self, kind: &str, action: Option<&str>, payload: &serde_json::Value) {
+        let mut line = serde_json::json!({
+            "kind": kind,
+            "session_id": self.session,
+            "ts": 1_790_604_120_000_u64 + self.seq,
+            "schema_version": contract::SCHEMA_VERSION,
+            "payload": payload,
+        });
+        if let Some(object) = line.as_object_mut() {
+            if let Some(action) = action {
+                object.insert("action_id".to_owned(), serde_json::json!(action));
+            }
+            object.insert("seq".to_owned(), serde_json::json!(self.seq));
+            self.seq += 1;
+        }
+        use std::fmt::Write as _;
+        writeln!(self.out, "{line}").unwrap_or(());
+    }
+}
+
+/// One ticket session's log: `steps` steps with text and tool calls, plus
+/// one long message and one long tool output when `with_long` holds. The
+/// first line forks from `parent` when one is given.
+fn ticket_log(
+    session: &str,
+    steps: usize,
+    parent: Option<(&str, u64)>,
+    with_long: bool,
+    step_base: usize,
+) -> (String, u64) {
+    let mut log = TicketLog {
+        out: String::new(),
+        seq: 0,
+        session: session.to_owned(),
+    };
+    let empty = serde_json::json!({});
+    let started = serde_json::json!({"effects": [], "reversible": false});
+    let mut payload = serde_json::json!({"workspace": "~/work/fiber", "variables": {"path": "/usr/bin:/bin", "names": [], "source": "inherited"}});
+    if let Some((parent_id, at)) = parent {
+        payload["forked_from"] = serde_json::json!({"session_id": parent_id, "seq": at});
+    }
+    log.line("session_started", None, &payload);
+    log.line(
+        "fiber_started",
+        None,
+        &serde_json::json!({"version": "0.0.0", "resumed": false}),
+    );
+    let mut step = step_base;
+    for turn in 0..10 {
+        let prompt = words(200, turn);
+        log.line(
+            "turn_started",
+            None,
+            &serde_json::json!({"input": [{"type": "message", "source": "driver", "content": [{"type": "text", "text": prompt}]}]}),
+        );
+        let per_turn = steps / 10;
+        for _ in 0..per_turn {
+            step += 1;
+            let message = format!("t_m{step}");
+            log.line("step_started", None, &empty);
+            log.line("assistant_message_started", Some(&message), &empty);
+            let text = if with_long && step == step_base + 5 {
+                long_text(TICKET_LONG_ROWS)
+            } else {
+                words(193, step)
+            };
+            log.line(
+                "text_completed",
+                Some(&message),
+                &serde_json::json!({"text": text}),
+            );
+            let call = format!("t_t{step}");
+            log.line(
+                "tool_call_requested",
+                Some(&call),
+                &serde_json::json!({"name": "shell", "arguments": {"command": "rg -n paging crates"}}),
+            );
+            log.line(
+                "assistant_message_completed",
+                Some(&message),
+                &serde_json::json!({"outcome": "completed"}),
+            );
+            log.line(
+                "usage_recorded",
+                Some(&message),
+                &serde_json::json!({"generation_id": "fiber-paging-0001", "model": "test/paging-model", "tokens": {"input": 1200, "cache_read": 0, "cache_write": {}, "output": 300}, "input_bytes": 4096, "cost": null}),
+            );
+            log.line("tool_call_started", Some(&call), &started);
+            let output = if with_long && step == step_base + 6 {
+                long_text(TICKET_LONG_ROWS)
+            } else {
+                words(3000, step)
+            };
+            log.line(
+                "tool_call_completed",
+                Some(&call),
+                &serde_json::json!({"status": "completed", "content": [{"type": "text", "text": output}]}),
+            );
+        }
+        log.line(
+            "turn_completed",
+            None,
+            &serde_json::json!({"outcome": "completed"}),
+        );
+    }
+    let count = log.seq;
+    (log.out, count)
+}
+
+/// The ticket's single large session: thousands of entries with one long
+/// message and one long tool output of tens of thousands of rows.
+pub fn ticket_session() -> String {
+    let (log, _) = ticket_log(TICKET_IDS[3], TICKET_LARGE_STEPS, None, true, 0);
+    log
+}
+
+/// The ticket's history chain, root first: four sessions with three
+/// `forked_from` links. The root and the child hold long messages; the
+/// middle links stay small. Each child's fork point is its parent's last
+/// line, so every ancestor scan covers almost the whole ancestor log.
+pub fn ticket_chain() -> Vec<(String, String)> {
+    let (root, root_count) = ticket_log(TICKET_IDS[0], TICKET_LARGE_STEPS, None, true, 0);
+    let (second, second_count) = ticket_log(
+        TICKET_IDS[1],
+        TICKET_SMALL_STEPS,
+        Some((TICKET_IDS[0], root_count.saturating_sub(1))),
+        false,
+        100_000,
+    );
+    let (third, third_count) = ticket_log(
+        TICKET_IDS[2],
+        TICKET_SMALL_STEPS,
+        Some((TICKET_IDS[1], second_count.saturating_sub(1))),
+        false,
+        200_000,
+    );
+    let (child, _) = ticket_log(
+        TICKET_IDS[3],
+        TICKET_LARGE_STEPS,
+        Some((TICKET_IDS[2], third_count.saturating_sub(1))),
+        true,
+        300_000,
+    );
+    vec![
+        (TICKET_IDS[0].to_owned(), root),
+        (TICKET_IDS[1].to_owned(), second),
+        (TICKET_IDS[2].to_owned(), third),
+        (TICKET_IDS[3].to_owned(), child),
+    ]
+}
+
 /// The heavy session, repeated `scale` times, then a turn still running.
 pub fn paging_session(scale: usize) -> String {
     let mut log = Log {

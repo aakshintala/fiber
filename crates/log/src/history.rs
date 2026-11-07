@@ -150,6 +150,21 @@ pub fn history_to(dir: &Path, point: Seq) -> Result<Vec<Segment>, Error> {
     Ok(segments)
 }
 
+/// Lines the history scans building offset tables, counted while testing:
+/// one add per `Segment::range` scan of its whole prefix. Production
+/// ignores the count; the scroll-stall screen test asserts a page load
+/// stays window-bounded.
+#[cfg(debug_assertions)]
+pub(crate) static HISTORY_SCAN_LINES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Takes the scanned-lines count since the last call, starting it again
+/// from zero. Test-only; the count runs only in debug builds.
+#[cfg(debug_assertions)]
+pub(crate) fn take_history_scan_lines() -> u64 {
+    HISTORY_SCAN_LINES.swap(0, std::sync::atomic::Ordering::SeqCst)
+}
+
 impl Segment {
     /// This log's durable lines from `seq` `from` up to `to` inclusive, in
     /// order. Empty when `from` is past `to`. Reads only to `to` and
@@ -170,6 +185,8 @@ impl Segment {
             return Ok(Vec::new());
         }
         let offsets = crate::offsets::Offsets::scan(&self.dir, end.saturating_add(1), |_| Ok(()))?;
+        #[cfg(debug_assertions)]
+        HISTORY_SCAN_LINES.fetch_add(offsets.count(), std::sync::atomic::Ordering::SeqCst);
         // The log ends before `to`: nothing past its last line is in
         // this session's history.
         if let Some(to) = &self.to

@@ -77,6 +77,8 @@ mod rules_view;
 mod running_view;
 mod scope_switches;
 mod screen;
+#[cfg(test)]
+mod scroll_stall_tests;
 mod settings_view;
 mod shell;
 mod skills_view;
@@ -138,6 +140,10 @@ pub use layout::{DEFAULT_PANEL_SHARE, DEFAULT_RAIL_SHARE, session_columns};
 
 pub use jigs::{OpenStages, draw, hover_frames, measure_open, measure_paging};
 pub use paging_session::paging_session;
+pub use paging_session::{
+    TICKET_IDS, TICKET_LARGE_STEPS, TICKET_LONG_ROWS, TICKET_SMALL_STEPS, ticket_chain,
+    ticket_session,
+};
 
 pub use event_loop::run;
 
