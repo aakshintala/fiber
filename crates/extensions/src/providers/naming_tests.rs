@@ -69,6 +69,28 @@ fn registry(entries: &[(&str, Vec<ModelData>)]) -> Providers {
     providers
 }
 
+/// A registry like `registry`, with every provider reading its credential
+/// from `from`: a `Function` source names `credential()` providers that read
+/// nothing Fiber stores.
+fn registry_from(entries: &[(&str, Vec<ModelData>)], from: CredentialFrom) -> Providers {
+    let mut providers = Providers::default();
+    for (name, models) in entries {
+        providers.by_name.insert(
+            (*name).to_owned(),
+            ProviderData {
+                name: (*name).to_owned(),
+                credential_from: from.clone(),
+                credential_name: None,
+                headers: BTreeMap::new(),
+                placeholders: BTreeMap::new(),
+                models: models.clone(),
+                reviewer_model: None,
+            },
+        );
+    }
+    providers
+}
+
 /// The naming list sorted, for set comparison.
 fn sorted(naming: Vec<(String, String)>) -> Vec<(String, String)> {
     let mut naming = naming;
@@ -568,4 +590,29 @@ fn a_holder_flips_between_counted_and_logged_out_without_a_config_change() {
         error.to_string(),
         "No credential for `pa`: `pa` has `m` but is not logged in. Run `fiber login pa`."
     );
+}
+
+#[test]
+fn a_logged_out_function_holder_renders_no_login_advice() {
+    // Only the logged-out `bedrock` holder has `m`, and its `credential()`
+    // reads nothing Fiber stores: bare `m` names it without the login
+    // command.
+    let providers = registry_from(
+        &[("bedrock", vec![model("m")])],
+        CredentialFrom::Function(config::CredentialLabelSources {
+            names: "profile".into(),
+            default: "the environment".into(),
+            credential_env: Vec::new(),
+            credential_paths: Vec::new(),
+        }),
+    );
+    let (_root, config) = credentialed(&[]);
+    let error = providers.resolve_named(&[], &config, "m").unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Config(config::ConfigError::CredentialMissing { .. })
+    ));
+    let message = error.to_string();
+    assert!(message.contains("No credential for `bedrock`"), "{message}");
+    assert!(!message.contains("fiber login"), "{message}");
 }
