@@ -20,7 +20,10 @@ use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{Setup, function_call, hello, is_status, run_to_exit, stream, text_reply};
+use support::{
+    KillGroup, Setup, expired, function_call, hello, is_status, run_to_exit, spawn_watched, stream,
+    text_reply,
+};
 
 /// Runs `fiber ask` with `args` to its exit: its exit code, parsed stdout
 /// lines and stderr text. The exit wait gets its own bound, minted here,
@@ -225,12 +228,16 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
             "fiber.watch({{\"text_completed\"}}, {{ timeout = 2000, run = function(ev) local ok, old = pcall(host.fs.read, {marker:?}) if not ok then old = \"\" end host.fs.write({marker:?}, old .. \"run\\n\") host.http({{ url = \"{held_url}\" }}) end }})"
         ),
     );
-    let deadline = setup.deadline;
     let mut command = setup.fiber(&["ask", "hi"]);
     command.current_dir(setup.workspace());
+    let (child, watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let guard = KillGroup(group);
+    // The thread holds no bound: the exit wait mints its own after the final
+    // release, so the spawn does not start its clock.
     let (done_tx, done_rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ignored = done_tx.send(run_to_exit(deadline, "fiber ask to exit", command));
+        let _ignored = done_tx.send(child.wait_with_output());
     });
     // The first run parked on the held server; the mid-session run happened
     // exactly once. This wait's bound is minted here; the held fake's own
@@ -298,16 +305,30 @@ fn a_parked_mid_session_offer_prints_nothing_and_drains_nothing() {
     // The exit wait's bound is minted here, after the final release.
     let completion_wait = setup.deadline.start_wait();
     let output = match completion_wait.recv(&done_rx) {
-        Ok(output) => output,
-        Err(mpsc::RecvTimeoutError::Timeout) => panic!(
-            "waited until the deadline for `fiber ask` to exit; {}",
-            diagnose(&setup, &marker, held_requests_at_release, &model)
+        Ok(output) => output.unwrap(),
+        // The state text is built before the kill, so it names what was found.
+        Err(mpsc::RecvTimeoutError::Timeout) => expired(
+            completion_wait,
+            group,
+            &done_rx,
+            &format!(
+                "`fiber ask` to exit; {}",
+                diagnose(&setup, &marker, held_requests_at_release, &model)
+            ),
         ),
         Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
             "the sender for `fiber ask` to exit hung up before sending; {}",
             diagnose(&setup, &marker, held_requests_at_release, &model)
         ),
     };
+    assert!(
+        !fakes::group_alive(group),
+        "`fiber ask` left a process in its group behind"
+    );
+    // The group is empty: skip the guard's kill and tell the watchdog to
+    // exit without signalling.
+    std::mem::forget(guard);
+    watchdog.stand_down(completion_wait.cleanup_phase());
     assert!(output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
