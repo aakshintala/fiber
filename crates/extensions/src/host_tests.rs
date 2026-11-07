@@ -166,6 +166,124 @@ fn json_round_trips_through_lua() {
     assert!(lua.load("return json.decode('{')").exec().is_err());
 }
 
+/// What a `pcall` of a Rust-raised callback error prints: the callback's
+/// `RuntimeError` message, not a Lua string. `tostring` prefixes it with
+/// `runtime error: ` and appends the traceback, so this returns the first
+/// line with the prefix stripped: the exact `json.decode: ...` text.
+#[track_caller]
+fn pcall_message_of(lua: &Lua, code: &str) -> String {
+    let message: String = lua
+        .load(format!(
+            "local ok, e = pcall(function() {code} end); assert(not ok); return tostring(e)"
+        ))
+        .eval()
+        .unwrap();
+    message
+        .lines()
+        .next()
+        .unwrap()
+        .strip_prefix("runtime error: ")
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn json_decode_strict_rejects_a_raw_tab() {
+    let lua = lua();
+    let message = pcall_message_of(
+        &lua,
+        r#"return json.decode('"a' .. string.char(9) .. 'b"')"#,
+    );
+    assert_eq!(
+        message,
+        r"json.decode: control character (\u0000-\u001F) found while parsing a string at line 1 column 3"
+    );
+}
+
+#[test]
+fn json_decode_lenient_escapes_raw_controls_inside_strings() {
+    let lua = lua();
+    // Each short form plus one \u00XX case, byte-exact through re-encoding.
+    for (byte, escaped) in [
+        (8, r"\b"),
+        (9, r"\t"),
+        (10, r"\n"),
+        (12, r"\f"),
+        (13, r"\r"),
+        (0, r"\u0000"),
+        (31, r"\u001f"),
+    ] {
+        let code = format!(
+            r#"return json.encode(json.decode('"a' .. string.char({byte}) .. 'b"', {{ lenient = true }}))"#
+        );
+        let encoded: String = lua.load(&code).eval().unwrap();
+        assert_eq!(encoded, format!(r#""a{escaped}b""#), "byte {byte}");
+        // The default stays strict, and so does an empty options table.
+        for strict in [
+            format!(r#"return json.decode('"a' .. string.char({byte}) .. 'b"')"#),
+            format!(r#"return json.decode('"a' .. string.char({byte}) .. 'b"', {{}})"#),
+        ] {
+            assert!(lua.load(&strict).exec().is_err(), "byte {byte}: {strict}");
+        }
+    }
+}
+
+#[test]
+fn json_decode_lenient_tracks_escaped_quotes_and_backslashes() {
+    let lua = lua();
+    // The raw tab follows an escaped quote and precedes an escaped
+    // backslash; neither escape may flip the sanitizer's string tracking.
+    let decoded: String = lua
+        .load(
+            r#"local tab = string.char(9)
+               return json.decode('"a\\"b' .. tab .. 'c\\\\d"', { lenient = true })"#,
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(decoded, "a\"b\tc\\d");
+}
+
+#[test]
+fn json_decode_lenient_still_rejects_beyond_controls() {
+    let lua = lua();
+    // A raw control outside a string raises under lenient exactly as strict.
+    // Byte 11 is no JSON whitespace, so it cannot parse as a separator.
+    let code = r#"return json.decode('[' .. string.char(11) .. '1]', { lenient = true })"#;
+    let lenient = pcall_message_of(&lua, code);
+    let strict = pcall_message_of(
+        &lua,
+        r#"return json.decode('[' .. string.char(11) .. '1]')"#,
+    );
+    assert_eq!(lenient, strict);
+    // The cut-marker text is not valid JSON, so lenient raises on it too.
+    let marker =
+        "return json.decode('[12 bytes cut. The full output is in /tmp/x.]', { lenient = true })";
+    let lenient = pcall_message_of(&lua, marker);
+    let strict = pcall_message_of(
+        &lua,
+        "return json.decode('[12 bytes cut. The full output is in /tmp/x.]')",
+    );
+    assert_eq!(lenient, strict);
+    // Malformed-beyond-controls raises under lenient exactly as strict.
+    let lenient = pcall_message_of(&lua, "return json.decode('{', { lenient = true })");
+    let strict = pcall_message_of(&lua, "return json.decode('{')");
+    assert_eq!(lenient, strict);
+}
+
+#[test]
+fn json_decode_options_must_be_a_table() {
+    let lua = lua();
+    assert_eq!(
+        pcall_message_of(&lua, r#"return json.decode('"a"', "lenient")"#),
+        "json.decode: options must be a table"
+    );
+    // Unknown option keys are ignored.
+    assert_eq!(
+        eval(&lua, r#"return json.decode('"a"', { bogus = 1 })"#),
+        "a"
+    );
+}
+
 #[test]
 fn the_hashes_match_their_published_test_vectors() {
     let lua = lua();
