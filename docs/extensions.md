@@ -377,6 +377,7 @@ host.oauth.poll(opts)              -- poll a device-code token endpoint; returns
 host.oauth.refresh(fn)             -- lock the call's stored credential file, re-read it, refresh once
 host.sha256(bytes)                 -- SHA-256; returns hex
 host.hmac_sha256(key, bytes)       -- HMAC-SHA256; returns raw bytes
+host.utf8_lossy(bytes)             -- bytes as a string with each invalid UTF-8 sequence replaced by U+FFFD; only codemode's print capture calls it
 json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (Lua has none built in); { lenient = true } escapes raw control characters inside strings, strict stays the default
 ```
 
@@ -529,9 +530,12 @@ json.decode(str [, { lenient }]) / json.encode(value)   -- JSON, host-provided (
 server's tool or another extension's. It returns the call's outcome: `status`,
 `content`, `artifact`, and `reason` or `error` when the call did not complete.
 It carries no `details` or `changes`, which the model never sees. The outcome
-reaches the script whole: an inner call's content is never cut and names no
-artifact, while the outer call's own result to the model stays bounded
-(`docs/tools.md`, "Bounded results"). A call that does not complete is an ordinary return, not a
+reaches the script whole: an inner call bypasses the loop's cut, and the
+read tool's own cut does not apply to it, while the outer call's own result
+to the model stays bounded (`docs/tools.md`, "Bounded results"). The shell's
+1 MiB spill is the one tool-level bound that still applies on the inner path:
+a shell call past 1 MiB names its artifact as it does outside (`docs/tools.md`,
+"Shell", "Result and output"). A call that does not complete is an ordinary return, not a
 Lua error, so the extension decides what to do next. A codemode extension is
 built on it: the model sends one script, and the script calls tools, filters
 their output and returns only what the model needs

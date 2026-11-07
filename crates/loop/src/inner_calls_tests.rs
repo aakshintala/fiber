@@ -699,13 +699,46 @@ fn serve(
     assert!(inner.is_empty(), "the served call leaves no running inner");
     drop(inner);
     drop(release);
-    deadline
+    // A second wait: the raise already answered, and serving ran since, so
+    // this receive gets its own bound, made when it starts
+    // (`docs/testing.md`, "Waits and timeouts").
+    fakes::Deadline::after(MUST_SUCCEED_WITHIN)
         .recv_or_fail(&answered, "served inner call")
         .unwrap()
 }
 
 fn served(text: String, failed: bool) -> Box<contract::events::ToolCallCompleted> {
     serve(Arc::new(Answer { text, failed }), Arc::new(NoRules))
+}
+
+/// Asserts two large strings hold the same bytes without printing either
+/// whole on failure: only the two lengths and the first differing offset
+/// (`docs/testing.md`, "Event streams").
+#[track_caller]
+fn assert_large_eq(actual: &str, expected: &str) {
+    if actual.len() != expected.len() {
+        let offset = actual
+            .bytes()
+            .zip(expected.bytes())
+            .position(|(left, right)| left != right)
+            .unwrap_or_else(|| actual.len().min(expected.len()));
+        panic!(
+            "large strings differ: actual {} bytes, expected {} bytes, first differing offset {offset}",
+            actual.len(),
+            expected.len()
+        );
+    }
+    if let Some(offset) = actual
+        .bytes()
+        .zip(expected.bytes())
+        .position(|(left, right)| left != right)
+    {
+        panic!(
+            "large strings differ: actual {} bytes, expected {} bytes, first differing offset {offset}",
+            actual.len(),
+            expected.len()
+        );
+    }
 }
 
 #[test]
@@ -715,10 +748,11 @@ fn inner_untruncated_completion_arrives_whole_without_artifact() {
     let text = "x".repeat(20_000);
     let done = served(text.clone(), false);
     assert_eq!(done.status, contract::events::CallStatus::Completed);
-    assert_eq!(
-        done.content,
-        vec![contract::shapes::ContentPart::Text { text }]
-    );
+    assert_eq!(done.content.len(), 1, "one part holds the whole text");
+    let contract::shapes::ContentPart::Text { text: actual } = &done.content[0] else {
+        panic!("the one part is text");
+    };
+    assert_large_eq(actual, &text);
     assert!(done.artifact.is_none());
     assert!(done.kept.is_none());
 }

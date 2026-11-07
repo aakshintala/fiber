@@ -473,7 +473,19 @@ impl crate::Loop {
         // into an outer one.
         let effects = Arc::new(prepared.effects);
         let worker_effects = Arc::clone(&effects);
-        let tool = prepared.tool;
+        // An inner `read` runs uncapped, so the read tool's own cut never
+        // applies on this path and the script sees the whole file
+        // (`docs/tools.md`, "Bounded results"). The scope stays on `read`:
+        // the shell's spill follows its bound for the ends it holds
+        // (`crates/tools/src/shell/spill.rs`, `Config::bound`), so
+        // uncapping it here would change inner shell results and how much
+        // they hold; its 1 MiB spill stays as it is (see #4361). Every
+        // other tool answers `None` and runs as prepared.
+        let tool = if call.name == "read" {
+            prepared.tool.with_cap(usize::MAX).unwrap_or(prepared.tool)
+        } else {
+            prepared.tool
+        };
         // The entered inner run's worker context, gated like the outer
         // call's, so `info` clones nothing.
         let worker = self.diag.worker().map(|diag| (diag, call.name.clone()));

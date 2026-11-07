@@ -289,6 +289,18 @@ pub(crate) fn install(
             lua.create_string(hmac::sign(&key, &bytes.as_bytes()).as_ref())
         })?,
     )?;
+    // Invalid UTF-8 never reaches an outer result: the result's conversion
+    // rejects it and fails the run, so codemode's `capture` replaces each
+    // invalid sequence with one U+FFFD, as `from_utf8_lossy` does. The
+    // callback is plain bytes in and a string out, so it stays beside the
+    // other byte-level helpers; only codemode's capture calls it, never
+    // the global result conversion.
+    host.set(
+        "utf8_lossy",
+        lua.create_function(|_, bytes: LuaString| {
+            Ok(String::from_utf8_lossy(&bytes.as_bytes()).into_owned())
+        })?,
+    )?;
     let json = lua.create_table()?;
     json.set(
         "encode",

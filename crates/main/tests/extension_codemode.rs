@@ -366,15 +366,17 @@ fn a_200kb_read_reaches_whole_without_a_cut() {
     let source = "local o = host.tool(\"read\", { path = \"big.txt\" })\n\
         print(\"bytes:\" .. #o.content[1].text)\n\
         print(\"cut:\" .. tostring(o.content[1].text:find(\"bytes cut\", 1, true) ~= nil))\n\
+        print(\"cutline:\" .. tostring(o.content[1].text:find(\"longer than\", 1, true) ~= nil))\n\
         print(\"artifact:\" .. tostring(o.artifact))";
     let setup = Setup::new();
     script(&setup, "s.json", &calling(source));
     script(&setup, "r.json", &allow());
-    // The read tool's own slice is configured past the file: the loop's
-    // inner bypass then carries every byte to the script uncut.
+    // The default cap stays: the inner path runs the read uncapped, so the
+    // script sees every byte with neither the loop's cut marker nor the
+    // read tool's own long-line notice.
     write_json(
         &setup.home().join("config.json"),
-        &json!({"reviewer": {"model": "scripted/r.json"}, "tools": {"read": {"max_result_bytes": 300 * 1024}}}),
+        &json!({"reviewer": {"model": "scripted/r.json"}}),
     );
     install_codemode(&setup);
     std::fs::write(setup.workspace().join("big.txt"), &big).unwrap();
@@ -385,7 +387,7 @@ fn a_200kb_read_reaches_whole_without_a_cut() {
     assert_eq!(completed["payload"]["status"], "completed");
     assert_eq!(
         completed_text(completed),
-        "bytes:204800\ncut:false\nartifact:nil\nScript finished\n- read completed"
+        "bytes:204800\ncut:false\ncutline:false\nartifact:nil\nScript finished\n- read completed"
     );
     // The inner completion the script resumed with holds all 204800 bytes,
     // with no artifact and no kept ranges.
