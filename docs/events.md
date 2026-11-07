@@ -1055,7 +1055,8 @@ Durable.
 | `reason` | string | yes | `subdirectory`, `created`, `changed`, `deleted` or `own_edit`; a closed set |
 | `extension` | string | no | the section's extension, when the file is a section file; absent for an instruction file |
 | `content` | string | no | the file's content now; absent when deleted |
-| `sent` | string | yes | what the model was sent: `full`, `diff`, `deleted` or `none`; a closed set |
+| `sent` | string | yes | what the model was sent: `full`, `diff`, `deleted`, `none` or `stub`; a closed set |
+| `size` | number | no | the raw byte length read when the line was emitted, present whenever `content` is |
 
 #### `date_changed`
 

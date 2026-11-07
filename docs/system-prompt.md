@@ -188,7 +188,9 @@ In each directory Fiber reads `AGENTS.md`, or `CLAUDE.md` when there is no
 `AGENTS.md`. A `CLAUDE.md` whose only content points at `AGENTS.md` is
 therefore never read. `@path` imports are not followed.
 
-Every file is sent in full, under its path, whatever its size. The system
+Every file is sent in full, under its path, whatever its size — except a
+subdirectory file over 32 KiB, which is sent as a stub ("Subdirectory
+files"). The system
 prompt tells the model the precedence rules:
 
 - a file applies to its own directory and everything below it
@@ -243,6 +245,15 @@ in a monorepo. Fiber sends one the first time a tool call's declared paths
 (`docs/tools.md`) fall under its directory. It is appended as its own message,
 once per context. After a handoff it is sent again only when a call touches
 that directory again.
+
+A subdirectory file over 32 KiB (32768 bytes) is sent as a stub instead of
+its full text: its path, its size in bytes, its headings (every line starting
+with `#`, in file order), and an instruction to read it before working in
+that directory. Files at or under 32 KiB are sent in full, as is every
+top-level file whatever its size. A stubbed file stays stubbed for the
+context: a later send of it carries the stub with the new size and headings,
+never the full text. Each stub send is followed by a `notice` with code
+`instructions_large` naming the path and size ("Size").
 
 A call that declares no paths, such as a shell command Fiber cannot read,
 never triggers a subdirectory file.
@@ -352,7 +363,13 @@ files and extension texts. Instruction text means the instruction files,
 extension sections, extension texts, `SYSTEM.md` and `APPEND_SYSTEM.md`. The session runs anyway.
 The 10% matches `tool_definitions_large` (`docs/tools.md`).
 
-Nothing is cut. A rules file with its end cut off breaks rules its author
+When a subdirectory file is sent as a stub ("Subdirectory files"), the send
+is followed by a `notice` with the same code, naming the file's path and size
+and saying a stub was sent.
+
+Nothing is cut. A subdirectory stub is not a cut: its path, size, headings
+and read instruction cross, and the full text stays one `read` away. A rules
+file with its end cut off breaks rules its author
 thought were in force.
 
 The skills listing follows the same rule. When it passes 10% of the context
@@ -458,7 +475,7 @@ Every text Fiber sends the model is a Markdown file in the `loop`, `tools`,
 | `crates/loop/prompt/system.md` | Fiber's system prompt text |
 | `crates/tools/prompt/guidelines.md` | the built-in tools' guidelines, one `##` section per tool |
 | `crates/loop/prompt/opening.md` | the opening message |
-| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the extension section heading and budget line, the diff, deleted and date lines, the added and removed skill lines, the session message framing, the extension heading, the nudge, the handoff note request, the handoff jobs line, the moved-result line, the delegate's final message and its questions, the fork's task, the rewind summary request, the rewind note, the quota notice, and the cancelled search's result line |
+| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the subdirectory stub, the extension section heading and budget line, the diff, deleted and date lines, the added and removed skill lines, the session message framing, the extension heading, the nudge, the handoff note request, the handoff jobs line, the moved-result line, the delegate's final message and its questions, the fork's task, the rewind summary request, the rewind note, the quota notice, and the cancelled search's result line |
 | `crates/loop/prompt/reviewer.md` | the reviewer's instructions: a `shared` section, then one `##` section per stage, `first-pass` and `second-pass`, the `handoff` section with the selection request at a handoff and the `handoff-reask` section with the re-ask note when a selection reply does not read (`docs/permissions.md`, "The reviewer") |
 
 In `messages.md`, a section's text runs from its `## name` line to the next
