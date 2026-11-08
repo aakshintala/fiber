@@ -2147,7 +2147,10 @@ fn restore_failures_record_nothing_and_leave_the_id_free() {
     fail(started("j_dir", "x"), None);
     // Paths outside artifacts/<file> are never opened.
     std::fs::write(dir.path().join("outside.log"), b"").unwrap();
+    // A file that does exist under artifacts/, named through another directory.
+    std::fs::write(artifacts.join("j_bad.log"), b"").unwrap();
     for bad in [
+        "elsewhere/j_bad.log",
         "../outside.log",
         "artifacts/../outside.log",
         "artifacts/sub/j.log",
