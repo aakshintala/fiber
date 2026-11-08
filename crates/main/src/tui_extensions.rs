@@ -1208,7 +1208,18 @@ fn ledger_value(row: &tui::ext::LedgerRow<'_>) -> Value {
             json!(result.output),
         ),
     };
-    json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": exit, "duration_ms": duration_ms, "lines": lines, "changes": changes, "error": error, "output": output, "answer": row.answer, "flat": row.flat})
+    let mut value = json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": exit, "duration_ms": duration_ms, "lines": lines, "changes": changes, "error": error, "output": output, "answer": row.answer, "flat": row.flat});
+    with_recipient(&mut value, row.recipient);
+    value
+}
+
+/// Writes `recipient` onto a call's input only when the terminal held one:
+/// an optional key is absent when it does not apply, never `null`
+/// (`docs/tui.md`, "How a TUI extension runs").
+fn with_recipient(value: &mut Value, recipient: Option<&str>) {
+    if let (Some(text), Some(object)) = (recipient, value.as_object_mut()) {
+        object.insert("recipient".to_owned(), json!(text));
+    }
 }
 
 fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {

@@ -572,7 +572,7 @@ pub(crate) fn summary(name: &str, arguments: &Value) -> String {
 
 /// `text` on one line: every run of whitespace, newlines included, reads
 /// as one space, with nothing left at either end.
-fn oneline(text: &str) -> String {
+pub(crate) fn oneline(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

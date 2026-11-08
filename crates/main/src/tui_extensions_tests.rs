@@ -86,6 +86,7 @@ fn render(renderer: &dyn Renderer, ctx: &SessionCtx) -> Decision {
             output: "",
         }),
         answer: None,
+        recipient: None,
         flat: false,
     };
     renderer.render(
@@ -318,6 +319,7 @@ fn render_deadline_reports_typed_extension_failure_and_switches_off() {
             output: "",
         }),
         answer: None,
+        recipient: None,
         flat: false,
     };
     let input = Input::LedgerRow(row);
@@ -929,6 +931,31 @@ fn skipped_answers_project_the_literal_text() {
     );
 }
 
+/// A ledger row's `recipient` rides its input only when the terminal
+/// held one: an optional key is absent, never `null`.
+#[test]
+fn a_ledger_row_input_holds_recipient_only_when_held() {
+    let args = json!({"id": "j_abc", "message": "hi"});
+    let table = |recipient| {
+        input_value(&Input::LedgerRow(tui::ext::LedgerRow {
+            name: "delegate_message",
+            arguments: &args,
+            state: CallState::Pending,
+            answer: None,
+            recipient,
+            flat: false,
+        }))
+    };
+    assert_eq!(table(Some("Fix the parser"))["recipient"], "Fix the parser");
+    let absent = table(None);
+    assert!(
+        !absent
+            .as_object()
+            .expect("a table")
+            .contains_key("recipient")
+    );
+}
+
 /// Every call state projects its documented Lua shape: no-payload
 /// states carry the current defaults, terminal states carry their
 /// result, a failure carries its split code and message, and a denial
@@ -943,6 +970,7 @@ fn every_call_state_projects_its_documented_shape() {
             arguments: &args,
             state,
             answer: None,
+            recipient: None,
             flat: false,
         }))
     }
@@ -1313,6 +1341,7 @@ fn render_frame(
             output: "",
         }),
         answer: None,
+        recipient: None,
         flat: false,
     };
     renderer.render_animated(
@@ -1488,6 +1517,7 @@ fn animated_deadline_reports_typed_extension_failure_and_switches_off() {
             output: "",
         }),
         answer: None,
+        recipient: None,
         flat: false,
     };
     let input = Input::LedgerRow(row);

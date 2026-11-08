@@ -2443,6 +2443,43 @@ fn a_decorator_draws_the_built_in_row_plus_its_badge() {
     assert_eq!(crate::work::take().renderer_calls, 1);
 }
 
+/// A message call's built-in row draws the recipient the terminal held
+/// as its target, on one line, and the id when it held none; a held
+/// name of only whitespace is drawn, not replaced by the id.
+#[test]
+fn a_message_row_draws_its_recipient_else_the_id() {
+    let group = Group::default();
+    let call = |recipient: Option<&str>| Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "delegate_message".to_owned(),
+        arguments: json!({"id": "j_abc", "message": "hi"}),
+        recipient: recipient.map(str::to_owned),
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    let text = |recipient: Option<&str>| -> String {
+        let call = call(recipient);
+        let row = group.ledger_input(&call, "", false);
+        group
+            .builtin_row(&row, 72)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let named = text(Some("Fix\nthe parser"));
+    assert!(named.contains("Fix the parser"), "{named:?}");
+    assert!(!named.contains("j_abc"), "{named:?}");
+    assert!(text(None).contains("j_abc"));
+    assert!(!text(Some(" ")).contains("j_abc"));
+    // A recipient wider than the room is cut with "…", as the id is.
+    let long = "d".repeat(100);
+    let cut = text(Some(&long));
+    assert!(cut.contains('…'), "{cut:?}");
+    assert!(crate::format::width(&cut) <= 72, "{cut:?}");
+}
+
 /// The renderer gets the row width less the six-column gutter: 74 at
 /// 80 columns, and 0 when the gutter leaves nothing.
 #[test]

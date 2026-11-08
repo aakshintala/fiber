@@ -163,6 +163,10 @@ pub struct LedgerRow<'a> {
     pub state: CallState<'a, LedgerResult<'a>, ()>,
     /// The suffix a form's answer replaces the status with.
     pub answer: Option<&'a str>,
+    /// The recipient's description, for a `delegate_message`, or name, for a
+    /// `session_message`, as the terminal held it when the call folded; `None`
+    /// when it held none or the call is no message call.
+    pub recipient: Option<&'a str>,
     /// The screen reader drops every style from the returned spans.
     pub flat: bool,
 }
@@ -186,6 +190,7 @@ impl<'a> LedgerRow<'a> {
         hash_value(self.arguments, &mut key);
         hash_call_state(&self.state, hash_ledger_result, |_: &(), _key| {}, &mut key);
         self.answer.hash(&mut key);
+        self.recipient.hash(&mut key);
         self.flat.hash(&mut key);
         key.finish()
     }
