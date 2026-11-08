@@ -124,6 +124,11 @@ fn allow() -> Value {
     json!({"steps": [{"text": "allow"}]})
 }
 
+/// The reviewer script answering the first two stages with `allow`.
+fn allow_twice() -> Value {
+    json!({"steps": [{"text": "allow"}, {"text": "allow"}]})
+}
+
 /// A session script making one `codemode` call with `source`, then done.
 fn calling(source: &str) -> Value {
     json!({"steps": [
@@ -201,14 +206,89 @@ fn assert_large_eq(actual: &str, expected: &str) {
 }
 
 #[test]
-fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
+fn invalid_utf8_prints_replacement_and_the_run_succeeds() {
+    let source = "print(\"a\" .. string.char(255) .. \"b\")\n\
+        print(\"mid\" .. string.char(255) .. string.char(254) .. \"end\")\n\
+        print(\"h\" .. string.char(195, 169) .. \"llo\")\n\
+        print(\"tail\" .. string.char(226, 130))";
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "a�b\nmid��end\nhéllo\ntail�\nScript finished"
+    );
+}
+
+#[test]
+fn utf8_sub_never_splits_a_multibyte_character() {
+    let source = "local s = \"h\" .. string.char(195, 169) .. \"llo\"\n\
+        print(utf8.sub(s, 2, 2))\n\
+        print(utf8.sub(s, 2, 3))\n\
+        print(utf8.sub(\"hello\", -2))\n\
+        print(utf8.sub(\"hi\", 1, 100))\n\
+        print(utf8.sub(string.char(240, 159, 152, 128) .. \"ab\", 1, 1))\n\
+        print(utf8.sub(s, -4, -4))\n\
+        print(\"[\" .. utf8.sub(\"hello\", 3, 2) .. \"]\")\n\
+        local ok = pcall(utf8.sub, \"a\" .. string.char(255))\n\
+        print(ok)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "é\nél\nlo\nhi\n😀\né\n[]\nfalse\nScript finished"
+    );
+}
+
+#[test]
+fn utf8_sub_stays_out_of_the_shared_table() {
+    // One VM serves the whole session, with a fresh env per call: a field
+    // the first call sets on its `utf8` table is gone in the second call
+    // only when each env carries a copy, never the shared table.
+    let session = json!({"steps": [
+        {"tool_calls": [{"name": "codemode", "arguments": {"source": "utf8.marker = 42\nprint(utf8.sub(\"hi\", 2))"}}]},
+        {"tool_calls": [{"name": "codemode", "arguments": {"source": "print(utf8.marker == nil)\nprint(utf8.sub(\"hi\", 2))"}}]},
+        {"text": "Done."},
+    ]});
+    let setup = reviewed_setup(&session, &allow_twice());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let first = completed_holding(&run, "i\nScript finished");
+    assert_eq!(completed_text(first), "i\nScript finished");
+    let second = completed_holding(&run, "true\ni\nScript finished");
+    assert_eq!(completed_text(second), "true\ni\nScript finished");
+    assert_eq!(run.of("turn_completed").len(), 1);
+}
+
+#[test]
+fn null_tests_by_equality_and_indexing_null_errors() {
+    let source = "local n = json.decode('null')\n\
+        print(n == json.decode('null'))\n\
+        local ok = pcall(function() return n.field end)\n\
+        print(ok)";
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(completed_text(completed), "true\nfalse\nScript finished");
+}
+
+#[test]
+fn an_uncut_row_names_no_artifact_while_the_script_sees_whole_bytes() {
     let big = "B".repeat(20 * 1024);
     let source = "local small = _G.host.tool(\"read\", { path = \"small.txt\" })\n\
         local nested = load('local o = host.tool(\"read\", { path = \"nested.txt\" }); print(\"nested:\" .. o.content[1].text)')\n\
         nested()\n\
         local big = host.tool(\"shell\", { command = \"cat big.bin\" })\n\
         print(\"small:\" .. small.content[1].text)\n\
-        print(\"big:\" .. big.content[1].text:sub(1, 4))\n\
+        print(\"bytes:\" .. #big.content[1].text)\n\
+        print(\"cut:\" .. tostring(big.content[1].text:find(\"bytes cut\", 1, true) ~= nil))\n\
         print(\"multi\", 1, true)\n\
         return \"ignored\"";
     let setup = reviewed_setup(&calling(source), &allow());
@@ -231,34 +311,37 @@ fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
     let mut lines: Vec<&str> = text.lines().collect();
     assert_eq!(
         lines.len(),
-        8,
-        "four printed and status lines plus three ledger rows: {text:?}"
+        9,
+        "five printed and status lines plus three ledger rows: {text:?}"
     );
     let shell_row = lines.pop().unwrap();
     let nested_read_row = lines.pop().unwrap();
     let read_row = lines.pop().unwrap();
+    // The script saw the whole 20 KiB output: the file bytes plus the
+    // shell tool's closing line (`text_of`/`exit_line` in
+    // `crates/tools/src/shell.rs`), with no cut marker.
+    let whole = format!("{big}\nExit code 0.\n");
+    let bytes_line = format!("bytes:{}", whole.len());
     assert_eq!(
         lines,
         [
             "nested:world",
             "small:hello",
-            "big:BBBB",
+            bytes_line.as_str(),
+            "cut:false",
             "multi\t1\ttrue",
             "Script finished"
         ]
     );
     assert_eq!(read_row, "- read completed");
     assert_eq!(nested_read_row, "- read completed");
-    let path = shell_row
-        .strip_prefix("- shell completed ")
-        .unwrap_or_else(|| panic!("the cut row names its artifact: {shell_row:?}"));
-    assert!(!path.is_empty());
-    // The ledger row's path holds that call's full output: the file bytes
-    // plus the shell tool's closing line (`text_of`/`exit_line` in
-    // `crates/tools/src/shell.rs`).
-    let stored = std::fs::read(run.session_dir(&setup).join(path)).unwrap();
-    let stored = String::from_utf8(stored).unwrap();
-    assert_large_eq(&stored, &format!("{big}\nExit code 0.\n"));
+    assert_eq!(shell_row, "- shell completed");
+    // The inner completion the script resumed with holds every byte, with
+    // no artifact and no kept ranges.
+    let inner = completed_holding(&run, &"B".repeat(1024));
+    assert_large_eq(completed_text(inner), &whole);
+    assert_eq!(inner["payload"].get("artifact"), None);
+    assert_eq!(inner["payload"].get("kept"), None);
     // The turn finished on the scripted follow-up.
     assert_eq!(
         run.of("text_completed").last().unwrap()["payload"]["text"],
@@ -275,6 +358,44 @@ fn a_cut_row_names_its_artifact_and_an_uncut_row_names_none() {
             .any(|ext| ext["name"] == CODEMODE_NAME),
         "{loaded}"
     );
+}
+
+#[test]
+fn a_200kb_read_reaches_whole_without_a_cut() {
+    let big = "R".repeat(200 * 1024);
+    let source = "local o = host.tool(\"read\", { path = \"big.txt\" })\n\
+        print(\"bytes:\" .. #o.content[1].text)\n\
+        print(\"cut:\" .. tostring(o.content[1].text:find(\"bytes cut\", 1, true) ~= nil))\n\
+        print(\"cutline:\" .. tostring(o.content[1].text:find(\"longer than\", 1, true) ~= nil))\n\
+        print(\"artifact:\" .. tostring(o.artifact))";
+    let setup = Setup::new();
+    script(&setup, "s.json", &calling(source));
+    script(&setup, "r.json", &allow());
+    // The default cap stays: the inner path runs the read uncapped, so the
+    // script sees every byte with neither the loop's cut marker nor the
+    // read tool's own long-line notice.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"reviewer": {"model": "scripted/r.json"}}),
+    );
+    install_codemode(&setup);
+    std::fs::write(setup.workspace().join("big.txt"), &big).unwrap();
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(resolved(&run)["payload"]["decision"], "allow");
+    let completed = completed_holding(&run, "Script finished");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed_text(completed),
+        "bytes:204800\ncut:false\ncutline:false\nartifact:nil\nScript finished\n- read completed"
+    );
+    // The inner completion the script resumed with holds all 204800 bytes,
+    // with no artifact and no kept ranges.
+    let inner = completed_holding(&run, &"R".repeat(1024));
+    assert_large_eq(completed_text(inner), &big);
+    assert_eq!(inner["payload"].get("artifact"), None);
+    assert_eq!(inner["payload"].get("kept"), None);
+    assert_eq!(run.of("turn_completed").len(), 1);
 }
 
 #[test]

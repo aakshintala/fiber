@@ -1,0 +1,12 @@
+{
+  "total_count": 1,
+  "check_runs": [
+    {
+      "name": "CI",
+      "status": "in_progress",
+      "conclusion": null,
+      "completed_at": null,
+      "id": 10
+    }
+  ]
+}

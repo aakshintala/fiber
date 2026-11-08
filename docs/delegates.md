@@ -69,6 +69,8 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   `job_stop`, or the caller's SIGTERM.
 - The output path is the delegate's own `events.jsonl` for a Fiber delegate, and
   the harness's raw stream in the parent's `artifacts/` for any other.
+- A Fiber delegate's final message is in its own session's `artifacts/final.md`,
+  and the wake and `jobs wait` name that path.
 - If a Fiber delegate fails before its session exists, `jobs list` shows its error and omits the missing log path.
 - Every tool is declared from the first request of a session and never removed.
   A tool that cannot be used, such as a delegate tool at the depth cap, fails
@@ -145,11 +147,16 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 
 ## Results
 
-- When a delegate finishes, the parent is woken as for any job. The wake carries
-  the delegate's final message, bounded as `docs/tools.md`, "Bounded results",
-  says: the first 16 KiB in the notice, the full text in `artifacts/`. A
+- When a delegate finishes, the parent is woken as for any job. A Fiber
+  delegate's final message is written whole, whatever its length, to
+  `artifacts/final.md` in the delegate's own session directory, and the wake
+  and the `jobs wait` result both name that file by its absolute path. The wake
+  carries the message bounded as `docs/tools.md`, "Bounded results", says: the
+  first 16 KiB, with the notice naming the file when the message is cut. A
   delegate the parent settles from its own log after a resume carries the
-  same bounded final message.
+  same bounded final message, and its file is written then. The parent, or
+  another delegate, reads the rest with the ordinary `read` tool on that path.
+- `jobs wait` returns the final message as the delegate wrote it; the file holds it after the session's hooks, so the two can differ when a hook changed it.
 - A delegate that asks with `ask_user` ends its turn, and the wake carries its
   questions from `delegate_finished`. The parent answers with
   `delegate_message`, which resumes the delegate, or asks the person first

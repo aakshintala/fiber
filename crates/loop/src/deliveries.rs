@@ -152,6 +152,41 @@ struct AskedDelivery {
     changed_by: Option<Vec<String>>,
 }
 
+/// Writes `finished.text` to the final-message file `finished` names,
+/// replacing any earlier one whole, and settles the finish's fields on the
+/// result: the file written, `artifact_absolute` stays and `artifact` names
+/// the file, unless a hook's own artifact file already holds that name
+/// (`hook_file`); the file not written, neither names it. A finish naming
+/// no file (another harness) is left alone. The delegate's session
+/// directory must exist: nothing here creates one.
+pub(crate) fn write_final_file(finished: &mut DelegateFinished, hook_file: bool) {
+    let Some(file) = finished.artifact_absolute.as_deref().map(Path::new) else {
+        return;
+    };
+    if write_whole(file, finished.text.as_bytes()).is_ok() {
+        if !hook_file {
+            finished.artifact = Some(contract::events::FINAL_MESSAGE.to_owned());
+        }
+    } else {
+        finished.artifact_absolute = None;
+        if !hook_file {
+            finished.artifact = None;
+        }
+    }
+}
+
+/// `bytes` as the whole of `file`, in an `artifacts/` directory under an
+/// existing session directory.
+fn write_whole(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let artifacts = file.parent().ok_or(std::io::ErrorKind::NotFound)?;
+    let session = artifacts.parent().ok_or(std::io::ErrorKind::NotFound)?;
+    if !session.is_dir() {
+        return Err(std::io::ErrorKind::NotFound.into());
+    }
+    std::fs::create_dir_all(artifacts)?;
+    support::atomic::write_atomic(file, bytes, 0o666)
+}
+
 impl Loop {
     /// The tool that started `job`, or `""` when the log recorded none: an
     /// extension's `host.delegate` starts a job with no tool.
@@ -330,9 +365,12 @@ impl Loop {
     /// full, unbounded text, and its replacement is returned unbounded.
     /// The hook's artifact text is written to `artifacts/<job_id>.txt`
     /// with the display text kept separate; an artifact-only change
-    /// leaves the text unchanged. The cut belongs to `calls::job_event`
-    /// after it.
-    fn deliver_finish(
+    /// leaves the text unchanged. The text that comes out, whatever the
+    /// hooks did, is then written once to the delegate's final-message
+    /// file, so the file holds what this delivery carries and the raw
+    /// text never reaches it when a hook changed, withheld or failed the
+    /// finish. The cut belongs to `calls::job_event` after it.
+    pub(crate) fn deliver_finish(
         &mut self,
         mut finished: DelegateFinished,
         status: Outcome,
@@ -360,8 +398,10 @@ impl Loop {
             true,
         )?
         else {
+            write_final_file(&mut finished, false);
             return Ok(finished);
         };
+        let mut hook_file = false;
         match outcome {
             AfterToolOutcome::Unchanged
             | AfterToolOutcome::Changed {
@@ -379,6 +419,7 @@ impl Loop {
                     let name = format!("{}.txt", finished.job_id.0);
                     let (path, _) = self.log.write_artifact(&name, artifact.as_bytes())?;
                     finished.artifact = Some(path);
+                    hook_file = true;
                 }
                 finished.changed_by = changed_by;
             }
@@ -393,6 +434,7 @@ impl Loop {
                 finished.changed_by = None;
             }
         }
+        write_final_file(&mut finished, hook_file);
         Ok(finished)
     }
 

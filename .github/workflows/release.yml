@@ -38,12 +38,15 @@ on:
         type: boolean
         default: false
 
-# Pushes share one group and nightlies, scheduled or manual, share another,
-# neither cancelling: stable releases run one at a time, in push order, a
-# nightly never blocks a stable release behind it, and a manual nightly never
-# overlaps a scheduled one.
+# Pushes share one group and nightlies join the backstop pushes' group,
+# never cancelling a running run: stable releases run one at a time, in push
+# order, a nightly never overlaps a backstop run, and rehearsal dispatches
+# keep their own group so a rehearsal never blocks a nightly or waits on the
+# backstop. GitHub keeps one pending run per group, so a newer push replaces
+# a waiting backstop and a nightly joining the group evicts a waiting push;
+# the next backstop covers the evicted commits.
 concurrency:
-  group: release-${{ github.event_name == 'push' && 'push' || 'nightly' }}${{ inputs.rehearse == true && '-rehearsal' || '' }}
+  group: ${{ github.event_name == 'push' && 'release-push' || (inputs.rehearse == true && 'release-nightly-rehearsal' || 'ci-main') }}
   cancel-in-progress: false
 
 permissions:

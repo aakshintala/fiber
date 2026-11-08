@@ -332,7 +332,7 @@ fn a_relative_workspace_is_invalid_arguments() {
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     client.send(r#"{"id":"c_start","command":"start","args":{"workspace":"relative/path"}}"#);
-    let rejected = recv(&client, "the start rejection");
+    let rejected = recv_answer(&client, "c_start", "the start rejection");
     assert_eq!(rejected["kind"], "command_rejected");
     assert_eq!(rejected["payload"]["code"], "invalid_arguments");
     assert_eq!(rejected["payload"]["command_id"], "c_start");
@@ -402,7 +402,7 @@ fn a_session_stuck_in_setup_is_killed_by_its_guard() {
     assert_eq!(locks, 0, "the session is still in setup: no lock yet");
     guard.stand_down_watchdog();
     drop(guard);
-    let rejected = recv(&client, "the start rejection");
+    let rejected = recv_answer(&client, "c_start", "the start rejection");
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
     fakes::try_matching_exits(&workspace, setup.deadline).unwrap_or_else(|err| panic!("waited until the deadline for the stuck session and its server to die after the guard dropped: {err}"));
     drop(client);
@@ -517,7 +517,7 @@ fn read_file_answers_an_artifact_and_refuses_an_escape() {
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     client.send(r#"{"id":"c_r1","command":"read_file","args":{"session":"s_00000000000000f1","path":"artifacts/a.txt"}}"#);
-    let answered = recv(&client, "the read_file acknowledgement");
+    let answered = recv_answer(&client, "c_r1", "the read_file acknowledgement");
     assert_eq!(answered["kind"], "command_accepted");
     assert_eq!(
         answered["payload"],
@@ -531,7 +531,7 @@ fn read_file_answers_an_artifact_and_refuses_an_escape() {
         client.send(&format!(
             "{{\"id\":\"{id}\",\"command\":\"read_file\",\"args\":{{\"session\":\"s_00000000000000f1\",\"path\":\"{path}\"}}}}"
         ));
-        let rejected = recv(&client, "the read_file rejection");
+        let rejected = recv_answer(&client, id, "the read_file rejection");
         assert_eq!(rejected["kind"], "command_rejected");
         assert_eq!(rejected["payload"]["command_id"], id);
         assert_eq!(rejected["payload"]["code"], "invalid_arguments");
@@ -585,7 +585,7 @@ fn a_start_without_a_key_is_rejected_with_the_doctor_line_first() {
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\",\"content\":[{{\"type\":\"text\",\"text\":\"{PROMPT}\"}}]}}}}"
     ));
-    let rejected = recv(&client, "the start rejection");
+    let rejected = recv_answer(&client, "c_start", "the start rejection");
     assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
     assert_eq!(
         rejected["payload"]["code"], "credential_missing",
