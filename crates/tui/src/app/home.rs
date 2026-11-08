@@ -752,8 +752,8 @@ impl App {
                                 && let Some(message) =
                                     answer.payload.get("message").and_then(Value::as_str)
                             {
-                                home.blockers = message.lines().map(str::to_owned).collect();
-                                home.blocker_keys = vec![false; home.blockers.len()];
+                                self.home.blockers = message.lines().map(str::to_owned).collect();
+                                self.home.blocker_keys = vec![false; self.home.blockers.len()];
                             }
                             return consumed.then(Vec::new);
                         }
