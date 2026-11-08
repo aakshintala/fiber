@@ -2709,3 +2709,4 @@ fn shell_cap_screen_more_row() {
     shell_run(&mut small, 20);
     assert_eq!(texts(&small), shell_rows_want(20, &["exit 0"]));
     assert!(small.targets().is_empty());
+}
