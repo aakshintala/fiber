@@ -1254,9 +1254,10 @@ fn a_click_on_a_compactions_note_line_opens_the_note() {
             session("turn_completed", json!({"outcome": "completed"}), None),
         ],
     );
-    // Ready: the last event, `turn_completed`, is folded and the grid shows
-    // the reply it closed, so no later data moves the note row before the
-    // click (`docs/testing/screens.md`, "Screens").
+    // Ready: `feed` returns only after the loop folded every input up to the
+    // last event, `turn_completed`, and the grid shows the reply it closed,
+    // so no later data moves the note row before the click
+    // (`docs/testing/screens.md`, "Screens").
     assert!(shown(&lp).contains("Continuing."), "{}", shown(&lp));
     assert!(!shown(&lp).contains("keep going"), "{}", shown(&lp));
     let note = row_of(&lp, "▸ note");
