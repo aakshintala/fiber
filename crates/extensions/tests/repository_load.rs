@@ -14,6 +14,7 @@
 )]
 
 mod common;
+use common::set_source_mtime;
 
 use std::collections::BTreeSet;
 use std::fs::{self, File};
@@ -2433,22 +2434,6 @@ fn load_pinned_keeps_the_first_declared_copy_of_one_name_silently() {
 
 /// Backdates each source file and directory so age-only cache checks do not
 /// mistake the package installation time for a source change.
-fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
-    for entry in fs::read_dir(dir).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_dir() {
-            set_source_mtime(&entry.path(), mtime);
-        } else {
-            File::options()
-                .write(true)
-                .open(entry.path())
-                .unwrap()
-                .set_modified(mtime)
-                .unwrap();
-        }
-    }
-    File::open(dir).unwrap().set_modified(mtime).unwrap();
-}
 
 /// Installs `fiber.test/mixed` with `init`: static `acme` data with
 /// `static_id`, a `providers/acme.lua` discovering `found_id`, and

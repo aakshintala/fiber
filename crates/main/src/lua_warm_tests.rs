@@ -10,6 +10,7 @@
     reason = "test code; a failure is the test's"
 )]
 
+use crate::test_support::set_source_mtime;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
@@ -123,26 +124,6 @@ fn signed(request: &Request) -> &str {
     let signature = request.header("x-fixture-signature").unwrap_or("");
     assert_eq!(signature.len(), 64, "{signature:?}");
     request.header("x-fixture-content-sha256").unwrap()
-}
-
-fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_dir() {
-            set_source_mtime(&entry.path(), mtime);
-        } else {
-            std::fs::File::options()
-                .write(true)
-                .open(entry.path())
-                .unwrap()
-                .set_modified(mtime)
-                .unwrap();
-        }
-    }
-    std::fs::File::open(dir)
-        .unwrap()
-        .set_modified(mtime)
-        .unwrap();
 }
 
 #[test]

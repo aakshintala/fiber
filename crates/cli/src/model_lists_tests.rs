@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
+use crate::test_support::set_source_mtime;
 use crate::test_support::write_record;
 use std::cell::Cell;
 use std::os::unix::fs::PermissionsExt;
@@ -180,24 +181,6 @@ fn installed<'a>(
 
 /// Sets every source-tree mtime before the fake clock and cached timestamps.
 fn age_source(setup: &Setup, extension: &str) {
-    fn set_source_mtime(dir: &Path, mtime: std::time::SystemTime) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_dir() {
-                set_source_mtime(&entry.path(), mtime);
-            } else {
-                std::fs::File::open(entry.path())
-                    .unwrap()
-                    .set_modified(mtime)
-                    .unwrap();
-            }
-        }
-        std::fs::File::open(dir)
-            .unwrap()
-            .set_modified(mtime)
-            .unwrap();
-    }
-
     let dir = setup.home().join("extensions").join(extension);
     set_source_mtime(&dir, std::time::SystemTime::UNIX_EPOCH);
 }

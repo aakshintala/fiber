@@ -7,6 +7,7 @@
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
 mod common;
+use common::set_source_mtime;
 
 use common::write_record;
 use common::{Setup, config, install, lua_named, manifest, provider, write};
@@ -1325,25 +1326,6 @@ fn set_cache_mtime(home: &std::path::Path, provider: &str, mtime: std::time::Sys
 }
 
 /// Sets every file and directory under an extension to one mtime.
-fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_dir() {
-            set_source_mtime(&entry.path(), mtime);
-        } else {
-            std::fs::File::options()
-                .write(true)
-                .open(entry.path())
-                .unwrap()
-                .set_modified(mtime)
-                .unwrap();
-        }
-    }
-    std::fs::File::open(dir)
-        .unwrap()
-        .set_modified(mtime)
-        .unwrap();
-}
 
 fn wrote(home: &std::path::Path, provider: &str, ids: &[&str]) {
     let models: Vec<serde_json::Value> = ids
