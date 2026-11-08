@@ -5,9 +5,3 @@ crates/loop/src/timing_tests.rs:arm_cancel_after_subscribe
 crates/loop/src/tool_timing_tests.rs:arm_after_dispatch_advance
 crates/main/tests/support/mod.rs:read_line_through
 crates/main/tests/support/mod.rs:write_line_through
-crates/main/tests/support/mod.rs:timeout_message
-crates/main/tests/support/mod.rs:closed_message
-crates/main/tests/support/mod.rs:drain_stderr_to_snapshot_reported
-crates/main/tests/support/pty.rs:same_frame
-crates/main/tests/support/pty.rs:click_bytes
-crates/main/tests/support/pty.rs:mouse_where_paused

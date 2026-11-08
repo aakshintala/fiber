@@ -1,0 +1,22 @@
+[
+  [
+    {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "commit": {
+        "committer": {
+          "date": "2026-11-06T20:00:00Z"
+        }
+      }
+    }
+  ],
+  [
+    {
+      "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "commit": {
+        "committer": {
+          "date": "2026-11-06T19:00:00Z"
+        }
+      }
+    }
+  ]
+]

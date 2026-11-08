@@ -785,6 +785,45 @@ fn the_tools_last_row_says_what_the_rebuild_costs() {
     );
 }
 
+/// The tools view's last row prices the session's model: the status
+/// model wins over the preamble's, whose entry carries no price
+/// (`docs/tui.md`, "The model picker").
+#[test]
+fn the_tools_last_row_prices_the_status_model_over_the_preamble() {
+    let mut app = connected(fake());
+    app.on_line(preamble("a/b"));
+    app.on_line(session_line(
+        "session_status",
+        serde_json::json!({
+            "name": "fix the parser", "workspace": "/w", "project": "-w",
+            "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 1, "cache_read": 0,
+                "cache_write": {}, "output": 2},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "a/c", "delegates": 0, "jobs": 0, "clients": 0,
+            "state": "idle",
+        }),
+    ));
+    app.on_line(usage_of(84_000));
+    app.on_models(Ok(crate::catalogue::Catalogue {
+        installable: Vec::new(),
+        models: vec![priced("a/b", None), priced("a/c", Some(3_690_000))],
+        notices: Vec::new(),
+        lists: Vec::new(),
+        left_out: Vec::new(),
+        ..Default::default()
+    }));
+    let id = open_tools(&mut app);
+    app.on_line(session_line(
+        "command_accepted",
+        serde_json::json!({"command_id": id, "result": tools_answer()}),
+    ));
+    assert_eq!(
+        app.config_view_screen().expect("the view is open").footer,
+        "a change rebuilds the cache (~84k tokens · $0.31) on reload"
+    );
+}
+
 #[test]
 fn the_tools_last_row_counts_only_the_session_on_screen() {
     let mut app = connected(fake());

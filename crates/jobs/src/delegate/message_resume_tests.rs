@@ -625,10 +625,21 @@ fn resumed_text(id: &str, log: &str) -> String {
     format!("Resumed delegate {id}. Its log is {log}.")
 }
 
-/// One queue entry the tests compare whole.
-fn taken_record(id: &JobId, text: &str, action: Option<ActionId>) -> Taken {
+/// One queue entry the tests compare whole: the finish names the final
+/// message file beside the delegate's `output`.
+fn taken_record(id: &JobId, text: &str, output: &str, action: Option<ActionId>) -> Taken {
+    let mut finished = delegate_finished(&id.0, text);
+    finished.artifact = Some("artifacts/final.md".into());
+    finished.artifact_absolute = Some(
+        std::path::Path::new(output)
+            .parent()
+            .unwrap()
+            .join("artifacts/final.md")
+            .display()
+            .to_string(),
+    );
     Taken {
-        record: contract::jobs::JobRecord::DelegateFinished(delegate_finished(&id.0, text)),
+        record: contract::jobs::JobRecord::DelegateFinished(finished),
         action,
     }
 }
@@ -850,7 +861,7 @@ fn a_dropped_resume_output_loses_no_start() {
     assert_eq!(
         (run2.claim.0)(),
         Some(vec![
-            taken_record(&id, "Done.", None),
+            taken_record(&id, "Done.", &output_path, None),
             taken_completed(&id),
             taken_started(&id, &output_path, None),
             taken_delegate_started(&id, None),
@@ -893,7 +904,7 @@ fn two_calls_resume_in_turn() {
     assert_eq!(
         call(&first.settle.expect("call 1 settles")),
         vec![
-            taken_record(&id, "Done 1.", None),
+            taken_record(&id, "Done 1.", &output_path, None),
             taken_completed(&id),
             taken_started(&id, &output_path, None),
             taken_delegate_started(&id, None),
@@ -1230,7 +1241,7 @@ fn a_cancel_inside_the_start_still_commits_the_resume() {
     assert_eq!(
         taken,
         vec![
-            taken_record(&id, "Done.", None),
+            taken_record(&id, "Done.", &output_path, None),
             taken_completed(&id),
             taken_started(&id, &output_path, Some(action())),
             taken_delegate_started(&id, Some(action())),

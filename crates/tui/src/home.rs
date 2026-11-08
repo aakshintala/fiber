@@ -286,6 +286,9 @@ pub(crate) struct Chip {
     pub(crate) dim: bool,
     /// Its text.
     pub(crate) text: String,
+    /// Only its session-only mark draws dim: the model chip while a
+    /// session-only choice is pending, leaving the model name bright.
+    pub(crate) session_mark: bool,
 }
 
 /// What home draws, built by [`crate::app::App::home_screen`].

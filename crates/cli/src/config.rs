@@ -356,29 +356,9 @@ fn closest(providers: &Providers, config: &Config, typed: &str) -> Vec<String> {
         })
         .collect();
     refs.sort();
-    refs.sort_by_key(|candidate| distance(base, candidate));
+    refs.sort_by_key(|candidate| extensions::distance(base, candidate));
     refs.truncate(3);
     refs
-}
-
-/// Edits between two references, in characters, ranking the closest matches.
-fn distance(left: &str, right: &str) -> usize {
-    let left: Vec<char> = left.chars().collect();
-    let right: Vec<char> = right.chars().collect();
-    let mut prev: Vec<usize> = (0..=right.len()).collect();
-    for (i, l) in left.iter().enumerate() {
-        let mut current = Vec::with_capacity(right.len() + 1);
-        current.push(i + 1);
-        for (j, r) in right.iter().enumerate() {
-            let cost = usize::from(l != r);
-            let above = prev.get(j + 1).map_or(usize::MAX, |v| v.saturating_add(1));
-            let beside = prev.get(j).map_or(usize::MAX, |v| v.saturating_add(cost));
-            let side = current.get(j).map_or(usize::MAX, |v| v.saturating_add(1));
-            current.push(above.min(beside).min(side));
-        }
-        prev = current;
-    }
-    prev.get(right.len()).copied().unwrap_or(usize::MAX)
 }
 
 /// `fiber config get <key>` in the current directory: prints the effective

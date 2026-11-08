@@ -83,21 +83,36 @@ impl Reader {
         writer: Writer,
         deadline: Deadline,
     ) -> (Self, mpsc::Receiver<()>) {
-        let (stop_read, stop_write) = std::io::pipe().unwrap();
         let (wake, wakes) = mpsc::channel();
+        (
+            Self::start_with_wake(master, shared, writer, deadline, wake),
+            wakes,
+        )
+    }
+
+    /// As [`Reader::start`], sending each wake on `wake`, so a test that
+    /// also wakes on other events (a recorded hub command) shares one
+    /// receiver. The reader sends one `()` per chunk appended, after the
+    /// chunk is published and the lock released.
+    #[track_caller]
+    pub(crate) fn start_with_wake(
+        master: fs::File,
+        shared: Arc<Mutex<Shared>>,
+        writer: Writer,
+        deadline: Deadline,
+        wake: mpsc::Sender<()>,
+    ) -> Self {
+        let (stop_read, stop_write) = std::io::pipe().unwrap();
         let (done, finished) = mpsc::channel();
         let master = OwnedFd::from(master);
         thread::Builder::new()
             .spawn(move || Self::drain(master, stop_read, shared, writer, wake, done, deadline))
             .unwrap();
-        (
-            Self {
-                stop: stop_write,
-                done: finished,
-                deadline,
-            },
-            wakes,
-        )
+        Self {
+            stop: stop_write,
+            done: finished,
+            deadline,
+        }
     }
 
     /// Drains `master` on a thread as in [`Reader::start`], sharing the
@@ -325,7 +340,7 @@ pub(crate) struct Cell {
 impl Cell {
     /// The `vt100` cell as a [`Cell`]: a cell with no content reads as a
     /// blank cell, which is how a terminal shows unwritten cells.
-    fn of(cell: &vt100::Cell) -> Self {
+    pub(crate) fn of(cell: &vt100::Cell) -> Self {
         let contents = cell.contents();
         Self {
             symbol: if contents.is_empty() {
@@ -358,7 +373,7 @@ pub(crate) struct Grid {
 
 impl Grid {
     /// One snapshot of the parser's screen.
-    fn of(parser: &vt100::Parser) -> Self {
+    pub(crate) fn of(parser: &vt100::Parser) -> Self {
         let screen = parser.screen();
         let (_, cols) = screen.size();
         Self {
@@ -551,11 +566,11 @@ pub(crate) fn focus_notice(run: &mut Run, code: &str) {
 pub(crate) struct Shared {
     output: Vec<u8>,
     parser: vt100::Parser,
-    grid: Grid,
+    pub(crate) grid: Grid,
     queries: Vec<u8>,
     graphics: bool,
     /// Whether a synchronized-output block is open: waits snapshot whole frames only.
-    sync_open: bool,
+    pub(crate) sync_open: bool,
     /// The last bytes seen, completing a marker split across two reads.
     sync_tail: Vec<u8>,
     pending_size: Option<(u16, u16)>,
@@ -567,6 +582,10 @@ pub(crate) struct Shared {
     /// the dump holds the output through it, never a snapshot taken
     /// after quit.
     dump_len: Option<usize>,
+    /// The text a retained frame must hold, once armed by [`Shared::retain`].
+    needle: Option<String>,
+    /// The first whole frame, from arming on, whose text holds `needle`.
+    retained: Option<Grid>,
 }
 
 impl Shared {
@@ -591,7 +610,25 @@ impl Shared {
             ended: false,
             snapshot_len: 0,
             dump_len: None,
+            needle: None,
+            retained: None,
         }
+    }
+
+    /// Arms retention: from now on the first whole frame whose text holds
+    /// `needle` is kept, however the reads cut the stream, so a wait that
+    /// looks after a later frame replaced it still sees it. Clears any
+    /// frame retained before. Panics on an empty needle, which every
+    /// frame holds.
+    pub(crate) fn retain(&mut self, needle: &str) {
+        assert!(!needle.is_empty(), "a retained needle must not be empty");
+        self.needle = Some(needle.to_owned());
+        self.retained = None;
+    }
+
+    /// The frame [`Shared::retain`] kept, if one has drawn since arming.
+    pub(crate) fn retained(&self) -> Option<Grid> {
+        self.retained.clone()
     }
 
     /// The chunk's query replies, in stream order. Only the query tail
@@ -613,13 +650,33 @@ impl Shared {
     /// completes, never a snapshot taken after quit. Unset, no file is
     /// written. The write failure is ignored: a bad path surfaces as a
     /// missing dump where the dump is read, never as a look-test failure.
+    ///
+    /// While retention is armed and nothing is retained, the chunk parses
+    /// in slices that each end where a block closes, and the first
+    /// resulting grid whose text holds the needle is kept: a read holding
+    /// several frames, or closing one and opening the next, never hides a
+    /// frame from the retained check.
     pub(crate) fn publish(&mut self, bytes: &[u8]) {
         if let Some((cols, rows)) = self.pending_size.take() {
             self.parser.screen_mut().set_size(rows, cols);
         }
-        self.parser.process(bytes);
+        let closes = self.sync_through(bytes);
+        let mut parsed = 0;
+        if self.retained.is_none()
+            && let Some(needle) = self.needle.clone()
+        {
+            for close in closes {
+                self.parser.process(&bytes[parsed..close]);
+                parsed = close;
+                let grid = Grid::of(&self.parser);
+                if grid.contents.contains(&needle) {
+                    self.retained = Some(grid);
+                    break;
+                }
+            }
+        }
+        self.parser.process(&bytes[parsed..]);
         self.output.extend_from_slice(bytes);
-        self.sync_through(bytes);
         if !self.sync_open {
             self.grid = Grid::of(&self.parser);
             self.snapshot_len = self.output.len();
@@ -634,8 +691,11 @@ impl Shared {
     }
 
     /// Folds `chunk`'s markers into the block state in stream order, then
-    /// keeps the tail for a marker split across two reads.
-    fn sync_through(&mut self, chunk: &[u8]) {
+    /// keeps the tail for a marker split across two reads. Returns the
+    /// offsets in `chunk` just past each end marker it folded; a marker
+    /// split across reads closes at the offset of its last byte.
+    fn sync_through(&mut self, chunk: &[u8]) -> Vec<usize> {
+        let mut closes = Vec::new();
         let mut both = std::mem::take(&mut self.sync_tail);
         let split = both.len();
         both.extend_from_slice(chunk);
@@ -647,11 +707,13 @@ impl Shared {
             } else if both[at..].starts_with(SYNC_END) && at + SYNC_END.len() > split {
                 self.sync_open = false;
                 at += SYNC_END.len();
+                closes.push(at - split);
             } else {
                 at += 1;
             }
         }
         self.sync_tail = both[both.len().saturating_sub(SYNC_KEEP)..].to_vec();
+        closes
     }
 
     /// The grid rebuilt from the output so far: whole frames only.
@@ -765,7 +827,7 @@ pub(crate) fn hover_bytes(point: (u16, u16)) -> Vec<u8> {
 /// left, whose expiry is a `TimedOut` error with nothing further written.
 /// A zero budget still makes one non-blocking write attempt, which
 /// succeeds whenever the pty has room for the click's few bytes.
-fn dispatch(file: &fs::File, bytes: &[u8], deadline: Deadline) -> io::Result<()> {
+pub(crate) fn dispatch(file: &fs::File, bytes: &[u8], deadline: Deadline) -> io::Result<()> {
     use std::os::fd::AsFd as _;
     let fd = file.as_fd();
     let saved = fcntl_getfl(fd).map_err(io::Error::from)?;
@@ -840,8 +902,8 @@ const PENDING_KEEP: usize = 64;
 
 /// Synchronized output's markers (DEC mode 2026): the terminal brackets
 /// every frame in them (`docs/tui.md`, "Performance").
-const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
-const SYNC_END: &[u8] = b"\x1b[?2026l";
+pub(crate) const SYNC_BEGIN: &[u8] = b"\x1b[?2026h";
+pub(crate) const SYNC_END: &[u8] = b"\x1b[?2026l";
 /// The sync tail's kept bytes: one fewer than the markers' length, so a
 /// marker split across two reads completes.
 const SYNC_KEEP: usize = 7;
@@ -897,18 +959,18 @@ pub(crate) struct Run {
     watchdog: Option<Watchdog>,
     /// The sessions watchdog and the workspace path it matches.
     sessions: Option<(Watchdog, String)>,
-    shared: Arc<Mutex<Shared>>,
+    pub(crate) shared: Arc<Mutex<Shared>>,
     writer: Writer,
-    reader: Option<Reader>,
+    pub(crate) reader: Option<Reader>,
     /// One wake per chunk appended.
-    wakes: mpsc::Receiver<()>,
+    pub(crate) wakes: mpsc::Receiver<()>,
     cols: u16,
     rows: u16,
     deadline: Deadline,
     /// Workers `write_registered` timed out on: a leaf lock, taken only
     /// to push or drain, never while holding `Shared` or `Writer` and
     /// never across a receive or a join.
-    pending_writes: Mutex<Vec<PendingWrite>>,
+    pub(crate) pending_writes: Mutex<Vec<PendingWrite>>,
 }
 
 /// What a run drained: the child's exit and every byte read from the
@@ -1585,7 +1647,7 @@ impl Run {
 /// itself is injected, so the constant-check test pins the budget
 /// without a process wait.
 #[track_caller]
-fn wait_for_workspace_holders(
+pub(crate) fn wait_for_workspace_holders(
     workspace: &str,
     deadline: Deadline,
     wait: impl FnOnce(&str, Deadline) -> io::Result<()>,
@@ -1796,913 +1858,4 @@ pub(crate) fn sgr_params(bytes: &[u8]) -> Vec<Vec<u16>> {
         }
     }
     lists
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-
-    /// `wait_screen` panics with the grid its last check saw, never a
-    /// fresh read, and names how much of the deadline remained when the
-    /// wait began. The marker reaches the run's own terminal but its grid
-    /// stays stale behind a synchronized-output block, so the checked
-    /// grid holds no marker while the output does; the predicate then
-    /// publishes the held bytes to the grid synchronously after its check,
-    /// with no wake, so the timeout panic must show the checked grid while
-    /// a fresh read sees the marker. Replacing `grid.contents` with
-    /// `self.screen().contents` in the panic makes the shown grid contain
-    /// the marker and fails the equality below. The test uses no sleep
-    /// (`docs/testing.md`, "Waits and timeouts").
-    #[test]
-    fn wait_screen_panics_with_the_checked_grid_and_names_the_deadline_left() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let mut terminal_side = terminal.terminal;
-        let mut run = Run::attach(main, 80, 24, deadline);
-        // The marker goes through the run's own terminal: the reader
-        // publishes it to the output but holds the grid behind the sync
-        // block, so the grid stays stale while the output advances.
-        let from = run.output().len();
-        terminal_side.write_all(SYNC_BEGIN).unwrap();
-        terminal_side.write_all(b"marker").unwrap();
-        run.wait_bytes(from, b"marker", "the fed marker");
-        assert!(
-            !run.screen().contents.contains("marker"),
-            "the grid stays stale behind the sync block"
-        );
-        // Stop and join the reader before draining wakes: the publish
-        // releases the shared lock before its wake is sent, so a
-        // nonblocking drain can run before the wake lands and the expired
-        // wait below would consume it and check twice (`docs/testing.md`,
-        // "Races are forced, not waited for"). After the join no more
-        // wakes arrive, so the drain leaves none pending and the wait
-        // times out on its first receive.
-        let reader = run.reader.take().expect("the run has a reader");
-        assert!(reader.stop(), "expected the reader to stop");
-        while run.wakes.try_recv().is_ok() {}
-        // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "no code under test waits on the clock (ruling 6179406086)"
-        )]
-        clock.advance(fakes::deadline::WAITS);
-        assert!(
-            deadline.left().is_zero(),
-            "the wait starts with no time left"
-        );
-        let before = run.screen().contents.clone();
-        assert!(
-            !before.contains("marker"),
-            "the checked grid holds no marker"
-        );
-        let shared = std::sync::Arc::clone(&run.shared);
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run.wait_screen("the never-arriving needle", |grid| {
-                assert!(
-                    !grid.contents.contains("marker"),
-                    "the checked grid is still stale"
-                );
-                // Publish the held marker to the grid after the check,
-                // synchronously and with no wake: the panic below must
-                // still show the checked grid.
-                {
-                    let mut guard = shared.lock().unwrap();
-                    guard.sync_open = false;
-                    guard.publish(b"");
-                    assert!(
-                        guard.grid.contents.contains("marker"),
-                        "the fresh grid sees the marker after the check"
-                    );
-                }
-                grid.contents.contains("needle-never-arrives")
-            })
-        }));
-        let message = result
-            .unwrap_err()
-            .downcast_ref::<String>()
-            .cloned()
-            .unwrap_or_default();
-        let shown = message.split("screen:\n").nth(1).unwrap_or("");
-        assert_eq!(
-            shown, before,
-            "the panic shows the checked grid: {message:?}"
-        );
-        assert!(
-            !shown.contains("marker"),
-            "the held output stays out of the panic: {message:?}"
-        );
-        assert!(
-            message.contains("left when the wait began"),
-            "the panic names the remaining deadline: {message:?}"
-        );
-        assert!(
-            message.contains("the never-arriving needle"),
-            "the panic names the wait: {message:?}"
-        );
-        let fresh = run.screen().contents.clone();
-        assert!(
-            fresh.contains("marker"),
-            "a fresh read after the check sees the marker"
-        );
-    }
-
-    /// A led wait puts the caller's lead first and leaves the wait's name,
-    /// the remaining deadline and the screen dump after it; the same wait
-    /// with no lead still opens with the wait's own text. Both waits
-    /// start on a fake clock advanced past the bound, so they expire at
-    /// once (`docs/testing.md`, "Waits and timeouts").
-    #[test]
-    fn wait_screen_leading_puts_the_lead_before_the_wait_and_the_screen() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let mut run = Run::attach(main, 80, 24, deadline);
-        // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "no code under test waits on the clock (ruling 6179406086)"
-        )]
-        clock.advance(fakes::deadline::WAITS);
-        let panic_text = |result: std::thread::Result<Grid>| {
-            result
-                .unwrap_err()
-                .downcast_ref::<String>()
-                .cloned()
-                .unwrap_or_default()
-        };
-        let led = panic_text(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || run.wait_screen_leading("the needle", |_| false, || "the lead; ".to_owned()),
-        )));
-        assert!(
-            led.starts_with("the lead; waited until the deadline for the needle (deadline had "),
-            "the lead comes first: {led:?}"
-        );
-        assert!(
-            led.contains("left when the wait began); screen:\n"),
-            "the deadline and the screen dump follow: {led:?}"
-        );
-        let plain = panic_text(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-            || run.wait_screen("the needle", |_| false),
-        )));
-        assert!(
-            plain.starts_with("waited until the deadline for the needle (deadline had "),
-            "a wait with no lead opens with its own text: {plain:?}"
-        );
-    }
-
-    /// `shows_row` matches a whole trimmed row only: padding around the
-    /// reply text still matches, while a row with any additional text,
-    /// such as the working status line, does not. A substring check
-    /// would match the bare stem and the status line alike, so each
-    /// negative case below fails it.
-    #[test]
-    fn shows_row_matches_a_whole_trimmed_row_only() {
-        use super::super::journey::shows_row;
-        let mut parser = vt100::Parser::new(24, 80, 0);
-        parser.process("   Working   \r\nWorking 3s · Esc to interrupt\r\n".as_bytes());
-        let grid = Grid::of(&parser);
-        assert!(shows_row(&grid, "Working"), "the padded reply row matches");
-        assert!(
-            !shows_row(&grid, "Work"),
-            "a stem of the reply row does not match"
-        );
-        assert!(
-            !shows_row(&grid, "Working!"),
-            "a longer stem of the reply row does not match"
-        );
-        assert!(
-            !shows_row(&grid, "Working 3s"),
-            "a stem of the status line does not match"
-        );
-        let mut bare = vt100::Parser::new(24, 80, 0);
-        bare.process("Working 3s · Esc to interrupt\r\n".as_bytes());
-        let bare = Grid::of(&bare);
-        assert!(
-            !shows_row(&bare, "Working"),
-            "the working status line alone does not satisfy the reply wait"
-        );
-        assert!(!shows_row(&grid, "idle"), "absent text does not match");
-    }
-
-    /// The workspace-holder cleanup wait draws on the cleanup phase,
-    /// not the journey's spent success-path budget: a fake clock
-    /// advanced past WAITS leaves the shared wait with nothing, while
-    /// the cleanup phase still holds CLEANUP minus WAITS. The extracted
-    /// wait forwards the cleanup-phase deadline it is given. A constant
-    /// check only: no pty run, no real-clock hold, no process wait, so
-    /// this test compiles into every main test binary that includes
-    /// this support module.
-    #[test]
-    fn workspace_cleanup_wait_uses_the_cleanup_phase() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        // No code under test waits on the clock here; the clock only ages the Deadline (ruling 6179406086).
-        #[allow(
-            clippy::disallowed_methods,
-            reason = "no code under test waits on the clock (ruling 6179406086)"
-        )]
-        clock.advance(fakes::deadline::WAITS);
-        assert!(deadline.left().is_zero(), "the shared wait budget is spent");
-        let cleanup = deadline.cleanup_phase();
-        assert_eq!(
-            cleanup.left(),
-            fakes::deadline::CLEANUP.saturating_sub(fakes::deadline::WAITS),
-            "the cleanup wait keeps its own budget after WAITS is spent"
-        );
-        wait_for_workspace_holders("fiber-cleanup-absent", cleanup, |_, received| {
-            assert_eq!(
-                received.left(),
-                fakes::deadline::CLEANUP.saturating_sub(fakes::deadline::WAITS),
-                "the wait receives the full cleanup budget"
-            );
-            Ok(())
-        });
-    }
-
-    use contract::clock::Clock as _;
-
-    /// The terminal side reading without blocking: raw mode with no
-    /// minimum and no timeout, so a read returns the bytes already in the
-    /// pty buffer at once.
-    fn make_raw(terminal: &fs::File) {
-        let mut attrs = rustix::termios::tcgetattr(terminal).unwrap();
-        attrs.make_raw();
-        attrs.special_codes[rustix::termios::SpecialCodeIndex::VMIN] = 0;
-        attrs.special_codes[rustix::termios::SpecialCodeIndex::VTIME] = 0;
-        rustix::termios::tcsetattr(terminal, rustix::termios::OptionalActions::Now, &attrs)
-            .unwrap();
-    }
-
-    /// Every byte waiting on the terminal side: the click reports the
-    /// helper wrote, already in the pty buffer.
-    fn drain_terminal(mut terminal: &fs::File) -> Vec<u8> {
-        use std::io::Read as _;
-        let mut bytes = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            match terminal.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => bytes.extend_from_slice(&chunk[..n]),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => break,
-                Err(error) => panic!("reading the terminal side: {error}"),
-            }
-        }
-        bytes
-    }
-
-    /// A full frame holding `text` at each 0-based row in `rows`: a clear
-    /// followed by each row's positioned write.
-    fn draw(rows: &[(u16, &str)]) -> Vec<u8> {
-        let mut bytes = b"\x1b[H\x1b[J".to_vec();
-        for (y, text) in rows {
-            bytes.extend_from_slice(format!("\x1b[{};1H{text}", y + 1).as_bytes());
-        }
-        bytes
-    }
-
-    /// A caught helper outcome as the channel carries it: `Ok` when the
-    /// helper dispatched, the panic message when it did not.
-    fn panic_text(outcome: std::thread::Result<()>) -> Result<(), String> {
-        match outcome {
-            Ok(()) => Ok(()),
-            Err(payload) => Err(payload
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| {
-                    payload
-                        .downcast_ref::<&str>()
-                        .map(|held| (*held).to_owned())
-                })
-                .unwrap_or_else(|| "a non-string panic".to_owned())),
-        }
-    }
-
-    /// Parks the calling thread on the fake clock at the helper's own
-    /// bound instant, then blocks on the test's release: the helper
-    /// waiting on its clock past its own check, not a parked caller
-    /// alone. The test advances by `advance_when_parked` naming the
-    /// reported thread and instant, then releases the hook.
-    fn park_at(
-        clock: &fakes::clock::FakeClock,
-        wait_left: Duration,
-        report: &mpsc::Sender<(thread::ThreadId, std::time::Instant)>,
-        release: &mpsc::Receiver<()>,
-    ) {
-        let expected = clock
-            .now()
-            .checked_add(wait_left)
-            .expect("the park instant");
-        clock.wait_until(Some(expected), &mut |_| {
-            report
-                .send((thread::current().id(), expected))
-                .unwrap_or(());
-            Deadline::after(fakes::deadline::WAIT)
-                .recv(release)
-                .expect("the test releases the parked hook");
-        });
-    }
-
-    /// The acceptance proof: coordinates found in frame A are stale once a
-    /// row is inserted above the target, so the old pattern clicks the
-    /// wrong row while the helper re-finds and clicks the right one. A
-    /// `same_frame` that always compares true sends the stale row; one
-    /// that always compares false never dispatches and fails with the
-    /// helper's named deadline panic.
-    #[test]
-    fn a_click_found_before_a_row_is_inserted_lands_on_the_target_row() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let thread_clock = (*clock).clone();
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let terminal_side = terminal.terminal;
-        make_raw(&terminal_side);
-        let mut run = Run::attach(main, 80, 24, deadline);
-        let frame_a = draw(&[(3, "decoy"), (4, "target")]);
-        let frame_b = draw(&[(4, "decoy"), (5, "target")]);
-        run.shared.lock().unwrap().publish(&frame_a);
-        let stale = run
-            .screen()
-            .text_at("target")
-            .expect("frame A holds the target");
-        assert_eq!(stale, (0, 4), "the control finds the target in frame A");
-        run.shared.lock().unwrap().publish(&frame_b);
-        assert!(
-            run.screen().rows[4].contains("decoy"),
-            "frame B inserted a row above the target"
-        );
-        let target = run
-            .screen()
-            .text_at("target")
-            .expect("frame B holds the target");
-        assert_ne!(
-            click_bytes(stale),
-            click_bytes(target),
-            "the stale coordinates would click the wrong row"
-        );
-        run.shared.lock().unwrap().publish(&frame_a);
-        assert_eq!(
-            run.screen().text_at("target"),
-            Some((0, 4)),
-            "the reset redraws frame A"
-        );
-        let (outcome_tx, outcome_rx) = mpsc::channel();
-        let (report_tx, report_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let finds = Arc::new(Mutex::new(0usize));
-        let founds = Arc::new(Mutex::new(0usize));
-        let shared = Arc::clone(&run.shared);
-        let thread_finds = Arc::clone(&finds);
-        let thread_founds = Arc::clone(&founds);
-        let terminal_read = terminal_side.try_clone().unwrap();
-        thread::Builder::new()
-            .spawn(move || {
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run.mouse_where_paused(
-                        "the target row",
-                        |grid| {
-                            *thread_finds.lock().unwrap() += 1;
-                            grid.text_at("target")
-                        },
-                        click_bytes,
-                        |pause| match pause {
-                            Pause::Found { wait_left } => {
-                                let mut found = thread_founds.lock().unwrap();
-                                *found += 1;
-                                match *found {
-                                    1 => shared.lock().unwrap().publish(&frame_b),
-                                    2 => park_at(&thread_clock, wait_left, &report_tx, &release_rx),
-                                    n => panic!("unexpected Found #{n}: one retry only"),
-                                }
-                            }
-                            Pause::Waiting { .. } | Pause::Dispatched { .. } => {}
-                        },
-                    );
-                }));
-                // Read while the run is alive: dropping it closes the
-                // master, and a slave read past that fails.
-                let clicked = drain_terminal(&terminal_read);
-                outcome_tx
-                    .send((panic_text(outcome), clicked))
-                    .unwrap_or(());
-            })
-            .unwrap();
-        // A helper that returns without parking never reports: skip the
-        // advance and the release, and let the asserts below tell the
-        // stale click from the fresh one.
-        let (outcome, clicked) = match deadline.recv(&report_rx) {
-            Ok((thread, expected)) => {
-                clock.advance_when_parked(
-                    Some(expected),
-                    Some(thread),
-                    fakes::deadline::WAIT,
-                    &deadline,
-                );
-                let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
-                release_tx.send(()).unwrap_or(());
-                done.recv(&outcome_rx).expect("the helper thread's result")
-            }
-            Err(_) => {
-                let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
-                done.recv(&outcome_rx).expect("the helper thread's result")
-            }
-        };
-        outcome.expect("the helper dispatches at the fresh row");
-        assert_eq!(
-            clicked,
-            click_bytes(target),
-            "the helper clicks the target's row in frame B"
-        );
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(
-            *finds.lock().unwrap(),
-            2,
-            "the changed attempt and the settled retry each find"
-        );
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(
-            *founds.lock().unwrap(),
-            2,
-            "the changed attempt and the settled retry each pause"
-        );
-    }
-
-    /// A style-only change between the find and the click is a change: the
-    /// same text with a different background re-finds once. A frame
-    /// comparison over row text only never retries here. An always-retry
-    /// mutant reaches the third pause and fails with its message, since
-    /// the clock never moves and the wait never expires.
-    #[test]
-    fn a_style_only_change_between_find_and_click_is_a_change() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let terminal_side = terminal.terminal;
-        make_raw(&terminal_side);
-        let mut run = Run::attach(main, 80, 24, deadline);
-        run.shared.lock().unwrap().publish(&draw(&[(4, "target")]));
-        let shared = Arc::clone(&run.shared);
-        let mut finds = 0usize;
-        let mut founds = 0usize;
-        let mut dispatched = 0usize;
-        run.mouse_where_paused(
-            "the styled target",
-            |grid| {
-                finds += 1;
-                grid.text_at("target")
-            },
-            click_bytes,
-            |pause| match pause {
-                Pause::Found { .. } => {
-                    founds += 1;
-                    match founds {
-                        1 => shared
-                            .lock()
-                            .unwrap()
-                            .publish(b"\x1b[5;1H\x1b[44mtarget\x1b[m"),
-                        2 => {}
-                        n => panic!("unexpected Found #{n}: only one retry"),
-                    }
-                }
-                Pause::Dispatched { .. } => dispatched += 1,
-                Pause::Waiting { .. } => {
-                    panic!("the styled target waits for nothing");
-                }
-            },
-        );
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(finds, 2, "the changed attempt and the retry each find");
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(founds, 2, "the changed attempt and the retry each pause");
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(dispatched, 1, "the retry dispatches once");
-        assert_eq!(
-            drain_terminal(&terminal_side),
-            click_bytes((0, 4)),
-            "the retry clicks the found cell"
-        );
-    }
-
-    /// An unchanged frame clicks once without a retry: one find, one
-    /// pause, one dispatch. An always-retry mutant reaches the second
-    /// pause and fails with its message, since the clock never moves and
-    /// the wait never expires.
-    #[test]
-    fn an_unchanged_frame_clicks_once_without_a_retry() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let terminal_side = terminal.terminal;
-        make_raw(&terminal_side);
-        let mut run = Run::attach(main, 80, 24, deadline);
-        run.shared.lock().unwrap().publish(&draw(&[(4, "target")]));
-        let mut finds = 0usize;
-        let mut founds = 0usize;
-        let mut dispatched = 0usize;
-        run.mouse_where_paused(
-            "the settled target",
-            |grid| {
-                finds += 1;
-                grid.text_at("target")
-            },
-            click_bytes,
-            |pause| match pause {
-                Pause::Found { .. } => {
-                    founds += 1;
-                    if founds > 1 {
-                        panic!("unexpected second Found: unchanged frame must click once");
-                    }
-                }
-                Pause::Dispatched { .. } => dispatched += 1,
-                Pause::Waiting { .. } => {
-                    panic!("the settled target waits for nothing");
-                }
-            },
-        );
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(finds, 1, "the settled frame finds once");
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(founds, 1, "the settled frame pauses once");
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(dispatched, 1, "the settled frame dispatches once");
-        assert_eq!(
-            drain_terminal(&terminal_side),
-            click_bytes((0, 4)),
-            "the click lands on the found cell"
-        );
-    }
-
-    /// An absent target panics naming the wait and the last grid: the hook
-    /// parks the helper thread at its own bound instant, the test spends
-    /// the wait through the parked advance, and the helper's receive is
-    /// handed zero. The text finder returns the first row-major match at
-    /// terminal-cell columns, skipping a wide character's continuation
-    /// cell and keeping a combining mark in its base cell.
-    #[test]
-    fn an_absent_target_panics_naming_the_wait_and_the_last_grid() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let thread_clock = (*clock).clone();
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let terminal_side = terminal.terminal;
-        make_raw(&terminal_side);
-        let mut run = Run::attach(main, 80, 24, deadline);
-        run.shared
-            .lock()
-            .unwrap()
-            .publish(&draw(&[(2, "something else")]));
-        let (outcome_tx, outcome_rx) = mpsc::channel();
-        let (report_tx, report_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        thread::Builder::new()
-            .spawn(move || {
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run.mouse_where_paused(
-                        "the missing target",
-                        |_| None::<(u16, u16)>,
-                        click_bytes,
-                        |pause| match pause {
-                            Pause::Waiting { wait_left } => {
-                                park_at(&thread_clock, wait_left, &report_tx, &release_rx);
-                            }
-                            Pause::Found { .. } | Pause::Dispatched { .. } => {
-                                panic!("the absent target is never found");
-                            }
-                        },
-                    );
-                }));
-                outcome_tx.send(panic_text(outcome)).unwrap_or(());
-            })
-            .unwrap();
-        let (thread, expected) = deadline
-            .recv(&report_rx)
-            .expect("the helper thread reports its check");
-        clock.advance_when_parked(
-            Some(expected),
-            Some(thread),
-            fakes::deadline::WAIT,
-            &deadline,
-        );
-        let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
-        release_tx.send(()).unwrap_or(());
-        let message = done
-            .recv(&outcome_rx)
-            .expect("the helper thread's result")
-            .expect_err("the absent target panics");
-        assert!(
-            message.starts_with("waited until the deadline for the missing target"),
-            "the panic names the wait: {message:?}"
-        );
-        assert!(
-            message.contains("something else"),
-            "the panic shows the last grid: {message:?}"
-        );
-        let probe_terminal = open(80, 24);
-        let probe_main = fs::File::from(probe_terminal.main);
-        let probe = Run::attach(probe_main, 80, 24, deadline);
-        probe.shared.lock().unwrap().publish(&draw(&[
-            (0, "target here"),
-            (1, "target there"),
-            (2, "界 target"),
-            (3, "é target"),
-        ]));
-        let grid = probe.screen();
-        assert_eq!(
-            grid.text_at("target"),
-            Some((0, 0)),
-            "the finder returns the first row-major match"
-        );
-        assert_eq!(
-            grid.text_at("there"),
-            Some((7, 1)),
-            "the finder searches every row"
-        );
-        assert_eq!(
-            grid.text_at("here"),
-            Some((7, 0)),
-            "the match offset maps back to a column"
-        );
-        let wide = draw(&[(0, "界 target")]);
-        probe.shared.lock().unwrap().publish(&wide);
-        assert_eq!(
-            probe.screen().text_at("target"),
-            Some((3, 0)),
-            "a wide character's continuation cell holds no column"
-        );
-        let combining = draw(&[(0, "é target")]);
-        probe.shared.lock().unwrap().publish(&combining);
-        assert_eq!(
-            probe.screen().text_at("target"),
-            Some((2, 0)),
-            "a combining mark stays in its base cell"
-        );
-        assert_eq!(probe.screen().text_at("absent"), None, "no match is none");
-    }
-
-    /// The click is written while the frame lock is held: the dispatch
-    /// reports the lock crossed the write. Dropping `Shared` before the
-    /// write reports otherwise. An always-retry mutant reaches the second
-    /// pause and fails with its message, since the clock never moves and
-    /// the wait never expires.
-    #[test]
-    fn the_click_is_written_while_the_frame_lock_is_held() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let terminal_side = terminal.terminal;
-        make_raw(&terminal_side);
-        let mut run = Run::attach(main, 80, 24, deadline);
-        run.shared.lock().unwrap().publish(&draw(&[(4, "target")]));
-        let mut founds = 0usize;
-        let mut held = None;
-        run.mouse_where_paused(
-            "the locked target",
-            |grid| grid.text_at("target"),
-            click_bytes,
-            |pause| match pause {
-                Pause::Found { .. } => {
-                    founds += 1;
-                    if founds > 1 {
-                        panic!("unexpected second Found: single dispatch must not retry");
-                    }
-                }
-                Pause::Dispatched { frame_lock_held } => held = Some(frame_lock_held),
-                Pause::Waiting { .. } => {
-                    panic!("the locked target waits for nothing");
-                }
-            },
-        );
-        assert_eq!(held, Some(true), "the frame lock crosses the write");
-        assert_eq!(
-            drain_terminal(&terminal_side),
-            click_bytes((0, 4)),
-            "the click lands on the found cell"
-        );
-    }
-
-    /// A panicking encoder leaves both locks usable: the encode runs with
-    /// no lock held, so its panic poisons neither mutex and writes
-    /// nothing. Encoding under `Shared` poisons it on this path. Any
-    /// mutant that retries instead of propagating the panic reaches the
-    /// second pause and fails with its message, since the clock never
-    /// moves and the wait never expires.
-    #[test]
-    fn a_panicking_encoder_leaves_both_locks_usable() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let terminal_side = terminal.terminal;
-        make_raw(&terminal_side);
-        let mut run = Run::attach(main, 80, 24, deadline);
-        run.shared.lock().unwrap().publish(&draw(&[(4, "target")]));
-        let mut founds = 0usize;
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run.mouse_where_paused(
-                "the encoding target",
-                |grid| grid.text_at("target"),
-                |_| panic!("encoder"),
-                |pause| match pause {
-                    Pause::Found { .. } => {
-                        founds += 1;
-                        if founds > 1 {
-                            panic!("unexpected second Found: encoder must panic first");
-                        }
-                    }
-                    Pause::Waiting { .. } | Pause::Dispatched { .. } => {
-                        panic!("the encoder panics before any wait or dispatch");
-                    }
-                },
-            );
-        }));
-        let message = panic_text(outcome).expect_err("the encoder panics");
-        assert!(
-            message.contains("encoder"),
-            "the encoder panic propagates: {message:?}"
-        );
-        assert!(run.shared.lock().is_ok(), "the frame lock stays usable");
-        assert!(run.writer().lock().is_ok(), "the writer lock stays usable");
-        assert!(
-            drain_terminal(&terminal_side).is_empty(),
-            "a panicking encode writes nothing"
-        );
-    }
-
-    /// A held writer sends nothing even after it is released: the dispatch
-    /// takes `Writer` only by `try_lock` under `Shared`, so a held writer
-    /// panics having written nothing, and registers no worker. A dispatch
-    /// handing its bytes to a worker would register it instead: the thread
-    /// receives each registered send through the named `ack` deadline and
-    /// joins, and any byte on the wire fails the empty read. Deleting the
-    /// `try_lock` error arm's panic returns normally and fails the held
-    /// message assert.
-    #[test]
-    fn a_held_writer_sends_nothing_even_after_it_is_released() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let thread_clock = (*clock).clone();
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let terminal_side = terminal.terminal;
-        make_raw(&terminal_side);
-        let terminal_read = terminal_side.try_clone().unwrap();
-        let mut run = Run::attach(main, 80, 24, deadline);
-        let frame_a = draw(&[(4, "target")]);
-        let frame_b = draw(&[(5, "target")]);
-        run.shared.lock().unwrap().publish(&frame_a);
-        let (outcome_tx, outcome_rx) = mpsc::channel();
-        let (report_tx, report_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let helper = thread::Builder::new()
-            .spawn(move || {
-                let writer = run.writer();
-                let held = writer.lock().unwrap();
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run.mouse_where_paused(
-                        "the held target",
-                        |grid| grid.text_at("target"),
-                        click_bytes,
-                        |pause| match pause {
-                            Pause::Found { wait_left } => {
-                                park_at(&thread_clock, wait_left, &report_tx, &release_rx);
-                            }
-                            Pause::Waiting { .. } | Pause::Dispatched { .. } => {
-                                panic!("the held writer neither waits nor dispatches");
-                            }
-                        },
-                    );
-                }));
-                drop(held);
-                run.shared.lock().unwrap().publish(&frame_b);
-                let ack = deadline.start_wait();
-                let taken = std::mem::take(&mut *run.pending_writes.lock().unwrap());
-                let registered = taken.len();
-                for (handle, finished) in taken {
-                    ack.recv(&finished)
-                        .expect("waited until the deadline for the registered worker's write")
-                        .expect("the registered worker's write succeeds");
-                    handle.join().expect("the registered worker joins");
-                }
-                let read = drain_terminal(&terminal_read);
-                outcome_tx
-                    .send((run, panic_text(outcome), registered, read))
-                    .unwrap_or(());
-            })
-            .unwrap();
-        let (thread, expected) = deadline
-            .recv(&report_rx)
-            .expect("the helper thread reports its check");
-        clock.advance_when_parked(
-            Some(expected),
-            Some(thread),
-            fakes::deadline::WAIT,
-            &deadline,
-        );
-        let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
-        release_tx.send(()).unwrap_or(());
-        let (run, outcome, registered, read) =
-            done.recv(&outcome_rx).expect("the helper thread's result");
-        helper.join().expect("the helper thread joins");
-        assert!(read.is_empty(), "a held writer sends nothing");
-        assert_eq!(registered, 0, "the helper starts no worker");
-        let message = outcome.expect_err("the held writer panics");
-        assert!(
-            message.contains("terminal writer is held"),
-            "the panic names the held writer: {message:?}"
-        );
-        assert!(run.shared.lock().is_ok(), "the frame lock stays usable");
-        assert!(run.writer().lock().is_ok(), "the writer lock stays usable");
-    }
-
-    /// An open synchronized frame waits for its close, then re-finds: the
-    /// first find sees frame A while newer output sits behind the open
-    /// block, so the helper waits for the close and dispatches at the
-    /// target's row in frame B. A dispatch comparing the grid without
-    /// waiting for the close clicks the decoy's row in B.
-    #[test]
-    fn an_open_synchronized_frame_waits_for_its_close_then_refinds() {
-        let clock = Box::leak(Box::new(fakes::clock::FakeClock::new()));
-        let deadline = Deadline::on(&**clock);
-        let terminal = open(80, 24);
-        let main = fs::File::from(terminal.main);
-        let terminal_side = terminal.terminal;
-        make_raw(&terminal_side);
-        let mut terminal_writer = terminal_side.try_clone().unwrap();
-        let done = Deadline::after(Duration::from_secs(80)); // ruling: #3979
-        let mut run = Run::attach(main, 80, 24, deadline);
-        let frame_a = draw(&[(3, "decoy"), (4, "target")]);
-        let frame_b = draw(&[(4, "decoy"), (5, "target")]);
-        run.shared.lock().unwrap().publish(&frame_a);
-        let (outcome_tx, outcome_rx) = mpsc::channel();
-        let finds = Arc::new(Mutex::new(0usize));
-        let founds = Arc::new(Mutex::new(0usize));
-        let shared = Arc::clone(&run.shared);
-        let thread_finds = Arc::clone(&finds);
-        let thread_founds = Arc::clone(&founds);
-        let terminal_read = terminal_side.try_clone().unwrap();
-        thread::Builder::new()
-            .spawn(move || {
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run.mouse_where_paused(
-                        "the synced target",
-                        |grid| {
-                            *thread_finds.lock().unwrap() += 1;
-                            grid.text_at("target")
-                        },
-                        click_bytes,
-                        |pause| match pause {
-                            Pause::Found { .. } => {
-                                let mut found = thread_founds.lock().unwrap();
-                                *found += 1;
-                                if *found == 1 {
-                                    let mut redraw = SYNC_BEGIN.to_vec();
-                                    redraw.extend_from_slice(&frame_b);
-                                    shared.lock().unwrap().publish(&redraw);
-                                }
-                            }
-                            Pause::Waiting { .. } => {
-                                use std::io::Write as _;
-                                terminal_writer.write_all(SYNC_END).unwrap();
-                            }
-                            Pause::Dispatched { .. } => {}
-                        },
-                    );
-                }));
-                // Read while the run is alive: dropping it closes the
-                // master, and a slave read past that fails.
-                let clicked = drain_terminal(&terminal_read);
-                outcome_tx
-                    .send((panic_text(outcome), clicked))
-                    .unwrap_or(());
-            })
-            .unwrap();
-        let (outcome, clicked) = done.recv(&outcome_rx).expect("the helper thread's result");
-        outcome.expect("the helper dispatches after the close");
-        assert_eq!(
-            clicked,
-            click_bytes((0, 5)),
-            "the helper clicks the target's row in frame B"
-        );
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(
-            *finds.lock().unwrap(),
-            2,
-            "the open-block attempt and the fresh attempt each find"
-        );
-        // docs/testing/screens.md, "Screens": the re-find runs under the call's one wait.
-        assert_eq!(
-            *founds.lock().unwrap(),
-            2,
-            "the open-block attempt and the fresh attempt each pause"
-        );
-    }
 }

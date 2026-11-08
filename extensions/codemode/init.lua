@@ -16,7 +16,9 @@
 fiber.tool("codemode", {
   description = "Runs a Lua script. The script calls session tools through host.tool(name, args); "
     .. "each call returns its outcome table: status, content, artifact, and reason or error when the call "
-    .. "did not complete. Printing an outcome prints its text content. Example:\n"
+    .. "did not complete. Printing an outcome prints its text content. "
+    .. "A JSON null decodes to the null value: compare with json.decode('null') for equality, "
+    .. "since indexing null raises an error. Example:\n"
     .. "local o = host.tool(\"read\", { path = \"x\" })\n"
     .. "print(o)\n"
     .. "print(o.content[1].text)",
@@ -37,10 +39,14 @@ fiber.tool("codemode", {
     -- argument, separated by tabs, with a newline per call; a chunk return
     -- value is ignored and appended nowhere.
     local printed = {}
+    -- Invalid UTF-8 never reaches the outer result: the result's
+    -- conversion rejects it and fails the run, so `capture` replaces
+    -- each invalid sequence with one U+FFFD through `host.utf8_lossy`.
+    local lossy = host.utf8_lossy
     local function capture(...)
       local parts = {}
       for i = 1, select("#", ...) do
-        parts[i] = tostring(select(i, ...))
+        parts[i] = lossy(tostring(select(i, ...)))
       end
       printed[#printed + 1] = table.concat(parts, "\t")
     end
@@ -105,6 +111,69 @@ fiber.tool("codemode", {
     end
     env.print = capture
     env.host = script_host
+    -- The script's own `utf8`: a copy of the shared table, so adding
+    -- `sub` leaks into no other extension's `_G`. `sub` mirrors
+    -- `string.sub` on characters, never splitting a multibyte sequence;
+    -- invalid input raises instead of slicing garbage.
+    local script_utf8 = {}
+    for name, value in pairs(utf8) do
+      script_utf8[name] = value
+    end
+    script_utf8.sub = function(s, i, j)
+      if type(s) ~= "string" then
+        error("bad argument #1 to 'sub' (string expected, got " .. type(s) .. ")", 2)
+      end
+      if utf8.len(s) == nil then
+        error("bad argument #1 to 'sub' (invalid UTF-8)", 2)
+      end
+      local function checkint(v, n)
+        if type(v) ~= "number" then
+          error("bad argument #" .. n .. " to 'sub' (number expected, got " .. type(v) .. ")", 2)
+        end
+        local k = math.tointeger(v)
+        if k == nil then
+          error("bad argument #" .. n .. " to 'sub' (number has no integer representation)", 2)
+        end
+        return k
+      end
+      if i == nil then
+        i = 1
+      else
+        i = checkint(i, 2)
+      end
+      if j == nil then
+        j = -1
+      else
+        j = checkint(j, 3)
+      end
+      -- The `string.sub` corrections, on characters: negatives count
+      -- back from the end, out-of-range ends clamp, an empty range is "".
+      local total = utf8.len(s)
+      if i < 0 then
+        i = total + i + 1
+      end
+      if j < 0 then
+        j = total + j + 1
+      end
+      if i < 1 then
+        i = 1
+      end
+      if j > total then
+        j = total
+      end
+      if i > j then
+        return ""
+      end
+      local first = utf8.offset(s, i)
+      local last
+      if j == total then
+        last = #s
+      else
+        last = utf8.offset(s, j + 1) - 1
+      end
+      return s:sub(first, last)
+    end
+    env.utf8 = script_utf8
     env._G = env
     env.load = function(source, chunkname, mode, chunk_env)
       return load(source, chunkname, mode, chunk_env or env)

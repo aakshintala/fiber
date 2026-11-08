@@ -31,6 +31,7 @@ pub use context::{
     SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded, group_notices,
     grouped_lead,
 };
+pub use delegate_finished::FINAL_MESSAGE;
 pub use host::{
     CallResult, CommandAccepted, CommandInfo, CommandRejected, CommandResult, CredentialLabels,
     DelegateFinished, DelegateStarted, ExtensionExec, ExtensionLog, ExtensionMessage,

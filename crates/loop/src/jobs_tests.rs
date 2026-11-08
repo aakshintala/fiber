@@ -145,6 +145,7 @@ fn delegate_finished(id: &str, text: String) -> DelegateFinished {
         job_id: JobId(id.into()),
         text,
         artifact: None,
+        artifact_absolute: None,
         questions: None,
         usage: Usage {
             tokens: Tokens {
@@ -1170,10 +1171,11 @@ fn a_delegate_notice_writes_its_finish_before_its_end() {
 }
 
 #[test]
-fn a_20_kib_final_message_is_cut_with_its_full_text_in_an_artifact() {
+fn a_20_kib_final_message_is_cut_with_its_full_text_in_the_final_file() {
     let full = "z".repeat(20 * 1024);
+    let session = delegate_session();
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
-    world.send(delegate_held(DELEGATE, full.clone()));
+    world.send(delegate_held_with_path(session.path(), DELEGATE, &full));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();
     assert_eq!(
@@ -1183,17 +1185,19 @@ fn a_20_kib_final_message_is_cut_with_its_full_text_in_an_artifact() {
     let text = lines[2].payload["text"].as_str().unwrap();
     assert!(text.starts_with(&full[..16 * 1024]));
     assert!(text.contains("[4096 bytes cut."));
-    assert_eq!(
-        lines[2].payload["artifact"],
-        format!("artifacts/{DELEGATE}.txt")
-    );
-    let kept =
-        std::fs::read_to_string(world.dir.join(format!("artifacts/{DELEGATE}.txt"))).unwrap();
+    assert!(text.contains(&final_file(session.path()).display().to_string()));
+    assert_names_final(&lines[2].payload, session.path());
+    let kept = std::fs::read_to_string(final_file(session.path())).unwrap();
     assert_eq!(kept, full);
     // The model reads the logged, already-bounded line, framed by the
-    // delegate-finished section.
+    // delegate-finished section, then the file's path.
     let seen = users(&world.requests()[0]);
-    assert_eq!(seen[seen.len() - 2], delegate_rendered(DELEGATE, text));
+    let wake = format!(
+        "{}\nFull final message: {}",
+        delegate_rendered(DELEGATE, text),
+        final_file(session.path()).display()
+    );
+    assert_eq!(seen[seen.len() - 2], wake);
 }
 
 #[test]
@@ -5473,38 +5477,40 @@ fn an_already_cut_batch_returned_as_is_is_kept() {
 }
 
 #[test]
-fn an_expanded_delegate_text_is_cut_with_its_full_text_in_an_artifact() {
+fn an_expanded_delegate_text_is_cut_with_its_full_text_in_the_final_file() {
     let full = "z".repeat(20 * 1024);
+    let session = delegate_session();
     let hooks = Arc::new(RecordingHooks::default());
     let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new())
         .hooked(Arc::clone(&hooks));
-    let dir = world.dir.clone();
+    let file = final_file(session.path());
     hooks.answer_with(move |seen| {
         // The delegate dispatch sees the full text before any cut or
-        // artifact exists; the completion dispatch passes through.
+        // file exists; the completion dispatch passes through.
         if seen.delivery == Some(JobDelivery::Delegate) {
             assert_eq!(seen.content.len(), 20 * 1024);
-            assert!(!dir.join(format!("artifacts/{DELEGATE}.txt")).exists());
+            assert!(!file.exists());
             return changed(&"y".repeat(40 * 1024));
         }
         unchanged()
     });
     write_started(&mut world, DELEGATE, Some("shell"));
-    world.send(delegate_held(DELEGATE, full));
+    world.send(delegate_held_with_path(session.path(), DELEGATE, &full));
     assert_eq!(world.turn(), Some(TurnOutcome::Completed));
     let lines = world.turn_lines();
     let text = lines[2].payload["text"].as_str().unwrap();
     assert!(text.starts_with(&"y".repeat(16 * 1024)));
     assert!(text.contains("bytes cut."));
-    assert_eq!(
-        lines[2].payload["artifact"],
-        format!("artifacts/{DELEGATE}.txt")
-    );
-    let kept =
-        std::fs::read_to_string(world.dir.join(format!("artifacts/{DELEGATE}.txt"))).unwrap();
+    assert_names_final(&lines[2].payload, session.path());
+    let kept = std::fs::read_to_string(final_file(session.path())).unwrap();
     assert_large_str_eq(&kept, &"y".repeat(40 * 1024));
     let seen = users(&world.requests()[0]);
-    assert_eq!(seen[seen.len() - 2], delegate_rendered(DELEGATE, text));
+    let wake = format!(
+        "{}\nFull final message: {}",
+        delegate_rendered(DELEGATE, text),
+        final_file(session.path()).display()
+    );
+    assert_eq!(seen[seen.len() - 2], wake);
 }
 
 #[test]
@@ -6608,4 +6614,579 @@ fn a_completed_wait_on_a_real_registry_returns_the_stored_tail() {
         "{text}"
     );
     assert!(text.contains("Last output:\none\ntwo\nthree\n"), "{text}");
+// A Fiber delegate's final message file: written once, after the hooks, from
+// the text the delivery carries (`docs/delegates.md`, "Results").
+
+/// The text the final-message tests give the delegate, carrying a token a
+/// hook replaces.
+const RAW: &str = "scanned RAW-TOKEN found";
+
+/// A delegate's session directory, apart from the parent's.
+fn delegate_session() -> fakes::TempDir {
+    fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-final-file")
+}
+
+/// The final-message file in `session`.
+fn final_file(session: &std::path::Path) -> std::path::PathBuf {
+    session.join("artifacts/final.md")
+}
+
+/// `id`'s finish as `finish_run` stores it for a Fiber delegate whose
+/// session directory is `session`: the file named, none written.
+fn named_finish(session: &std::path::Path, id: &str, text: &str) -> DelegateFinished {
+    DelegateFinished {
+        artifact: Some("artifacts/final.md".into()),
+        artifact_absolute: Some(final_file(session).display().to_string()),
+        ..delegate_finished(id, text.into())
+    }
+}
+
+/// [`delegate_held`] with the finish named as `finish_run` stores it.
+fn delegate_held_with_path(session: &std::path::Path, id: &str, text: &str) -> Delivery {
+    Delivery::Job(JobNotice {
+        completed: failed(id),
+        claim: Claim(Box::new(|| Some(Vec::new()))),
+        delegate: Some(named_finish(session, id, text)),
+    })
+}
+
+/// What a delegate notice naming `session`'s file renders as its wake.
+fn delegate_wake(session: &std::path::Path, id: &str, text: &str) -> String {
+    format!(
+        "{}\nFull final message: {}",
+        delegate_rendered(id, text),
+        final_file(session).display()
+    )
+}
+
+/// The one `delegate_finished` line of the last turn.
+fn finished_line(world: &World) -> Envelope {
+    world
+        .turn_lines()
+        .into_iter()
+        .find(|line| line.kind() == EventKind::DelegateFinished)
+        .expect("a delegate_finished is logged")
+}
+
+/// Delivers `DELEGATE`'s finish named in `session` to a world answering
+/// with `hooks`, and returns the world after its turn.
+fn deliver_named(session: &std::path::Path, hooks: Option<Arc<RecordingHooks>>) -> World {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    if let Some(hooks) = hooks {
+        world = world.hooked(hooks);
+    }
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held_with_path(session, DELEGATE, RAW));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    world
+}
+
+/// `payload`'s final-message fields name `session`'s file.
+#[track_caller]
+fn assert_names_final(payload: &Map<String, Value>, session: &std::path::Path) {
+    assert_eq!(payload["artifact"], "artifacts/final.md");
+    assert_eq!(
+        payload["artifact_absolute"],
+        final_file(session).display().to_string()
+    );
+}
+
+#[test]
+fn a_delegate_finish_with_no_hooks_writes_the_text_as_it_stands() {
+    let session = delegate_session();
+    let world = deliver_named(session.path(), None);
+    assert_eq!(
+        std::fs::read(final_file(session.path())).unwrap(),
+        RAW.as_bytes()
+    );
+    assert_names_final(&finished_line(&world).payload, session.path());
+    let seen = users(&world.requests()[0]);
+    assert!(
+        seen.contains(&delegate_wake(session.path(), DELEGATE, RAW)),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn an_unhooked_delegate_finish_writes_the_text_as_it_stands() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    let world = deliver_named(session.path(), Some(Arc::clone(&hooks)));
+    assert_eq!(hooks.calls()[0].delivery, Some(JobDelivery::Delegate));
+    assert_eq!(
+        std::fs::read(final_file(session.path())).unwrap(),
+        RAW.as_bytes()
+    );
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], RAW);
+    assert_names_final(&line.payload, session.path());
+    let seen = users(&world.requests()[0]);
+    assert!(
+        seen.contains(&delegate_wake(session.path(), DELEGATE, RAW)),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn a_redacted_delegate_text_writes_the_hooked_text_to_the_file() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| changed(&seen.content.replace("RAW-TOKEN", "[redacted]")));
+    let world = deliver_named(session.path(), Some(hooks));
+    let redacted = "scanned [redacted] found";
+    let bytes = std::fs::read(final_file(session.path())).unwrap();
+    assert_eq!(bytes, redacted.as_bytes());
+    assert!(!bytes.windows(9).any(|window| window == b"RAW-TOKEN"));
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], redacted);
+    assert_eq!(line.payload["changed_by"], json!(["redactor"]));
+    assert_names_final(&line.payload, session.path());
+    let seen = users(&world.requests()[0]);
+    assert!(
+        seen.contains(&delegate_wake(session.path(), DELEGATE, redacted)),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn a_withheld_delegate_writes_the_withheld_line_to_the_file() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| withheld());
+    let world = deliver_named(session.path(), Some(hooks));
+    let bytes = std::fs::read(final_file(session.path())).unwrap();
+    assert_eq!(bytes, withheld_line().as_bytes());
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], withheld_line());
+    assert_names_final(&line.payload, session.path());
+    let seen = users(&world.requests()[0]);
+    assert!(
+        seen.contains(&delegate_wake(session.path(), DELEGATE, &withheld_line())),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn a_failed_delegate_hook_writes_the_withheld_line_to_the_file() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| failed_hook());
+    let world = deliver_named(session.path(), Some(hooks));
+    let bytes = std::fs::read(final_file(session.path())).unwrap();
+    assert_eq!(bytes, failed_line().as_bytes());
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], failed_line());
+    assert_names_final(&line.payload, session.path());
+    let seen = users(&world.requests()[0]);
+    assert!(
+        seen.contains(&delegate_wake(session.path(), DELEGATE, &failed_line())),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn a_text_and_artifact_delegate_change_writes_the_hooked_text_and_names_both_files() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| AfterToolAnswer {
+        outcome: AfterToolOutcome::Changed {
+            content: Some("hooked text".into()),
+            details: None,
+            artifact: Some("HOOK-ARTIFACT".into()),
+        },
+        changed_by: vec!["redactor".into()],
+        notices: Vec::new(),
+    });
+    let world = deliver_named(session.path(), Some(hooks));
+    assert_eq!(
+        std::fs::read(final_file(session.path())).unwrap(),
+        b"hooked text"
+    );
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], "hooked text");
+    // The hook's own artifact is named by `artifact`, in the parent's
+    // directory; the final-message file by `artifact_absolute`.
+    let hook_file = format!("artifacts/{DELEGATE}.txt");
+    assert_eq!(line.payload["artifact"], hook_file);
+    assert_eq!(
+        std::fs::read_to_string(world.dir.join(&hook_file)).unwrap(),
+        "HOOK-ARTIFACT"
+    );
+    assert_eq!(
+        line.payload["artifact_absolute"],
+        final_file(session.path()).display().to_string()
+    );
+    let seen = users(&world.requests()[0]);
+    assert!(
+        seen.contains(&delegate_wake(session.path(), DELEGATE, "hooked text")),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn an_artifact_only_delegate_change_names_the_hook_file_and_writes_the_text_unchanged() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|_| artifacted("HOOK-ARTIFACT"));
+    let world = deliver_named(session.path(), Some(hooks));
+    assert_eq!(
+        std::fs::read(final_file(session.path())).unwrap(),
+        RAW.as_bytes()
+    );
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], RAW);
+    let hook_file = format!("artifacts/{DELEGATE}.txt");
+    assert_eq!(line.payload["artifact"], hook_file);
+    assert_eq!(
+        std::fs::read_to_string(world.dir.join(&hook_file)).unwrap(),
+        "HOOK-ARTIFACT"
+    );
+    assert_eq!(
+        line.payload["artifact_absolute"],
+        final_file(session.path()).display().to_string()
+    );
+    let seen = users(&world.requests()[0]);
+    assert!(
+        seen.contains(&delegate_wake(session.path(), DELEGATE, RAW)),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn an_unwritable_final_file_names_no_file_in_the_delivery_copy() {
+    // The delegate's session directory is gone: nothing creates it.
+    let session = delegate_session();
+    let gone = session.path().join("gone");
+    let world = deliver_named(&gone, None);
+    assert!(!gone.exists());
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], RAW);
+    assert!(line.payload.get("artifact").is_none());
+    assert!(line.payload.get("artifact_absolute").is_none());
+    let seen = users(&world.requests()[0]);
+    assert!(seen.contains(&delegate_rendered(DELEGATE, RAW)), "{seen:?}");
+}
+
+#[test]
+fn a_later_finish_replaces_the_file_whole() {
+    let session = delegate_session();
+    let first = deliver_named(session.path(), None);
+    drop(first);
+    let long = "x".repeat(100);
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held_with_path(session.path(), DELEGATE, &long));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(
+        std::fs::read(final_file(session.path())).unwrap(),
+        long.as_bytes()
+    );
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(delegate_held_with_path(session.path(), DELEGATE, ""));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(std::fs::read(final_file(session.path())).unwrap(), b"");
+}
+
+// The claim path: a call that claims a delegate's finish first runs the
+// `delegate` delivery and writes the file from its output.
+
+/// A reply that calls `first` and `second`, each with `{}`.
+fn calls_two(first: &str, second: &str) -> Scripted {
+    let mut scripted = calls(first);
+    let other = calls(second);
+    let Ok(end) = &mut scripted.end else {
+        panic!("a scripted reply ends");
+    };
+    if let Ok(more) = other.end {
+        end.actions.extend(more.actions);
+    }
+    scripted
+        .deltas
+        .push(Delta::ToolCallArguments(ToolCallArgumentsDelta {
+            index: 1,
+            name: Some(second.into()),
+            text: "{}".into(),
+        }));
+    scripted
+}
+
+/// A tool called `name` settling `taken`.
+struct SettlesAs {
+    name: &'static str,
+    taken: Vec<Taken>,
+}
+
+impl Tool for SettlesAs {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.into(),
+            description: "Settles a claimed job end.".into(),
+            input_schema: json!({"type": "object", "additionalProperties": false}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Settles { taken: Vec::new() }.effects(arguments)
+    }
+
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
+        Settles {
+            taken: self.taken.clone(),
+        }
+        .run(arguments, cancel, emit)
+    }
+}
+
+/// The records a claim takes for `DELEGATE`: its finish as `finish_run`
+/// stores it, then its end.
+fn claimed_pair(session: &std::path::Path) -> Vec<Taken> {
+    vec![
+        Taken {
+            record: JobRecord::DelegateFinished(named_finish(session, DELEGATE, RAW)),
+            action: None,
+        },
+        Taken {
+            record: JobRecord::Completed(failed(DELEGATE)),
+            action: None,
+        },
+    ]
+}
+
+/// A world whose first reply calls `settles`, which takes
+/// [`claimed_pair`], answering with `hooks` when given.
+fn claiming(session: &std::path::Path, hooks: Option<Arc<RecordingHooks>>) -> World {
+    let taken = claimed_pair(session);
+    let mut world = World::new(
+        vec![calls("settles"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Settles { taken })],
+    );
+    if let Some(hooks) = hooks {
+        world = world.hooked(hooks);
+    }
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    world
+}
+
+/// The `settles` call's action id and its completed content.
+fn settles_call(world: &World) -> (ActionId, String) {
+    let lines = world.turn_lines();
+    let requested = lines
+        .iter()
+        .find(|line| line.kind() == EventKind::ToolCallRequested)
+        .expect("the settles call");
+    let action = requested.action_id.clone().expect("a call has an action");
+    let completed = lines
+        .iter()
+        .find(|line| {
+            line.kind() == EventKind::ToolCallCompleted && line.action_id.as_ref() == Some(&action)
+        })
+        .expect("the call completed");
+    let text = completed.payload["content"][0]["text"]
+        .as_str()
+        .expect("text content")
+        .to_owned();
+    (action, text)
+}
+
+#[test]
+fn a_claimed_unhooked_delegate_finish_writes_the_text_as_it_stands() {
+    let session = delegate_session();
+    let world = claiming(session.path(), None);
+    assert_eq!(
+        std::fs::read(final_file(session.path())).unwrap(),
+        RAW.as_bytes()
+    );
+    let line = finished_line(&world);
+    assert_eq!(line.action_id, Some(settles_call(&world).0));
+    assert_eq!(line.payload["text"], RAW);
+    assert_names_final(&line.payload, session.path());
+}
+
+#[test]
+fn a_claimed_redacted_delegate_finish_writes_the_hooked_text_to_the_file_only() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    // What the file held when the call's own pass ran.
+    let file = final_file(session.path());
+    let at_call: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let recorded = Arc::clone(&at_call);
+    hooks.answer_with(move |seen| match seen.delivery {
+        Some(JobDelivery::Delegate) => changed(&seen.content.replace("RAW-TOKEN", "[redacted]")),
+        Some(_) => unchanged(),
+        None => {
+            *recorded.lock().unwrap() = std::fs::read_to_string(&file).ok();
+            unchanged()
+        }
+    });
+    let world = claiming(session.path(), Some(Arc::clone(&hooks)));
+    let deliveries: Vec<_> = hooks.calls().iter().map(|seen| seen.delivery).collect();
+    assert_eq!(
+        deliveries,
+        [
+            Some(JobDelivery::Delegate),
+            Some(JobDelivery::Completion),
+            None
+        ]
+    );
+    let redacted = "scanned [redacted] found";
+    let bytes = std::fs::read(final_file(session.path())).unwrap();
+    assert_eq!(bytes, redacted.as_bytes());
+    // The file was written before the call's own result was hooked.
+    assert_eq!(at_call.lock().unwrap().as_deref(), Some(redacted));
+    // The chain's output went to the file only: the log and the call's
+    // result keep what the call saw.
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], RAW);
+    assert!(line.payload.get("changed_by").is_none());
+    assert_names_final(&line.payload, session.path());
+    assert_eq!(settles_call(&world).1, "claimed\n");
+}
+
+#[test]
+fn a_claimed_failed_delegate_hook_writes_the_failed_line() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    hooks.answer_with(|seen| match seen.delivery {
+        Some(JobDelivery::Delegate) => failed_hook(),
+        _ => unchanged(),
+    });
+    let world = claiming(session.path(), Some(hooks));
+    let bytes = std::fs::read(final_file(session.path())).unwrap();
+    assert_eq!(bytes, failed_line().as_bytes());
+    assert!(!bytes.windows(9).any(|window| window == b"RAW-TOKEN"));
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], RAW);
+    assert_names_final(&line.payload, session.path());
+}
+
+#[test]
+fn a_claimed_delegate_finish_whose_write_fails_logs_no_path() {
+    let session = delegate_session();
+    let gone = session.path().join("gone");
+    let world = claiming(&gone, None);
+    assert!(!gone.exists());
+    let line = finished_line(&world);
+    assert_eq!(line.payload["text"], RAW);
+    assert!(line.payload.get("artifact").is_none());
+    assert!(line.payload.get("artifact_absolute").is_none());
+    assert_eq!(settles_call(&world).1, "claimed\n");
+}
+
+#[test]
+fn a_claimed_finish_takes_its_status_from_its_own_jobs_end() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    // Another job's end sits between the finish and its own end.
+    let mut other = failed("other");
+    other.status = Outcome::Cancelled;
+    other.process = None;
+    let mut pair = claimed_pair(session.path());
+    pair.insert(
+        1,
+        Taken {
+            record: JobRecord::Completed(other),
+            action: None,
+        },
+    );
+    let mut world = World::new(
+        vec![calls("settles"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Settles { taken: pair })],
+    )
+    .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    write_started(&mut world, "other", Some("shell"));
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let chains: Vec<_> = hooks
+        .calls()
+        .into_iter()
+        .filter(|seen| seen.delivery == Some(JobDelivery::Delegate))
+        .collect();
+    assert_eq!(chains.len(), 1);
+    assert_eq!(chains[0].status, CallStatus::Failed);
+    assert_eq!(chains[0].process, failed(DELEGATE).process);
+}
+
+#[test]
+fn a_claimed_finish_naming_no_file_runs_no_delegate_chain() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    let mut pair = claimed_pair(session.path());
+    if let JobRecord::DelegateFinished(finished) = &mut pair[0].record {
+        finished.artifact = None;
+        finished.artifact_absolute = None;
+    }
+    let mut world = World::new(
+        vec![calls("settles"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Settles { taken: pair })],
+    )
+    .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let deliveries: Vec<_> = hooks.calls().iter().map(|seen| seen.delivery).collect();
+    assert_eq!(deliveries, [Some(JobDelivery::Completion), None]);
+    assert!(!final_file(session.path()).exists());
+    let line = finished_line(&world);
+    assert!(line.payload.get("artifact_absolute").is_none());
+}
+
+#[test]
+fn two_claims_of_one_delegate_finish_write_the_file_once() {
+    let session = delegate_session();
+    let hooks = Arc::new(RecordingHooks::default());
+    let taken = claimed_pair(session.path());
+    let mut world = World::new(
+        vec![
+            calls_two("settles", "settles_none"),
+            Scripted::text("Seen."),
+        ],
+        Vec::new(),
+        |_| {
+            vec![
+                Arc::new(SettlesAs {
+                    name: "settles",
+                    taken,
+                }),
+                Arc::new(SettlesAs {
+                    name: "settles_none",
+                    taken: Vec::new(),
+                }),
+            ]
+        },
+    )
+    .hooked(Arc::clone(&hooks));
+    write_started(&mut world, DELEGATE, Some("shell"));
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let chains = hooks
+        .calls()
+        .iter()
+        .filter(|seen| seen.delivery == Some(JobDelivery::Delegate))
+        .count();
+    assert_eq!(chains, 1, "the delegate chain ran once");
+    let finishes: Vec<_> = world
+        .turn_lines()
+        .into_iter()
+        .filter(|line| line.kind() == EventKind::DelegateFinished)
+        .collect();
+    assert_eq!(finishes.len(), 1);
+    let first = world
+        .turn_lines()
+        .into_iter()
+        .find(|line| line.kind() == EventKind::ToolCallRequested)
+        .and_then(|line| line.action_id);
+    assert_eq!(finishes[0].action_id, first, "the first call owns the line");
+    assert_eq!(
+        std::fs::read(final_file(session.path())).unwrap(),
+        RAW.as_bytes()
+    );
 }

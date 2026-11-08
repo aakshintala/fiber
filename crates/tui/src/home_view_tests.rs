@@ -141,7 +141,8 @@ fn box_top(frame: &str, width: usize) -> usize {
 
 /// Chooses a model for this session only: with no model on the chip,
 /// Enter opens the picker instead of starting, so the blocker tests
-/// pick through it, keeping the `[no model]` chips their snapshots show.
+/// pick through it. The pending choice shows on the chip as
+/// `[ⓢ test/model]`, which the blocker snapshots carry.
 fn choose_session_model(app: &mut App) {
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::CtrlL, now), crate::app::Effect::None);
