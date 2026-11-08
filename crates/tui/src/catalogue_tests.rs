@@ -10,6 +10,57 @@ use crate::Input;
 use fakes::Deadline;
 
 #[test]
+fn models_diagnostic_records_read_completion_and_queued_start() {
+    let home = fakes::TempDir::new("tui-models-diagnostic");
+    let diag = Arc::new(diag::diag::Diag::new(
+        home.path(),
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    let read: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let mut reader = Reader::new(Some(read)).with_diag(diag);
+    let (tx, rx) = mpsc::channel();
+    reader.ask(Refresh::Cached, &tx);
+    reader.ask(Refresh::Stale, &tx);
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
+    reader.done(&tx);
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
+    let text = std::fs::read_to_string(
+        home.path()
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id())),
+    )
+    .unwrap();
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line["code"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["models_read_done", "models_ask_started", "models_read_done"]
+    );
+    assert_eq!(
+        lines[0]["data"],
+        serde_json::json!({"kind":"cached","lists":0})
+    );
+    assert_eq!(lines[1]["data"], serde_json::json!({"kind":"stale"}));
+    assert_eq!(
+        lines[2]["data"],
+        serde_json::json!({"kind":"stale","lists":0})
+    );
+}
+
+#[test]
 fn a_default_catalogue_has_no_logged_out_providers() {
     assert!(Catalogue::default().logged_out.is_empty());
 }

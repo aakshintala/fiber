@@ -185,6 +185,7 @@ impl<B: Backend> Loop<B> {
             on_attach: Box::new(|_| {}),
             clock,
             timing: crate::timing::Timing::info(),
+            diag: crate::timing::info_diag(),
             attached_frame: None,
             summary_span: None,
             files_out,
@@ -268,6 +269,29 @@ pub(super) fn command(
     let line = line.unwrap_or_else(|err| panic!("{what}: {err}"));
     let value = serde_json::from_str(&line).unwrap_or_else(|err| panic!("{what}: {err}: {line:?}"));
     (reader, value)
+}
+
+#[test]
+fn models_diagnostic_records_post_apply_catalogue_size() {
+    let home = fakes::TempDir::new("tui-models-applied");
+    let diag = Arc::new(diag::diag::Diag::new(
+        home.path(),
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.diag = diag;
+    lp.handle_inner(Input::Models(Err("failed read".to_owned())));
+    let text = std::fs::read_to_string(
+        home.path()
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id())),
+    )
+    .unwrap();
+    let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["code"], "models_applied");
+    assert_eq!(line["data"], serde_json::json!({"catalogue_size":0}));
 }
 
 #[test]
