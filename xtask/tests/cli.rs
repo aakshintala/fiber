@@ -2984,6 +2984,11 @@ fn shellcheck_files_lists_a_new_broken_script() {
     assert_eq!(code, 1, "{out}");
     assert!(out.contains("no bash files"), "{out}");
 
+    dir.write("other/tool", "#!/bin/bash\n");
+    let (code, out) = xtask(&dir, &["shellcheck-files", "other"], &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "other/tool\n", "{out}");
+
     let (code, out) = xtask(&dir, &["shellcheck-files", "missing"], &[], "");
     assert_eq!(code, 2, "{out}");
 }

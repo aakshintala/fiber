@@ -135,3 +135,13 @@ fn a_missing_directory_and_a_regular_file_are_errors() {
     assert!(files(&dir.path().join("missing")).is_err());
     assert!(files(&dir.path().join("a")).is_err());
 }
+
+#[test]
+fn a_shebang_line_with_no_trailing_newline_is_bash() {
+    let dir = TempDir::new("xtask-shellcheck-files");
+    dir.write("a", "#!/bin/bash");
+    assert_eq!(
+        files(dir.path()).unwrap(),
+        [format!("{}/a", dir.path().display())]
+    );
+}
