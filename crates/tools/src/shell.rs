@@ -698,7 +698,16 @@ impl Shell {
                     if policy == command::MovePolicy::Foreground
                         && matches!(moved.reason, command::MoveReason::ShellExited { .. }) =>
                 {
-                    background::finish_inline(*moved, limit, &parsed.command, emit)
+                    let mut moved = moved;
+                    let mut carry = std::mem::take(&mut moved.progress.stream_carry);
+                    background::finish_inline(
+                        *moved,
+                        self.clock.as_ref(),
+                        limit,
+                        &parsed.command,
+                        emit,
+                        &mut carry,
+                    )
                 }
                 Some(jobs) => background::take(
                     *moved,

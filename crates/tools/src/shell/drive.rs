@@ -299,10 +299,10 @@ pub(super) fn finish(
 ) -> Finished {
     let (output, status, capped) = {
         let mut inner = lock(&shared.inner);
-        if !eof {
+        if !eof && inner.file.is_none() {
             // The reader blocks in its read until the last holder closes
             // the pipe. Discarding drops those bytes so they are not part
-            // of the result.
+            // of the result. With a file installed they go to it instead.
             inner.discard = true;
         }
         // The spill leaves `Inner` with the result: nothing writes the

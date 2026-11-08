@@ -24,7 +24,7 @@ use super::command::{Finished, MovePolicy, MoveReason, StopKind};
 use super::drive::finish;
 use super::monitor::Feed;
 use super::moved::Moved;
-use super::output::{JobStream, align_char_boundary, lock};
+use super::output::{JobStream, Shared, align_char_boundary, lock};
 use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::tty;
 use super::{Limit, assemble};
@@ -77,6 +77,16 @@ pub(crate) fn running_step(
     move_due: bool,
     asked: bool,
 ) -> Step {
+    // A foreground shell already reaped with its group occupied ends the
+    // call with its own result: a timeout that falls due while the group is
+    // listed must not stop the leftovers (RULING-4238-1).
+    if policy == MovePolicy::Foreground
+        && !cancelled
+        && !seen_empty
+        && let Some(code) = shell_exit
+    {
+        return Step::Move(MoveReason::ShellExited { code });
+    }
     if timed_out {
         return Step::Stop(StopKind::Timeout);
     }
@@ -249,11 +259,17 @@ pub(crate) fn take(
 /// under the session's artifacts directory, named in one trailing line
 /// after the closing line. The group stays on the process-wide list, so
 /// session shutdown stops it; nothing else does.
+///
+/// The artifact is installed as the reader's sink under the reader lock
+/// before the result is taken, so each byte lands once, in the result or in
+/// the artifact.
 pub(crate) fn finish_inline(
     mut moved: Moved,
+    _clock: &dyn Clock,
     limit: Option<Limit>,
     command: &str,
     emit: &dyn Emit,
+    carry: &mut Vec<u8>,
 ) -> Output {
     moved.detach_call_cancel();
     let members = moved.progress.members.take();
@@ -271,36 +287,76 @@ pub(crate) fn finish_inline(
         None => Err("the session has no artifacts directory".to_owned()),
     };
     let Moved {
-        mut progress,
+        progress,
         protection,
         cap,
         ..
     } = moved;
+    let saved = match kept {
+        Ok((file, path)) => {
+            let mut inner = lock(&progress.shared.inner);
+            inner.file = Some(file);
+            inner.cap = cap;
+            format!(
+                "Output written after the call returns is in {}.",
+                path.display()
+            )
+        }
+        Err(why) => format!("Output written after the call returns could not be saved: {why}."),
+    };
     // The reader is still open on the leftovers' pipe, so the end is
     // neither indeterminate nor held open: the shell's exit is the result.
+    // Without a sink the finish discards what the reader gets from now on.
     let finished = finish(
         &progress.shared,
         None,
         progress.sent_signal,
         progress.seen_empty,
-        true,
+        false,
         emit,
-        &mut progress.stream_carry,
+        carry,
     );
-    let (sink, saved) = match kept {
-        Ok((file, path)) => (
-            Some(file),
-            format!("Output after the shell exited is in {}.", path.display()),
-        ),
-        Err(why) => (
-            None,
-            format!("Output after the shell exited could not be saved: {why}."),
-        ),
-    };
-    lock(&progress.shared.inner).after_exit(sink, cap);
+    steward(progress.shared, progress.pgid, progress.listing);
     let report = protection.map(ProtectionGuard::finish);
     let line = leftover_line(members.as_ref(), &saved);
     super::assemble_tailed(limit, finished, None, Some(command), report, Some(&line))
+}
+
+/// Looks after what the call leaves behind, on its own thread: closes the
+/// artifact file once the reader reaches the end of the pipe, and takes the
+/// group off the process-wide list once it is empty. It sends no signal and
+/// waits on no clock and no cancel.
+fn steward(shared: Arc<Shared>, pgid: u32, listing: Option<Box<support::group::Listing>>) {
+    let mut listing = listing;
+    let mut closed = false;
+    // A thread that cannot start leaves the group listed and the file open
+    // until the shared state drops: shutdown still stops the group.
+    let _started = std::thread::Builder::new()
+        .name("shell-leftovers".to_owned())
+        .spawn(move || {
+            loop {
+                {
+                    let mut inner = lock(&shared.inner);
+                    if inner.eof {
+                        drop(inner.file.take());
+                        closed = true;
+                    }
+                    // The reader wakes this on every chunk and at the end of
+                    // the pipe; the timeout is the poll of the group. The
+                    // real time bound is a poll pause, not a deadline.
+                    drop(shared.cv.wait_timeout(inner, support::group::GROUP_POLL));
+                }
+                if listing.is_some()
+                    && !support::group::alive(pgid)
+                    && let Some(listing) = listing.take()
+                {
+                    support::group::live().unlist(*listing);
+                }
+                if closed && listing.is_none() {
+                    return;
+                }
+            }
+        });
 }
 
 /// How many names the trailing line gives.

@@ -1451,15 +1451,35 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
 }
 
 /// A shell that starts `count` `sleep`s in its group, waits until `ps` shows
-/// them all, records its group then its readiness in `ready`, and runs
-/// `after`.
-fn leaves_sleepers(ready: &Path, count: u32, after: &str) -> String {
+/// them all, records its group then its readiness in `ready`, prints `done`,
+/// blocks on the `gate` FIFO, and runs `after`.
+fn leaves_sleepers(ready: &Path, gate: &Path, count: u32, after: &str) -> String {
     format!(
         "echo $$ > {ready}; i=0; while [ $i -lt {count} ]; do sleep 1000 & i=$((i+1)); done; \
          until [ \"$(ps -A -o pgid=,comm= | awk -v g=$$ '$1==g && $2 ~ /sleep/' | wc -l)\" -ge {count} ]; do :; done; \
-         echo $$ >> {ready}; {after}",
+         echo $$ >> {ready}; echo done; read -r _ < {gate}; {after}",
         ready = quote(ready),
+        gate = quote(gate),
     )
+}
+
+/// Lets the shell blocked on the `gate` FIFO go on. The open waits for the
+/// shell's reading end, so it runs off the test's thread.
+fn release_gate(gate: &Path) {
+    let gate = gate.to_path_buf();
+    thread::spawn(move || std::fs::write(&gate, "go\n"));
+}
+
+/// Waits for the shell's `done` to stream, the signal that the reader holds
+/// it, then lets the shell exit.
+fn release_after_done(run: &JobRun, gate: &Path) {
+    assert!(
+        run.recorder
+            .wait_for_text("done\n", fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "waited {:?} for `done` to stream",
+        fakes::MUST_SUCCEED_WITHIN
+    );
+    release_gate(gate);
 }
 
 /// The shell-exit call as a person's foreground call, with an artifacts
@@ -1484,10 +1504,12 @@ fn shell_exits(
     let jobs = FakeJobs::new(dir.path());
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir_all(&artifacts).unwrap();
+    let gate = dir.path().join("exit_gate");
+    fakes::fifo(&gate);
     let run = start_with(
         dir.path().to_path_buf(),
         with_artifacts.then(|| artifacts.clone()),
-        leaves_sleepers(ready.path(), count, after),
+        leaves_sleepers(ready.path(), &gate, count, after),
         timeout_ms,
         false,
         Arc::clone(&jobs),
@@ -1495,6 +1517,7 @@ fn shell_exits(
     );
     let pgid = ready.wait(Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
+    release_after_done(&run, &gate);
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&run.output)
         .expect("the shell's own result once sleep was listed");
@@ -1519,7 +1542,7 @@ impl Exited {
 #[test]
 fn shell_exit_completes_inline_with_the_output_the_exit_code_and_one_trailing_line() {
     let dir = fakes::TempDir::new("fiber-shell-exit-inline");
-    let exited = shell_exits(&dir, 1, "echo done; exit 0", None, true);
+    let exited = shell_exits(&dir, 1, "exit 0", None, true);
     let body = text(&exited.output);
     assert!(exited.output.error.is_none(), "{body}");
     assert_eq!(
@@ -1537,7 +1560,7 @@ fn shell_exit_completes_inline_with_the_output_the_exit_code_and_one_trailing_li
         "{body}"
     );
     assert!(
-        line.contains("Output after the shell exited is in "),
+        line.contains("Output written after the call returns is in "),
         "{body}"
     );
     assert!(line.contains("run_in_background"), "{body}");
@@ -1551,7 +1574,7 @@ fn shell_exit_completes_inline_with_the_output_the_exit_code_and_one_trailing_li
 #[test]
 fn shell_exit_completes_inline_nonzero_is_the_normal_nonzero_result() {
     let dir = fakes::TempDir::new("fiber-shell-exit-inline-nonzero");
-    let exited = shell_exits(&dir, 1, "echo oops; exit 3", None, true);
+    let exited = shell_exits(&dir, 1, "exit 3", None, true);
     let body = text(&exited.output);
     assert_eq!(code(&exited.output), Some(ErrorCode::NonzeroExit), "{body}");
     assert_eq!(
@@ -1567,7 +1590,7 @@ fn shell_exit_completes_inline_nonzero_is_the_normal_nonzero_result() {
     };
     assert_eq!(details["exit_code"], json!(3));
     let (head, line) = body.split_once("Exit code 3.\n").expect(&body);
-    assert_eq!(head, "oops\n", "{body}");
+    assert_eq!(head, "done\n", "{body}");
     assert!(line.starts_with("1 process left running"), "{body}");
     assert!(exited.jobs.started().is_empty());
     exited.reap();
@@ -1583,7 +1606,7 @@ fn shell_exit_completes_inline_names_three_of_ten_leftovers() {
         line.starts_with("10 processes left running (first: "),
         "{body}"
     );
-    let named = line.split(". Output after").next().unwrap();
+    let named = line.split("). Output already").next().unwrap();
     assert_eq!(named.matches("sleep (").count(), 3, "{body}");
     exited.reap();
 }
@@ -1628,10 +1651,13 @@ fn leftover_output_after_the_shell_exited_lands_in_the_named_artifact() {
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir_all(&artifacts).unwrap();
     let block = block_of(ready.path());
+    let gate = dir.path().join("exit_gate");
+    fakes::fifo(&gate);
     let command = format!(
-        "mkfifo {block}; ( read -r _ < {block}; echo LATE ) & echo $$ > {ready}; echo done",
+        "mkfifo {block}; ( read -r _ < {block}; echo LATE ) & echo $$ > {ready}; echo done; read -r _ < {gate}",
         block = quote(&block),
         ready = quote(ready.path()),
+        gate = quote(&gate),
     );
     let run = start_with(
         dir.path().to_path_buf(),
@@ -1644,6 +1670,7 @@ fn leftover_output_after_the_shell_exited_lands_in_the_named_artifact() {
     );
     let pgid = ready.wait(Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
+    release_after_done(&run, &gate);
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&run.output)
         .expect("the shell's own result");
@@ -1651,8 +1678,8 @@ fn leftover_output_after_the_shell_exited_lands_in_the_named_artifact() {
     assert!(body.starts_with("done\nExit code 0.\n"), "{body}");
     assert!(!body.contains("LATE"), "{body}");
     let path = body
-        .split("is in ")
-        .nth(1)
+        .rsplit("is in ")
+        .next()
         .and_then(|rest| rest.split(".txt").next())
         .map(|stem| PathBuf::from(format!("{stem}.txt")))
         .expect(&body);
@@ -1694,7 +1721,7 @@ fn leftover_without_an_artifacts_directory_says_the_output_is_not_saved() {
     let body = text(&exited.output);
     assert!(body.contains("1 process left running"), "{body}");
     assert!(body.contains("could not be saved"), "{body}");
-    assert!(!body.contains("is in "), "{body}");
+    assert!(!body.contains(".txt"), "{body}");
     exited.reap();
 }
 

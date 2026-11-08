@@ -677,13 +677,20 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   them. The result ends with one line after the closing line: how many
   processes are left running and the first three by name and process id
   (for example `2 processes left running (first: sleep (12), sleep (13)).`),
-  the artifact file that holds what they print after the shell exited, and
+  the artifact file for what they print after the call returns, and
   the long-running-process hint (``To keep a long-running process such as
   a server, start it with `run_in_background` and no timeout, or with
   `detach`.``). When the group cannot be listed the line gives no count and
   says processes are still running in the group; when the session has no
   artifacts directory it says the output could not be saved, and that output
   is dropped. A shell that leaves nothing running ends with no such line.
+- Where the leftovers' output lands has three tiers. Output already
+  delivered when the shell exits is in the result. Output still in flight at
+  exit, or written before the call returns, may be in either place. Output
+  written after the call returns is in the artifact file. A byte lands in
+  one place only, and the artifact stops growing at the same cap as a job's
+  output file. The file closes when the output pipe does, and Fiber takes the
+  group off its list once the group is empty.
 - A command still running after 30 seconds moves to the background as
   "Moving to the background" says, and a move that kept a timeout ends its
   receipt with the stop time in UTC, the timeout, and the

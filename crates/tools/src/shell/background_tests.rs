@@ -200,7 +200,7 @@ fn rows(count: u32) -> GroupMembers {
     GroupMembers::Members(format_rows(&rows))
 }
 
-const SAVED: &str = "Output after the shell exited is in /a/s_1.txt.";
+const SAVED: &str = "Output written after the call returns is in /a/s_1.txt.";
 
 #[test]
 fn leftover_line_for_one_process_is_singular() {

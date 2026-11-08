@@ -724,6 +724,65 @@ fn a_timeout_wins_over_every_move() {
 }
 
 #[test]
+fn a_reaped_foreground_shell_with_members_moves_before_a_due_timeout() {
+    // RULING-4238-1: a timeout that falls due while the group is listed
+    // cannot stop leftovers the shell's exit already ended the call over.
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            false,
+            false,
+            Some(3),
+            false,
+            false
+        ),
+        Step::Move(MoveReason::ShellExited { code: 3 })
+    );
+    // An empty group, a cancel, and every other policy keep their order.
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            false,
+            true,
+            Some(3),
+            false,
+            false
+        ),
+        Step::Stop(StopKind::Timeout)
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            true,
+            false,
+            Some(3),
+            false,
+            false
+        ),
+        Step::Stop(StopKind::Timeout)
+    );
+    assert_eq!(
+        running_step(MovePolicy::Stay, true, false, false, Some(3), false, false),
+        Step::Stop(StopKind::Timeout)
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            false,
+            false,
+            None,
+            false,
+            false
+        ),
+        Step::Stop(StopKind::Timeout)
+    );
+}
+
+#[test]
 fn a_cancel_wins_over_a_move_and_an_empty_group() {
     assert_eq!(
         running_step(
