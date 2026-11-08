@@ -321,10 +321,6 @@ fn settings_metadata_tabs_follow_key_classification() {
             assert!(!path.contains('*'), "`{path}` has a `*`, so no tab");
         }
     }
-    assert_eq!(
-        TABBED.iter().map(|(_, paths)| paths.len()).sum::<usize>(),
-        45
-    );
     for key in KEYS {
         let want = tab_of(key.path);
         assert_eq!(

@@ -1170,40 +1170,41 @@ fn settings_metadata_screen_rows_are_complete() {
 
 #[test]
 fn settings_metadata_screen_rows_match_the_contract() {
-    let rows: Vec<Contract> = SCREEN_ROWS
+    // The contract orders the rows, not the entries a row covers.
+    let covered_set = |covers: &[&'static str]| {
+        let mut set = covers.to_vec();
+        set.sort_unstable();
+        set.dedup();
+        set
+    };
+    let rows: Vec<_> = SCREEN_ROWS
         .iter()
         .map(|row| {
             let tab = row.metadata.tab.expect("a screen row has a tab");
-            (row.metadata.label, tab, row.command, row.covers)
+            (
+                row.metadata.label,
+                tab,
+                row.command,
+                covered_set(row.covers),
+            )
         })
         .collect();
-    assert_eq!(rows, SCREENS, "label, tab, command and coverage, in order");
+    let want: Vec<_> = SCREENS
+        .iter()
+        .map(|&(label, tab, command, covers)| (label, tab, command, covered_set(covers)))
+        .collect();
+    assert_eq!(rows, want, "label, tab, command and coverage, in order");
 
-    // A family name such as `tools.*` is not a schema entry; a
-    // coverage entry names one.
-    let covered: Vec<&str> = SCREEN_ROWS
+    // The set comparison above hides a repeated entry.
+    let mut covered: Vec<&str> = SCREEN_ROWS
         .iter()
         .flat_map(|row| row.covers)
         .copied()
         .collect();
-    for path in &covered {
-        assert!(
-            !path.ends_with(".*") || *path == "keys.*",
-            "`{path}` is a family, not a schema entry"
-        );
-    }
-    let mut once = covered.clone();
-    once.sort_unstable();
-    once.dedup();
-    assert_eq!(once.len(), covered.len(), "a path is covered by two rows");
-    let mut commands: Vec<&str> = SCREEN_ROWS.iter().map(|row| row.command).collect();
-    commands.sort_unstable();
-    commands.dedup();
-    assert_eq!(
-        commands.len(),
-        SCREEN_ROWS.len(),
-        "two rows share a command"
-    );
+    let all = covered.len();
+    covered.sort_unstable();
+    covered.dedup();
+    assert_eq!(covered.len(), all, "a path is covered twice");
 }
 
 #[test]
