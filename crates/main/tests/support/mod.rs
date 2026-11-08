@@ -321,7 +321,7 @@ impl Setup {
         write_record(&extension);
         write_json(
             &self.home().join("config.json"),
-            &json!({"model": "fake/m"}),
+            &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
         );
     }
 

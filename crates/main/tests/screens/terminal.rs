@@ -3616,3 +3616,44 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
     );
     quit_live(run);
 }
+
+#[test]
+fn pty_launch_uses_default_test_credential_before_caller_env() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[]);
+    let grid = run.wait_screen("the default signed-in home", |grid| {
+        grid.contents.contains("Enter starts a session")
+    });
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
+    run.ready();
+    run.write(b"say hi\r");
+    run.wait_screen("the default credential's response", |grid| {
+        grid.contents.contains("Hel")
+    });
+    assert_eq!(server.requests().len(), 1);
+    quit_live(run);
+
+    let mut run = support::pty::Run::spawn(&setup, 120, 32, &[], &[("FIBER_TEST_FAKE_KEY", "")]);
+    run.wait_screen("the caller-overridden keyless home", |grid| {
+        grid.contents.contains("Enter starts a session")
+    });
+    run.ready();
+    run.write(b"say hi\r");
+    let grid = run.wait_screen("the keyless credential notice", |grid| {
+        grid.contents.contains("no key for fake")
+    });
+    assert!(
+        grid.contents.contains("FIBER_TEST_FAKE_KEY is empty"),
+        "{grid:?}"
+    );
+    assert_eq!(server.requests().len(), 1);
+    run.write(b"\x03");
+    run.wait_screen("the cleared keyless draft", |grid| {
+        !grid.contents.contains("say hi")
+    });
+    run.write(b"/quit\r");
+    assert_eq!(run.wait().status.code(), Some(0));
+}
