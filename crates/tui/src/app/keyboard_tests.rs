@@ -1340,7 +1340,7 @@ fn the_open_report_is_an_overlay() {
 #[test]
 fn paste_and_home_arrows_change_neither_the_draft_nor_the_report() {
     let mut app = home_with(80, 24, launch());
-    app.home.as_mut().expect("home").launch.model = Some("acme/m1".to_owned());
+    app.home.launch.model = Some("acme/m1".to_owned());
     type_text(&mut app, "ab");
     frame(&mut app);
     assert_eq!(press(&mut app, "down"), Effect::None);

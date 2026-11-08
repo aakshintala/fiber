@@ -806,11 +806,7 @@ fn no_subscribe_with_the_link_down() {
 fn no_subscribe_without_the_delegates_card() {
     let mut app = home();
     opened(&mut app);
-    app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
-        .launch
-        .panel_cards = vec!["session".to_owned()];
+    app.home.launch.panel_cards = vec!["session".to_owned()];
     start_delegate(&mut app, "j_1", DELEGATE);
     let out = parent_status(&mut app);
     assert!(subscribes(&out).is_empty());

@@ -50,7 +50,7 @@ fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
         })));
         app.home_click(crate::home::Spot::Pick(0));
         // A model is now present, so the selected workspace can start.
-        app.home.as_mut().unwrap().launch.model = Some("test/model".to_owned());
+        app.home.launch.model = Some("test/model".to_owned());
         let lines = sent(app.on_enter());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["command"], "start");

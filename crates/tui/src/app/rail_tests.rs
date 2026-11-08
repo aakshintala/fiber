@@ -1538,7 +1538,7 @@ fn clicking_done_with_no_exits_lands_home_unfocused() {
 fn clicking_done_with_a_total_above_loaded_opens_the_first_row() {
     let mut app = opened(&[A, B], A);
     app.on_line(left(B, "exited"));
-    app.home.as_mut().unwrap().sessions.note_total("-w", 4);
+    app.home.sessions.note_total("-w", 4);
     let parsed = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
     // A Done click sends no scoped ask without a new trigger: a subscribe
     // goes out and no scoped recent does.
@@ -1574,7 +1574,7 @@ fn clicking_done_with_a_total_above_loaded_opens_the_first_row() {
 #[test]
 fn clicking_done_with_a_total_but_no_loaded_rows_lands_unfocused() {
     let mut app = opened(&[A, B], A);
-    app.home.as_mut().unwrap().sessions.note_total("-w", 3);
+    app.home.sessions.note_total("-w", 3);
     let parsed = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
     // A Done click sends no scoped ask without a new trigger: a subscribe
     // goes out and no scoped recent does.

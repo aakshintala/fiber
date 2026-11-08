@@ -302,9 +302,7 @@ fn a_hidden_remembered_chip_falls_back_to_the_workspace_chip() {
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
     // Outside git the switch hides: ↓ lands on the workspace chip.
-    let crate::LaunchLocation::Local { git, .. } =
-        &mut app.home.as_mut().expect("home").launch.location
-    else {
+    let crate::LaunchLocation::Local { git, .. } = &mut app.home.launch.location else {
         panic!("local launch")
     };
     *git = false;

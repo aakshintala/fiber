@@ -180,7 +180,7 @@ impl App {
     /// The attached session's feed row.
     pub(super) fn attached_row(&self) -> Option<&crate::home::Row> {
         let session = self.session()?;
-        self.home.as_ref()?.sessions.row(session)
+        self.home.sessions.row(session)
     }
 
     /// The header's text for the attached session: the item view's
@@ -214,10 +214,10 @@ impl App {
     /// frame. Where the panel and the rail are is recorded when they
     /// move.
     pub(super) fn relayout(&mut self) {
-        let home = self.home.as_ref().map(|home| HomeState {
+        let home = Some(HomeState {
             shares: Shares {
-                rail: home.launch.rail_share,
-                panel: home.launch.panel_share,
+                rail: self.home.launch.rail_share,
+                panel: self.home.launch.panel_share,
             },
             on_home: self.on_home(),
         });

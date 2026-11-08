@@ -194,11 +194,9 @@ impl App {
     /// subscribe at the level already held or asked for.
     pub(in crate::app) fn subscribe(&mut self, session: &SessionId, level: Level) -> String {
         let (id, line) = subscribe_line(session, level, None);
-        if let Some(home) = self.home.as_mut() {
-            home.subs.sent(id.clone(), session.clone(), level);
-            self.outbox
-                .wait(&id, super::super::outbox::Waiting::Subscribe);
-        }
+        self.home.subs.sent(id.clone(), session.clone(), level);
+        self.outbox
+            .wait(&id, super::super::outbox::Waiting::Subscribe);
         line
     }
 
@@ -206,16 +204,12 @@ impl App {
     /// a delegate is subscribed once per attachment (`docs/invocation.md`,
     /// `subscribe`).
     pub(in crate::app) fn subscribed_level(&self, session: &SessionId) -> Option<Level> {
-        self.home
-            .as_ref()
-            .and_then(|home| home.subs.expected(session))
+        self.home.subs.expected(session)
     }
 
     /// Whether a subscribe for `session` waits for its answer.
     pub(in crate::app) fn subscribe_pending(&self, session: &SessionId) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| home.subs.pending(session))
+        self.home.subs.pending(session)
     }
 
     /// Leaves the session on screen for home: the conversation cleared
@@ -229,32 +223,25 @@ impl App {
         let attached = self.session().cloned();
         // `go_home` resets before the session clears, so the value is
         // saved first and put back when nothing was attached.
-        let came_from = self.home.as_ref().and_then(|home| home.came_from.clone());
+        let came_from = self.home.came_from.clone();
         self.go_home();
         // Home's list focus is requested per entry: a plain leave
         // lands on the entry bar, and the callers that focus a row ask
         // for it after. Without this a leave re-pins the last row focus
         // requested, so `/new` would land back on the left row.
-        if let Some(home) = self.home.as_mut() {
-            home.focus_list = None;
-        }
+        self.home.focus_list = None;
         let Some(session) = attached else {
-            if let Some(home) = self.home.as_mut() {
-                home.came_from = came_from;
-            }
+            self.home.came_from = came_from;
             return Effect::None;
         };
-        if let Some(home) = self.home.as_mut() {
-            home.came_from = Some(session.clone());
-        }
+        self.home.came_from = Some(session.clone());
         let lowers = self.outbox.is_up()
-            && self.home.as_ref().is_some_and(|home| {
-                home.subs.expected(&session) == Some(Level::Full)
-                    && home
-                        .sessions
-                        .row(&session)
-                        .is_some_and(|row| row.left.is_none())
-            });
+            && self.home.subs.expected(&session) == Some(Level::Full)
+            && self
+                .home
+                .sessions
+                .row(&session)
+                .is_some_and(|row| row.left.is_none());
         if lowers {
             Effect::Send(vec![self.subscribe(&session, Level::Summary)])
         } else {
@@ -266,12 +253,11 @@ impl App {
     /// whose row is still live. A session that exited or closed, or a
     /// row that vanished, hides the hint and leaves the key untaken.
     pub(in crate::app) fn came_from_live(&self) -> bool {
-        self.home.as_ref().is_some_and(|home| {
-            home.came_from.as_ref().is_some_and(|came_from| {
-                home.sessions
-                    .row(came_from)
-                    .is_some_and(|row| row.left.is_none())
-            })
+        self.home.came_from.as_ref().is_some_and(|came_from| {
+            self.home
+                .sessions
+                .row(came_from)
+                .is_some_and(|row| row.left.is_none())
         })
     }
 
@@ -282,7 +268,7 @@ impl App {
     pub(in crate::app) fn leave_on_row(&mut self) -> Effect {
         let key = self
             .session()
-            .and_then(|session| self.home.as_ref()?.sessions.row(session))
+            .and_then(|session| self.home.sessions.row(session))
             .map(|row| row.key);
         let effect = self.leave();
         if let Some(key) = key
@@ -313,9 +299,9 @@ impl App {
         }
         let key = self
             .home
-            .as_ref()
-            .and_then(|home| home.came_from.clone())
-            .and_then(|came_from| self.home.as_ref()?.sessions.row(&came_from))
+            .came_from
+            .clone()
+            .and_then(|came_from| self.home.sessions.row(&came_from))
             .map(|row| row.key)?;
         Some(self.open_entry(key))
     }
@@ -335,11 +321,7 @@ impl App {
         if !self.outbox.is_up() || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
-        let Some(row) = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-        else {
+        let Some(row) = self.home.sessions.by_key(key) else {
             return Effect::None;
         };
         if row.state == crate::home::State::Unreadable {
@@ -348,10 +330,7 @@ impl App {
             return Effect::None;
         }
         let session = row.id.clone();
-        let expected = self
-            .home
-            .as_ref()
-            .and_then(|home| home.subs.expected(&session));
+        let expected = self.home.subs.expected(&session);
         Effect::Send(self.open_session(session, expected, None, false))
     }
 
@@ -359,18 +338,14 @@ impl App {
     /// the accepted level changes only on acceptance. Some with its
     /// session when the id was in flight, either way.
     fn answered(&mut self, id: &str, accepted: bool) -> Option<SessionId> {
-        self.home
-            .as_mut()
-            .and_then(|home| home.subs.answered(id, accepted))
+        self.home.subs.answered(id, accepted)
     }
 
     /// Whether the open's first-stage summary subscribe is in flight:
     /// the attach summary span runs while this holds, through the
     /// acceptance that queues the session's commands line.
     pub(crate) fn summary_in_flight(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| matches!(home.subs.opening, Some(Opening::Summary { .. })))
+        matches!(self.home.subs.opening, Some(Opening::Summary { .. }))
     }
 
     /// Whether `id` is the open's subscribe in flight: the first
@@ -378,8 +353,9 @@ impl App {
     /// only the raise's acceptance ends the gate.
     fn is_ack(&self, id: &str) -> bool {
         self.home
+            .subs
+            .opening
             .as_ref()
-            .and_then(|home| home.subs.opening.as_ref())
             .is_some_and(|opening| match opening {
                 Opening::Summary { ack, .. } | Opening::Raised { ack, .. } => ack == id,
                 Opening::Due { .. } | Opening::Reading { .. } => false,
@@ -395,19 +371,16 @@ impl App {
     pub(super) fn reconcile(&mut self, session: &SessionId) {
         let lowers = self.outbox.is_up()
             && self.session() != Some(session)
-            && self.home.as_ref().is_some_and(|home| {
-                home.subs.full(session)
-                    && !home.subs.pending(session)
-                    && home
-                        .sessions
-                        .row(session)
-                        .is_some_and(|row| row.left.is_none())
-            });
+            && self.home.subs.full(session)
+            && !self.home.subs.pending(session)
+            && self
+                .home
+                .sessions
+                .row(session)
+                .is_some_and(|row| row.left.is_none());
         if lowers {
             let line = self.subscribe(session, Level::Summary);
-            if let Some(home) = self.home.as_mut() {
-                home.subs.outbox.push(line);
-            }
+            self.home.subs.outbox.push(line);
         }
     }
 
@@ -440,8 +413,9 @@ impl App {
     fn fail_open(&mut self, code: ErrorCode, message: String) -> Vec<String> {
         let session = self
             .home
-            .as_mut()
-            .and_then(|home| home.subs.opening.take())
+            .subs
+            .opening
+            .take()
             .map(|opening| opening.session().clone());
         let Some(session) = session else {
             return Vec::new();
@@ -452,9 +426,7 @@ impl App {
             }
             None => message,
         };
-        if let Some(home) = self.home.as_mut() {
-            home.sessions.note(&session, text.clone());
-        }
+        self.home.sessions.note(&session, text.clone());
         let attached = self.session() == Some(&session);
         self.notices.push(code, text);
         if attached {
@@ -481,8 +453,9 @@ impl App {
         if let Some(source) = source
             && self
                 .home
-                .as_ref()
-                .and_then(|home| home.subs.levels.session_for(id))
+                .subs
+                .levels
+                .session_for(id)
                 .is_some_and(|minting| &minting != source)
         {
             return None;
@@ -517,27 +490,21 @@ impl App {
         session: &SessionId,
         id: &str,
     ) -> Option<Vec<String>> {
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.subs.full(session))
-        {
+        if self.home.subs.full(session) {
             self.reconcile(session);
         }
         if self.is_ack(id) {
             let due = self
                 .home
+                .subs
+                .opening
                 .as_ref()
-                .and_then(|home| home.subs.opening.as_ref())
                 .is_some_and(|opening| matches!(opening, Opening::Summary { .. }));
             if due {
-                if let Some(Opening::Summary { session, held, .. }) =
-                    self.home.as_mut().and_then(|home| home.subs.opening.take())
+                if let Some(Opening::Summary { session, held, .. }) = self.home.subs.opening.take()
                 {
                     let line = self.ask_commands(&session);
-                    if let Some(home) = self.home.as_mut() {
-                        home.subs.opening = Some(Opening::Due { session, held });
-                    }
+                    self.home.subs.opening = Some(Opening::Due { session, held });
                     return Some(vec![line]);
                 }
                 return Some(Vec::new());
@@ -547,9 +514,7 @@ impl App {
             // with it. A log still cut past here re-pushes
             // `stream_closed` when its replay reaches the cut.
             self.notices.clear_code(ErrorCode::StreamClosed, &session.0);
-            if let Some(home) = self.home.as_mut() {
-                home.subs.opening = None;
-            }
+            self.home.subs.opening = None;
             return None;
         }
         Some(Vec::new())
@@ -564,10 +529,7 @@ impl App {
     /// one the open was left, so it drops and nothing goes out. Else
     /// `None`: no raise is due.
     pub(crate) fn take_raise(&mut self) -> Option<String> {
-        let opening = self
-            .home
-            .as_ref()
-            .and_then(|home| home.subs.opening.as_ref());
+        let opening = self.home.subs.opening.as_ref();
         let due = opening.as_ref().and_then(|opening| match opening {
             Opening::Due { held, .. } => Some(*held),
             Opening::Summary { .. } | Opening::Reading { .. } | Opening::Raised { .. } => None,
@@ -579,23 +541,22 @@ impl App {
         let held = due.or(if reading_done { Some(false) } else { None })?;
         let session = self
             .home
+            .subs
+            .opening
             .as_ref()
-            .and_then(|home| home.subs.opening.as_ref())
             .map(|opening| opening.session().clone());
         let session = session?;
         if self.session() != Some(&session) {
-            if let Some(home) = self.home.as_mut() {
-                home.subs.opening = None;
-            }
+            self.home.subs.opening = None;
             return None;
         }
         let (id, line) = subscribe_line(&session, Level::Full, None);
-        if let Some(home) = self.home.as_mut() {
-            home.subs.sent(id.clone(), session.clone(), Level::Full);
-            home.subs.raise(id.clone());
-            self.outbox
-                .wait(&id, super::super::outbox::Waiting::Subscribe);
-        }
+        self.home
+            .subs
+            .sent(id.clone(), session.clone(), Level::Full);
+        self.home.subs.raise(id.clone());
+        self.outbox
+            .wait(&id, super::super::outbox::Waiting::Subscribe);
         if due.is_some() {
             let busy = matches!(&self.phase, Phase::Attached { busy: true, .. });
             self.overlay = crate::app::overlay::Overlay::Shown {
@@ -611,13 +572,10 @@ impl App {
     /// Whether `id` answers the open's raise for `session`: the ack
     /// `pass_line` reads while the overlay is shown.
     pub(in crate::app) fn raise_ack(&self, session: &SessionId, id: &str) -> bool {
-        self.home
-            .as_ref()
-            .and_then(|home| home.subs.opening.as_ref())
-            .is_some_and(|opening| {
-                matches!(opening, Opening::Raised { ack, .. } if ack == id)
-                    && opening.session() == session
-            })
+        self.home.subs.opening.as_ref().is_some_and(|opening| {
+            matches!(opening, Opening::Raised { ack, .. } if ack == id)
+                && opening.session() == session
+        })
     }
 
     /// Moves a due open to the tail read and starts it: the loop reads
@@ -625,24 +583,23 @@ impl App {
     /// to read when the move happened.
     pub(crate) fn tail_due(&mut self) -> Option<SessionId> {
         let attached = self.session().cloned();
-        let session = self.home.as_mut()?.subs.tail_due(attached.as_ref())?;
+        let session = self.home.subs.tail_due(attached.as_ref())?;
         self.overlay = crate::app::overlay::Overlay::Reading(crate::app::overlay::Tail::new());
         Some(session)
     }
 
     /// The session opening, if any.
     pub(crate) fn opening_session(&self) -> Option<SessionId> {
-        self.home
-            .as_ref()
-            .and_then(|home| home.subs.opening_session())
+        self.home.subs.opening_session()
     }
 
     /// Whether `session` is opening: its lines fold into its row and are
     /// dropped until the raise's acknowledgement.
     pub(super) fn gated(&self, session: &SessionId) -> bool {
         self.home
+            .subs
+            .opening
             .as_ref()
-            .and_then(|home| home.subs.opening.as_ref())
             .is_some_and(|opening| opening.session() == session)
     }
 }

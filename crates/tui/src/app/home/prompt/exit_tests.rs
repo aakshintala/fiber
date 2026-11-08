@@ -618,7 +618,7 @@ fn an_unsent_close_settles_only_its_tag() {
 #[test]
 fn remote_exit_lines_keep_the_hub_for_live_and_attached_sessions() {
     let mut app = home_with(80, 24, launch());
-    app.home.as_mut().unwrap().launch.location = crate::LaunchLocation::Remote {
+    app.home.launch.location = crate::LaunchLocation::Remote {
         hub: "box".to_owned(),
     };
     linked(&mut app);

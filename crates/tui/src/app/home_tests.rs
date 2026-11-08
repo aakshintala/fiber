@@ -96,7 +96,7 @@ fn remote_home_ignores_the_launch_project_in_sections_and_row_text() {
         })
         .collect();
     assert_eq!(heads, ["a", "b"]);
-    let row = app.home.as_ref().unwrap().sessions.all()[1].key;
+    let row = app.home.sessions.all()[1].key;
     let text = app.home_text(Spot::Entry(row)).unwrap();
     assert!(text.ends_with("  b"), "{text}");
     assert!(!text.contains("sentinel-project"));
@@ -116,7 +116,7 @@ fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
             }
             app.on_line(row);
         }
-        let sessions = &app.home.as_ref().unwrap().sessions;
+        let sessions = &app.home.sessions;
         assert_eq!(sessions.project_of("/remote"), Some(expected));
         assert_eq!(sessions.project_of("/elsewhere"), None);
     }
@@ -133,10 +133,7 @@ fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
         "q",
         json!({"state":"idle"}),
     ));
-    assert_eq!(
-        app.home.as_ref().unwrap().sessions.project_of("/remote"),
-        Some("q")
-    );
+    assert_eq!(app.home.sessions.project_of("/remote"), Some("q"));
     for absent_first in [false, true] {
         let mut sessions = crate::home::Sessions::default();
         let make = |id: &str, project: &str| {
@@ -3213,7 +3210,7 @@ fn y_on_more_copies_a_positive_count_but_not_zero() {
         Effect::Copy("… 2 more".to_owned())
     );
 
-    app.home.as_mut().unwrap().sessions.expand("-w");
+    app.home.sessions.expand("-w");
     app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
     assert_eq!(app.on_key(Key::Char('y'), now), Effect::None);
 }
@@ -4678,8 +4675,6 @@ fn a_chosen_workspace_keeps_the_switch_after_its_row_leaves() {
     assert_eq!(chips(&app)[0], "[git-ws]");
     assert!(shows_switch(&app));
     app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
         .sessions
         .remove(&contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert!(rows(&app).is_empty());
@@ -6342,7 +6337,7 @@ fn an_accepted_offer_answer_opens_the_report_and_closes_the_offer() {
     assert_eq!((report.copied_count(), report.left_count()), (4, 1));
     assert!(app.notices().is_empty());
     assert!(!app.home_screen().unwrap().question_import);
-    assert!(!app.home.as_ref().unwrap().import_offer);
+    assert!(!app.home.import_offer);
     // Esc closes the report and leaves no notices behind.
     let now = fakes::clock::FakeClock::new().now();
     assert!(matches!(app.on_key(Key::Esc, now), Effect::None));
@@ -6715,7 +6710,7 @@ fn a_dirty_answer_sends_exactly_one_follow_up() {
     );
     let first = line_id(&lines[0]).to_owned();
     // A trigger arrived while the ask was in flight.
-    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    app.home.sessions.mark_dirty("-w");
     let follow = answer_value(
         &mut app,
         &first,
@@ -6748,7 +6743,7 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
     );
     let first = line_id(&lines[0]).to_owned();
-    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    app.home.sessions.mark_dirty("-w");
     assert!(
         app.on_line(hub_refused(&first, "gone", "no recent"))
             .is_empty()
@@ -6772,7 +6767,7 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
         line,
         crate::app::NoticeLine::Notice { code, .. } if code.name() == "gone"
     )));
-    assert!(!app.home.as_ref().unwrap().sessions.is_dirty("-w"));
+    assert!(!app.home.sessions.is_dirty("-w"));
 }
 
 #[test]
@@ -6785,7 +6780,7 @@ fn a_scoped_malformed_answer_keeps_the_total_notices_once_and_sends_nothing() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
     );
     let first = line_id(&lines[0]).to_owned();
-    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    app.home.sessions.mark_dirty("-w");
     let follow = answer_value(
         &mut app,
         &first,
@@ -6831,7 +6826,7 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
             json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
         );
         let first = line_id(&lines[0]).to_owned();
-        app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+        app.home.sessions.mark_dirty("-w");
         let follow = answer_value(
             &mut app,
             &first,
@@ -6853,10 +6848,7 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
         assert_eq!(stored(&app, "-w"), Some(5), "{label}");
         // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
         assert_eq!(listed(&app), before, "{label}");
-        assert!(
-            !app.home.as_ref().unwrap().sessions.is_dirty("-w"),
-            "{label}"
-        );
+        assert!(!app.home.sessions.is_dirty("-w"), "{label}");
     }
 }
 

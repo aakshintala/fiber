@@ -196,7 +196,7 @@ impl App {
     /// in its project group, in feed order, until the screen shows
     /// another session (`docs/tui.md`, "The rail").
     pub(crate) fn rail_cards(&self) -> Option<(Vec<&Row>, Option<&str>)> {
-        let home = self.home.as_ref()?;
+        let home = &self.home;
         let hidden = &self.rail_state.hidden;
         // Row keys are unique and never reused, so the drawn set is the
         // filtered cards plus the attached exited feed row, in the feed
@@ -230,9 +230,7 @@ impl App {
     /// beside the rail header's spend and the key its "N ✓" opens
     /// (`docs/tui.md`, "The rail"). Empty without home.
     pub(crate) fn rail_sections(&self) -> Vec<crate::home::Section<'_>> {
-        let Some(home) = self.home.as_ref() else {
-            return Vec::new();
-        };
+        let home = &self.home;
         home.sessions.sections(home.launch_project())
     }
 
@@ -274,9 +272,7 @@ impl App {
                 self.rail_state.walk.clear();
             }
         }
-        let Some(home) = self.home.as_ref() else {
-            return;
-        };
+        let home = &self.home;
         // Numbers cover every card, hidden ones included, so a hidden
         // card keeps its number for its whole life and a new card takes
         // the smallest free one (`docs/tui.md`, "The rail"). Only the
@@ -356,11 +352,7 @@ impl App {
     /// The on-screen session's home row key.
     fn attached_row_key(&self) -> Option<u64> {
         let attached = self.session().cloned()?;
-        self.home
-            .as_ref()?
-            .sessions
-            .row(&attached)
-            .map(|row| row.key)
+        self.home.sessions.row(&attached).map(|row| row.key)
     }
 
     /// The rail's stops in drawn order: each group's "+", then its
@@ -429,7 +421,6 @@ impl App {
     pub(super) fn rail_stroke(&mut self, stroke: &Stroke, now: Instant) -> Option<Effect> {
         if self.key_context() != Context::Input
             || self.item_open()
-            || self.home.is_none()
             || self.chrome.layout().is_none()
         {
             return None;
@@ -556,12 +547,7 @@ impl App {
                 .iter()
                 .find(|(_, held)| *held == number)
                 .map(|(id, _)| id.clone());
-            let key = id.and_then(|id| {
-                self.home
-                    .as_ref()
-                    .and_then(|home| home.sessions.row(&id))
-                    .map(|row| row.key)
-            });
+            let key = id.and_then(|id| self.home.sessions.row(&id).map(|row| row.key));
             return Some(key.map_or(Effect::None, |key| self.switch_to(key)));
         }
         if *key == Key::AltA {
@@ -679,10 +665,10 @@ impl App {
     /// (`docs/tui.md`, "Shedding"). ⌥P brings the panel back, and the
     /// rail sheds again.
     pub(super) fn show_rail(&mut self) -> Effect {
-        let home = self.home.as_ref().map(|home| super::chrome::HomeState {
+        let home = Some(super::chrome::HomeState {
             shares: crate::layout::Shares {
-                rail: home.launch.rail_share,
-                panel: home.launch.panel_share,
+                rail: self.home.launch.rail_share,
+                panel: self.home.launch.panel_share,
             },
             on_home: self.on_home(),
         });
@@ -702,7 +688,7 @@ impl App {
     pub(crate) fn rail_waiting(&self) -> Option<usize> {
         self.chrome.layout()?.grip?;
         let attached = self.session();
-        let home = self.home.as_ref()?;
+        let home = &self.home;
         Some(
             home.sessions
                 .cards()
@@ -726,8 +712,8 @@ impl App {
             Spot::Card(key) => {
                 let exited = self
                     .home
-                    .as_ref()
-                    .and_then(|home| home.sessions.by_key(key))
+                    .sessions
+                    .by_key(key)
                     .is_some_and(|row| row.left == Some(Left::Exited));
                 if exited {
                     self.open_entry(key)
@@ -777,19 +763,19 @@ impl App {
             return Effect::None;
         }
         let attached = self.session();
-        let oldest = self.home.as_ref().and_then(|home| {
-            home.sessions
-                .cards()
-                .into_iter()
-                .filter(|row| {
-                    row.left.is_none()
-                        && row.state == State::Waiting
-                        && Some(&row.id) != attached
-                        && !self.rail_state.is_cardless(&row.id)
-                })
-                .min_by_key(|row| row.status.as_ref().map_or(u64::MAX, |status| status.since))
-                .map(|row| row.key)
-        });
+        let oldest = self
+            .home
+            .sessions
+            .cards()
+            .into_iter()
+            .filter(|row| {
+                row.left.is_none()
+                    && row.state == State::Waiting
+                    && Some(&row.id) != attached
+                    && !self.rail_state.is_cardless(&row.id)
+            })
+            .min_by_key(|row| row.status.as_ref().map_or(u64::MAX, |status| status.since))
+            .map(|row| row.key);
         match oldest {
             Some(key) => self.switch_to(key),
             None => {
@@ -832,15 +818,11 @@ impl App {
     ) -> Option<Vec<String>> {
         self.outbox.settled(id);
         if accepted {
-            if let Some(home) = self.home.as_mut() {
-                home.sessions.remove(session);
-            }
+            self.home.sessions.remove(session);
         } else {
             let code = super::home::refusal_code(payload);
             let message = super::home::refusal(payload);
-            if let Some(home) = self.home.as_mut() {
-                home.sessions.note(session, message.clone());
-            }
+            self.home.sessions.note(session, message.clone());
             self.notices.push(code, message);
         }
         Some(Vec::new())
@@ -855,11 +837,7 @@ impl App {
         if !self.outbox.is_up() {
             return Effect::None;
         }
-        let Some(row) = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-        else {
+        let Some(row) = self.home.sessions.by_key(key) else {
             return Effect::None;
         };
         if crate::view::rail::cannot_attach(row) {
@@ -882,8 +860,8 @@ impl App {
     fn start_in(&mut self, key: u64) -> Effect {
         let Some(workspace) = self
             .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
+            .sessions
+            .by_key(key)
             .map(|row| row.workspace.clone())
         else {
             return Effect::None;
@@ -907,11 +885,7 @@ impl App {
         if !self.outbox.is_up() || matches!(self.phase, Phase::Pending { .. }) {
             return Effect::None;
         }
-        let Some(row) = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-        else {
+        let Some(row) = self.home.sessions.by_key(key) else {
             return Effect::None;
         };
         if self.session() == Some(&row.id) {

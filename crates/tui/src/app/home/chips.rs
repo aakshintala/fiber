@@ -63,16 +63,12 @@ impl App {
     /// Focuses `chip`, remembering it as the chip focused last.
     fn focus_chip(&mut self, chip: Spot) {
         self.focus = Some(TargetId::Home(chip));
-        if let Some(home) = self.home.as_mut() {
-            home.last_chip = chip;
-        }
+        self.home.last_chip = chip;
     }
 
     /// Remembers the focused chip, for a key leaving the chip row.
     fn remember_chip(&mut self, chip: Spot) {
-        if let Some(home) = self.home.as_mut() {
-            home.last_chip = chip;
-        }
+        self.home.last_chip = chip;
     }
 
     /// The chip ↓ from the entry bar and ↑ from the first row land on:
@@ -82,9 +78,9 @@ impl App {
         if stops.is_empty() {
             return None;
         }
-        let last = self.home.as_ref().map(|home| home.last_chip);
-        if last.is_some_and(|last| stops.contains(&last)) {
-            last
+        let last = self.home.last_chip;
+        if stops.contains(&last) {
+            Some(last)
         } else {
             stops.into_iter().next()
         }
