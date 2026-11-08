@@ -1294,6 +1294,9 @@ fn page_load_scans_only_its_window() {
     assert_eq!(second.len(), 64);
     let scanned = super::take_history_scan_lines();
     let total = scanned.saturating_add(second.len() as u64);
+    // Issue-specific regression bound required by RULING-4059-2, not a
+    // public page-count promise: one 64-line window plus resident offset
+    // checkpoints (`CHECKPOINTS` in `crates/log/src/offsets.rs`).
     assert!(
         total <= 64 + 1024,
         "one page loads window-bounded, scanned {scanned} plus {} parsed over 1088",
