@@ -672,3 +672,5 @@ crates/main/tests/hub_exit_window.rs	fiber-4435	plan	2026-11-08T17:36:45Z	Amoghs
 crates/tui/src/snapshots/tui__rebind__view_tests__keys_home_80x24_wrapped_focus.snap	fiber-4188	plan	2026-11-08T17:50:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
 crates/tui/src/app/snapshots/tui__app__overlay__tests__stacked__quit_over_report_over_keys_screen_on_home.snap	fiber-4188	plan	2026-11-08T17:50:27Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
 crates/tui/src/event_loop/attach_tests.rs	fiber-4435	plan	2026-11-08T19:16:34Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/support/mod.rs	fiber-4402	plan	2026-11-08T19:24:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4428,4441,4440,4439,4438,4436,4434,4422,4375
+crates/tui/src/app/config_views_tests.rs	fiber-4402	plan	2026-11-08T19:24:43Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4428,4441,4440,4439,4438,4436,4434,4422,4375
