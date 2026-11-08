@@ -290,7 +290,7 @@ fn reset(
 }
 
 fn file_text(file: &std::path::Path) -> String {
-    std::fs::read_to_string(file).unwrap()
+    std::fs::read_to_string(file).unwrap_or_else(|err| panic!("{}: {err}", file.display()))
 }
 
 #[test]

@@ -2702,22 +2702,25 @@ fn enter_on_each_screen_row_opens_its_screen_and_writes_no_key() {
             .count();
         let effect = enter_row(&mut app, tab, down);
         let command = screen_.row().map(|row| row.command).unwrap();
-        match screen_ {
-            Screen::Keys => assert!(app.keys_screen_open(), "{command}"),
-            Screen::Rules => {
-                let frame = app.config_view_screen().expect("a view is open");
-                assert_ne!(frame.title, "Settings", "{command}");
-            }
-            Screen::Credentials | Screen::Tools | Screen::Skills | Screen::Mcp => {
+        // What each row asks of the app: a command to the session, or a
+        // screen the app opens itself.
+        let asked = match screen_ {
+            Screen::Credentials => Some("credentials"),
+            Screen::Tools => Some("tools"),
+            Screen::Skills => Some("skills"),
+            Screen::Mcp => Some("mcp_servers"),
+            Screen::Keys | Screen::Rules => None,
+        };
+        match asked {
+            Some(asked) => {
                 let sent = sent(effect);
                 assert_eq!(sent.len(), 1, "{command}");
-                let asked = match screen_ {
-                    Screen::Credentials => "credentials",
-                    Screen::Tools => "tools",
-                    Screen::Skills => "skills",
-                    _ => "mcp_servers",
-                };
                 assert_eq!(sent[0]["command"], asked, "{command}");
+            }
+            None if screen_ == Screen::Keys => assert!(app.keys_screen_open(), "{command}"),
+            None => {
+                let frame = app.config_view_screen().expect("a view is open");
+                assert_ne!(frame.title, "Settings", "{command}");
             }
         }
         assert!(seam.writes().is_empty(), "{command}");

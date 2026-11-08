@@ -63,7 +63,7 @@ pub(crate) enum ConfigView {
 #[derive(Debug)]
 enum Open {
     /// `/settings`.
-    Settings(Settings),
+    Settings(Box<Settings>),
     /// `/tools`.
     Tools(Tools),
     /// `/skills`.
@@ -409,19 +409,19 @@ impl App {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
-                Open::Settings(Settings::open(
+                Open::Settings(Box::new(Settings::open(
                     &self.config_ctx(seam.as_ref(), &workspace),
                     self.launch_overrides.clone(),
-                ))
+                )))
             }
             ConfigView::Theme => {
                 let Some(workspace) = self.view_workspace() else {
                     return Effect::None;
                 };
-                Open::Settings(Settings::open_theme(
+                Open::Settings(Box::new(Settings::open_theme(
                     &self.config_ctx(seam.as_ref(), &workspace),
                     self.launch_overrides.clone(),
-                ))
+                )))
             }
             ConfigView::Tools => {
                 return self.open_asking(seam, "tools", build_tools);

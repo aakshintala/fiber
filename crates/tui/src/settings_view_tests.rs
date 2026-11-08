@@ -1798,9 +1798,12 @@ fn the_renderer_targets_each_drawn_line_so_a_click_lands_on_the_row_it_shows() {
         let spot = targets
             .iter()
             .filter(|target| target.rect.y == y)
-            .find_map(|target| match target.id {
-                crate::mouse::TargetId::View(Spot::Row(at)) => Some(at),
-                _ => None,
+            .find_map(|target| {
+                if let crate::mouse::TargetId::View(Spot::Row(at)) = target.id {
+                    Some(at)
+                } else {
+                    None
+                }
             })
             .unwrap();
         let mut clicked = tab(&fake, SettingsTab::Models);

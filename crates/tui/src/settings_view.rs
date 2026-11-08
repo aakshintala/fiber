@@ -1603,7 +1603,9 @@ fn set_path(entry: &mut Value, text: &str) {
         Value::Object(object) => {
             object.insert("path".to_owned(), Value::String(text.to_owned()));
         }
-        other => *other = Value::String(text.to_owned()),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            *entry = Value::String(text.to_owned());
+        }
     }
 }
 

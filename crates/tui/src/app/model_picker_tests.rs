@@ -5383,7 +5383,7 @@ fn a_refused_settings_model_save_keeps_the_picker_for_a_retry() {
     assert!(app.model_picker_open(), "the picker stays for a retry");
     // The refused attempt is the only write so far, to the row's key.
     let attempt = ("model".to_owned(), "\"acme/m1\"".to_owned());
-    assert_eq!(saved(&seam), [attempt.clone()]);
+    assert_eq!(saved(&seam), std::slice::from_ref(&attempt));
     *seam.refuse.lock().unwrap() = None;
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(!app.model_picker_open());
