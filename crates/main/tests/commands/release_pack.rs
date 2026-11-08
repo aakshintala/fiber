@@ -911,9 +911,13 @@ impl Release {
         );
         release.write("tree/docs/README.md", b"fixture docs");
         release.write("tree/docs/guide.md", b"guide");
-        fs::copy(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/release_pack/fiber"),
+        release.write(
+            "tree/bin/fiber",
+            include_bytes!("../fixtures/release_pack/fiber"),
+        );
+        fs::set_permissions(
             release.root("tree/bin/fiber"),
+            fs::Permissions::from_mode(0o755),
         )
         .unwrap();
         release.write("tree/bin/THIRD-PARTY-NOTICES", b"notices");
