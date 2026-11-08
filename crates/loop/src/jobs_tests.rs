@@ -6614,6 +6614,8 @@ fn a_completed_wait_on_a_real_registry_returns_the_stored_tail() {
         "{text}"
     );
     assert!(text.contains("Last output:\none\ntwo\nthree\n"), "{text}");
+}
+
 // A Fiber delegate's final message file: written once, after the hooks, from
 // the text the delivery carries (`docs/delegates.md`, "Results").
 
