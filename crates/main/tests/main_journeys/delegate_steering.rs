@@ -1,15 +1,16 @@
 //! The delegate steering journey (#4187): a running fiber delegate's view
 //! draws the steering card for its own queue and edits it through the same
 //! keys and targets as the conversation (`docs/tui.md`, "Swapped views"
-//! and "Steering"). The delegate runs a foreground shell command blocked
-//! on a FIFO the test owns, so its queue persists on screen until the
-//! test releases the FIFO.
+//! and "Steering"). The test holds the delegate's model response on the
+//! fake provider, so the delegate's turn stays open and its queue
+//! persists on screen until the test releases the response.
 
+use fakes::ProviderServer;
 use serde_json::{Value, json};
 
 use super::support::pty::{Grid, Run};
 use super::support::{
-    Setup, Socket, Subscribed, TRUECOLOUR, accepted, bounded, recv, subscribe, until, until_after,
+    Setup, Socket, Subscribed, TRUECOLOUR, accepted, recv, subscribe, text_reply, until_after,
     write_json,
 };
 use super::{dismiss_first_run_offer, journey_bin, quit_journey, run_journey, shows};
@@ -20,8 +21,9 @@ const ALT_UP: &[u8] = b"\x1b[1;3A";
 const ALT_DOWN: &[u8] = b"\x1b[1;3B";
 /// Alt+X in its CSI-u form.
 const ALT_X: &[u8] = b"\x1b[120;3u";
-/// The panel row of the running delegate.
-const DELEGATE_ROW: &str = "● review the parser";
+/// The panel row of the running delegate: its description, which follows
+/// a status glyph that animates while the delegate holds no status.
+const DELEGATE_ROW: &str = "review the parser";
 
 /// The first column on row `y` where `needle` starts, cell by cell.
 fn col_of(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
@@ -143,24 +145,17 @@ fn fence_after(prev: Subscribed, line: &Value, delegate: &str) -> Subscribed {
     }
 }
 
-/// The scripts and rules: the parent's `delegate_spawn` goes to the
-/// scripted reviewer, and the delegate's one shell call, which blocks
-/// reading the FIFO at `hold`, is allowed by its exact command.
-fn write_setup(setup: &Setup, command: &str) {
-    write_json(
-        &setup.workspace().join("d.json"),
-        &json!({"steps": [
-            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
-            {"text": ["Reviewed."]},
-            {"text": ["Spare."]},
-        ]}),
-    );
+/// The parent's script and the config: the parent and the reviewer run
+/// scripted, `delegate_spawn` goes to the reviewer, and the delegate runs
+/// on the fake provider `server` installed as `fake/m`.
+fn write_setup(setup: &Setup, server: &ProviderServer) {
+    setup.provider(server);
     write_json(
         &setup.workspace().join("s.json"),
         &json!({"steps": [
             {"tool_calls": [{"name": "delegate_spawn", "arguments": {
                 "description": "review the parser", "prompt": "go",
-                "model": "fiber:scripted/d.json"}}]},
+                "model": "fiber:fake/m"}}]},
             {"text": ["Done."]},
             {"text": ["Noted."]},
             {"text": ["Calm."]},
@@ -175,16 +170,15 @@ fn write_setup(setup: &Setup, command: &str) {
         &json!({
             "model": "scripted/s.json",
             "reviewer": {"model": "scripted/r.json"},
-            "roles": {"delegate": "fiber:scripted/d.json"},
+            "roles": {"delegate": "fiber:fake/m"},
             "hub": {"idle_exit_ms": 1000}
         }),
     );
     std::fs::write(
         setup.home().join("rules"),
         format!(
-            "{}\n{}\n",
+            "{}\n",
             json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
-            json!({"decision": "allow", "tool": "shell", "prefix": command}),
         ),
     )
     .unwrap();
@@ -196,19 +190,37 @@ fn queued_delegate_steering_journey() {
         "delegate_steering::queued_delegate_steering_journey",
         std::panic::AssertUnwindSafe(|| {
             let setup = Setup::new();
-            let hold_path = setup.workspace().join("delegate-steering-hold");
-            let command = format!("head -n 1 '{}'", hold_path.display());
-            write_setup(&setup, &command);
+            let server =
+                ProviderServer::start([text_reply("Reviewed."), text_reply("Steered.")]).unwrap();
+            write_setup(&setup, &server);
             let bin = journey_bin();
-            let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &TRUECOLOUR);
-            // Declared after the run, so a failure drops the hold first:
-            // its watchdog reaps the blocked reader before the teardown.
-            fakes::fifo(&hold_path);
-            let mut delegate_shell_hold = fakes::Hold::on(&hold_path, hold_path.to_str().unwrap());
+            let env: Vec<(&str, &str)> = TRUECOLOUR
+                .iter()
+                .copied()
+                .chain([("FIBER_TEST_FAKE_KEY", "sk-test")])
+                .collect();
+            let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &env);
+            // Owned after the run, so a failure drops the server first:
+            // its drop releases the held response before the teardown.
+            let delegate_provider = server;
+            delegate_provider.hold();
             run.ready();
             dismiss_first_run_offer(&mut run);
             run.write(b"go\r");
-            run.wait_screen("the running delegate row", |grid| shows(grid, DELEGATE_ROW));
+            // The delegate's model request is recorded and unanswered:
+            // its turn is open for as long as the test holds it.
+            assert!(
+                delegate_provider.await_requests(1, setup.deadline.start_wait()),
+                "the held delegate model request"
+            );
+            let requests = delegate_provider.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "POST");
+            let body = String::from_utf8_lossy(&requests[0].body).into_owned();
+            assert!(body.contains("go"), "the delegate's prompt in {body}");
+            run.wait_screen("the running delegate row", |grid| {
+                shows(grid, "1 running") && shows(grid, DELEGATE_ROW)
+            });
             run.click_where("the delegate row", |grid| find_text(grid, DELEGATE_ROW));
             run.wait_screen("the delegate view", |grid| {
                 shows(grid, "Delegate  ◆ review the parser")
@@ -217,21 +229,10 @@ fn queued_delegate_steering_journey() {
             });
             let delegate = delegate_session(&setup);
             // A second client on the delegate hears its lines; each wait
-            // below starts after the latest line the test consumed.
+            // below starts after the latest durable line the test consumed.
             let control = Socket::connect(setup.deadline, &setup.hub_socket());
             assert_eq!(recv(&control, "hub_hello")["kind"], "hub_hello");
-            let sub = subscribe(&control, &delegate);
-            // The shell call runs, blocked on the FIFO, before any steer
-            // goes: its own start is the rendezvous.
-            let started = until(&control, "the held shell call starting", |line| {
-                line["kind"] == "tool_call_started" && line["session_id"] == delegate.as_str()
-            });
-            let started = started.last().cloned().unwrap_or_default();
-            let shell_call = started["action_id"]
-                .as_str()
-                .unwrap_or_else(|| panic!("an action id on {started}"))
-                .to_owned();
-            let mut fence = fence_after(sub, &started, &delegate);
+            let mut fence = subscribe(&control, &delegate);
 
             // Enter on a typed message queues it in the delegate's card
             // above the cleared input.
@@ -323,35 +324,25 @@ fn queued_delegate_steering_journey() {
                     && !shows(grid, "third thing")
             });
 
-            // Releasing the FIFO ends the shell call; the delegate reaches
-            // its step boundary and the kept message joins its turn.
-            let mut release = delegate_shell_hold.release().try_clone().unwrap();
-            bounded(
-                setup.deadline.start_wait(),
-                "writing the release",
-                move || std::io::Write::write_all(&mut release, b"\n"),
-            )
-            .unwrap();
-            let (mut ended, mut applied, mut emptied) = (false, false, false);
+            // Releasing the response lets the delegate's turn reach its
+            // step boundary: the kept message joins it.
+            delegate_provider.release();
+            let (mut applied, mut emptied) = (false, false);
             until_after(
                 &control,
                 &fence,
-                "the shell end, the applied message and the empty queue",
+                "the applied message and the empty queue",
                 |line| {
                     match line["kind"].as_str() {
-                        Some("tool_call_completed") => {
-                            ended |= line["action_id"] == shell_call.as_str();
-                        }
                         Some("steering_applied") => {
                             applied |= line["payload"]["content"][0]["text"] == "use the parser";
                         }
                         Some("steering_queue") => emptied |= queued(line).is_empty(),
                         _ => {}
                     }
-                    ended && applied && emptied
+                    applied && emptied
                 },
             );
-            delegate_shell_hold.stand_down(setup.deadline.cleanup_phase());
             run.wait_screen("the joined steer rule and no card", |grid| {
                 grid.rows.iter().any(|row| row.contains("steer ·"))
                     && shows(grid, "use the parser")
