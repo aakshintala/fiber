@@ -10845,7 +10845,7 @@ fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
 /// as `session_message` sends it. The receiver's second model call is held
 /// while its view opens, so the card is folded from the live stream, not a replay.
 #[test]
-fn delegate_admission_siblings_session_message_draws_a_labelled_rule() {
+fn a_siblings_session_message_draws_a_labelled_rule_with_its_name_in_the_delegates_card() {
     const MARK2: &str = "sibling-marker-3c5e8d12";
     let setup = support::Setup::new();
     let _guard = arm(&setup);
@@ -10961,5 +10961,74 @@ fn delegate_admission_siblings_session_message_draws_a_labelled_rule() {
         let log = log.clone();
         move || log_has(&log, "fiber_exited", "")
     });
+    quit(run);
+}
+
+#[test]
+fn delegate_admission_forked_run_takes_a_message_and_exits_with_a_client_attached() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let reply = tree_answering(
+        support::stream(&[fork_call("say hello")]),
+        text_reply("allow"),
+        support::hello(),
+        text_reply("fork first"),
+        support::hello(),
+    );
+    let held = Arc::new(AtomicBool::new(false));
+    let server = ProviderServer::start_responding(move |request| {
+        if String::from_utf8_lossy(&request.body).contains("you are a fork of session")
+            && !held.swap(true, Ordering::SeqCst)
+        {
+            entered_tx.send(()).unwrap();
+            let _ = Deadline::after(Duration::from_secs(40)).recv(&release_rx.lock().unwrap());
+        }
+        reply(request)
+    })
+    .unwrap();
+    fork_providers(&setup, &server);
+    standing_allow(&setup);
+    short_hub_idle(&setup);
+
+    let mut run = Run::spawn(&setup, 160, 48, &[], &terminal_env());
+    run.ready();
+    run.write(b"scan the tree\r");
+    assert!(
+        Deadline::after(Duration::from_secs(40))
+            .recv(&entered_rx)
+            .is_ok(),
+        "the fork's first model request is held"
+    );
+    let delegate = started_delegates(&setup).remove(0);
+    let log = delegate_log(&setup, &delegate);
+    let fork_started = one(&read_lines(&log), "session_started");
+    let parent_id = fork_started["forked_from"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let socket = support::Socket::connect(setup.deadline, &setup.session_socket(&delegate));
+    socket.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
+    support::recv_answer(&socket, "c_sub", "the fork subscription");
+    socket.send(
+        &json!({"id": "c_message", "command": "message",
+            "args": {"from_session_id": parent_id, "text": "fork-message-marker"}})
+        .to_string(),
+    );
+    // The hook answers only after the held provider call returns; do not wait
+    // for the message acknowledgement while the fork's loop is streaming.
+    release_tx.send(()).unwrap();
+    let accepted = support::recv_answer(&socket, "c_message", "the fork message take");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    fakes::wait_until("the fork's applied session message", setup.deadline, {
+        let log = log.clone();
+        move || log_has(&log, "steering_applied", "fork-message-marker")
+    });
+    fakes::wait_until("the fork's exit", setup.deadline, move || {
+        log_has(&log, "fiber_exited", "")
+    });
+    drop(socket);
     quit(run);
 }
