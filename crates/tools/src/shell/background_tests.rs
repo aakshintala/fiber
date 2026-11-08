@@ -29,8 +29,8 @@ use super::super::moved::Moved;
 use super::super::output::{OUTPUT_CAP, Shared, align_char_boundary, lock, note_eof};
 use super::{
     GroupMembers, MoveAsk, PS_BOUND, deadline_note, description_of, format_rows, group_members,
-    output_tail, parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt, to_completed,
-    with_deadline, with_spill_line,
+    leftover_line, output_tail, parse_ps, receipt, shell_sentence, stop_of, take, terminal_receipt,
+    to_completed, with_deadline, with_spill_line,
 };
 
 fn finished(
@@ -193,6 +193,73 @@ not a row\n";
         format_rows(&[(12, "sleep".to_owned()), (34, "my cmd".to_owned())]),
         "sleep (12), my cmd (34)"
     );
+}
+
+fn rows(count: u32) -> GroupMembers {
+    let rows: Vec<(u32, String)> = (1..=count).map(|pid| (pid, "sleep".to_owned())).collect();
+    GroupMembers::Members(format_rows(&rows))
+}
+
+const SAVED: &str = "Output after the shell exited is in /a/s_1.txt.";
+
+#[test]
+fn leftover_line_for_one_process_is_singular() {
+    assert_eq!(
+        leftover_line(Some(&rows(1)), SAVED),
+        format!(
+            "1 process left running (first: sleep (1)). {SAVED} {}",
+            super::super::MOVED_JOB_HINT
+        )
+    );
+}
+
+#[test]
+fn leftover_line_names_all_of_three() {
+    assert_eq!(
+        leftover_line(Some(&rows(3)), SAVED),
+        format!(
+            "3 processes left running (first: sleep (1), sleep (2), sleep (3)). {SAVED} {}",
+            super::super::MOVED_JOB_HINT
+        )
+    );
+    assert_eq!(
+        leftover_line(Some(&rows(2)), SAVED),
+        format!(
+            "2 processes left running (first: sleep (1), sleep (2)). {SAVED} {}",
+            super::super::MOVED_JOB_HINT
+        )
+    );
+}
+
+#[test]
+fn leftover_line_counts_ten_and_names_three() {
+    assert_eq!(
+        leftover_line(Some(&rows(10)), SAVED),
+        format!(
+            "10 processes left running (first: sleep (1), sleep (2), sleep (3)). {SAVED} {}",
+            super::super::MOVED_JOB_HINT
+        )
+    );
+    assert_eq!(
+        leftover_line(Some(&rows(4)), SAVED),
+        format!(
+            "4 processes left running (first: sleep (1), sleep (2), sleep (3)). {SAVED} {}",
+            super::super::MOVED_JOB_HINT
+        )
+    );
+}
+
+#[test]
+fn leftover_line_for_an_unanswered_listing_gives_no_count() {
+    let line = leftover_line(Some(&GroupMembers::Unavailable), SAVED);
+    assert_eq!(
+        line,
+        format!(
+            "Processes are still running in its group. {SAVED} {}",
+            super::super::MOVED_JOB_HINT
+        )
+    );
+    assert!(!line.contains("left running"), "{line}");
 }
 
 #[test]

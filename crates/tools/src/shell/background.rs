@@ -21,10 +21,11 @@ use contract::tool::{Cancel, Output};
 use support::cancel::Token;
 
 use super::command::{Finished, MovePolicy, MoveReason, StopKind};
+use super::drive::finish;
 use super::monitor::Feed;
 use super::moved::Moved;
-use super::output::{JobStream, align_char_boundary};
-use super::sandbox::protected::Report as ProtectedReport;
+use super::output::{JobStream, align_char_boundary, lock};
+use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::tty;
 use super::{Limit, assemble};
 use crate::error::{ShellError, ToolError};
@@ -238,6 +239,107 @@ pub(crate) fn take(
             // end still compares, restores and reports exactly once.
             let (finished, report) = moved.resume(clock.as_ref(), cancel, emit);
             super::assemble_reported(limit, finished, Some(&line), Some(command), report)
+        }
+    }
+}
+
+/// The shell exited and left processes in its group: the call returns the
+/// shell's own result at once, with no job (`docs/tools.md`, "When a
+/// command ends"). What the leftovers print from now on goes to a file
+/// under the session's artifacts directory, named in one trailing line
+/// after the closing line. The group stays on the process-wide list, so
+/// session shutdown stops it; nothing else does.
+pub(crate) fn finish_inline(
+    mut moved: Moved,
+    limit: Option<Limit>,
+    command: &str,
+    emit: &dyn Emit,
+) -> Output {
+    moved.detach_call_cancel();
+    let members = moved.progress.members.take();
+    let kept = match &moved.spill {
+        Some(config) => {
+            let path = config.dir.join(format!("{}.txt", support::mint("s_")));
+            match File::create_new(&path) {
+                Ok(file) => Ok((file, path)),
+                Err(error) => Err(format!(
+                    "could not save the output to {}: {error}",
+                    path.display()
+                )),
+            }
+        }
+        None => Err("the session has no artifacts directory".to_owned()),
+    };
+    let Moved {
+        mut progress,
+        protection,
+        cap,
+        ..
+    } = moved;
+    // The reader is still open on the leftovers' pipe, so the end is
+    // neither indeterminate nor held open: the shell's exit is the result.
+    let finished = finish(
+        &progress.shared,
+        None,
+        progress.sent_signal,
+        progress.seen_empty,
+        true,
+        emit,
+        &mut progress.stream_carry,
+    );
+    let (sink, saved) = match kept {
+        Ok((file, path)) => (
+            Some(file),
+            format!("Output after the shell exited is in {}.", path.display()),
+        ),
+        Err(why) => (
+            None,
+            format!("Output after the shell exited could not be saved: {why}."),
+        ),
+    };
+    lock(&progress.shared.inner).after_exit(sink, cap);
+    let report = protection.map(ProtectionGuard::finish);
+    let line = leftover_line(members.as_ref(), &saved);
+    super::assemble_tailed(limit, finished, None, Some(command), report, Some(&line))
+}
+
+/// How many names the trailing line gives.
+const FIRST_NAMES: usize = 3;
+
+/// The one line after the closing line of a shell that exited with
+/// processes left running: how many, the first few by name, where their
+/// later output goes (`saved`), and how to keep a long-running process.
+/// A listing that did not answer names no one and invents no count.
+fn leftover_line(members: Option<&GroupMembers>, saved: &str) -> String {
+    let hint = super::MOVED_JOB_HINT;
+    match members {
+        Some(GroupMembers::Members(names)) => {
+            let rows: Vec<&str> = names.split("), ").collect();
+            let count = rows.len();
+            let first: Vec<String> = rows
+                .iter()
+                .enumerate()
+                .take(FIRST_NAMES)
+                .map(|(at, row)| {
+                    if at + 1 == count {
+                        (*row).to_owned()
+                    } else {
+                        format!("{row})")
+                    }
+                })
+                .collect();
+            let (number, noun) = if count == 1 {
+                ("1".to_owned(), "process")
+            } else {
+                (count.to_string(), "processes")
+            };
+            format!(
+                "{number} {noun} left running (first: {first}). {saved} {hint}",
+                first = first.join(", "),
+            )
+        }
+        Some(GroupMembers::Empty) | Some(GroupMembers::Unavailable) | None => {
+            format!("{UNNAMED} {saved} {hint}")
         }
     }
 }

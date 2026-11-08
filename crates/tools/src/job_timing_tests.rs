@@ -620,30 +620,28 @@ fn the_background_command_moves_a_call_with_one_start() {
 }
 
 #[test]
-fn a_shell_exit_leaving_a_member_times_the_move() {
+fn a_shell_exit_leaving_a_member_opens_no_job_and_writes_no_timing() {
     let fixture = Fixture::new("fiber-p10-exited");
     let marker = "fiber-p10-exited";
     let _watchdog = Watchdog::matching(marker);
-    let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
-    holding.arm();
+    let ready = Ready::new(fixture.dir.path());
+    let (holding, _reached, _release) = Holding::wrap(Arc::clone(&fixture.jobs));
     let shell = fixture.shell(holding);
-    let command = format!(": {marker}; sleep 60 & exit 0");
+    let command = format!(": {marker}; echo $$ > ready.fifo; sleep 60 & exit 0");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let (_ids, output_rx) = run_async(shell, arguments, CancelToken::new());
-    through_open(&fixture, &reached, &release);
-    let deadline = Deadline::after(STEP);
-    let output = deadline.recv_or_fail(&output_rx, "the receipt");
-    assert!(
-        fakes::text_of(&output).contains("so it moved to the background."),
-        "{}",
-        fakes::text_of(&output)
-    );
-    assert_eq!(fixture.probe.calls(), 1);
-    let record = closed(&fixture.records, deadline);
-    assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
-    let job = started(&output);
-    stop_and_end(&fixture.jobs, &job.job_id, marker);
+    let pgid = ready.wait(Deadline::after(STEP))[0];
+    let output = Deadline::after(STEP).recv_or_fail(&output_rx, "the shell's own result");
+    let body = fakes::text_of(&output);
+    assert!(body.contains("Exit code 0.\n"), "{body}");
+    assert!(body.contains("left running"), "{body}");
+    assert!(output.jobs.is_empty());
+    assert!(fixture.jobs.started().is_empty());
+    assert_eq!(fixture.probe.calls(), 0);
+    assert_none(&fixture.records, "a shell exit that left a member");
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    assert!(fakes::group_empties(pgid, Deadline::after(STEP)));
 }
 
 #[test]

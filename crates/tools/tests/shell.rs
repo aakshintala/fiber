@@ -1007,10 +1007,25 @@ fn start_jobs(
     jobs: Arc<FakeJobs>,
     cancel: impl Cancel + Clone + 'static,
 ) -> JobRun {
+    start_with(dir, None, command, timeout_ms, background, jobs, cancel)
+}
+
+fn start_with(
+    dir: PathBuf,
+    artifacts: Option<PathBuf>,
+    command: String,
+    timeout_ms: Option<u64>,
+    background: bool,
+    jobs: Arc<FakeJobs>,
+    cancel: impl Cancel + Clone + 'static,
+) -> JobRun {
     let clock = FakeClock::new();
     let start = clock.origin();
-    let shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
+    let mut shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
         .with_jobs(jobs.clone());
+    if let Some(artifacts) = artifacts {
+        shell = shell.with_artifacts(artifacts);
+    }
     let mut arguments = args(&command);
     if let Some(timeout_ms) = timeout_ms {
         arguments.insert("timeout_ms".into(), json!(timeout_ms));
@@ -1435,72 +1450,252 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
-#[test]
-fn a_shell_that_exits_with_members_moves_and_names_them() {
-    let dir = fakes::TempDir::new("fiber-shell-orphans");
+/// A shell that starts `count` `sleep`s in its group, waits until `ps` shows
+/// them all, records its group then its readiness in `ready`, and runs
+/// `after`.
+fn leaves_sleepers(ready: &Path, count: u32, after: &str) -> String {
+    format!(
+        "echo $$ > {ready}; i=0; while [ $i -lt {count} ]; do sleep 1000 & i=$((i+1)); done; \
+         until [ \"$(ps -A -o pgid=,comm= | awk -v g=$$ '$1==g && $2 ~ /sleep/' | wc -l)\" -ge {count} ]; do :; done; \
+         echo $$ >> {ready}; {after}",
+        ready = quote(ready),
+    )
+}
+
+/// The shell-exit call as a person's foreground call, with an artifacts
+/// directory under `dir`.
+struct Exited {
+    run: JobRun,
+    jobs: Arc<FakeJobs>,
+    pgid: u32,
+    watchdog: Watchdog,
+    output: contract::tool::Output,
+    artifacts: PathBuf,
+}
+
+fn shell_exits(
+    dir: &fakes::TempDir,
+    count: u32,
+    after: &str,
+    timeout_ms: Option<u64>,
+    with_artifacts: bool,
+) -> Exited {
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let run = start_with(
+        dir.path().to_path_buf(),
+        with_artifacts.then(|| artifacts.clone()),
+        leaves_sleepers(ready.path(), count, after),
+        timeout_ms,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(Deadline::after(CHILD_START))[0];
+    let watchdog = Watchdog::group(pgid);
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&run.output)
+        .expect("the shell's own result once sleep was listed");
+    Exited {
+        run,
+        jobs,
+        pgid,
+        watchdog,
+        output,
+        artifacts,
+    }
+}
+
+impl Exited {
+    fn reap(self) {
+        assert!(kill_group(self.pgid, "KILL").unwrap());
+        self.watchdog
+            .stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    }
+}
+
+#[test]
+fn shell_exit_completes_inline_with_the_output_the_exit_code_and_one_trailing_line() {
+    let dir = fakes::TempDir::new("fiber-shell-exit-inline");
+    let exited = shell_exits(&dir, 1, "echo done; exit 0", None, true);
+    let body = text(&exited.output);
+    assert!(exited.output.error.is_none(), "{body}");
+    assert_eq!(
+        exited
+            .output
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(0)
+    );
+    let (head, line) = body.split_once("Exit code 0.\n").expect(&body);
+    assert_eq!(head, "done\n", "{body}");
+    assert!(
+        line.starts_with("1 process left running (first: sleep ("),
+        "{body}"
+    );
+    assert!(
+        line.contains("Output after the shell exited is in "),
+        "{body}"
+    );
+    assert!(line.contains("run_in_background"), "{body}");
+    assert_eq!(line.matches('\n').count(), 1, "{body}");
+    assert!(exited.output.jobs.is_empty());
+    assert!(exited.jobs.started().is_empty());
+    assert!(group_alive(exited.pgid));
+    exited.reap();
+}
+
+#[test]
+fn shell_exit_completes_inline_nonzero_is_the_normal_nonzero_result() {
+    let dir = fakes::TempDir::new("fiber-shell-exit-inline-nonzero");
+    let exited = shell_exits(&dir, 1, "echo oops; exit 3", None, true);
+    let body = text(&exited.output);
+    assert_eq!(code(&exited.output), Some(ErrorCode::NonzeroExit), "{body}");
+    assert_eq!(
+        exited
+            .output
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(3)
+    );
+    let Some(Value::Object(details)) = &exited.output.details else {
+        panic!("details: {:?}", exited.output.details);
+    };
+    assert_eq!(details["exit_code"], json!(3));
+    let (head, line) = body.split_once("Exit code 3.\n").expect(&body);
+    assert_eq!(head, "oops\n", "{body}");
+    assert!(line.starts_with("1 process left running"), "{body}");
+    assert!(exited.jobs.started().is_empty());
+    exited.reap();
+}
+
+#[test]
+fn shell_exit_completes_inline_names_three_of_ten_leftovers() {
+    let dir = fakes::TempDir::new("fiber-shell-exit-inline-ten");
+    let exited = shell_exits(&dir, 10, "exit 0", None, true);
+    let body = text(&exited.output);
+    let (_, line) = body.split_once("Exit code 0.\n").expect(&body);
+    assert!(
+        line.starts_with("10 processes left running (first: "),
+        "{body}"
+    );
+    let named = line.split(". Output after").next().unwrap();
+    assert_eq!(named.matches("sleep (").count(), 3, "{body}");
+    exited.reap();
+}
+
+#[test]
+fn leftover_processes_keep_running_past_the_timeout_with_no_job() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-timeout");
+    let exited = shell_exits(&dir, 1, "exit 0", Some(5_000), true);
+    // The drive is gone: nothing parks on the clock, so no timeout is
+    // armed for the leftovers.
+    assert!(
+        exited.run.clock.parked().is_empty(),
+        "something still waits on the clock: {:?}",
+        exited.run.clock.parked()
+    );
+    assert!(group_alive(exited.pgid));
+    assert!(exited.jobs.started().is_empty());
+    assert!(exited.output.jobs.is_empty());
+    exited.reap();
+}
+
+#[test]
+fn leftover_processes_are_stopped_at_session_shutdown() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-shutdown");
+    let exited = shell_exits(&dir, 1, "exit 0", None, true);
+    assert!(group_alive(exited.pgid));
+    support::group::kill_every_group();
+    assert!(
+        fakes::group_empties(exited.pgid, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "shutdown left the leftover group running"
+    );
+    exited
+        .watchdog
+        .stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn leftover_output_after_the_shell_exited_lands_in_the_named_artifact() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-late");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let block = block_of(ready.path());
     let command = format!(
-        "echo $$ > {ready}; sleep 1000 & until ps -o comm= -p $! | grep -q sleep; do :; done; echo $$ >> {ready}; exit 3",
+        "mkfifo {block}; ( read -r _ < {block}; echo LATE ) & echo $$ > {ready}; echo done",
+        block = quote(&block),
         ready = quote(ready.path()),
     );
-    let running = start_jobs(
+    let run = start_with(
         dir.path().to_path_buf(),
+        Some(artifacts.clone()),
         command,
         None,
         false,
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
-    let _started = ready.wait(fakes::Deadline::after(CHILD_START));
+    let pgid = ready.wait(Deadline::after(CHILD_START))[0];
     let watchdog = Watchdog::group(pgid);
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        .recv(&running.output)
-        .expect("waited for the shell-exited receipt after sleep exec'd");
+        .recv(&run.output)
+        .expect("the shell's own result");
     let body = text(&output);
-    assert!(output.error.is_none(), "{body}");
-    assert!(output.process.is_none());
-    assert!(body.contains("exited with code 3"), "{body}");
-    assert!(body.contains("sleep ("), "{body}");
-    assert!(body.contains("moved to the background"), "{body}");
-    assert!(group_alive(pgid));
-    let timeout_at = running.start + Duration::from_millis(600_000);
-    let mark = running
-        .clock
-        .mark_parked(
-            timeout_at,
-            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN),
-        )
-        .expect("the moved job did not park at its timeout");
-    // A later park at the timeout means another group check found sleep
-    // alive and the job waits on.
-    assert!(
-        running.clock.await_parked_since(
-            &mark,
-            Some(timeout_at),
-            fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
-        ),
-        "the job did not wait again while sleep was in the group"
+    assert!(body.starts_with("done\nExit code 0.\n"), "{body}");
+    assert!(!body.contains("LATE"), "{body}");
+    let path = body
+        .split("is in ")
+        .nth(1)
+        .and_then(|rest| rest.split(".txt").next())
+        .map(|stem| PathBuf::from(format!("{stem}.txt")))
+        .expect(&body);
+    assert!(path.starts_with(&artifacts), "{body}");
+    release_block(ready.path());
+    let seen = path.clone();
+    fakes::wait_until(
+        "the leftover's late output in the artifact",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || std::fs::read_to_string(&seen).is_ok_and(|text| text == "LATE\n"),
     );
-    assert!(
-        jobs.ended(fakes::Deadline::after(Duration::ZERO)).is_none(),
-        "the job ended while sleep was still in the group"
-    );
-    assert!(kill_group(pgid, "KILL").unwrap());
-    let ended = jobs
-        .ended(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))
-        .expect("the job to finish once the group was empty");
-    assert_eq!(ended.status, Outcome::Failed);
-    assert_eq!(
-        ended.error.as_ref().map(|error| error.code.clone()),
-        Some(ErrorCode::NonzeroExit)
-    );
-    assert_eq!(
-        ended.process.as_ref().and_then(|process| process.exit_code),
-        Some(3)
-    );
-    watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+    assert!(jobs.started().is_empty());
+    assert!(fakes::group_empties(
+        pgid,
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+    ));
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn leftover_that_writes_nothing_leaves_an_empty_named_artifact() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-empty");
+    let exited = shell_exits(&dir, 1, "exit 0", None, true);
+    let body = text(&exited.output);
+    let files: Vec<_> = std::fs::read_dir(&exited.artifacts)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    assert_eq!(std::fs::read_to_string(&files[0]).unwrap(), "");
+    assert!(body.contains(&files[0].display().to_string()), "{body}");
+    exited.reap();
+}
+
+#[test]
+fn leftover_without_an_artifacts_directory_says_the_output_is_not_saved() {
+    let dir = fakes::TempDir::new("fiber-shell-leftover-nodir");
+    let exited = shell_exits(&dir, 1, "exit 0", None, false);
+    let body = text(&exited.output);
+    assert!(body.contains("1 process left running"), "{body}");
+    assert!(body.contains("could not be saved"), "{body}");
+    assert!(!body.contains("is in "), "{body}");
+    exited.reap();
 }
 
 #[test]

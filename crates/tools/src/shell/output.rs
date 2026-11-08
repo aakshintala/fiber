@@ -214,6 +214,24 @@ impl Inner {
         None
     }
 
+    /// The command's own result has been taken and its group still holds
+    /// the pipe: what the reader gets from now on goes to `file`, or is
+    /// dropped when there is none. Bytes read since the take are the first
+    /// the file gets, all under the reader lock, so none is kept twice or
+    /// lost.
+    pub(super) fn after_exit(&mut self, file: Option<File>, cap: u64) {
+        let late = std::mem::take(&mut self.output);
+        let Some(mut file) = file else {
+            self.discard = true;
+            return;
+        };
+        write_or_drop(&mut file, &late);
+        self.cap = cap;
+        self.written = u64::try_from(late.len()).unwrap_or(u64::MAX);
+        self.cap_fired = self.written > cap;
+        self.file = Some(file);
+    }
+
     /// Writes what fits under the cap to the file and queues it for the
     /// next `job_delta`. Bytes past the cap are dropped and fire the cap.
     fn sink(&mut self, bytes: &[u8]) {
