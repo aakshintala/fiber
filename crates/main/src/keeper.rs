@@ -213,6 +213,7 @@ impl CommandHost for Host {
         job_id: &JobId,
         output_path: &Path,
         errors_path: Option<&Path>,
+        lines: bool,
     ) -> Result<(), HostError> {
         let client = self.live(id)?;
         lock(&client.adopted).insert(job_id.clone(), id.to_owned());
@@ -222,6 +223,7 @@ impl CommandHost for Host {
                 job_id: job_id.clone(),
                 output_path: output_path.to_path_buf(),
                 errors_path: errors_path.map(Path::to_path_buf),
+                lines,
             })
             .map_err(|failure| error(id, failure))
     }
@@ -322,6 +324,13 @@ impl Client {
                         Ok(()) | Err(_) => {}
                     }
                 }
+            }
+            // Negotiation frames belong to a handover, never to a Start
+            // client: dropping them silently would hide a confused keeper.
+            FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => {
+                return Err(io::Error::other("handover frame on an ordinary client"));
             }
         }
         Ok(())

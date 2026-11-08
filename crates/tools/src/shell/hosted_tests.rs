@@ -14,7 +14,15 @@ struct Host {
     calls: mpsc::Sender<(Spawn, mpsc::Sender<HostEvent>)>,
     stops: Mutex<Vec<String>>,
     stopped: Option<mpsc::Sender<String>>,
-    adopted: Option<mpsc::Sender<(JobId, std::path::PathBuf)>>,
+    adopted: Option<mpsc::Sender<Adopted>>,
+}
+/// What the shell told the host to keep: the job, its output file, its
+/// stderr file and whether it delivers monitor lines.
+struct Adopted {
+    job: JobId,
+    path: std::path::PathBuf,
+    errors: Option<std::path::PathBuf>,
+    lines: bool,
 }
 impl CommandHost for Host {
     fn start(&self, spec: Spawn, events: mpsc::Sender<HostEvent>) -> Result<Started, HostError> {
@@ -31,10 +39,22 @@ impl CommandHost for Host {
     fn write(&self, _: &str, _: &str) -> Result<(), HostError> {
         Ok(())
     }
-    fn adopt(&self, _: &str, job: &JobId, path: &Path, _: Option<&Path>) -> Result<(), HostError> {
+    fn adopt(
+        &self,
+        _: &str,
+        job: &JobId,
+        path: &Path,
+        errors: Option<&Path>,
+        lines: bool,
+    ) -> Result<(), HostError> {
         if let Some(adopted) = &self.adopted {
             adopted
-                .send((job.clone(), path.to_path_buf()))
+                .send(Adopted {
+                    job: job.clone(),
+                    path: path.to_path_buf(),
+                    errors: errors.map(Path::to_path_buf),
+                    lines,
+                })
                 .expect("adopt observed");
         }
         Ok(())
@@ -216,7 +236,13 @@ fn a_background_call_adopts_after_job_started_and_keeps_writing_its_file() {
     });
     let (spec, events) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&started, "start");
     assert_eq!(spec.timeout_ms, None);
-    let (job, path) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
+    let Adopted {
+        job,
+        path,
+        errors,
+        lines,
+    } = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
+    assert_eq!((errors, lines), (None, false), "a plain background job");
     // docs/tools.md, "The keeper": adoption follows the durable job start.
     assert_eq!(
         jobs.started()
@@ -481,4 +507,51 @@ fn a_hosted_background_receipt_names_the_kept_timeout_stop() {
     assert!(text.contains("run_in_background"), "{text}");
     events.send(HostEvent::Exit(end())).expect("exit");
     drop(events);
+}
+
+#[test]
+fn monitor_lines_without_stderr_artifact() {
+    let dir = fakes::TempDir::new("fiber-hosted-monitor-lines");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    // The fixture's first job writes `j_0000000000000001.log`, so its stderr
+    // file would be `j_0000000000000001.stderr.log`: a directory there makes
+    // the file's creation fail.
+    std::fs::create_dir(dir.path().join("j_0000000000000001.stderr.log")).expect("block stderr");
+    let (calls, started) = mpsc::channel();
+    let (adopted, adopts) = mpsc::channel();
+    let host = Arc::new(Host {
+        calls,
+        stops: Mutex::new(Vec::new()),
+        stopped: None,
+        adopted: Some(adopted),
+    });
+    let shell = Shell::new(
+        dir.path().to_path_buf(),
+        Arc::new(fakes::clock::SystemClock),
+    )
+    .with_host(host)
+    .with_jobs(jobs.clone());
+    let (done, result) = mpsc::channel();
+    std::thread::spawn(move || {
+        done.send(
+            shell.run(
+                serde_json::json!({"command":"held", "monitor":true})
+                    .as_object()
+                    .expect("object"),
+                &CancelToken::default(),
+                &Recorder::default(),
+            ),
+        )
+        .expect("result");
+    });
+    let (_, events) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&started, "start");
+    let adopt = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
+    // docs/tools.md, "The keeper": the keeper carries the monitor intent.
+    // The missing stderr file leaves the path empty, not the intent.
+    assert!(adopt.lines, "the monitor still delivers lines");
+    assert_eq!(adopt.errors, None);
+    // The process stays alive through the adoption; now let it end.
+    events.send(HostEvent::Exit(end())).expect("exit");
+    let output = Deadline::after(Duration::from_secs(10)).recv_or_fail(&result, "receipt");
+    assert!(output.error.is_none(), "{:?}", output.error);
 }

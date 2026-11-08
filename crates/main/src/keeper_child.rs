@@ -55,6 +55,7 @@ enum Sink {
 struct Adoption {
     output: PathBuf,
     errors: Option<PathBuf>,
+    lines: bool,
 }
 struct State {
     sink: Sink,
@@ -583,6 +584,7 @@ impl Runtime {
                     job_id,
                     output_path,
                     errors_path,
+                    lines,
                 } => {
                     let _log = lock(&self.log);
                     if lock(&self.supervisor).adopt(&id, job_id.clone())
@@ -591,6 +593,7 @@ impl Runtime {
                         lock(&process.state).adoption = Some(Adoption {
                             output: output_path,
                             errors: errors_path,
+                            lines,
                         });
                     }
                 }
@@ -602,6 +605,11 @@ impl Runtime {
                     self.decide(Supervisor::shutdown_requested)?;
                 }
                 ToKeeper::Shutdown(false) => return Err(io::Error::other("shutdown must be true")),
+                // Only a candidate on the keeper's socket may negotiate; the
+                // session's own control connection never does.
+                ToKeeper::Identify(_) | ToKeeper::Handover(_) | ToKeeper::Adopted(_) => {
+                    return Err(io::Error::other("handshake frame on the session's control"));
+                }
             }
         }
         Ok(())

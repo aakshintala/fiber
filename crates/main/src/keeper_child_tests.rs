@@ -129,7 +129,11 @@ fn keeper_start_output_and_exit_are_ordered_and_shutdown_does_not_take_a_log() {
                 assert_eq!(exit.code, Some(0));
                 break;
             }
-            FromKeeper::Started { .. } | FromKeeper::Failed { .. } => panic!("unexpected reply"),
+            FromKeeper::Started { .. }
+            | FromKeeper::Failed { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => panic!("unexpected reply"),
         }
     }
     assert_eq!(output, b"output");
@@ -219,7 +223,12 @@ fn start_shell(keeper: &Keeper, call: &str, shell: &str) -> u32 {
     writer.write_all(b"\n").expect("newline");
     match Deadline::after(Duration::from_secs(10)).recv_or_fail(&keeper.read, "started") {
         FromKeeper::Started { pgid, .. } => pgid,
-        FromKeeper::Failed { .. } | FromKeeper::Output { .. } | FromKeeper::Exit { .. } => {
+        FromKeeper::Failed { .. }
+        | FromKeeper::Output { .. }
+        | FromKeeper::Exit { .. }
+        | FromKeeper::Identity { .. }
+        | FromKeeper::Handover { .. }
+        | FromKeeper::AdoptDone(_) => {
             panic!("expected started")
         }
     }
@@ -240,7 +249,12 @@ fn await_shell_ready(keeper: &Keeper, marker: &str) {
                     return;
                 }
             }
-            FromKeeper::Started { .. } | FromKeeper::Failed { .. } | FromKeeper::Exit { .. } => {}
+            FromKeeper::Started { .. }
+            | FromKeeper::Failed { .. }
+            | FromKeeper::Exit { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => {}
         }
     }
 }
@@ -256,6 +270,7 @@ fn adopt_call(keeper: &Keeper, call: &str, job: &str) {
             job_id: JobId(job.into()),
             output_path: out,
             errors_path: None,
+            lines: false,
         },
     )
     .expect("adopt");
@@ -455,7 +470,10 @@ fn keeper_prewound_reap_keeps_the_normal_completion() {
                 break;
             }
             FromKeeper::Output { .. } | FromKeeper::Started { .. } => {}
-            FromKeeper::Failed { .. } => panic!("expected exit"),
+            FromKeeper::Failed { .. }
+            | FromKeeper::Identity { .. }
+            | FromKeeper::Handover { .. }
+            | FromKeeper::AdoptDone(_) => panic!("expected exit"),
         }
     }
     crash(&mut keeper);

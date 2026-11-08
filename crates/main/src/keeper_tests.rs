@@ -244,7 +244,7 @@ fn keeper_confirms_a_durable_hosted_job_end_once() {
     started(&mut peer, "call");
     assert!(deadline().recv(&result).unwrap().is_ok());
     let job = JobId("j_0123456789abcdef".into());
-    host.adopt("call", &job, &home.path().join("out"), None)
+    host.adopt("call", &job, &home.path().join("out"), None, false)
         .unwrap();
     assert_eq!(line(&peer)["adopt"]["id"], "call");
     let event = contract::events::Event::JobCompleted(tools::kept_end(
@@ -290,4 +290,33 @@ fn keeper_demux_preserves_output_then_exit() {
     assert!(
         matches!(dl.recv_or_fail(&output, "keeper exit"), HostEvent::Exit(exit) if exit.code == Some(0))
     );
+}
+
+#[test]
+fn ordinary_client_rejects_handover_frames() {
+    let (host, _, _, _) = fixture(false);
+    let (stream, _peer) = UnixStream::pair().unwrap();
+    let client = Client::new(
+        Connection {
+            stream,
+            lifeline: Box::new(()),
+            child: None,
+        },
+        &host,
+    )
+    .unwrap();
+    for frame in [
+        FromKeeper::Identity {
+            session_id: SessionId("s_0123456789abcdef".into()),
+        },
+        FromKeeper::Handover {
+            running: Vec::new(),
+        },
+        FromKeeper::AdoptDone(true),
+    ] {
+        // docs/tools.md, "The keeper": a candidate cannot issue arbitrary
+        // frames before an authenticated handover, and a Start client never
+        // negotiates one.
+        assert!(client.reply(frame).is_err());
+    }
 }
