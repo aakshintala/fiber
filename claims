@@ -83,17 +83,6 @@ crates/jobs/src/delegate/models_tests.rs	fiber-4242	plan	2026-11-07T15:53:13Z	Am
 crates/jobs/src/delegate.rs	fiber-4242	plan	2026-11-07T15:53:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
 crates/jobs/src/delegate/delegate_tests.rs	fiber-4242	plan	2026-11-07T15:53:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
 docs/delegates.md	fiber-4242	plan	2026-11-07T15:53:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
-crates/contract/src/events/host.rs	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-crates/jobs/src/tool.rs	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-crates/loop/src/jobs_tests.rs	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-crates/loop/src/kept.rs	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-crates/loop/src/kept_tests.rs	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-crates/tools/src/shell/background.rs	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-crates/tools/src/shell/background_tests.rs	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-crates/tools/tests/shell.rs	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-docs/events.md	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-docs/tools.md	fiber-4240	plan	2026-11-07T16:07:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4368
-crates/jobs/src/tool_tests.rs	fiber-4240	plan	2026-11-07T16:10:09Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 extensions/codemode/init.lua	fiber-4339	plan	2026-11-07T16:16:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_codemode.rs	fiber-4339	plan	2026-11-07T16:16:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/log/src/history_tests.rs	fiber-4059	plan	2026-11-07T16:20:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
