@@ -92,6 +92,11 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   invalid value fails with `invalid_arguments` and lists the roles in full
   on one line, up to 3 closest references nearest-first with ties in sorted
   order, and names `delegate_models` for the rest.
+- A thinking level the model does not take fails the same way, and its reason
+  names the levels that model takes before the roles line.
+- A model refusal names at most 3 suggested references and one model's
+  thinking levels. Apart from the names it echoes, such as roles, the model
+  asked for and suggested model ids, which print in full, it stays within 2 KB.
 - Neither the roles nor the references appear in any tool definition or the
   system prompt. They change when config changes, when a provider withdraws a
   model, or when model discovery refreshes, and a tool definition that changes
