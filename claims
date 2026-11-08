@@ -698,3 +698,11 @@ docs/ci.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshi
 xtask/src/narrating_comments.rs	fiber-4143	plan	2026-11-08T16:40:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 xtask/src/narrating_comments_tests.rs	fiber-4143	plan	2026-11-08T16:40:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 xtask/tests/narrating_comments.rs	fiber-4143	plan	2026-11-08T16:40:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/tui/src/turn/images.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
+crates/tui/src/turn/images_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
+crates/tui/src/turn/card.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
+crates/tui/src/turn/card_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
+crates/tui/src/copy_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
+crates/tui/src/turn_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
+crates/tui/src/view_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
+docs/tui.md	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
