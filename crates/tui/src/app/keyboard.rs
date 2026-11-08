@@ -139,9 +139,17 @@ impl App {
     pub(crate) fn set_keys(&mut self, setup: KeysSetup) {
         let (keys, notices) = load(&setup.user);
         self.keyboard.keys = keys;
+        self.keys_changed();
         for notice in notices {
             self.notices.push(ErrorCode::ConfigInvalid, notice);
         }
+    }
+
+    /// A renderer wrapping the built-in working line holds a hint naming
+    /// the old key: the shown pages' cached lines go, so the next count
+    /// and paint draw the new one.
+    fn keys_changed(&mut self) {
+        self.screen.pages_mut().ext.cache.clear();
     }
 
     /// The effective bindings, what the key map shows.
@@ -488,6 +496,7 @@ impl App {
         match saved {
             Ok(()) => {
                 self.keyboard.keys = next;
+                self.keys_changed();
             }
             Err(message) => {
                 if let Some(screen) = self.keyboard.screen.as_mut() {
@@ -503,8 +512,12 @@ impl App {
     /// session's row. Both drop focus and any steering selection first,
     /// so the entry bar or the row takes focus. `session_only` chooses
     /// in the open model picker for this session only, or saves the open
-    /// checklist as `scoped_models`. Anything else does nothing.
+    /// checklist as `scoped_models`. `interrupt_turn` cancels the turn on
+    /// screen. Anything else does nothing.
     pub(super) fn on_action(&mut self, id: &'static str) -> Effect {
+        if id == "interrupt_turn" {
+            return self.interrupt_turn();
+        }
         if id == "session_only" {
             if self.top_surface() != Surface::Picker {
                 return Effect::None;
