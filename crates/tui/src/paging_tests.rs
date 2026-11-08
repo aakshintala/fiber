@@ -634,6 +634,90 @@ fn page_texts(app: &App, at: usize) -> Vec<String> {
     rows.iter().map(|(line, _)| line.to_string()).collect()
 }
 
+/// The ledger row of the read in `page`, whose rewrite the fold took.
+fn rewritten_row(app: &App, page: usize) -> Option<String> {
+    page_texts(app, page)
+        .into_iter()
+        .find(|line| line.contains("\u{2713} read"))
+}
+
+#[test]
+fn a_replayed_hook_rewrite_is_drawn_from_history() {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "read it"}]}]}),
+    );
+    stream.durable("step_started", None, json!({}));
+    stream.durable("assistant_message_started", Some("a_mrw"), json!({}));
+    stream.durable(
+        "tool_call_requested",
+        Some("a_trw"),
+        json!({"name": "read", "arguments": {"path": "a.txt"}}),
+    );
+    stream.durable(
+        "assistant_message_completed",
+        Some("a_mrw"),
+        json!({"outcome": "completed"}),
+    );
+    stream.durable(
+        "tool_call_started",
+        Some("a_trw"),
+        json!({"effects": ["reads"], "reversible": true,
+            "arguments": {"path": "b.txt"}, "changed_by": ["fiber.test/guard"]}),
+    );
+    stream.durable(
+        "tool_call_completed",
+        Some("a_trw"),
+        json!({"status": "completed", "content": [{"type": "text", "text": "B"}]}),
+    );
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    let first_turn = stream.lines.len();
+    for turn in 1..4 {
+        stream.turn(turn, 30);
+    }
+    let lines = stream.lines;
+
+    // The reference folds turn 0 alone, so its page is the open one and
+    // never evicts.
+    let mut reference = app(80, 20);
+    open(&mut reference, &lines[..first_turn]);
+    let group = first_group(&reference).expect("the rewritten read's group");
+    reference.open(group);
+    let want = rewritten_row(&reference, 0).expect("the reference ledger row");
+    assert!(want.contains("b.txt"), "{want:?}");
+    assert!(want.contains("via fiber.test/guard"), "{want:?}");
+
+    // The replay closes turn 0's page behind three more turns, so the row
+    // can only come back from the durable lines.
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    assert!(app.pages().part(0).is_none());
+    app.jump(0);
+    assert!(!app.needs().is_empty(), "page 0 loads from history");
+    frame(&mut app, &lines);
+    assert!(app.pages().part(0).is_some());
+    let group = first_group(&app).expect("the replayed group");
+    app.open(group);
+    assert_eq!(rewritten_row(&app, 0), Some(want.clone()));
+
+    // Dropped and loaded again, the row is the same with no second open.
+    for _ in 0..200 {
+        if app.pages().part(0).is_none() {
+            break;
+        }
+        app.on_key(Key::PageDown, now());
+        frame(&mut app, &lines);
+    }
+    assert!(app.pages().part(0).is_none(), "page 0 dropped again");
+    app.jump(0);
+    assert!(!app.needs().is_empty(), "page 0 loads from history again");
+    frame(&mut app, &lines);
+    assert_eq!(rewritten_row(&app, 0), Some(want));
+}
+
 #[test]
 fn a_target_opened_stays_open_when_its_page_comes_back() {
     let lines = session(6, false);
