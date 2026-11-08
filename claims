@@ -685,3 +685,4 @@ crates/tui/src/view/snapshots/tui__view__key_map__tests__key_map_80x24.snap	fibe
 crates/tui/src/view/working_line.rs	fiber-4188	plan	2026-11-08T16:08:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/working.rs	fiber-4188	plan	2026-11-08T16:08:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4188	plan	2026-11-08T16:08:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/interrupt_tests.rs	fiber-4188	plan	2026-11-08T16:09:09Z	roundhouse-7010-plus-1:/home/aakshintala	
