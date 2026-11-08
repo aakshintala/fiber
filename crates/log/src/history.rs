@@ -5,9 +5,10 @@
 //! (`docs/state.md`, "Projects"). Only `log` opens the session
 //! directories here (`docs/architecture.md`, "The call rules").
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use contract::{Envelope, Seq, SessionId};
 
@@ -150,6 +151,32 @@ pub fn history_to(dir: &Path, point: Seq) -> Result<Vec<Segment>, Error> {
     Ok(segments)
 }
 
+/// Lines the history scans building offset tables, counted while testing:
+/// one add per `Segment::range` scan of its whole prefix. Production
+/// ignores the count; the scroll-stall test asserts a page load stays
+/// window-bounded.
+#[cfg(test)]
+static HISTORY_SCAN_LINES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Takes the scanned-lines count since the last call, starting it again
+/// from zero. Test-only; the count runs only in test builds.
+#[cfg(test)]
+pub(crate) fn take_history_scan_lines() -> u64 {
+    HISTORY_SCAN_LINES.swap(0, std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A cached ancestor prefix table, by directory and the line past the fork
+/// point.
+type SegmentTables = HashMap<(PathBuf, u64), Arc<crate::offsets::Offsets>>;
+
+/// Ancestor prefix tables: an ancestor log never rewrites the prefix its
+/// child holds, so a table built for one page serves every later page of
+/// the same segment. The lock is held only to copy the shared table out or
+/// to put one in, never across file I/O and never while holding an offset
+/// table lock.
+static SEGMENT_TABLES: LazyLock<Mutex<SegmentTables>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 impl Segment {
     /// This log's durable lines from `seq` `from` up to `to` inclusive, in
     /// order. Empty when `from` is past `to`. Reads only to `to` and
@@ -169,7 +196,27 @@ impl Segment {
         if from > end {
             return Ok(Vec::new());
         }
-        let offsets = crate::offsets::Offsets::scan(&self.dir, end.saturating_add(1), |_| Ok(()))?;
+        let limit = end.saturating_add(1);
+        let offsets = if self.to.is_some() {
+            if let Some(shared) = support::lock(&SEGMENT_TABLES)
+                .get(&(self.dir.clone(), limit))
+                .cloned()
+            {
+                shared
+            } else {
+                let built = Arc::new(crate::offsets::Offsets::scan(&self.dir, limit, |_| Ok(()))?);
+                #[cfg(test)]
+                HISTORY_SCAN_LINES.fetch_add(built.count(), std::sync::atomic::Ordering::SeqCst);
+                support::lock(&SEGMENT_TABLES)
+                    .insert((self.dir.clone(), limit), Arc::clone(&built));
+                built
+            }
+        } else {
+            let fresh = crate::offsets::Offsets::scan(&self.dir, limit, |_| Ok(()))?;
+            #[cfg(test)]
+            HISTORY_SCAN_LINES.fetch_add(fresh.count(), std::sync::atomic::Ordering::SeqCst);
+            Arc::new(fresh)
+        };
         // The log ends before `to`: nothing past its last line is in
         // this session's history.
         if let Some(to) = &self.to

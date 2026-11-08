@@ -1205,3 +1205,101 @@ fn history_with_a_first_line_that_is_not_an_event_is_a_pointer() {
     assert_eq!(path, dir.join(EVENTS));
     assert_eq!(reason, "the log's first line is not an event");
 }
+
+/// One long row, about 70 characters. The row is fixed so building tens of
+/// thousands of rows stays fast.
+fn long_row() -> String {
+    "the session log holds every durable line and the terminal pages it; ".to_owned()
+}
+
+/// Text holding `count` paragraphs separated by blank lines, so the history
+/// draws each as its own row. Single newlines would fold as soft breaks.
+fn long_text(count: usize) -> String {
+    (0..count)
+        .map(|_| long_row())
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+/// A page of history holds about 64 durable lines, and the offset table
+/// keeps 1024 resident checkpoints. Loading one page stays window-bounded:
+/// the lines scanned building its table plus the lines parsed for its
+/// window fit in that bound. A full-log rescan per page breaks it.
+#[test]
+fn page_load_scans_only_its_window() {
+    let home = fakes::TempDir::new("log-history-ticket-red-4059");
+    let sessions = home.path().join("sessions");
+    let mut root = vec![started("s_aaaaaaaaaaaaaaaa", 0, None)];
+    for seq in 1..3000_u64 {
+        if seq == 1500 {
+            root.push(fixture_line(
+                "text_completed",
+                "s_aaaaaaaaaaaaaaaa",
+                1_759_150_000_000_u64 + seq,
+                seq,
+                &json!({"text": long_text(20_000)}),
+            ));
+        } else if seq == 1501 {
+            root.push(fixture_line(
+                "tool_call_completed",
+                "s_aaaaaaaaaaaaaaaa",
+                1_759_150_000_000_u64 + seq,
+                seq,
+                &json!({"status": "completed", "content": [{"type": "text", "text": long_text(20_000)}]}),
+            ));
+        } else {
+            root.push(plain("s_aaaaaaaaaaaaaaaa", seq, "turn_started"));
+        }
+    }
+    let root_count = root.len() as u64;
+    write_lines(&sessions, "s_aaaaaaaaaaaaaaaa", &root);
+    write_lines(
+        &sessions,
+        "s_bbbbbbbbbbbbbbbb",
+        &[
+            started(
+                "s_bbbbbbbbbbbbbbbb",
+                0,
+                Some(("s_aaaaaaaaaaaaaaaa", root_count - 1)),
+            ),
+            plain("s_bbbbbbbbbbbbbbbb", 1, "turn_started"),
+        ],
+    );
+    write_lines(
+        &sessions,
+        "s_cccccccccccccccc",
+        &[
+            started("s_cccccccccccccccc", 0, Some(("s_bbbbbbbbbbbbbbbb", 1))),
+            plain("s_cccccccccccccccc", 1, "turn_started"),
+        ],
+    );
+    write_lines(
+        &sessions,
+        "s_dddddddddddddddd",
+        &[
+            started("s_dddddddddddddddd", 0, Some(("s_cccccccccccccccc", 1))),
+            plain("s_dddddddddddddddd", 1, "turn_started"),
+        ],
+    );
+    let dir = sessions.join("s_dddddddddddddddd");
+    let segments = history(&dir).unwrap();
+    assert_eq!(segments.len(), 4);
+    let root_segment = &segments[0];
+    assert_eq!(root_segment.session_id.0, "s_aaaaaaaaaaaaaaaa");
+    let _ = super::take_history_scan_lines();
+    let first = root_segment.range(0, 64).unwrap();
+    assert_eq!(first.len(), 64);
+    let _ = super::take_history_scan_lines();
+    let second = root_segment.range(64, 64).unwrap();
+    assert_eq!(second.len(), 64);
+    let scanned = super::take_history_scan_lines();
+    let total = scanned.saturating_add(second.len() as u64);
+    // Issue-specific regression bound required by RULING-4059-2, not a
+    // public page-count promise: one 64-line window plus resident offset
+    // checkpoints (`CHECKPOINTS` in `crates/log/src/offsets.rs`).
+    assert!(
+        total <= 64 + 1024,
+        "one page loads window-bounded, scanned {scanned} plus {} parsed over 1088",
+        second.len()
+    );
+}

@@ -716,6 +716,32 @@ fn landing_clears_the_selection_and_remaps_focus() {
     assert_eq!(app.focused(), None);
 }
 
+/// Focus on a shell run's more row follows the run across the landing,
+/// so a land does not drop the person's place on it; a run the fold
+/// lacks leaves focus empty.
+#[test]
+fn shell_cap_landing_keeps_focus_on_the_more_row() {
+    let mut item = "! seq\nsent with your next prompt".to_owned();
+    for n in 1..=25 {
+        item.push_str(&format!("\nout {n:02}"));
+    }
+    item.push_str("\nexit 0");
+    let mut app = app();
+    assert!(
+        app.attached_screen_mut()
+            .pages_mut()
+            .add_shell(Some(item.clone()))
+    );
+    let mut fold = crate::window::Pages::new(80);
+    assert!(fold.add_shell(Some(item)));
+    app.focus = Some(TargetId::Line(Target::Shell(0)));
+    app.land(fold, false);
+    assert_eq!(app.focused(), Some(TargetId::Line(Target::Shell(0))));
+    app.focus = Some(TargetId::Line(Target::Shell(1)));
+    app.land(crate::window::Pages::new(80), false);
+    assert_eq!(app.focused(), None, "a run the fold lacks");
+}
+
 /// A held landing keeps the second copy of a repeated line: the anchor
 /// is the top row's `seq`, applied after the unfreeze. The fold carries
 /// the same lines with a longer first reply, so the later pages start
