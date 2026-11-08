@@ -1306,13 +1306,6 @@ const LABEL_ALLOWANCES: &[LabelAllowance] = &[
         name: "jobs",
         reason: "fills the compaction template",
     },
-    LabelAllowance {
-        path: "crates/loop/src/reviewer.rs",
-        function: "sections",
-        context: "prompt-section",
-        name: "compaction",
-        reason: "selects the compaction section",
-    },
 ];
 
 const HOME_COMPONENTS: &[&str] = &[
@@ -2611,18 +2604,6 @@ fn label_context(
     {
         return Some(("restart", "fills the compaction template"));
     }
-    if path == "crates/loop/src/reviewer.rs"
-        && context == "fn sections"
-        && name == "compaction"
-        && previous_punct(tokens, i, 1, ',')
-        && previous_ident(tokens, i, 2, "md")
-        && previous_ident(tokens, i, 4, "section")
-        && previous_ident(tokens, i, 7, "prompt")
-        && previous_ident(tokens, i, 10, "crate")
-        && previous_ident(tokens, i, 12, "compaction")
-    {
-        return Some(("sections", "selects the compaction section"));
-    }
     None
 }
 
@@ -2697,7 +2678,6 @@ fn loop_sites_with_tokens(
                 ("crates/loop/src/status.rs", "jobs") => Some("state-key"),
                 ("crates/loop/src/skills.rs", "skill") => Some("command-tag"),
                 ("crates/loop/src/compaction/carry.rs", "jobs") => Some("template-key"),
-                ("crates/loop/src/reviewer.rs", "compaction") => Some("prompt-section"),
                 _ => None,
             };
             let exception = label.is_some_and(|label| {

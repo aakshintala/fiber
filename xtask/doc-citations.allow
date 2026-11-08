@@ -248,11 +248,11 @@ crates/loop/src/before_tool_tests.rs	1	docs/errors.md`,\n    // "Notices"
 crates/loop/src/calls.rs	2	docs/extensions.md`, "after_tool"
 crates/loop/src/calls_tests.rs	1	docs/events.md, "tool_call_completed"
 crates/loop/src/calls_tests.rs	1	docs/loop.md, "One step"
+crates/loop/src/compaction.rs	1	docs/errors.md`, "Notices"
+crates/loop/src/compaction/tests.rs	4	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/conversation_tests.rs	18	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/diag.rs	1	docs/state.md`, "Diagnostic logs"
 crates/loop/src/diag_tests.rs	1	docs/state.md`, "Diagnostic logs"
-crates/loop/src/compaction.rs	1	docs/errors.md`, "Notices"
-crates/loop/src/compaction/tests.rs	4	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/history_tests.rs	5	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/src/history_tests.rs	1	docs/loop.md, "What the model is sent"
 crates/loop/src/hooks.rs	1	docs/events.md`, "Conventions"
@@ -283,13 +283,13 @@ crates/loop/tests/approved_code.rs	1	docs/extensions.md`, "Offering"
 crates/loop/tests/before_compaction.rs	3	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/tests/change_workspace.rs	1	docs/events.md:1606
 crates/loop/tests/changes.rs	1	docs/errors.md`,\n    // "Notices"
+crates/loop/tests/compaction.rs	14	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/configuration.md:79-81
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	102	docs/invocation.md:1159-1160
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:109-138
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:187-190
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	51	docs/permissions.md:536-539
 crates/loop/tests/fixtures/reviewer_eval/calls.jsonl	30	docs/testing.md:46-48
-crates/loop/tests/compaction.rs	14	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/tests/inner_calls.rs	1	docs/extensions.md`, "When an extension calls a tool"
 crates/loop/tests/invariants.rs	1	docs/invocation.md`, "A prompt arriving\n    /// mid-turn is rejected `busy`"
 crates/loop/tests/resume.rs	3	docs/compaction.md, "What the model sees after a compaction"
@@ -297,8 +297,8 @@ crates/loop/tests/resume.rs	1	docs/tools.md, "The keeper"
 crates/loop/tests/reviewer_compaction.rs	9	docs/compaction.md, "What the model sees after a compaction"
 crates/loop/tests/reviewer_compaction.rs	1	docs/permissions.md, "At a compaction"
 crates/loop/tests/rewind.rs	1	docs/compaction.md, "What the model sees after a compaction"
-crates/loop/tests/skills_resent.rs	1	docs/errors.md`, "Notices"
 crates/loop/tests/skills_resent.rs	8	docs/compaction.md, "What the model sees after a compaction"
+crates/loop/tests/skills_resent.rs	1	docs/errors.md`, "Notices"
 crates/loop/tests/status.rs	4	docs/events.md, "session_status"
 crates/loop/tests/tool_search.rs	1	docs/compaction.md, "What the model sees after a compaction"
 crates/main/src/builtin_tests.rs	1	docs/testing.md, "Waits and timeouts"
@@ -331,6 +331,8 @@ crates/main/tests/change_workspace.rs	1	docs/invocation.md, "Deleting a session"
 crates/main/tests/change_workspace.rs	2	docs/invocation.md`, "Change workspace"
 crates/main/tests/changed_files_editor.rs	1	docs/testing/screens.md`, "A pointer event…"
 crates/main/tests/changed_files_remote.rs	1	docs/testing/screens.md`, "A pointer event…"
+crates/main/tests/compaction_kept.rs	4	docs/compaction.md, "What the model sees after a compaction"
+crates/main/tests/compaction_kept.rs	1	docs/permissions.md, "At a compaction"
 crates/main/tests/continue_session.rs	1	docs/invocation.md`, "`start` `continues`"
 crates/main/tests/delegates.rs	1	docs/code-quality.md, "What a reviewer checks"
 crates/main/tests/delegates.rs	1	docs/delegates.md,\n    // "Streams"
@@ -394,11 +396,9 @@ crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:313-16
 crates/main/tests/extension_lazy_commands.rs	1	docs/extensions.md:70-71
 crates/main/tests/feed.rs	1	docs/state.md`, "Recently exited\n//! sessions"
 crates/main/tests/fixtures/gcloud/gcloud	1	docs/testing.md, "Waits and timeouts"
-crates/main/tests/compaction_kept.rs	4	docs/compaction.md, "What the model sees after a compaction"
-crates/main/tests/compaction_kept.rs	1	docs/permissions.md, "At a compaction"
 crates/main/tests/history_page_failed.rs	1	docs/testing.md, "Waits and\n    // timeouts"
-crates/main/tests/hooks.rs	1	docs/errors.md`, "Notices"
 crates/main/tests/hooks.rs	1	docs/compaction.md, "What the model sees after a compaction"
+crates/main/tests/hooks.rs	1	docs/errors.md`, "Notices"
 crates/main/tests/hooks_entries.rs	2	docs/errors.md:85-91
 crates/main/tests/hooks_entries.rs	1	docs/errors.md`, "Notices"
 crates/main/tests/hooks_entries.rs	1	docs/events.md:1154-1155
@@ -433,11 +433,11 @@ crates/main/tests/link_look.rs	1	docs/tui.md, "Moving\n    // through the conver
 crates/main/tests/live_codex.rs	1	docs/testing.md, "Live calls\n    // and evals"
 crates/main/tests/log_search_timing.rs	1	docs/state.md`, "Diagnostic\n//! logs"
 crates/main/tests/loop_timing.rs	1	docs/state.md`,\n//! "Diagnostic logs"
+crates/main/tests/main_journeys.rs	2	docs/compaction.md, "What the model sees after a compaction"
 crates/main/tests/main_journeys.rs	1	docs/errors.md`,\n            // "Notices"
 crates/main/tests/main_journeys.rs	1	docs/errors.md`, "Notices"
 crates/main/tests/main_journeys.rs	1	docs/extensions.md:1797, 1805-1807
 crates/main/tests/main_journeys.rs	1	docs/extensions.md:1798-1799
-crates/main/tests/main_journeys.rs	2	docs/compaction.md, "What the model sees after a compaction"
 crates/main/tests/main_journeys.rs	1	docs/releasing.md`, "Install\n/// steps"
 crates/main/tests/mcp_login.rs	1	docs/state.md, "Diagnostic logs"
 crates/main/tests/mcp_remote.rs	1	docs/state.md, "Diagnostic logs"
