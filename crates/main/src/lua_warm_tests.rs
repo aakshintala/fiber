@@ -178,6 +178,10 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
         &home.join("extensions").join("fiber.test-lua-fixture"),
         serde_json::json!({"fixture": [format!("{}/v1", server.url())]}),
     );
+    set_source_mtime(
+        &home.join("extensions").join("fiber.test-lua-fixture"),
+        std::time::SystemTime::UNIX_EPOCH,
+    );
     config::store_secret(&home, "fixture.url", &config::Secret::new(server.url())).unwrap();
     config::store_secret(&home, "fixture.api_key", &config::Secret::new("k1".into())).unwrap();
     std::fs::write(
@@ -216,11 +220,6 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
         .recv(&setup)
         .expect("setup ended in time")
         .unwrap();
-    set_source_mtime(
-        &home.join("extensions").join("fiber.test-lua-fixture"),
-        std::time::SystemTime::UNIX_EPOCH,
-    );
-
     assert_eq!(parts.warm, Some(1), "the session warms for one lifetime");
     let log = Arc::new(
         Log::create(
