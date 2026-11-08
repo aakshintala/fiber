@@ -541,7 +541,7 @@ fn kitty_event_loop_draws_at_chunk_boundary() {
     // `inline_opened` attached before any frame ran, so the attach's purge
     // is still queued. No frame the test cares about has drained it, and the
     // key frame below would hand it to the writer as an abort of the test's
-    // own upload. Drop that stale handoff before the test's payload.
+    // own upload. Drop that stale compaction before the test's payload.
     let _ = lp.app.take_image_out();
     // A large payload pending: the first chunk reads off the pipe with the
     // deadline, and the held gate parks the writer after it.
@@ -645,7 +645,7 @@ fn stop_kitty_joins_the_writer() {
 }
 
 /// `pause_kitty` retains the writer's ids for the post-resume replay: an
-/// empty handoff would drop the shown image without re-fetching it.
+/// empty compaction would drop the shown image without re-fetching it.
 #[test]
 fn pause_kitty_retains_handover_ids() {
     use super::kitty_writer::{Item, KittyWriter};
@@ -2324,9 +2324,9 @@ fn filler(len: usize, seed: u64) -> String {
     text
 }
 
-/// A log of `turns` handoff turns with 4 KiB replies, the last reply
-/// `last`: one screenful per reply, a handoff between turns.
-fn handoff_log(turns: u64, last: &str) -> Vec<Envelope> {
+/// A log of `turns` compaction turns with 4 KiB replies, the last reply
+/// `last`: one screenful per reply, a compaction between turns.
+fn compaction_log(turns: u64, last: &str) -> Vec<Envelope> {
     let mut lines = Vec::new();
     let mut seq = 0u64;
     let mut push = |kind: &str, action: Option<&str>, payload: Value| {
@@ -2356,9 +2356,9 @@ fn handoff_log(turns: u64, last: &str) -> Vec<Envelope> {
         push("turn_completed", None, json!({"outcome": "completed"}));
         push("usage_recorded", None, json!({}));
         if turn + 1 < turns {
-            push("handoff_started", None, json!({"trigger": "manual"}));
+            push("compaction_started", None, json!({"trigger": "manual"}));
             push(
-                "handoff_completed",
+                "compaction_completed",
                 None,
                 json!({"outcome": "completed", "tokens_before": 1000}),
             );
@@ -2377,7 +2377,7 @@ fn a_batch_settles_once_at_its_end() {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.begin_batch();
     assert!(app.pages().holding());
-    for envelope in handoff_log(150, "the last reply holds quokkas") {
+    for envelope in compaction_log(150, "the last reply holds quokkas") {
         app.on_line(Line::Session(envelope));
     }
     assert!(app.pages().part(0).is_some());
@@ -2397,7 +2397,7 @@ fn a_batch_settles_once_at_its_end() {
 #[test]
 fn resume_open_replays_the_log_to_the_tail() {
     use std::io::{BufRead, BufReader, Write};
-    let lines = handoff_log(150, "the last reply holds quokkas");
+    let lines = compaction_log(150, "the last reply holds quokkas");
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
         location: crate::LaunchLocation::Local {

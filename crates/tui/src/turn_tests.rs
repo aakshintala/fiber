@@ -2024,7 +2024,7 @@ fn attempts_are_counted_from_lines_a_late_attach_replays() {
 }
 
 #[test]
-fn a_handoff_note_request_counts_its_own_attempts() {
+fn a_compaction_note_request_counts_its_own_attempts() {
     let mut app = app();
     start(&mut app, "go", 0);
     step(&mut app, 0);
@@ -2035,7 +2035,7 @@ fn a_handoff_note_request_counts_its_own_attempts() {
     message_done(&mut app, "failed");
     feed(
         &mut app,
-        "handoff_started",
+        "compaction_started",
         None,
         0,
         json!({"trigger": "overflow"}),

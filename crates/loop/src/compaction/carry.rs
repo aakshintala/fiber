@@ -1,10 +1,10 @@
-//! Owns the render state a handoff reads and the restart conversation.
+//! Owns the render state a compaction reads and the restart conversation.
 
 use std::collections::HashSet;
 
 use contract::ActionId;
 use contract::events::{
-    ContextNudged, Control, Event, HandoffCompleted, KeptMessage, Note, ShellCommand, SkillLoad,
+    CompactionCompleted, ContextNudged, Control, Event, KeptMessage, Note, ShellCommand, SkillLoad,
 };
 use contract::provider::Input;
 use contract::shapes::Question;
@@ -12,19 +12,19 @@ use contract::shapes::Question;
 use crate::prompt::{fill, message};
 use crate::reviewer::{PendingAsks, Reviewed, Shown, render_reviewed};
 
-/// The render state a handoff reads: the same fold in the live loop and in a
+/// The render state a compaction reads: the same fold in the live loop and in a
 /// rebuild, so the two never differ (`docs/loop.md`, "What the model is
 /// sent").
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct Carry {
-    /// Inner actions never enter the model's conversation or handoff carry.
+    /// Inner actions never enter the model's conversation or compaction carry.
     pub(crate) inner: HashSet<ActionId>,
-    /// The conversation's length at the open `handoff_started`.
+    /// The conversation's length at the open `compaction_started`.
     pub(crate) window: Option<usize>,
     /// The conversation's length before the rewind summary turn.
     pub(crate) summary: Option<usize>,
     /// This turn's input: its message items and the steering messages
-    /// applied, in log order. A handoff labels a copy, leaving this source
+    /// applied, in log order. A compaction labels a copy, leaving this source
     /// untouched for ordinary rendering.
     pub(crate) input: Vec<Input>,
     /// The jobs started and not completed, in start order, as
@@ -41,8 +41,8 @@ pub(crate) struct Carry {
     pub(crate) session_log_pinned: bool,
     /// Whether this context was nudged.
     pub(crate) nudged: bool,
-    /// The text parts the actions of a handoff window completed, by action:
-    /// a completed handoff takes them; a window that ends otherwise leaves
+    /// The text parts the actions of a compaction window completed, by action:
+    /// a completed compaction takes them; a window that ends otherwise leaves
     /// its few lines, which no later note names.
     pub(crate) texts: Vec<(ActionId, String)>,
     /// The calls of the last reply, in call order, with their results.
@@ -52,19 +52,19 @@ pub(crate) struct Carry {
     pub(crate) artifacts: Vec<(ActionId, String)>,
     /// The skills this context loaded, in first-load order, one per name,
     /// each with the path of its latest load: every completed call's
-    /// `control.skill` (`docs/tools.md`, "Skills"). A completed handoff
+    /// `control.skill` (`docs/tools.md`, "Skills"). A completed compaction
     /// moves it into `resend`.
     pub(crate) skills: Vec<SkillLoad>,
     /// The previous context's loads, in first-load order, armed by a
-    /// completed handoff: the next opening sends each one again
-    /// (`docs/handoff.md`, "What the model sees after a handoff"). A
-    /// completed handoff replaces it, and the `skills_resent` render, the
+    /// completed compaction: the next opening sends each one again
+    /// (`docs/compaction.md`, "What the model sees after a compaction"). A
+    /// completed compaction replaces it, and the `skills_resent` render, the
     /// `opening_message` render and `write_opening` taking it clear it.
     pub(crate) resend: Vec<SkillLoad>,
     /// Where the next `session_start` context goes, once an opening
     /// message rendered: right after it, so the hook's contexts sit
     /// between the opening and the turn's input and the note
-    /// (`docs/handoff.md`, "What the model sees after a handoff").
+    /// (`docs/compaction.md`, "What the model sees after a compaction").
     /// `None` anywhere else: any other rendered event clears it, and only
     /// a `session_start` context honours it.
     pub(crate) after_opening: Option<usize>,
@@ -73,10 +73,10 @@ pub(crate) struct Carry {
     /// one once (`docs/events.md`, `turn_started`).
     pub(crate) shells: Vec<(u64, ShellCommand)>,
     /// Where the person's kept messages go in the context a completed
-    /// handoff started: right after the opening message and its
+    /// compaction started: right after the opening message and its
     /// `session_start` contexts, before the carried input
-    /// (`docs/handoff.md`, "What the model sees after a handoff"). Only a
-    /// completed handoff arms it, at 0; the opening and each
+    /// (`docs/compaction.md`, "What the model sees after a compaction"). Only a
+    /// completed compaction arms it, at 0; the opening and each
     /// `session_start` context placed while it is armed move it on by one;
     /// the `reviewer_kept` line takes it.
     pub(crate) input_at: Option<usize>,
@@ -167,7 +167,7 @@ impl Carry {
 }
 
 /// One call of the last reply: the call, its result once written, and the
-/// note and questions its result set as `control.handoff` and
+/// note and questions its result set as `control.compact` and
 /// `control.questions`.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct StepCall {
@@ -231,14 +231,14 @@ impl Carry {
         }
     }
 
-    /// The conversation after a completed handoff: the carried input, the
+    /// The conversation after a completed compaction: the carried input, the
     /// note, a line for the jobs still running and, when tools set the note,
     /// the other calls of that step with their results.
-    pub(crate) fn restart(&mut self, done: &HandoffCompleted) -> Vec<Input> {
+    pub(crate) fn restart(&mut self, done: &CompactionCompleted) -> Vec<Input> {
         let mut conversation = self.input.clone();
         for input in &mut conversation {
             if let Input::User { text, .. } = input {
-                let labelled = fill(message("handoff-new"), &[("message", text.as_str())]);
+                let labelled = fill(message("compaction-new"), &[("message", text.as_str())]);
                 *text = labelled;
             }
         }
@@ -246,8 +246,8 @@ impl Carry {
         let step = std::mem::take(&mut self.step);
         // The loads move into the resend the next opening sends again: a
         // skill sent again counts as loaded in the new context, so a later
-        // handoff sends it again too (`docs/handoff.md`, "What the model
-        // sees after a handoff").
+        // compaction sends it again too (`docs/compaction.md`, "What the model
+        // sees after a compaction").
         self.resend = std::mem::take(&mut self.skills);
         let ids: &[ActionId] = match &done.note {
             Some(Note::Actions { note }) => note,
@@ -287,7 +287,7 @@ impl Carry {
                 .collect();
             conversation.push(Input::User {
                 text: fill(
-                    message("handoff-jobs"),
+                    message("compaction-jobs"),
                     &[("jobs", listed.join("\n").as_str())],
                 ),
                 images: Vec::new(),
@@ -317,8 +317,8 @@ impl Carry {
     }
 
     /// Carries the earlier kept message/reply pairs into the context a
-    /// completed handoff started, at the armed spot and in reviewer order.
-    /// It inserts nothing without an armed handoff, leaves this turn's input
+    /// completed compaction started, at the armed spot and in reviewer order.
+    /// It inserts nothing without an armed compaction, leaves this turn's input
     /// in place, and ignores keys with no matching entry.
     pub(crate) fn keep(&mut self, kept: &[KeptMessage], conversation: &mut Vec<Input>) {
         if let Some(mut at) = self.input_at.take() {
@@ -330,7 +330,10 @@ impl Carry {
                     conversation.insert(
                         at.min(conversation.len()),
                         Input::User {
-                            text: fill(message("handoff-earlier"), &[("message", text.as_str())]),
+                            text: fill(
+                                message("compaction-earlier"),
+                                &[("message", text.as_str())],
+                            ),
                             images: Vec::new(),
                         },
                     );
@@ -368,7 +371,7 @@ impl Carry {
         }
         if let Some(call) = self.step.iter_mut().find(|call| call.action == *action) {
             call.result = Some(result.clone());
-            call.note = control.and_then(|control| control.handoff.clone());
+            call.note = control.and_then(|control| control.compact.clone());
             call.questions = control
                 .and_then(|control| control.questions.clone())
                 .unwrap_or_default();
@@ -390,7 +393,7 @@ impl Carry {
 
     /// Whether `action` is an inner call's: its request ran under an
     /// extension, so neither it nor its later lines enter the model's
-    /// conversation or the handoff carry.
+    /// conversation or the compaction carry.
     pub(crate) fn is_inner(&self, action: &ActionId) -> bool {
         self.inner.contains(action)
     }
@@ -404,7 +407,7 @@ impl Carry {
             .collect()
     }
 
-    /// The calls of the last reply whose result set `control.handoff`, in
+    /// The calls of the last reply whose result set `control.compact`, in
     /// call order.
     pub(crate) fn noted(&self) -> Vec<ActionId> {
         self.step
@@ -415,7 +418,7 @@ impl Carry {
     }
 
     /// Closes a window left open: truncates `conversation` back to where
-    /// the handoff began, so the note request's lines never stay.
+    /// the compaction began, so the note request's lines never stay.
     pub(crate) fn close_window(&mut self, conversation: &mut Vec<Input>) {
         if let Some(length) = self.window.take() {
             conversation.truncate(length);

@@ -893,10 +893,10 @@ fn preserve_order_still_fails_when_a_normal_edge_enables_it() {
 
 const REGISTERED_TOOLS: [&str; 14] = [
     "ask_user",
+    "compact",
     "delegate_models",
     "delegate_spawn",
     "edit",
-    "handoff",
     "jobs",
     "name_session",
     "read",
@@ -1211,22 +1211,19 @@ fn loop_tool_names_rejects_label_shapes_in_the_wrong_function() {
         file(
             "loop",
             "src/status.rs",
-            r#"fn other() { let key = match state { SessionState::Jobs => ("jobs", None) }; }"#.to_owned(),
+            r#"fn other() { let key = match state { SessionState::Jobs => ("jobs", None) }; }"#
+                .to_owned(),
         ),
         file(
             "loop",
             "src/skills.rs",
-            r#"fn other() { let tag = if skill.model_invocable { "skill" } else { "template" }; }"#.to_owned(),
+            r#"fn other() { let tag = if skill.model_invocable { "skill" } else { "template" }; }"#
+                .to_owned(),
         ),
         file(
             "loop",
-            "src/handoff/carry.rs",
+            "src/compaction/carry.rs",
             r#"fn other() { let args = &[("jobs", listed.join("\n").as_str())]; }"#.to_owned(),
-        ),
-        file(
-            "loop",
-            "src/reviewer.rs",
-            r#"fn other() { let sections = Sections { handoff: crate::prompt::section(md, "handoff") }; }"#.to_owned(),
         ),
     ];
     assert_eq!(
@@ -1235,8 +1232,7 @@ fn loop_tool_names_rejects_label_shapes_in_the_wrong_function() {
             "crates/loop/src/opening.rs:1: built-in tool name shell",
             "crates/loop/src/status.rs:1: built-in tool name jobs",
             "crates/loop/src/skills.rs:1: built-in tool name skill",
-            "crates/loop/src/handoff/carry.rs:1: built-in tool name jobs",
-            "crates/loop/src/reviewer.rs:1: built-in tool name handoff",
+            "crates/loop/src/compaction/carry.rs:1: built-in tool name jobs",
         ]
     );
 }
@@ -1301,14 +1297,13 @@ fn loop_sites_skip_tool_identities_in_non_loop_crates() {
 }
 
 #[test]
-fn loop_tool_names_allows_only_the_five_known_label_contexts() {
+fn loop_tool_names_allows_only_the_four_known_label_contexts() {
     let tools = registrations(&REGISTERED_TOOLS);
     let labels = [
         file("loop", "src/opening.rs", "fn render() { let row = (\"shell\", environment.shell.as_str()); }".to_owned()),
         file("loop", "src/status.rs", "fn key() { let key = match state { SessionState::Jobs => (\"jobs\", None) }; }".to_owned()),
         file("loop", "src/skills.rs", "fn commands() { let tag = if skill.model_invocable { \"skill\" } else { \"template\" }; }".to_owned()),
-        file("loop", "src/handoff/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; }".to_owned()),
-        file("loop", "src/reviewer.rs", "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; }".to_owned()),
+        file("loop", "src/compaction/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; }".to_owned()),
     ];
     let mut files = vec![tools];
     files.extend(labels);
@@ -1342,16 +1337,10 @@ fn loop_tool_label_exceptions_allow_zero_or_one_use_but_not_two() {
             "let tag = if skill.model_invocable { \"skill\" } else { \"template\" };",
         ),
         (
-            "src/handoff/carry.rs",
+            "src/compaction/carry.rs",
             "restart",
             "jobs",
             "let args = &[(\"jobs\", listed.join(\"\\\\n\").as_str())];",
-        ),
-        (
-            "src/reviewer.rs",
-            "sections",
-            "handoff",
-            "let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") };",
         ),
     ];
 
@@ -1435,11 +1424,10 @@ fn loop_tool_label_exceptions_do_not_exempt_other_uses_in_the_same_files() {
         file("loop", "src/opening.rs", "fn render() { let row = (\"shell\", environment.shell.as_str()); let name = \"shell\"; }".to_owned()),
         file("loop", "src/status.rs", "fn key() { let key = SessionState::Jobs => (\"jobs\", None); let name = \"jobs\"; }".to_owned()),
         file("loop", "src/skills.rs", "fn commands() { let tag = if skill.model_invocable { \"skill\" } else { \"template\" }; let name = \"skill\"; }".to_owned()),
-        file("loop", "src/handoff/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; let name = \"jobs\"; }".to_owned()),
-        file("loop", "src/reviewer.rs", "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; let name = \"handoff\"; }".to_owned()),
+        file("loop", "src/compaction/carry.rs", "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; let name = \"jobs\"; }".to_owned()),
     ];
     let failures = loop_tool_names(&files);
-    assert_eq!(failures.len(), 5, "{failures:?}");
+    assert_eq!(failures.len(), 4, "{failures:?}");
     assert!(
         failures
             .iter()
@@ -1454,11 +1442,6 @@ fn loop_tool_label_exceptions_do_not_exempt_other_uses_in_the_same_files() {
         failures
             .iter()
             .any(|line| line.contains("built-in tool name skill"))
-    );
-    assert!(
-        failures
-            .iter()
-            .any(|line| line.contains("built-in tool name handoff"))
     );
 }
 
@@ -2031,8 +2014,7 @@ fn scanner_bound_probe() {
                 file("loop", "src/opening.rs", r#"fn render() { let row = ("shell", environment.shell.as_str()); }"#.to_owned()),
                 file("loop", "src/status.rs", r#"fn key() { let key = match state { SessionState::Jobs => ("jobs", None) }; }"#.to_owned()),
                 file("loop", "src/skills.rs", r#"fn commands() { let tag = if skill.model_invocable { "skill" } else { "template" }; }"#.to_owned()),
-                file("loop", "src/handoff/carry.rs", r#"fn restart() { let args = &[("jobs", listed.join("\n").as_str())]; }"#.to_owned()),
-                file("loop", "src/reviewer.rs", r#"fn sections() { let sections = Sections { handoff: crate::prompt::section(md, "handoff") }; }"#.to_owned()),
+                file("loop", "src/compaction/carry.rs", r#"fn restart() { let args = &[("jobs", listed.join("\n").as_str())]; }"#.to_owned()),
             ];
             let mut files = vec![tools];
             files.extend(labels);
@@ -2918,32 +2900,17 @@ fn each_label_context_requires_every_neighbour_token() {
             ][..],
         ),
         (
-            file("loop", "src/handoff/carry.rs", String::new()),
+            file("loop", "src/compaction/carry.rs", String::new()),
             "fn restart() { let args = &[(\"jobs\", listed.join(\"\\n\").as_str())]; }",
             "jobs",
             "restart",
-            "fills the handoff template",
+            "fills the compaction template",
             &[
                 (-1, SourceKind::Punct('!')),
                 (1, SourceKind::Punct('!')),
                 (2, SourceKind::Ident("other".to_owned())),
                 (3, SourceKind::Punct('!')),
                 (4, SourceKind::Ident("other".to_owned())),
-            ][..],
-        ),
-        (
-            file("loop", "src/reviewer.rs", String::new()),
-            "fn sections() { let sections = Sections { handoff: crate::prompt::section(md, \"handoff\") }; }",
-            "handoff",
-            "sections",
-            "selects the handoff section",
-            &[
-                (-1, SourceKind::Punct('!')),
-                (-2, SourceKind::Ident("other".to_owned())),
-                (-4, SourceKind::Ident("other".to_owned())),
-                (-7, SourceKind::Ident("other".to_owned())),
-                (-10, SourceKind::Ident("other".to_owned())),
-                (-12, SourceKind::Ident("other".to_owned())),
             ][..],
         ),
     ];

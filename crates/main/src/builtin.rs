@@ -17,7 +17,7 @@ use contract::tool::Tool;
 use crate::failed;
 
 /// The loop's `(who, tool)` pairs, the infos the `tools` command answers
-/// with, the driver shell [`doors::Session::shell`] runs, and what a handoff
+/// with, the driver shell [`doors::Session::shell`] runs, and what a compaction
 /// runs to clear what the file tools have seen.
 type SessionTools = (
     Vec<(String, Arc<dyn Tool>)>,
@@ -27,7 +27,7 @@ type SessionTools = (
     Arc<dyn contract::images::Images>,
 );
 
-/// `ask_user`, `delegate_message`, `delegate_models`, `delegate_spawn`, `edit`, `handoff`, `name_session`, `read`, `session_list`, `session_message`, `session_search`, `shell`,
+/// `ask_user`, `compact`, `delegate_message`, `delegate_models`, `delegate_spawn`, `edit`, `name_session`, `read`, `session_list`, `session_message`, `session_search`, `shell`,
 /// `skill`, `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
 /// `reviewer_notes_save` joins them in name order between `read` and `session_list`, and
 /// `web_search` as `web_search` chose it: the hosted search of the session's
@@ -37,7 +37,7 @@ type SessionTools = (
 /// home, and counts a session as this project's when `worktree::project` gives
 /// its workspace the same identity as `workspace`, as resume looks a
 /// session up. `read`, `write` and `edit`
-/// share one session's file state, which a handoff forgets, take `locks`,
+/// share one session's file state, which a compaction forgets, take `locks`,
 /// the session's per-path lock, which an extension's `host.fs` shares, and
 /// `read` runs the image child (`fiber image`) into `artifacts`, the session's
 /// `artifacts/` directory, where `web_fetch` saves the PDFs and images it
@@ -199,12 +199,12 @@ pub(crate) fn builtin_timed(
     }
     let mut built = vec![
         registered(tools::AskUser)?,
+        registered(tools::Compact)?,
         registered(delegates.message())?,
         registered(delegates.models())?,
         registered(delegates.tool())?,
         registered(delegates.fork())?,
         registered(files.edit())?,
-        registered(tools::Handoff)?,
         registered(tools::NameSession)?,
         registered(files.read())?,
         registered(tools::ReviewerNotesSave::new(

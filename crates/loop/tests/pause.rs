@@ -237,12 +237,12 @@ fn a_budget_reached_after_a_pause_sends_no_continuation() {
         }),
         subscription: false,
     };
-    // The scripted spend is far past the default handoff trigger; this turn
+    // The scripted spend is far past the default compaction trigger; this turn
     // is about the budget alone.
     let mut session = Session::open(vec![scripted], Vec::new(), Vec::new(), model)
-        .handoff(r#loop::HandoffSettings {
+        .compaction(r#loop::CompactionSettings {
             enabled: false,
-            ..r#loop::HandoffSettings::default()
+            ..r#loop::CompactionSettings::default()
         })
         .budget(Some(1.0));
     session.inbox.send(delivery("hi")).unwrap();

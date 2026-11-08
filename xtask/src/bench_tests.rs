@@ -24,7 +24,7 @@ const DOC: &str = concat!(
     "| Terminal, attaching a 10 MiB session | 200 MiB peak RSS | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Session, memory kept after the busy turn | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Terminal, memory kept after attaching a 10 MiB session | 200 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
-    "| Session, memory kept after 10 busy turns, each followed by its handoff | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
+    "| Session, memory kept after 10 busy turns, each followed by its compaction | the memory kept after the first, plus 1 MiB RssAnon | Linux x86_64 | picked | — | — | — | — | — |\n",
     "| Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked | 72 ms | 34 ms | 109 ms | 82 % | 74 % |\n",
     "| `session_list`, waiting for every running session's status | 2 s for the whole call, up to 1,000 running sessions | Linux x86_64 | picked | 1 ms | 1 ms | 72 ms | 0 % | 0 % |\n",
     "| Sandbox setup for one confined shell call | 3 ms | Linux x86_64 | measured | — | — | — | — | — |\n",
@@ -950,7 +950,7 @@ fn ten_turns_judged(results: &Value) -> (Vec<String>, Line) {
         rule: Rule::RetainedGrowth("ten_busy_turns_retained_kib"),
     };
     super::judge::judge(
-        "Session, memory kept after 10 busy turns, each followed by its handoff",
+        "Session, memory kept after 10 busy turns, each followed by its compaction",
         "the memory kept after the first, plus 1 MiB RssAnon",
         check,
         (Some(&parsed), None, ""),
@@ -1058,7 +1058,7 @@ fn the_tenth_turn_keeps_a_median_of_at_most_one_mib_past_the_first() {
     );
     let line = row(
         &comment,
-        "Session, memory kept after 10 busy turns, each followed by its handoff",
+        "Session, memory kept after 10 busy turns, each followed by its compaction",
     );
     assert!(line.ends_with("| pass |"), "{line}");
 }
@@ -1095,7 +1095,7 @@ fn a_pull_request_the_selection_did_not_choose_skips_the_ten_turns_row() {
     );
     let line = row(
         &out.comment,
-        "Session, memory kept after 10 busy turns, each followed by its handoff",
+        "Session, memory kept after 10 busy turns, each followed by its compaction",
     );
     assert!(line.ends_with("| skipped |"), "{line}");
     assert!(
@@ -1113,7 +1113,7 @@ fn a_pull_request_the_selection_did_not_choose_skips_the_ten_turns_row() {
     );
     let line = row(
         &out.comment,
-        "Session, memory kept after 10 busy turns, each followed by its handoff",
+        "Session, memory kept after 10 busy turns, each followed by its compaction",
     );
     assert!(line.ends_with("| pass |"), "{line}");
     // The skip records only the ten-turns workload: another Exact row

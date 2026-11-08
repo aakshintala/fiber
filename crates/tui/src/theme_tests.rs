@@ -55,7 +55,7 @@ fn names_round_trip() {
     assert_eq!(Role::Scroll.name(), "scroll");
     assert_eq!(Role::Panel.name(), "panel");
     assert_eq!(Role::Turn.name(), "turn");
-    assert_eq!(Role::Handoff.name(), "handoff");
+    assert_eq!(Role::Compaction.name(), "compaction");
 }
 
 /// A theme file, the built-in it names as `base`, and the roles it sets.
@@ -216,7 +216,7 @@ fn tint_and_grey_per_role() {
         (Role::Turn, true, true),
         (Role::Prompt, true, true),
         (Role::Code, true, true),
-        (Role::Handoff, true, false),
+        (Role::Compaction, true, false),
         (Role::Approval, true, true),
         (Role::Alert, true, false),
         (Role::Hover, true, true),

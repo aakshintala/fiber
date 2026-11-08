@@ -54,10 +54,10 @@ pub(crate) enum Queued {
     /// A monitor's batch: written as `job_line`; named in a `jobs` item when
     /// it starts a turn. No claim applies to it.
     Line(JobLine),
-    /// A person's `handoff`: named in a `handoff` item when it starts a
-    /// turn, and run at the next step boundary (`docs/handoff.md`, "A
+    /// A person's `compact`: named in a `compaction` item when it starts a
+    /// turn, and run at the next step boundary (`docs/compaction.md`, "A
     /// person"); no line is written for it.
-    Handoff(CommandId, Option<String>),
+    Compaction(CommandId, Option<String>),
     /// The jobs the ending notice or the jobs check named, and which of the
     /// two it was: written as `jobs_pending_notified`, the first line of its
     /// turn's first step.
@@ -139,7 +139,7 @@ impl Loop {
     pub(crate) fn model_running(&self, running: Vec<JobId>) -> Vec<JobId> {
         running
             .into_iter()
-            .filter(|id| !self.handoff.carry.owned(&id.0))
+            .filter(|id| !self.compaction.carry.owned(&id.0))
             .collect()
     }
 
@@ -336,7 +336,7 @@ impl Loop {
         let mut input: Vec<InputItem> = Vec::new();
         // Every held `shell_command` line joins this turn first, in `seq`
         // order: the `turn_started` naming them releases them.
-        for seq in self.handoff.carry.pending() {
+        for seq in self.compaction.carry.pending() {
             input.push(InputItem::ShellCommand { seq: Seq(seq) });
         }
         let mut contexts = Vec::new();
@@ -352,12 +352,12 @@ impl Loop {
                         changed_by: hooked.changed_by,
                     });
                 }
-                Queued::Handoff(command_id, instructions) => {
-                    input.push(InputItem::Handoff {
+                Queued::Compaction(command_id, instructions) => {
+                    input.push(InputItem::Compaction {
                         command_id: command_id.clone(),
                     });
                     self.queued
-                        .push_back(Queued::Handoff(command_id, instructions));
+                        .push_back(Queued::Compaction(command_id, instructions));
                 }
                 Queued::Job(ahead, completed, delegate) => {
                     name_job(&mut input, &completed.job_id);
@@ -443,9 +443,9 @@ impl Loop {
                     continue;
                 }
                 Queued::Line(line) => Event::JobLine(self.deliver_line(line, Some(turn))?),
-                // Held for the step's handoff check, which runs it.
-                Queued::Handoff(_, instructions) => {
-                    self.handoff.held.push(instructions);
+                // Held for the step's compaction check, which runs it.
+                Queued::Compaction(_, instructions) => {
+                    self.compaction.held.push(instructions);
                     continue;
                 }
                 Queued::Pending(job_ids, reason) => {
@@ -494,7 +494,7 @@ impl Loop {
                 piece @ (Queued::Steer(..)
                 | Queued::Job(..)
                 | Queued::Line(_)
-                | Queued::Handoff(..)
+                | Queued::Compaction(..)
                 | Queued::Pending(..)) => Some(piece),
             })
             .collect()
@@ -523,7 +523,7 @@ impl Loop {
                 if let Some(finished) = &finished {
                     let event = Event::DelegateFinished(finished.clone());
                     self.log.append(&event, None, None)?;
-                    if !self.handoff.carry.owned(&finished.job_id.0) {
+                    if !self.compaction.carry.owned(&finished.job_id.0) {
                         self.held.push(Input::User {
                             text: delegate_text(finished),
                             images: Vec::new(),
@@ -532,8 +532,8 @@ impl Loop {
                 }
                 let event = Event::JobCompleted(completed.clone());
                 self.log.append(&event, None, None)?;
-                self.handoff.carry.fold_jobs(&event);
-                if !self.handoff.carry.owned(&completed.job_id.0) {
+                self.compaction.carry.fold_jobs(&event);
+                if !self.compaction.carry.owned(&completed.job_id.0) {
                     self.held.push(Input::User {
                         text: notice_text(&completed),
                         images: Vec::new(),

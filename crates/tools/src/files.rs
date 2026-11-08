@@ -456,7 +456,7 @@ impl Files {
     }
 
     /// Clears what the session has seen. The session's built-in list hands
-    /// it to the handoff (`crates/main/src/builtin.rs`, `forget`).
+    /// it to the compaction (`crates/main/src/builtin.rs`, `forget`).
     pub fn forget(&self) {
         session(&self.shared.state).seen.clear();
     }

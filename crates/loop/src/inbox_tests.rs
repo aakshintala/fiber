@@ -765,7 +765,7 @@ fn name(text: &str) -> Delivery {
 
 fn control_with(name: Option<&str>) -> Control {
     Control {
-        handoff: None,
+        compact: None,
         questions: None,
         skill: None,
         name: name.map(str::to_owned),
@@ -803,7 +803,7 @@ fn held_kinds(looped: &Loop) -> Vec<&str> {
             | Delivery::Credential(..)
             | Delivery::Rewind(..)
             | Delivery::ChangeWorkspace(..)
-            | Delivery::Handoff(..)
+            | Delivery::Compaction(..)
             | Delivery::Job(_)
             | Delivery::JobLine(_)
             | Delivery::ExtensionExec(_)
@@ -1468,10 +1468,10 @@ impl SteerHooks for FakeSteerHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -1802,7 +1802,7 @@ fn turn_holds(input: &Option<TurnInput>, id: &str) -> bool {
             crate::jobs::Queued::Job(..)
             | crate::jobs::Queued::Notice(..)
             | crate::jobs::Queued::Line(_)
-            | crate::jobs::Queued::Handoff(..)
+            | crate::jobs::Queued::Compaction(..)
             | crate::jobs::Queued::Pending(..) => false,
         })
     })

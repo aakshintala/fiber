@@ -33,7 +33,7 @@ fn rows() -> Vec<SettingRow> {
             WriteScope::GlobalOnly,
         ),
         row(
-            "handoff.tokens",
+            "compaction.tokens",
             value("400000"),
             "default",
             WriteScope::Any { repo: true },
@@ -167,13 +167,13 @@ fn column(line: &str, needle: &str) -> usize {
 #[test]
 fn rows_show_key_value_and_layer_as_aligned_columns() {
     let fake = Fake::new(rows());
-    let settings = at(&fake, "handoff.tokens");
+    let settings = at(&fake, "compaction.tokens");
     let screen = drawn(&settings, None, 80, 24);
     // The widest key is 33 columns and the widest value 23, so the layer
     // column starts at 2 + 33 + 2 + 23 + 2.
     assert_eq!(
-        line_of(&screen, "handoff.tokens"),
-        format!("› {:<35}{:<25}default", "handoff.tokens", "400000")
+        line_of(&screen, "compaction.tokens"),
+        format!("› {:<35}{:<25}default", "compaction.tokens", "400000")
     );
     assert_eq!(
         line_of(&screen, "model"),
@@ -223,7 +223,7 @@ fn a_dim_header_row_heads_the_table() {
     let layer = column(line_of(&screen, "key"), "layer");
     assert_eq!(layer, 62);
     for (key, word) in [
-        ("handoff.tokens", "default"),
+        ("compaction.tokens", "default"),
         ("model", "global"),
         ("tui.theme", "default"),
         ("skills.disabled", "global + project"),
@@ -300,7 +300,7 @@ fn a_move_clears_what_the_last_action_said_and_a_stay_keeps_it() {
     assert!(settings.said.is_empty());
     assert_eq!(
         settings.frame(80, None).below,
-        ["changing handoff.tokens needs a reload"]
+        ["changing compaction.tokens needs a reload"]
     );
     // And back up, the same.
     settings.said = vec!["Saved.".to_owned()];
@@ -398,15 +398,15 @@ fn a_narrow_width_clips_without_panicking() {
 #[test]
 fn the_rows_end_in_the_file_hint_with_the_selected_keys_timing_above() {
     let fake = Fake::new(rows());
-    let settings = at(&fake, "handoff.tokens");
+    let settings = at(&fake, "compaction.tokens");
     let frame = settings.frame(80, Some(180_000));
     assert_eq!(frame.footer, "Ctrl+G opens the file");
     assert_eq!(
         frame.below,
-        ["changing handoff.tokens needs a reload (~180k tokens)"]
+        ["changing compaction.tokens needs a reload (~180k tokens)"]
     );
     let frame = settings.frame(80, None);
-    assert_eq!(frame.below, ["changing handoff.tokens needs a reload"]);
+    assert_eq!(frame.below, ["changing compaction.tokens needs a reload"]);
     let theme = at(&fake, "tui.theme").frame(80, None);
     assert_eq!(theme.below, ["Applies now."]);
     let mut said = at(&fake, "tui.theme");
@@ -453,7 +453,7 @@ fn a_failed_read_says_why_and_shows_no_rows() {
 #[test]
 fn settings_80x24() {
     let fake = Fake::new(rows());
-    let settings = at(&fake, "handoff.tokens");
+    let settings = at(&fake, "compaction.tokens");
     insta::assert_snapshot!("settings_80x24", drawn(&settings, Some(180_000), 80, 24));
 }
 
@@ -462,7 +462,7 @@ fn enter_opens_the_field_with_the_value_as_set_takes_it() {
     let fake = Fake::new(rows());
     for (key, text) in [
         ("model", "a/b"),
-        ("handoff.tokens", "400000"),
+        ("compaction.tokens", "400000"),
         ("skills.disabled", "[\"a\"]"),
         ("repository_extensions", ""),
     ] {
@@ -481,7 +481,7 @@ fn tab_skips_layers_the_key_may_not_be_written_to() {
     let fake = Fake::new(rows());
     for (key, cycle) in [
         (
-            "handoff.tokens",
+            "compaction.tokens",
             vec![
                 Layer::Global,
                 Layer::Project,
@@ -532,7 +532,7 @@ fn layers_follow_each_write_scope() {
 #[test]
 fn a_saved_write_rereads_and_says_the_file() {
     let fake = Fake::new(rows());
-    let mut settings = at(&fake, "handoff.tokens");
+    let mut settings = at(&fake, "compaction.tokens");
     press(&mut settings, &fake, &[Key::Enter, Key::Tab]);
     for _ in 0..6 {
         press(&mut settings, &fake, &[Key::Backspace]);
@@ -544,7 +544,7 @@ fn a_saved_write_rereads_and_says_the_file() {
         [(
             PathBuf::from("/w"),
             Layer::Project,
-            "handoff.tokens".to_owned(),
+            "compaction.tokens".to_owned(),
             "200000".to_owned()
         )]
     );
@@ -554,7 +554,7 @@ fn a_saved_write_rereads_and_says_the_file() {
         settings.said,
         [
             format!("Saved to {}.", file(Layer::Project).display()),
-            "changing handoff.tokens needs a reload".to_owned(),
+            "changing compaction.tokens needs a reload".to_owned(),
         ]
     );
 }
@@ -716,7 +716,7 @@ fn applies_by_key() {
         ("providers.openai.credential.extra", Applies::Reload),
         ("providers.openai.credentials_extra", Applies::Reload),
         ("skills.disabled", Applies::NextTurn),
-        ("handoff.tokens", Applies::Reload),
+        ("compaction.tokens", Applies::Reload),
     ] {
         assert_eq!(applies(key), when, "{key}");
     }
@@ -743,20 +743,20 @@ fn client_hub_keys_apply_at_the_next_connection() {
 #[test]
 fn the_reload_cost_uses_the_last_usage() {
     assert_eq!(
-        applies_text("handoff.tokens", Some(180_000)),
-        "changing handoff.tokens needs a reload (~180k tokens)"
+        applies_text("compaction.tokens", Some(180_000)),
+        "changing compaction.tokens needs a reload (~180k tokens)"
     );
     assert_eq!(
-        applies_text("handoff.tokens", Some(999)),
-        "changing handoff.tokens needs a reload (~999 tokens)"
+        applies_text("compaction.tokens", Some(999)),
+        "changing compaction.tokens needs a reload (~999 tokens)"
     );
 }
 
 #[test]
 fn without_usage_it_says_a_change_needs_a_reload() {
     assert_eq!(
-        applies_text("handoff.tokens", None),
-        "changing handoff.tokens needs a reload"
+        applies_text("compaction.tokens", None),
+        "changing compaction.tokens needs a reload"
     );
     assert_eq!(
         applies_text("budget.usd", None),
@@ -899,7 +899,7 @@ fn ctrl_g_on_a_default_row_opens_the_global_file() {
         WriteScope::Any { repo: true },
     ));
     let fake = Fake::new(rows);
-    let mut settings = at(&fake, "handoff.tokens");
+    let mut settings = at(&fake, "compaction.tokens");
     let acts = press(&mut settings, &fake, &[Key::CtrlG]);
     assert!(
         matches!(acts.as_slice(), [Act::Open(path)] if *path == file(Layer::Global)),
@@ -931,7 +931,7 @@ fn a_click_on_a_row_selects_it_and_the_x_closes() {
 #[test]
 fn settings_editing() {
     let fake = Fake::new(rows());
-    let mut settings = at(&fake, "handoff.tokens");
+    let mut settings = at(&fake, "compaction.tokens");
     press(&mut settings, &fake, &[Key::Enter, Key::Tab]);
     insta::assert_snapshot!("settings_editing", drawn(&settings, None, 80, 24));
 }

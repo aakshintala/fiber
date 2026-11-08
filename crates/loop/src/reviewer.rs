@@ -79,11 +79,11 @@ pub(crate) struct Sections {
     pub first: String,
     /// The second stage's instruction.
     pub second: String,
-    /// The handoff selection's instruction.
-    pub handoff: String,
-    /// The handoff selection's re-ask note, sent when a selection reply
+    /// The compaction selection's instruction.
+    pub compaction: String,
+    /// The compaction selection's re-ask note, sent when a selection reply
     /// does not read.
-    pub handoff_reask: String,
+    pub compaction_reask: String,
 }
 
 /// The reviewer's instructions, split per `docs/system-prompt.md`'s rule.
@@ -93,15 +93,15 @@ pub(crate) fn sections() -> Sections {
         shared: crate::prompt::section(md, "shared"),
         first: crate::prompt::section(md, "first-pass"),
         second: crate::prompt::section(md, "second-pass"),
-        handoff: crate::prompt::section(md, "handoff"),
-        handoff_reask: crate::prompt::section(md, "handoff-reask"),
+        compaction: crate::prompt::section(md, "compaction"),
+        compaction_reask: crate::prompt::section(md, "compaction-reask"),
     }
 }
 
 /// A reviewer request's system prompt (`docs/permissions.md`, "What the
 /// person tells it"): the shared instructions alone where the person
 /// wrote no notes, else the notes after them. One builder serves both
-/// stages and the handoff selection, so every reviewer request shares
+/// stages and the compaction selection, so every reviewer request shares
 /// one system prompt.
 fn system_prompt(shared: &str, notes: &str) -> String {
     if notes.trim().is_empty() {
@@ -1182,7 +1182,7 @@ fn stage_conversation(
 
 /// Starts one reviewer request: the reviewer's own factory builds the call
 /// at the first attempt, never the session's. Every review stage and the
-/// handoff selection share this one start; the caller records usage.
+/// compaction selection share this one start; the caller records usage.
 fn start_review_call(
     provider: &Arc<dyn Provider>,
     observe: Option<&Observe>,

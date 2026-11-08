@@ -1046,7 +1046,7 @@ fn a_relayed_rewind_whose_start_is_refused_answers_that_code() {
         // hub retries the same child id once when the old process exits).
         // The retry runs on the relay thread after the session thread
         // ends, so its starter signal ends the wait below: the retry's
-        // own handoff proves `follow` ran.
+        // own transfer proves `follow` ran.
         drop(release_tx);
         old_session.join().unwrap();
         assert!(

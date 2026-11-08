@@ -830,7 +830,7 @@ fn input_value(input: &Input<'_>) -> Value {
                 "flat": answers.flat,
             }),
         },
-        Input::HandoffBand(band) => {
+        Input::CompactionBand(band) => {
             json!({
                 "trigger": band.trigger,
                 "ts": band.ts,
@@ -1241,7 +1241,7 @@ fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {
 
 /// A band's state as Lua reads it: `writing`, `done` with its context
 /// sizes, or `unchanged` with `cancelled` (`docs/tui.md`, "The slots",
-/// `handoff_band`).
+/// `compaction_band`).
 fn band_state_value(state: &tui::ext::TurnBandState) -> Value {
     match state {
         tui::ext::TurnBandState::Writing => json!({"kind": "writing"}),
