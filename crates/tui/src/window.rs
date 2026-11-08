@@ -1028,10 +1028,10 @@ impl Pages {
 
     /// The slot of the run whose more row `target` names.
     fn shell_slot(&self, target: &Target) -> Option<usize> {
-        match target {
-            Target::Shell(slot) if *slot < self.shells.len() => Some(*slot),
-            _ => None,
-        }
+        let Target::Shell(slot) = target else {
+            return None;
+        };
+        (*slot < self.shells.len()).then_some(*slot)
     }
 
     /// Opens a run's output past the cap, or closes it. The state lives
@@ -1194,18 +1194,18 @@ impl Pages {
     /// turn-after and text, counting equal runs in order. A slot moves
     /// when `carry_chain` prepends runs, so the number is no identity.
     fn find_shell(&self, slot: usize, fold: &Pages) -> Option<usize> {
-        let same = |a: &(usize, usize, String, bool), b: &(usize, usize, String, bool)| {
-            a.0 == b.0 && a.1 == b.1 && a.2 == b.2
-        };
-        let run = self.shells.get(slot)?;
-        let nth = self.shells[..slot]
+        let key = |run: &(usize, usize, String, bool)| (run.0, run.1, run.2.clone());
+        let run = key(self.shells.get(slot)?);
+        let nth = self
+            .shells
             .iter()
-            .filter(|other| same(other, run))
+            .take(slot)
+            .filter(|other| key(other) == run)
             .count();
         fold.shells
             .iter()
             .enumerate()
-            .filter(|(_, other)| same(other, run))
+            .filter(|(_, other)| key(other) == run)
             .nth(nth)
             .map(|(at, _)| at)
     }
