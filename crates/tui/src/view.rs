@@ -784,3 +784,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tool_group_nesting_tests.rs"]
 mod tool_group_nesting_tests;
+
+#[cfg(test)]
+#[path = "hook_rewrite_tests.rs"]
+mod hook_rewrite_tests;

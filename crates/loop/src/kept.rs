@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::io::{Read as _, Seek as _, SeekFrom};
 
-use contract::events::{Event, EventKind, InputItem, JobCompleted, Outcome};
+use contract::events::{Event, EventKind, InputItem, JobCompleted};
 use contract::shapes::{ContentPart, Origin, Sender};
 use contract::{Envelope, ErrorCode};
 
@@ -51,9 +51,9 @@ impl Loop {
         let mut notices = Vec::new();
         let mut changed_by = Vec::new();
         for mut completed in std::mem::take(&mut self.kept) {
-            if completed.status == Outcome::Failed
-                && let Some(started) = self.ending.starts.get(&completed.job_id)
-            {
+            // Every ended outcome reloads its tail from the output file; a
+            // completion with no `starts` entry never ran, so it stays tail-less.
+            if let Some(started) = self.ending.starts.get(&completed.job_id) {
                 completed.output_tail = tail(self.log.dir(), &started.output_path);
             }
             let completed = self.deliver_completion(completed, None)?;

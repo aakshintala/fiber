@@ -13,7 +13,7 @@ mod read;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use config::{Config, ProviderData, Secret};
 use contract::clock::Clock;
@@ -27,6 +27,7 @@ use contract::{ErrorCode, ThinkingLevel};
 use extensions::{LuaProvider, Providers, SessionExtensions};
 
 pub(crate) use self::read::{CancelOnDrop, Reads};
+use crate::delegates::Delegates;
 use crate::lua_providers::{Access, KeyAndSigner};
 
 /// The credentials read at startup, by provider name: the label, and the
@@ -199,6 +200,11 @@ pub(crate) struct Switching {
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
     started: Arc<StartLock>,
     reads: Arc<Reads>,
+    /// The session's delegate service, handed over once the session builds
+    /// it: applying a switch rebuilds its resolver around the switched
+    /// model. Unset in tests that never build a session, whose switches
+    /// publish nothing.
+    delegates: OnceLock<Arc<Delegates>>,
     /// The session's diagnostic writer: a switch prepares observed
     /// factories over it. `None` until the session shares its writer, and
     /// a switch then carries no factories.
@@ -294,6 +300,7 @@ impl Switching {
             loaded: Mutex::new(loaded.into_iter().collect()),
             reads,
             diag: None,
+            delegates: OnceLock::new(),
         }
     }
 
@@ -335,6 +342,29 @@ impl Switching {
 
     pub(crate) fn loader(&self) -> Loader {
         self.reloadable().loader
+    }
+
+    /// Hands a switch the session's delegate service: the next applied
+    /// switch rebuilds its resolver around the switched model. The
+    /// session calls this once, after it builds its delegates.
+    pub(crate) fn set_delegates(&self, delegates: &Arc<Delegates>) {
+        let _first = self.delegates.set(Arc::clone(delegates));
+    }
+
+    /// Rebuilds the delegate resolver around the switched model and swaps
+    /// it onto the session whole, the same snapshot swap a reload uses:
+    /// without it `delegate_models` would keep leading with the old model.
+    /// Switches without a session publish nothing.
+    fn publish_resolve(&self, reference: &str) {
+        let Some(delegates) = self.delegates.get() else {
+            return;
+        };
+        let now = self.reloadable();
+        delegates.set_resolve(crate::delegates::resolver(
+            &self.registry,
+            &now.config,
+            reference,
+        ));
     }
 
     pub(crate) fn reloadable(&self) -> Reloadable {
@@ -806,12 +836,14 @@ pub(crate) fn prepare(
         .collect();
     let shared = Arc::clone(switching);
     let (switched_provider, switched_label) = (session.clone(), got.label.clone());
+    let applied_reference = reference.clone();
     let applied: Applied = Box::new(move || {
         shared.keep_loaded(keep);
         shared.repoint(&switched_provider, &switched_label);
         if let Some(publish) = publish {
             publish();
         }
+        shared.publish_resolve(&applied_reference);
     });
     Ok(r#loop::Prepared {
         provider,

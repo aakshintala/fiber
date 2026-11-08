@@ -151,7 +151,7 @@ fn job(id: &str, status: Outcome) -> JobCompleted {
 }
 
 #[test]
-fn kept_failed_completions_load_tails_but_nonfailed_and_unstarted_do_not() {
+fn kept_ended_completions_load_tails_but_unstarted_does_not() {
     with_loop(|mut looped| {
         for (id, status, output) in [
             ("j_failed", Outcome::Failed, "failure details\n"),
@@ -176,8 +176,9 @@ fn kept_failed_completions_load_tails_but_nonfailed_and_unstarted_do_not() {
             looped.kept.push(job(id, status));
         }
         looped.kept.push(job("j_unstarted", Outcome::Failed));
-        // `docs/events.md`, "`job_completed`": only failed jobs carry a tail;
-        // "Resume": keeper completions are sent with the next turn.
+        // `docs/events.md`, "`job_completed`": every ended outcome carries
+        // the tail of its output, capped; "Resume": keeper completions are
+        // sent with the next turn.
         assert_eq!(
             looped.deliver_kept().unwrap(),
             Some(InputItem::Message {
@@ -185,8 +186,10 @@ fn kept_failed_completions_load_tails_but_nonfailed_and_unstarted_do_not() {
                     text: concat!(
                         "Fiber: background job j_failed ended: failed.\n",
                         "Last output:\nfailure details\n\n",
-                        "Fiber: background job j_completed ended: completed.\n\n",
-                        "Fiber: background job j_cancelled ended: cancelled.\n\n",
+                        "Fiber: background job j_completed ended: completed.\n",
+                        "Last output:\nsuccessful output\n\n",
+                        "Fiber: background job j_cancelled ended: cancelled.\n",
+                        "Last output:\ncancelled output\n\n",
                         "Fiber: background job j_unstarted ended: failed.",
                     )
                     .into(),

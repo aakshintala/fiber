@@ -1139,6 +1139,7 @@ fn a_top_row_on_a_call_image_row_pins_the_group() {
                 | Target::Note(_)
                 | Target::Image(_)
                 | Target::Orphans(_)
+                | Target::Shell(_)
                 | Target::Copy { .. } => unreachable!(),
             })]
             && line.to_string().contains("a.png")

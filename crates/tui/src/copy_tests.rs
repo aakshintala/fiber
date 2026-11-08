@@ -255,6 +255,7 @@ fn the_copy_cells_are_the_drawn_label_inside_the_padding() {
             | super::super::Target::Login
             | super::super::Target::Note(_)
             | super::super::Target::Image(_)
+            | super::super::Target::Shell(_)
             | super::super::Target::Orphans(_) => None,
         })
         .expect("a copy target");

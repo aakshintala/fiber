@@ -651,7 +651,11 @@ impl State {
             }
         }
         (
-            Some(crate::delegates::resolver(&providers, config)),
+            Some(crate::delegates::resolver(
+                &providers,
+                config,
+                route.model.as_str(),
+            )),
             notices,
         )
     }
@@ -974,13 +978,14 @@ impl State {
             );
             infos.extend(synced.tools.iter().map(|(_, _, info)| info.clone()));
         }
-        // The reloaded delegate tools, swapped in as one pair: the
-        // spawn check and the models text never disagree. A rebuild
-        // that failed keeps the old entries, and the notices above say
-        // so. The swap runs before the stored set below is taken, so
-        // the install publishes the fresh pair.
-        if let Some(resolve) = &delegate_resolve {
-            let (spawn, models) = self.delegates.tools_with(resolve);
+        // The reloaded delegate tools, swapped in as one live pair:
+        // the spawn check and the models text never disagree, and both
+        // follow the install's `set_resolve`, as does a later switch.
+        // A rebuild that failed keeps the old entries, and the notices
+        // above say so. The swap runs before the stored set below is
+        // taken, so the install publishes the fresh pair.
+        if delegate_resolve.is_some() {
+            let (spawn, models) = self.delegates.tools_with();
             let mut spawn = Some(spawn);
             let mut models = Some(models);
             for (_, tool) in tools.iter_mut() {
