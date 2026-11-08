@@ -15,10 +15,14 @@
 mod support;
 
 use std::process::Output;
+use std::sync::{Arc, Mutex};
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
 use serde_json::{Value, json};
-use support::{HELLO_KINDS, Run, Setup, hello, is_status, run_to_exit, write_json};
+use support::{
+    HELLO_KINDS, HubProc, Run, SessionGuard, Setup, connect_hub, hello, is_status, recv_answer,
+    run_to_exit, subscribe, until, until_after, write_json,
+};
 
 /// Parses `fiber ask` stdout into a run: one JSON value per line, without
 /// `session_status` lines, which an observer thread writes.
@@ -635,4 +639,124 @@ fn request_tags_invalid_value_uses_default() {
     assert_eq!(kinds, HELLO_KINDS);
     assert_eq!(run.text_completed(), "Hello.");
     assert_turn(&requests, "/ai-gateway/mlflow/v1/chat/completions");
+}
+
+/// Starts a session through the hub with `overrides` on the glm model,
+/// waits for its turn, closes it and waits for it to exit. Returns the
+/// stream's `config_invalid` notices.
+fn hub_turn(client: &support::Socket, workspace: &str, id: &str, overrides: &[&str]) -> Vec<Value> {
+    let mut all = vec!["model=databricks/databricks-glm-5.3"];
+    all.extend(overrides);
+    client.send(
+        &json!({
+            "id": id,
+            "command": "start",
+            "args": {"workspace": workspace, "overrides": all,
+                     "content": [{"type": "text", "text": "hi"}]},
+        })
+        .to_string(),
+    );
+    let started = recv_answer(client, id, "the start acknowledgement");
+    assert_eq!(started["kind"], "command_accepted", "{started}");
+    let session = started["payload"]["result"]["session_id"]
+        .as_str()
+        .expect("the start answers with a session id")
+        .to_owned();
+    let sub = subscribe(client, &session);
+    let mut stream = until(client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    client.send(
+        &json!({"id": format!("{id}_close"), "session_id": session, "command": "close"})
+            .to_string(),
+    );
+    stream.extend(until_after(client, &sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    }));
+    stream
+        .into_iter()
+        .filter(|line| line["kind"] == "notice" && line["payload"]["code"] == "config_invalid")
+        .collect()
+}
+
+#[test]
+fn request_tags_hub_overrides_are_session_local() {
+    const MODEL_PATH: &str = "/ai-gateway/mlflow/v1/chat/completions";
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(|request| {
+        if request
+            .path
+            .starts_with("/api/2.1/unity-catalog/model-services")
+        {
+            Response::status(200, services_body().to_string())
+        } else if request
+            .path
+            .starts_with("/api/ai-gateway/v2/external-provider-models")
+        {
+            Response::status(200, catalog_body().to_string())
+        } else {
+            completions_hello()
+        }
+    })
+    .unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
+    // The hub's environment is empty, so the host and the token come from
+    // configuration.
+    write_json(
+        &setup.home().join("config/databricks.json"),
+        &json!({"workspace": host}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"providers": {"databricks": {"credentials": {
+            "default": {"command": ["echo", "dapi-test"]}
+        }}}}),
+    );
+
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+
+    // The same literal ask takes, then a second tag set, then none.
+    let first = r#"providers.databricks.request_tags={"run":"r1"}"#;
+    let second = r#"providers.databricks.request_tags={"run":"r2","source":"mine"}"#;
+    let mut invalid = Vec::new();
+    invalid.extend(hub_turn(&client, &workspace, "c_one", &[first]));
+    invalid.extend(hub_turn(&client, &workspace, "c_two", &[second]));
+    invalid.extend(hub_turn(&client, &workspace, "c_none", &[]));
+    assert!(invalid.is_empty(), "{invalid:?}");
+
+    let requests = server.requests();
+    let models: Vec<&Request> = requests.iter().filter(|r| r.path == MODEL_PATH).collect();
+    let tags: Vec<Value> = models.iter().map(|r| tags_header(r)).collect();
+    assert_eq!(
+        tags,
+        [
+            json!({"source": "fiber", "run": "r1"}),
+            json!({"source": "fiber", "run": "r2"}),
+            json!({"source": "fiber"}),
+        ],
+        "{requests:?}"
+    );
+    // Discovery, wherever a session ran it, stays source-only.
+    for request in requests.iter().filter(|r| r.path != MODEL_PATH) {
+        assert_eq!(
+            tags_header(request),
+            json!({"source": "fiber"}),
+            "{request:?}"
+        );
+    }
+
+    guard.wait_gone();
+    drop(client);
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
 }
