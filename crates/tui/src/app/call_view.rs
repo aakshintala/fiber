@@ -53,6 +53,11 @@ pub(crate) struct CallView {
     title: String,
     /// The call's target, drawn dim on the top row.
     command: String,
+    /// The call the rows come from, to lay them out again when the
+    /// width changes.
+    source: opened::Call,
+    /// The width `prefix`, `plain` and `closing` were laid out at.
+    width: u16,
     /// The headline and shell command rows, drawn before the output.
     prefix: Vec<opened::Body>,
     /// The shell or search closing row, drawn after the output.
@@ -101,6 +106,7 @@ impl CallView {
         name: String,
         arguments: serde_json::Value,
         session: SessionId,
+        width: u16,
     ) -> Self {
         let pager = Pager::new(call.artifact.is_some());
         Self {
@@ -110,6 +116,8 @@ impl CallView {
             arguments,
             title: call.title,
             command: call.command,
+            source: call.source,
+            width,
             prefix: call.prefix,
             closing: call.closing,
             numbering: call.numbering,
@@ -144,6 +152,8 @@ impl CallView {
             width,
         );
         let was_paged = self.paged();
+        self.source = fresh.source;
+        self.width = width;
         self.plain = fresh.plain;
         self.prefix = fresh.prefix;
         self.closing = fresh.closing;
@@ -160,6 +170,20 @@ impl CallView {
     /// Whether the result pages an artifact.
     fn paged(&self) -> bool {
         self.artifact.is_some()
+    }
+
+    /// Lays the call's rows out again at `width` from the call it
+    /// keeps, so a message wraps where the view is drawn now. Paging,
+    /// follow, search and the notice stay; the selection and the first
+    /// row shown move only when the new row count leaves them past the
+    /// last row.
+    fn rebuild(&mut self, width: u16) {
+        self.plain = opened::uncapped(&self.source, width);
+        self.prefix = opened::prefix(&self.source, width);
+        self.closing = opened::closing(&self.source);
+        self.width = width;
+        let rows = self.rows().len();
+        self.list.clamp(rows);
     }
 }
 
@@ -411,7 +435,8 @@ impl App {
         let Some((action, name, arguments)) = self.find_call_parts(id) else {
             return Effect::None;
         };
-        let mut view = CallView::open(call, action, name, arguments, session);
+        let width = self.column_width();
+        let mut view = CallView::open(call, action, name, arguments, session, width);
         if !self.connected() {
             view.notice = Some("The call's output could not load: not connected.".to_owned());
         }
@@ -474,6 +499,22 @@ impl App {
         view.refresh_from_completed(done, width);
         self.refresh_call_view_matches();
         self.call_view_pump().into_iter().collect()
+    }
+
+    /// Lays the open call view's rows out again when the column width
+    /// changed since they were built, then rebuilds its matches for the
+    /// new rows. Compares the view's own width, not the screen's wrap
+    /// result, which a frozen conversation reports unchanged.
+    pub(in crate::app) fn rewrap_call_view(&mut self) {
+        let width = self.column_width();
+        let Some(view) = self.call_view_mut() else {
+            return;
+        };
+        if view.width == width {
+            return;
+        }
+        view.rebuild(width);
+        self.refresh_call_view_matches();
     }
 
     /// Whether the call `id` names is open inline.
