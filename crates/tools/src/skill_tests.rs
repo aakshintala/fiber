@@ -169,7 +169,7 @@ fn effects_then_run_returns_the_body_under_its_path() {
     assert_eq!(
         output.control,
         Some(contract::events::Control {
-            compaction: None,
+            compact: None,
             questions: None,
             skill: Some(SkillLoad {
                 name: "tdd".into(),

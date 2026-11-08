@@ -207,7 +207,11 @@ fn get_equals_the_merged_value_for_every_key_shape() {
             None,
         ),
         // A missing key with a default names the defaults.
-        (vec![default(), global(json!({}))], "compaction.enabled", None),
+        (
+            vec![default(), global(json!({}))],
+            "compaction.enabled",
+            None,
+        ),
         // A missing key without one is unset.
         (vec![default(), global(json!({}))], "reviewer.model", None),
         // A per-model entry in one layer only. Kills skipping the model

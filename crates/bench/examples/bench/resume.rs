@@ -172,7 +172,7 @@ pub(crate) fn generate(
             )?;
             if turn < fixture.compactions {
                 let compaction_id = format!("c_h{turn}");
-                let line = command(&compaction_id, "compaction", &json!({}));
+                let line = command(&compaction_id, "compact", &json!({}));
                 run_turn(ctx, &mut client, &compaction_id, &line)?;
             }
         }

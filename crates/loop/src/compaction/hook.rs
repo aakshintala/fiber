@@ -5,7 +5,7 @@
 //! treats the note as opaque data, and an extension's name reaches it only
 //! on the answer (`docs/architecture.md`, "The call rules").
 
-use contract::events::{Event, CompactionTrigger};
+use contract::events::{CompactionTrigger, Event};
 use contract::hook::{BeforeCompaction, BeforeCompactionOutcome};
 use contract::provider::Input;
 use contract::{ErrorCode, TurnId};

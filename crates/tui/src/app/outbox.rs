@@ -44,7 +44,7 @@ pub(crate) enum Kind {
     Reply,
     SteerDrop,
     Shell,
-    /// A built-in command such as `compaction`, `reload` or `close`.
+    /// A built-in command such as `compact`, `reload` or `close`.
     Command,
     /// An `import` for a named source or both; its answer's report is
     /// titled from it.

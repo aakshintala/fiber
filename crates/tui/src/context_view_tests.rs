@@ -1,7 +1,7 @@
 //! Tests for the context breakdown's fold, estimates, bar and frame
 //! (`docs/tui.md`, "Swapped views").
 
-use super::{Category, ContextFold, Compaction, LARGEST_SHOWN, Sized, bar, categories, frame};
+use super::{Category, Compaction, ContextFold, LARGEST_SHOWN, Sized, bar, categories, frame};
 use crate::swapped::{Ink, List, render};
 use crate::theme::Role;
 use contract::Envelope;
@@ -186,7 +186,11 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
     );
     assert_eq!(
         frame.rows[2].last(),
-        Some(&("compaction 400k".to_owned(), None, Ink::Role(Role::Attention)))
+        Some(&(
+            "compaction 400k".to_owned(),
+            None,
+            Ink::Role(Role::Attention)
+        ))
     );
     // One row per category: the mark in its colour, the padded name,
     // the size and its share dim.

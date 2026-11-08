@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use contract::TurnId;
-use contract::events::{EventKind, CompactionTrigger, Outcome};
+use contract::events::{CompactionTrigger, EventKind, Outcome};
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeCompaction, BeforeCompactionAnswer,
     BeforeCompactionOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,

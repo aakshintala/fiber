@@ -30,7 +30,7 @@ use support::{
 fn naming(name: &'static str, text: &'static str) -> TestTool {
     let mut tool = TestTool::reads(name, text);
     tool.output.control = Some(Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("Fix the parser".into()),
@@ -171,7 +171,7 @@ fn two_naming_calls_write_in_request_order() {
     let trace = Arc::default();
     let mut first = naming("first", "First.");
     first.output.control = Some(Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("A".into()),
@@ -180,7 +180,7 @@ fn two_naming_calls_write_in_request_order() {
     first.trace = Arc::clone(&trace);
     let mut second = naming("second", "Second.");
     second.output.control = Some(Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("B".into()),
@@ -270,7 +270,7 @@ fn two_steps_name_twice_in_order() {
 fn a_failed_call_names_nothing() {
     let mut tool = TestTool::failing("name", ErrorCode::ToolError);
     tool.output.control = Some(Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("Fix the parser".into()),
@@ -301,7 +301,7 @@ fn a_failed_call_names_nothing() {
 fn a_cancelled_call_names_nothing() {
     let mut tool = naming("slow", "Slow done.");
     tool.output.control = Some(Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("Fix the parser".into()),
@@ -347,7 +347,7 @@ fn a_cancelled_call_names_nothing() {
 fn a_compaction_call_names_nothing() {
     let mut tool = TestTool::reads("hand", "Handed off.");
     tool.output.control = Some(Control {
-        compaction: Some("the note".into()),
+        compact: Some("the note".into()),
         questions: None,
         skill: None,
         name: None,
@@ -373,7 +373,7 @@ fn a_compaction_call_names_nothing() {
             .find(|l| l.kind() == EventKind::ToolCallCompleted)
             .unwrap()
             .payload["control"],
-        json!({"compaction": "the note"})
+        json!({"compact": "the note"})
     );
 }
 

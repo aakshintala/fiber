@@ -487,7 +487,7 @@ fn compact_starts_a_compaction_with_instructions_as_compaction_does() {
         let lines = sent(run(&mut app, command));
         // Typing the alias runs the same one command (`docs/tui.md`, "Slash commands").
         assert_eq!(lines.len(), 1, "{command}");
-        assert_eq!(lines[0]["command"], "compaction", "{command}");
+        assert_eq!(lines[0]["command"], "compact", "{command}");
         assert_eq!(
             lines[0]["args"],
             json!({"instructions": "take over"}),

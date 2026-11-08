@@ -65,7 +65,7 @@ reply, nothing reads the inbox. A `steer` is queued and `steering_queue`
 written at once, and a `steer_drop` takes effect at once, at any point in the
 turn: the thread reading the connection does both (`docs/architecture.md`,
 "One inbox"). While it waits on an approval, everything else that
-arrives is answered at once: a `compaction` is accepted, a second `reply` is
+arrives is answered at once: a `compact` is accepted, a second `reply` is
 rejected `stale_request`, and a `close` ends the wait with the request
 unanswerable (`docs/permissions.md`, "Headless"). What these queue (steering
 messages, a compaction, job notices) joins the conversation at the next step

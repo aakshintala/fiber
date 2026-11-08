@@ -52,7 +52,7 @@ fn a_compaction_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() 
         text_reply("The skill is loaded."),
         stream_call(
             "compaction_now",
-            "compaction",
+            "compact",
             &json!({"note": "The compaction note."}),
         ),
         text_reply("The work continues."),

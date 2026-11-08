@@ -1,7 +1,7 @@
 use super::{
-    COMPACTION_NOTE, PAGE_BYTES, RESULT_BYTES, RETAINED_SETTLE, TEN_TURNS, TOOL_CALLS, TRIGGER_TOKENS,
-    Turn, busy_turn_samples, count, fdatasync_calls, filler, log_lines, page, quiescent_anon_kib,
-    retained_anon_kib, ten_turn_samples, ten_turn_script, turn_bytes,
+    COMPACTION_NOTE, PAGE_BYTES, RESULT_BYTES, RETAINED_SETTLE, TEN_TURNS, TOOL_CALLS,
+    TRIGGER_TOKENS, Turn, busy_turn_samples, count, fdatasync_calls, filler, log_lines, page,
+    quiescent_anon_kib, retained_anon_kib, ten_turn_samples, ten_turn_script, turn_bytes,
 };
 use crate::run::PROBE;
 

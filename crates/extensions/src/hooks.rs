@@ -39,8 +39,8 @@ use crate::{API, Error, LuaProvider, LuaTool};
 
 mod before;
 mod chain;
-mod door;
 mod compaction;
+mod door;
 mod lifecycle;
 mod settle;
 mod start;

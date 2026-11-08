@@ -63,7 +63,7 @@ impl Tool for NameSession {
         match crate::tool_util::parsed::<Args>(arguments) {
             Ok(Args { name }) => Output {
                 control: Some(Control {
-                    compaction: None,
+                    compact: None,
                     questions: None,
                     skill: None,
                     name: Some(name),

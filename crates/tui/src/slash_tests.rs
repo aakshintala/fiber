@@ -79,7 +79,7 @@ const DRAWN_ORDER: &[&str] = &[
     "rewind",
     "cd",
     "fork",
-    "compaction",
+    "compact",
     "name",
     "login",
     "logout",

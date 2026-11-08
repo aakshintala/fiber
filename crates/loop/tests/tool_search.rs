@@ -208,7 +208,7 @@ impl CatalogTool {
         let mut tool = Self::deferred(name);
         tool.deferred = false;
         tool.output.control = Some(contract::events::Control {
-            compaction: Some(note.into()),
+            compact: Some(note.into()),
             ..Default::default()
         });
         tool
@@ -420,7 +420,10 @@ impl contract::hook::Hooks for AfterToolHooks {
         }
     }
 
-    fn before_compaction(&self, _: &contract::hook::BeforeCompaction<'_>) -> BeforeCompactionAnswer {
+    fn before_compaction(
+        &self,
+        _: &contract::hook::BeforeCompaction<'_>,
+    ) -> BeforeCompactionAnswer {
         BeforeCompactionAnswer {
             outcome: BeforeCompactionOutcome::NoNote,
             notices: Vec::new(),

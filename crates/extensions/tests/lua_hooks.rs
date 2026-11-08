@@ -11,7 +11,7 @@ use common::{Setup, go_module, install_lua, write};
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::events::{CallStatus, ExtensionExec, ExtensionLog, CompactionTrigger};
+use contract::events::{CallStatus, CompactionTrigger, ExtensionExec, ExtensionLog};
 use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeCompaction, BeforeCompactionAnswer,
     BeforeCompactionOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
@@ -1976,7 +1976,12 @@ fn a_non_blocking_before_compaction_hook_past_its_timeout_is_dropped() {
         &setup,
         "a",
         &json!({}),
-        &spinning_at("before_compaction", "non-blocking", 50, "{ note = \"late\" }"),
+        &spinning_at(
+            "before_compaction",
+            "non-blocking",
+            50,
+            "{ note = \"late\" }",
+        ),
     );
     install_lua(
         &setup,

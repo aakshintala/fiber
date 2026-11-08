@@ -1464,7 +1464,7 @@ fn naming_output() -> Output {
             },
         ],
         control: Some(contract::events::Control {
-            compaction: None,
+            compact: None,
             questions: None,
             skill: None,
             name: Some("Fix the parser".into()),

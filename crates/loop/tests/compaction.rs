@@ -31,7 +31,7 @@ use serde_json::json;
 
 use support::{
     DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, StartHooks, TestTool, assert_kinds,
-    assert_no_stored_attempt, attempt_numbers, calls_reply, delivery, compaction, ignore, kinds,
+    assert_no_stored_attempt, attempt_numbers, calls_reply, compaction, delivery, ignore, kinds,
     model, of_kind, reasoning_reply, start_added, start_empty, start_failed, start_noticed,
     tool_call_reply, with_tokens,
 };
@@ -1578,7 +1578,7 @@ fn wrapping(name: &'static str, note: &str) -> Arc<TestTool> {
     let mut tool = TestTool::reads(name, "");
     tool.output.content = Vec::new();
     tool.output.control = Some(Control {
-        compaction: Some(note.into()),
+        compact: Some(note.into()),
         ..Default::default()
     });
     Arc::new(tool)
@@ -1785,10 +1785,10 @@ fn two_calls_that_set_control_compaction_join_their_notes_in_call_order() {
 
 #[test]
 fn the_loop_acts_on_the_field_and_never_on_the_tool_name() {
-    // A tool named `compaction` that sets nothing does not hand off.
+    // A tool named `compact` that sets nothing does not hand off.
     let mut session = tool_session(
-        vec![calling(&["compaction"], 500), said("Done.", 50)],
-        vec![Arc::new(TestTool::reads("compaction", "Not a note."))],
+        vec![calling(&["compact"], 500), said("Done.", 50)],
+        vec![Arc::new(TestTool::reads("compact", "Not a note."))],
     );
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -1802,7 +1802,7 @@ fn the_loop_acts_on_the_field_and_never_on_the_tool_name() {
 fn a_call_that_failed_does_not_hand_off_whatever_it_set() {
     let mut tool = TestTool::failing("wrapup", ErrorCode::ToolError);
     tool.output.control = Some(Control {
-        compaction: Some("Never.".into()),
+        compact: Some("Never.".into()),
         ..Default::default()
     });
     let mut session = tool_session(
@@ -3335,7 +3335,7 @@ fn a_failed_tool_compaction_with_questions_writes_the_taken_lines() {
     );
     tool.output.content = Vec::new();
     tool.output.control = Some(Control {
-        compaction: Some("Tool note.".into()),
+        compact: Some("Tool note.".into()),
         questions: Some(vec![Question {
             header: "h".into(),
             question: "Go on?".into(),

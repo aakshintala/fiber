@@ -12,9 +12,9 @@ use std::fs;
 use std::path::Path;
 
 use contract::events::{
-    Empty, Environment, Event, EventKind, FiberStarted, CompactionCompleted, CompactionStarted,
-    CompactionTrigger, InputItem, Note, OpeningMessage, Outcome, TextCompleted, ToolCallRequested,
-    ToolCallStarted, TurnStarted, Variables, VariablesSource,
+    CompactionCompleted, CompactionStarted, CompactionTrigger, Empty, Environment, Event,
+    EventKind, FiberStarted, InputItem, Note, OpeningMessage, Outcome, TextCompleted,
+    ToolCallRequested, ToolCallStarted, TurnStarted, Variables, VariablesSource,
 };
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId};
@@ -716,7 +716,7 @@ fn pinned(looped_dir: &Path) -> bool {
     use contract::events::{CallStatus, Control};
     let folded = crate::resume::resumed(looped_dir).unwrap();
     let control = Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("a later name".to_owned()),
@@ -1370,7 +1370,13 @@ fn folded_chain(
         sessions,
         HB,
         &[
-            compaction_envelope(HB, 0, None, None, &compaction_session_started(Some((HA, 1)))),
+            compaction_envelope(
+                HB,
+                0,
+                None,
+                None,
+                &compaction_session_started(Some((HA, 1))),
+            ),
             compaction_envelope(HB, 1, Some("t_b1"), None, &compaction_turn("b-one")),
             compaction_envelope(HB, 2, Some("t_b1"), None, &compaction_step()),
             compaction_envelope(HB, 3, Some("t_b2"), None, &compaction_turn("b-two")),
@@ -1581,7 +1587,13 @@ fn hook_context_log() -> Vec<Envelope> {
             &compaction_done(Outcome::Completed, Some("a_note")),
         ),
         compaction_envelope(HA, 7, None, None, &compaction_opening()),
-        compaction_envelope(HA, 8, None, None, &compaction_hook_context("the hook context")),
+        compaction_envelope(
+            HA,
+            8,
+            None,
+            None,
+            &compaction_hook_context("the hook context"),
+        ),
         compaction_envelope(HA, 9, Some("t_2"), None, &compaction_step()),
         compaction_envelope(HA, 10, Some("t_3"), None, &compaction_turn("three")),
     ]

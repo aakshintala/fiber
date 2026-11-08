@@ -364,7 +364,10 @@ fn an_object_key_holding_another_type_is_config_invalid() {
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert_eq!(
         e.to_string(),
-        format!("{}: `compaction` must be an object.", setup.global().display())
+        format!(
+            "{}: `compaction` must be an object.",
+            setup.global().display()
+        )
     );
 }
 

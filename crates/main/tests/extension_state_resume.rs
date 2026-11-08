@@ -221,7 +221,10 @@ fn a_compaction_keeps_the_live_state_for_its_session_start() {
     extension_harness::until_session(&client, "first turn completed", |line| {
         line["kind"] == "turn_completed"
     });
-    extension_harness::send(&client, r#"{"id":"compaction","command":"compact","args":{}}"#);
+    extension_harness::send(
+        &client,
+        r#"{"id":"compaction","command":"compact","args":{}}"#,
+    );
     extension_harness::until_session(&client, "compaction completed", |line| {
         line["kind"] == "compaction_completed"
     });

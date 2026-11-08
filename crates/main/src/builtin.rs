@@ -27,7 +27,7 @@ type SessionTools = (
     Arc<dyn contract::images::Images>,
 );
 
-/// `ask_user`, `delegate_message`, `delegate_models`, `delegate_spawn`, `edit`, `compaction`, `name_session`, `read`, `session_list`, `session_message`, `session_search`, `shell`,
+/// `ask_user`, `compact`, `delegate_message`, `delegate_models`, `delegate_spawn`, `edit`, `name_session`, `read`, `session_list`, `session_message`, `session_search`, `shell`,
 /// `skill`, `web_fetch`, `write` and `jobs`, each registered by `builtin`, and
 /// `reviewer_notes_save` joins them in name order between `read` and `session_list`, and
 /// `web_search` as `web_search` chose it: the hosted search of the session's
@@ -199,12 +199,12 @@ pub(crate) fn builtin_timed(
     }
     let mut built = vec![
         registered(tools::AskUser)?,
+        registered(tools::Compact)?,
         registered(delegates.message())?,
         registered(delegates.models())?,
         registered(delegates.tool())?,
         registered(delegates.fork())?,
         registered(files.edit())?,
-        registered(tools::Compact)?,
         registered(tools::NameSession)?,
         registered(files.read())?,
         registered(tools::ReviewerNotesSave::new(

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use contract::events::{CallStatus, Event, CompactionTrigger, OnFork};
+use contract::events::{CallStatus, CompactionTrigger, Event, OnFork};
 use contract::hook::*;
 use serde_json::{Map, json};
 

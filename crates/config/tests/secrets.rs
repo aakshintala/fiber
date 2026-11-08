@@ -132,7 +132,10 @@ fn a_command_source_debug_prints_no_argument() {
 fn a_secret_pasted_into_configuration_reaches_no_error_or_notice() {
     for (text, fails) in [
         (format!(r#"{{"api_key": "{VALUE}"}}"#), false),
-        (format!(r#"{{"compaction": {{"tokens": "{VALUE}"}}}}"#), true),
+        (
+            format!(r#"{{"compaction": {{"tokens": "{VALUE}"}}}}"#),
+            true,
+        ),
         (format!(r#"{{"model": "{VALUE}",}}"#), true),
         (
             format!(r#"{{"providers": {{"x": {{"credential": {{"key": "{VALUE}"}}}}}}}}"#),

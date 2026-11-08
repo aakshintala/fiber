@@ -306,13 +306,18 @@ fn state_lines_take_follows_every_hook_call() {
         vec![Arc::new(Probe)],
     );
     let hooks = state_attached(&mut world, inner, StateCases::default());
-    world.looped = Some(world.looped.take().unwrap().hooks(hooks.clone()).compaction(
-        crate::CompactionSettings {
-            tokens: 1000,
-            nudge: false,
-            ..Default::default()
-        },
-    ));
+    world.looped = Some(
+        world
+            .looped
+            .take()
+            .unwrap()
+            .hooks(hooks.clone())
+            .compaction(crate::CompactionSettings {
+                tokens: 1000,
+                nudge: false,
+                ..Default::default()
+            }),
+    );
     let (ack, answered) = capture();
     world
         .inbox
@@ -370,7 +375,9 @@ fn state_lines_take_follows_every_hook_call() {
                 "turn_end" => assert_eq!(all[index + 1].kind(), EventKind::SteeringApplied),
                 "before_tool" => assert_eq!(all[index + 1].kind(), EventKind::ToolCallStarted),
                 "after_tool" => assert_eq!(all[index + 1].kind(), EventKind::ToolCallCompleted),
-                "before_compaction" => assert_eq!(all[index + 1].kind(), EventKind::CompactionCompleted),
+                "before_compaction" => {
+                    assert_eq!(all[index + 1].kind(), EventKind::CompactionCompleted)
+                }
                 key => assert!(key.starts_with("timer-")),
             }
         }
@@ -3556,7 +3563,7 @@ impl Tool for Asking {
                 text: "a question".into(),
             }],
             control: Some(contract::events::Control {
-                compaction: None,
+                compact: None,
                 questions: Some(vec![contract::shapes::Question {
                     header: "Pick".into(),
                     question: "Which?".into(),

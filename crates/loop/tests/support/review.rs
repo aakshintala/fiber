@@ -30,7 +30,7 @@ use super::reviewer_eval::{
     reviewed_items, sample, scan_line,
 };
 use contract::events::{
-    AskStep, DecidedBy, Event, EventKind, CompactionCompleted, Outcome, ReviewedCall, ReviewerUse,
+    AskStep, CompactionCompleted, DecidedBy, Event, EventKind, Outcome, ReviewedCall, ReviewerUse,
     ToolCallRequested, ToolCallStarted,
 };
 use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};

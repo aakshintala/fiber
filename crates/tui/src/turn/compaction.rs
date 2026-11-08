@@ -8,8 +8,8 @@
 use contract::Envelope;
 use contract::events::EventKind;
 use contract::events::{
-    ContextNudged, CompactionCompleted, CompactionStarted, CompactionTrigger, Note, Outcome, PreambleBuilt,
-    UsageRecorded,
+    CompactionCompleted, CompactionStarted, CompactionTrigger, ContextNudged, Note, Outcome,
+    PreambleBuilt, UsageRecorded,
 };
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -178,7 +178,12 @@ impl Band {
             // The band keeps its row, but zero width leaves no cells for the seam to paint.
             out.push((Line::default(), None));
             let band_at = out.len().saturating_sub(1);
-            out.on_surface(band_at, width, Role::Compaction, crate::surface::Edges::BOTH);
+            out.on_surface(
+                band_at,
+                width,
+                Role::Compaction,
+                crate::surface::Edges::BOTH,
+            );
             return;
         }
         let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
@@ -233,7 +238,12 @@ impl Band {
                     },
                 );
                 let band_at = out.len().saturating_sub(1);
-                out.on_surface(band_at, width, Role::Compaction, crate::surface::Edges::BOTH);
+                out.on_surface(
+                    band_at,
+                    width,
+                    Role::Compaction,
+                    crate::surface::Edges::BOTH,
+                );
             }
         }
         let note = self.note();
@@ -430,29 +440,31 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
                 true
             })
         }),
-        EventKind::CompactionCompleted => read!(envelope, CompactionCompleted).is_some_and(|done| {
-            let id = fold.id();
-            let ts = envelope.ts;
-            open(turns).is_some_and(|turn| {
-                if turn.writing().is_none() {
-                    turn.band(Band::new(id, BY_MODEL.to_owned(), ts));
-                }
-                if let Some(band) = turn.writing() {
-                    if let Some(Note::Hook { note_text, .. }) = done.note {
-                        band.hook = Some(note_text);
+        EventKind::CompactionCompleted => {
+            read!(envelope, CompactionCompleted).is_some_and(|done| {
+                let id = fold.id();
+                let ts = envelope.ts;
+                open(turns).is_some_and(|turn| {
+                    if turn.writing().is_none() {
+                        turn.band(Band::new(id, BY_MODEL.to_owned(), ts));
                     }
-                    band.state = match done.outcome {
-                        Outcome::Completed => State::Done {
-                            before: done.tokens_before,
-                            after: None,
-                        },
-                        Outcome::Failed => State::Unchanged { cancelled: false },
-                        Outcome::Cancelled => State::Unchanged { cancelled: true },
-                    };
-                }
-                true
+                    if let Some(band) = turn.writing() {
+                        if let Some(Note::Hook { note_text, .. }) = done.note {
+                            band.hook = Some(note_text);
+                        }
+                        band.state = match done.outcome {
+                            Outcome::Completed => State::Done {
+                                before: done.tokens_before,
+                                after: None,
+                            },
+                            Outcome::Failed => State::Unchanged { cancelled: false },
+                            Outcome::Cancelled => State::Unchanged { cancelled: true },
+                        };
+                    }
+                    true
+                })
             })
-        }),
+        }
         EventKind::ContextNudged => read!(envelope, ContextNudged).is_some_and(|nudged| {
             let line = format::dim(format!(
                 "◔ Context at {}, two thirds of the way to the {} compaction. The model was told \

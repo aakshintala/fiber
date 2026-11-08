@@ -19,12 +19,12 @@ struct Args {
 /// Restarts the model's context from `note`. It declares no effects, so it is
 /// never reviewed, and its result has no content: it carries only
 /// `control.compact`, which the loop acts on.
-pub struct Compaction;
+pub struct Compact;
 
-impl Tool for Compaction {
+impl Tool for Compact {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
-            name: "compaction".to_owned(),
+            name: "compact".to_owned(),
             description: "Restarts your context from the note you give. Kept messages with \
                  their replies, running jobs and loaded skills come along with the note. Write \
                  the note so a fresh agent can continue the work: refer to specs, issues, \
@@ -63,7 +63,7 @@ impl Tool for Compaction {
         match crate::tool_util::parsed::<Args>(arguments) {
             Ok(Args { note }) => Output {
                 control: Some(Control {
-                    compaction: Some(note),
+                    compact: Some(note),
                     questions: None,
                     skill: None,
                     name: None,
@@ -75,10 +75,10 @@ impl Tool for Compaction {
     }
 
     fn guidelines(&self) -> Option<String> {
-        crate::guidelines::of("compaction")
+        crate::guidelines::of("compact")
     }
 }
 
 #[cfg(test)]
-#[path = "compaction_tests.rs"]
+#[path = "compact_tests.rs"]
 mod tests;

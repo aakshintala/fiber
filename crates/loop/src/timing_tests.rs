@@ -177,7 +177,7 @@ impl Rules for EmptyRules {
 struct ReadsTool {
     name: &'static str,
     text: &'static str,
-    compaction: Option<&'static str>,
+    compact: Option<&'static str>,
 }
 
 impl ReadsTool {
@@ -185,7 +185,7 @@ impl ReadsTool {
         Self {
             name,
             text,
-            compaction: None,
+            compact: None,
         }
     }
 
@@ -193,7 +193,7 @@ impl ReadsTool {
         Self {
             name,
             text,
-            compaction: Some(note),
+            compact: Some(note),
         }
     }
 }
@@ -230,8 +230,8 @@ impl Tool for ReadsTool {
             content: vec![ContentPart::Text {
                 text: self.text.into(),
             }],
-            control: self.compaction.map(|note| Control {
-                compaction: Some(note.into()),
+            control: self.compact.map(|note| Control {
+                compact: Some(note.into()),
                 questions: None,
                 skill: None,
                 name: None,
@@ -2422,7 +2422,11 @@ fn an_automatic_compaction_nests_its_note_scopes() {
     assert_eq!(ops(&world, "turn.request").len(), 3);
     assert_eq!(ops(&world, "turn.model_call").len(), 3);
     let kinds = kinds(&world);
-    for kind in ["compaction_started", "compaction_completed", "opening_message"] {
+    for kind in [
+        "compaction_started",
+        "compaction_completed",
+        "opening_message",
+    ] {
         assert!(kinds.contains(&EventKind::from_name(kind)), "{kinds:?}");
     }
     let started = kinds
@@ -2851,7 +2855,10 @@ fn a_failed_compaction_start_writes_one_scope_and_no_started() {
     assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let kinds = kinds(&world);
     assert!(!kinds.contains(&EventKind::CompactionStarted), "{kinds:?}");
-    assert!(!kinds.contains(&EventKind::CompactionCompleted), "{kinds:?}");
+    assert!(
+        !kinds.contains(&EventKind::CompactionCompleted),
+        "{kinds:?}"
+    );
 }
 
 #[test]
@@ -2869,7 +2876,10 @@ fn a_failed_compaction_completion_writes_one_scope_and_no_fabrication() {
     assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let kinds = kinds(&world);
     assert!(kinds.contains(&EventKind::CompactionStarted), "{kinds:?}");
-    assert!(!kinds.contains(&EventKind::CompactionCompleted), "{kinds:?}");
+    assert!(
+        !kinds.contains(&EventKind::CompactionCompleted),
+        "{kinds:?}"
+    );
 }
 
 #[test]
@@ -2948,7 +2958,10 @@ fn a_tool_compaction_measures_its_restart() {
     );
     let compactions = ops(&world, "turn.compaction");
     assert_eq!(compactions.len(), 1);
-    assert_eq!(compactions[0].ms, 5, "the tool restart contributes its hold");
+    assert_eq!(
+        compactions[0].ms, 5,
+        "the tool restart contributes its hold"
+    );
 }
 
 #[test]

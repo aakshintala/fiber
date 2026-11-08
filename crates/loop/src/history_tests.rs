@@ -14,14 +14,14 @@ use std::path::{Path, PathBuf};
 
 use crate::conversation::{rebuild_and_sent, summary_conversation};
 use contract::events::{
-    Anchor, Answer, CacheLifetime, CallStatus, Control, DecidedBy, Decision, Environment, Event,
-    EventKind, FormAnswer, Grant, CompactionCompleted, CompactionStarted, CompactionTrigger, InputItem,
-    Interaction, InteractionRequested, InteractionResolved, ModelChanged, ModelSettings, Moved,
-    OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent, PermissionResolved,
-    PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered, RepositoryCodeResolved,
-    ResolvedBy, Rewound, SessionStarted, SkillLoad, SkillSent, SkillsResent, SteeringApplied,
-    SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted, UsageRecorded, Variables,
-    VariablesSource,
+    Anchor, Answer, CacheLifetime, CallStatus, CompactionCompleted, CompactionStarted,
+    CompactionTrigger, Control, DecidedBy, Decision, Environment, Event, EventKind, FormAnswer,
+    Grant, InputItem, Interaction, InteractionRequested, InteractionResolved, ModelChanged,
+    ModelSettings, Moved, OfferDecision, OfferedItem, OfferedKind, OpeningMessage, Outcome, Parent,
+    PermissionResolved, PreambleBuilt, PreambleReason, RanBy, RepositoryCodeOffered,
+    RepositoryCodeResolved, ResolvedBy, Rewound, SessionStarted, SkillLoad, SkillSent,
+    SkillsResent, SteeringApplied, SwitchSource, ToolCallCompleted, ToolCallRequested, TurnStarted,
+    UsageRecorded, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{Choice, ContentPart, Origin, Point, Question, Sender, Tokens, True};
@@ -1163,7 +1163,7 @@ fn a_person_name_in_the_parent_does_not_pin_the_child() {
     );
     let folded = fold(&log::history(&sessions.join(B)).unwrap()).unwrap();
     let control = contract::events::Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("x".into()),
@@ -1198,7 +1198,7 @@ fn a_person_name_in_the_own_log_pins_the_session() {
     );
     let folded = fold(&log::history(&sessions.join(B)).unwrap()).unwrap();
     let control = contract::events::Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some("x".into()),
@@ -1446,7 +1446,7 @@ fn skilled_completed(status: CallStatus, name: &str, path: &str) -> Event {
         kept: None,
         changes: None,
         control: Some(Control {
-            compaction: None,
+            compact: None,
             questions: None,
             skill: Some(SkillLoad {
                 name: name.into(),
@@ -1823,7 +1823,7 @@ fn a_provider_run_record_carrying_a_skill_seeds_nothing() {
         kept: None,
         changes: None,
         control: Some(Control {
-            compaction: None,
+            compact: None,
             questions: None,
             skill: Some(alpha()),
             name: None,
@@ -2155,7 +2155,8 @@ fn a_reviewer_kept_after_the_cut_inserts_nothing() {
     assert_eq!(before, [user("A"), user("B")]);
     // Cut between the completed compaction and its selection: the selection
     // is past the cut and inserts nothing.
-    let (after, _) = summary_conversation(&compaction_lines(true), 4, "fake/model-1", seed).unwrap();
+    let (after, _) =
+        summary_conversation(&compaction_lines(true), 4, "fake/model-1", seed).unwrap();
     assert_eq!(after.len(), 3);
     assert!(matches!(&after[0], Input::User { text, .. } if text.contains("2023-11-14")));
     // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5), then the note (item 6).

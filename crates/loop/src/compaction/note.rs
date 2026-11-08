@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use contract::events::{
-    ContextAdded, Event, CompactionCompleted, CompactionStarted, CompactionTrigger, Note, Outcome,
+    CompactionCompleted, CompactionStarted, CompactionTrigger, ContextAdded, Event, Note, Outcome,
     TurnCompleted, TurnOutcome,
 };
 use contract::provider::{Finish, Input, ModelRequest, Reply, ReplyAction};

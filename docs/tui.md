@@ -1322,7 +1322,7 @@ loaded skills, looked up tools, messaged delegates, messaged sessions,
 looked at sessions, saved reviewer notes, called tools. The first word is
 capitalised. Read, edited and written files count distinct paths, and asked
 questions count questions, not calls. `delegate_models` counts as a delegate, and
-`compaction`, `name_session`, `session_list` and `session_search` count as
+`compact`, `name_session`, `session_list` and `session_search` count as
 one kind, looked at sessions, and `reviewer_notes_save` is its own, saved
 reviewer notes. An edit's totals follow it, "+N" in
 `added` and "−N" in `removed`, both dim. Then ", thought N times" ("thought
@@ -1378,7 +1378,7 @@ fails when it differs from the code.
 | `delegate_models` | delegate | started N delegates | started 1 delegate |
 | `delegate_spawn` | delegate | started N delegates | started 1 delegate |
 | `edit` | edit | edited N files | edited 1 file |
-| `compaction` | session | looked at sessions N times | looked at sessions once |
+| `compact` | session | looked at sessions N times | looked at sessions once |
 | `jobs` | jobs | checked N jobs | checked 1 job |
 | `name_session` | session | looked at sessions N times | looked at sessions once |
 | `read` | read | read N files | read 1 file |

@@ -83,7 +83,12 @@ fn text(cards: &mut Cards, action: &str, text: &str) {
 }
 
 fn band(cards: &mut Cards) {
-    feed(cards, "compaction_started", None, json!({ "trigger": "auto" }));
+    feed(
+        cards,
+        "compaction_started",
+        None,
+        json!({ "trigger": "auto" }),
+    );
 }
 
 /// The compaction completes, so later text is a reply, not the note.
@@ -564,7 +569,10 @@ fn a_band_first_or_last_draws_no_empty_piece() {
     );
     let shown = shown_rows(&rows);
     assert_eq!(shown[6], "▄".repeat(60));
-    assert!(shown[7].starts_with(" ⇄ compaction · automatic"), "{shown:?}");
+    assert!(
+        shown[7].starts_with(" ⇄ compaction · automatic"),
+        "{shown:?}"
+    );
     assert_eq!(shown[8], "▀".repeat(60));
     assert_eq!(shown[9], "▄".repeat(60));
     let mut cards = fresh();
@@ -641,7 +649,10 @@ fn edges_the_page_withholds_are_not_drawn() {
     assert_eq!(shown[1], " before");
     assert_eq!(shown[2], "▀".repeat(60));
     assert_eq!(shown[3], "▄".repeat(60));
-    assert!(shown[4].starts_with(" ⇄ compaction · automatic"), "{shown:?}");
+    assert!(
+        shown[4].starts_with(" ⇄ compaction · automatic"),
+        "{shown:?}"
+    );
     assert_eq!(shown[5], "▀".repeat(60));
     // The piece after the band still opens with an edge.
     assert_eq!(shown[6], "▄".repeat(60));

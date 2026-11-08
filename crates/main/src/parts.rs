@@ -19,7 +19,7 @@ use r#loop::Model;
 use routing::{Here, connect_observed};
 
 use crate::{
-    failed, compaction, lua_providers, mcp_servers, placeholders, prompt_files, scripted,
+    compaction, failed, lua_providers, mcp_servers, placeholders, prompt_files, scripted,
     session_extensions, settings, switch,
 };
 

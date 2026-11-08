@@ -172,7 +172,7 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   separate artifact text, the result carries no `kept`, since its ranges would
   not index that artifact.
 - `control`: instructions to the loop, absent on most results. Four fields
-  are defined. `compaction`, a compaction note: the loop restarts the model's
+  are defined. `compact`, a compaction note: the loop restarts the model's
   context from it at the step boundary (`docs/compaction.md`). `questions`, a
   `questions` array: once every call in the step has completed, the turn ends
   `completed` with the questions of every call that set it, in call order, on
@@ -1897,7 +1897,7 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-`compaction` (`docs/compaction.md`), `name_session`, `reviewer_notes_save`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
+`compact` (`docs/compaction.md`), `name_session`, `reviewer_notes_save`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.

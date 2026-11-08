@@ -52,9 +52,9 @@ pub(crate) mod reviewer_eval;
 
 #[allow(unused_imports, reason = "each test target uses some helpers")]
 pub(crate) use events::{
-    assistant, completed_event, fiber_started, compaction_done, compaction_started, hosted_requested,
-    job_completed, job_started, kinds_of, message_started, opening_of, requested, result_of,
-    standing_request, started, steering, text_of, texts, user_turn,
+    assistant, compaction_done, compaction_started, completed_event, fiber_started,
+    hosted_requested, job_completed, job_started, kinds_of, message_started, opening_of, requested,
+    result_of, standing_request, started, steering, text_of, texts, user_turn,
 };
 /// How long a turn may take before a test fails instead of hanging: the
 /// shared must-succeed bound.
@@ -765,7 +765,7 @@ pub(crate) fn name_reported(
     )
 }
 
-/// A person's `compaction` on the loop's inbox, with `instructions`.
+/// A person's `compact` on the loop's inbox, with `instructions`.
 pub(crate) fn compaction(id: &str, instructions: Option<&str>) -> Delivery {
     Delivery::Compaction(
         CommandId(id.into()),
@@ -1675,7 +1675,10 @@ impl Session {
 
     /// Runs `forget` on every completed compaction.
     pub(crate) fn on_compaction(mut self, forget: Arc<dyn Fn() + Send + Sync>) -> Self {
-        self.looped = self.looped.take().map(|looped| looped.on_compaction(forget));
+        self.looped = self
+            .looped
+            .take()
+            .map(|looped| looped.on_compaction(forget));
         self
     }
 

@@ -337,7 +337,7 @@ pub struct FileChange {
 pub struct Control {
     /// A compaction note (`docs/compaction.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compaction: Option<String>,
+    pub compact: Option<String>,
     /// Questions for the driver: the turn ends with them at the step
     /// boundary (`docs/tools.md`, "What a result carries").
     #[serde(default, skip_serializing_if = "Option::is_none")]

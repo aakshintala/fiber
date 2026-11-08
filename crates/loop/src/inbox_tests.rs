@@ -765,7 +765,7 @@ fn name(text: &str) -> Delivery {
 
 fn control_with(name: Option<&str>) -> Control {
     Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: name.map(str::to_owned),

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use contract::ActionId;
 use contract::events::{
-    ContextNudged, Control, CompactionCompleted, Note, Outcome, SkillLoad, ToolCallRequested,
+    CompactionCompleted, ContextNudged, Control, Note, Outcome, SkillLoad, ToolCallRequested,
     TurnOutcome,
 };
 use contract::provider::Input;
@@ -12,7 +12,8 @@ use contract::shapes::{Question, Tokens};
 use serde_json::json;
 
 use super::{
-    Carry, CompactionSettings, context_tokens, estimate, note_request_text, prompt_tokens, trigger_at,
+    Carry, CompactionSettings, context_tokens, estimate, note_request_text, prompt_tokens,
+    trigger_at,
 };
 
 // Task 1 coverage: the skills sent again after a compaction (`docs/compaction.md`,
@@ -376,7 +377,7 @@ fn question(text: &str) -> Question {
 
 fn asking(texts: &[&str]) -> Control {
     Control {
-        compaction: None,
+        compact: None,
         questions: Some(texts.iter().map(|text| question(text)).collect()),
         skill: None,
         name: None,
@@ -407,7 +408,7 @@ fn the_questions_asked_follow_call_order_not_completion_order() {
 fn a_compaction_note_alone_asks_nothing() {
     let (mut carry, [first, second, _]) = three_calls();
     let note = Control {
-        compaction: Some("the note".into()),
+        compact: Some("the note".into()),
         questions: None,
         skill: None,
         name: None,
@@ -421,7 +422,7 @@ fn a_compaction_note_alone_asks_nothing() {
 
 fn skilled(name: &str, path: &str) -> Control {
     Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: Some(SkillLoad {
             name: name.into(),

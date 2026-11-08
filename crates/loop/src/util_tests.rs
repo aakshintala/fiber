@@ -13,8 +13,8 @@ use std::time::Duration;
 use contract::commands::Compact;
 use contract::emit::Emit;
 use contract::events::{
-    CacheLifetime, Event, EventKind, CompactionCompleted, InputItem, Note, Outcome, ToolCallRequested,
-    TurnOutcome, TurnStarted, VariablesSource,
+    CacheLifetime, CompactionCompleted, Event, EventKind, InputItem, Note, Outcome,
+    ToolCallRequested, TurnOutcome, TurnStarted, VariablesSource,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Provider, ReplyAction, ToolDefinition};
@@ -196,7 +196,7 @@ impl Driven {
         self.inbox
             .send(Delivery::Compaction(
                 CommandId("c_h".into()),
-                Compaction { instructions: None },
+                Compact { instructions: None },
                 Ack(Box::new(|_| {})),
             ))
             .unwrap();

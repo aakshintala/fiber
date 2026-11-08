@@ -892,11 +892,12 @@ fn budgeted(
         .collect();
     // The scripted spend is far past the default compaction trigger; these
     // tests are about the budget alone.
-    let mut session =
-        Session::open(script, during, vec![weather()], model).compaction(r#loop::CompactionSettings {
+    let mut session = Session::open(script, during, vec![weather()], model).compaction(
+        r#loop::CompactionSettings {
             enabled: false,
             ..r#loop::CompactionSettings::default()
-        });
+        },
+    );
     if let Some(usd) = usd {
         session = session.budget(Some(usd));
     }

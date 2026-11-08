@@ -154,7 +154,12 @@ fn each_hook_sees_the_note_before_it_and_the_last_note_wins() {
         images: Vec::new(),
     }];
     // Both return a note: the second wins and names its extension.
-    let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation.clone());
+    let answer = dispatch(
+        &session,
+        CompactionTrigger::Auto,
+        None,
+        conversation.clone(),
+    );
     assert_eq!(note(&answer), Some(("second saw first", "fiber.test/two")));
     // The second returns nothing: the first note stands and names the first.
     let answer = dispatch(&session, CompactionTrigger::Auto, None, conversation);

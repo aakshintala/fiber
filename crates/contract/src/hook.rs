@@ -11,8 +11,8 @@ use serde_json::{Map, Value};
 use crate::ErrorCode;
 use crate::SessionId;
 use crate::events::{
-    CallStatus, Event, ExtensionStateSet, ExtensionStateUnset, CompactionTrigger, HookInfo, InputItem,
-    Notice, OnFork,
+    CallStatus, CompactionTrigger, Event, ExtensionStateSet, ExtensionStateUnset, HookInfo,
+    InputItem, Notice, OnFork,
 };
 use crate::provider::Input;
 use crate::shapes::{ContentPart, DeclaredEffects, Process, Usage};

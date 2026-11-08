@@ -1706,7 +1706,7 @@ fn a_rewind_inherits_a_compaction_by_position() {
     let client = hubbed.client();
     hubbed.prompt("h1_p2", &old, "two");
 
-    client.send(&command("h1_hand", Some(&old), "compaction", json!({})));
+    client.send(&command("h1_hand", Some(&old), "compact", json!({})));
     until_ack(client, "the compaction acknowledgement", "h1_hand");
     until(client, "the compaction turn_completed", |line| {
         line["kind"] == "turn_completed" && line["session_id"] == old

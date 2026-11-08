@@ -1817,7 +1817,7 @@ fn inner_control_names_the_session_but_never_loads_a_model_skill_or_starts_a_com
             name: "inner-skill".into(),
             path: "/skill/SKILL.md".into(),
         }),
-        compaction: Some("inner compaction".into()),
+        compact: Some("inner compaction".into()),
         ..Default::default()
     };
     let inner = Arc::new(FakeTool::new("inner", move |_, _, _, _| Output {
@@ -1842,7 +1842,11 @@ fn inner_control_names_the_session_but_never_loads_a_model_skill_or_starts_a_com
         .find(|l| l.kind() == EventKind::SessionNamed)
         .unwrap();
     assert_eq!(named.payload["name"], "inner name");
-    assert!(!lines.iter().any(|l| l.kind() == EventKind::CompactionStarted));
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.kind() == EventKind::CompactionStarted)
+    );
     assert_eq!(
         outcomes.lock().unwrap()[0]
             .control

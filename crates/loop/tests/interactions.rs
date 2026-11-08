@@ -38,7 +38,7 @@ use contract::tool::{Answered, Ask, Asking, Cancel, Check, Effects, EffectsError
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider, StubJobs};
-use r#loop::{Error, CompactionSettings, Loop, Model, Prepared, Switchable};
+use r#loop::{CompactionSettings, Error, Loop, Model, Prepared, Switchable};
 use serde_json::{Map, Value, json};
 
 use support::{

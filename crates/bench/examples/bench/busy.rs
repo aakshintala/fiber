@@ -580,7 +580,7 @@ pub(crate) fn ten_turn_script(turn: &Turn) -> Vec<Response> {
 
 /// Ten busy turns in one session, each followed by its compaction, as a
 /// session past the trigger does them: the first turn on the command
-/// line, the rest over a `full` connection, with a `compaction` driver
+/// line, the rest over a `full` connection, with a `compact` driver
 /// command after every turn. The readings are the retained anon RSS
 /// after the first turn's compaction and after the tenth's, so growth is
 /// what the session keeps across compactions, not its context. Each turn
@@ -620,7 +620,7 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
                 ctx,
                 &mut client,
                 &compaction_id,
-                &crate::resume::command(&compaction_id, "compaction", &json!({})),
+                &crate::resume::command(&compaction_id, "compact", &json!({})),
             )?;
             let first = quiescent_anon_kib_of(pid, |wait| {
                 waited += wait;
@@ -640,7 +640,7 @@ fn ten_turns(ctx: &Ctx<'_>, notes: &mut Vec<String>) -> Result<Samples, String> 
                     ctx,
                     &mut client,
                     &compaction_id,
-                    &crate::resume::command(&compaction_id, "compaction", &json!({})),
+                    &crate::resume::command(&compaction_id, "compact", &json!({})),
                 )?;
             }
             drop(client);

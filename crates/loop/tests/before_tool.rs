@@ -1424,7 +1424,7 @@ impl AskTool {
 fn to_driver(questions: Vec<Question>) -> Output {
     Output {
         control: Some(contract::events::Control {
-            compaction: None,
+            compact: None,
             questions: Some(questions),
             skill: None,
             name: None,

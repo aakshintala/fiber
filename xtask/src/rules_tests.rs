@@ -896,7 +896,7 @@ const REGISTERED_TOOLS: [&str; 14] = [
     "delegate_models",
     "delegate_spawn",
     "edit",
-    "compaction",
+    "compact",
     "jobs",
     "name_session",
     "read",

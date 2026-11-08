@@ -18,10 +18,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use contract::events::{EventKind, CompactionTrigger, Notice, TurnOutcome};
+use contract::events::{CompactionTrigger, EventKind, Notice, TurnOutcome};
 use contract::hook::{
-    BeforeCompaction, BeforeCompactionAnswer, BeforeCompactionOutcome, ContextAnswer, ContextOutcome,
-    HookFailure, Hooks,
+    BeforeCompaction, BeforeCompactionAnswer, BeforeCompactionOutcome, ContextAnswer,
+    ContextOutcome, HookFailure, Hooks,
 };
 use contract::inbox::Delivery;
 use contract::provider::Input;
@@ -34,7 +34,7 @@ use serde_json::{Map, Value, json};
 
 use support::{
     ENDED, Gate, OPENING, REPLY, STEP, Script, Session, Tap, TestTool, assert_kinds,
-    assert_no_stored_attempt, attempt_numbers, calls_reply, delivery, compaction, kinds, of_kind,
+    assert_no_stored_attempt, attempt_numbers, calls_reply, compaction, delivery, kinds, of_kind,
     start_added, start_empty, start_failed, tool_call_reply, with_tokens,
 };
 
@@ -234,7 +234,11 @@ impl Hooks for CompactionHooks {
 }
 
 /// A compaction whose note a hook wrote: no note request, then the opening.
-const HOOK_HANDED_OFF: &[&str] = &["compaction_started", "compaction_completed", "opening_message"];
+const HOOK_HANDED_OFF: &[&str] = &[
+    "compaction_started",
+    "compaction_completed",
+    "opening_message",
+];
 /// A compaction whose note the model wrote, to the new opening message.
 const MODEL_HANDED_OFF: &[&str] = &[
     "compaction_started",
@@ -603,7 +607,11 @@ fn a_person_compaction_turn_with_no_input_ends_completed_after_the_hook_note() {
         &[
             OPENING,
             STEP,
-            &["compaction_started", "compaction_completed", "opening_message"],
+            &[
+                "compaction_started",
+                "compaction_completed",
+                "opening_message",
+            ],
             ENDED,
         ],
     );
@@ -787,7 +795,7 @@ fn wrapping(name: &'static str, note: &str) -> Arc<TestTool> {
     let mut tool = TestTool::reads(name, "");
     tool.output.content = Vec::new();
     tool.output.control = Some(contract::events::Control {
-        compaction: Some(note.into()),
+        compact: Some(note.into()),
         ..Default::default()
     });
     Arc::new(tool)

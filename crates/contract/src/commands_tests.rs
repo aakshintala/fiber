@@ -329,7 +329,7 @@ fn a_missing_args_is_read_as_an_empty_object() {
     let line = parse(r#"{"id":"c","command":"compact"}"#).unwrap();
     assert_eq!(
         line.command,
-        Command::Compact(Compaction { instructions: None })
+        Command::Compact(Compact { instructions: None })
     );
     assert_eq!(
         line.command,
@@ -482,7 +482,7 @@ fn close_now_reads_a_boolean_and_refuses_anything_else() {
 
 #[test]
 fn args_that_are_present_are_never_replaced_by_an_empty_object() {
-    // Every key of `compaction` is optional, so only a present `args` that does
+    // Every key of `compact` is optional, so only a present `args` that does
     // not fit can be refused.
     assert!(parse(r#"{"id":"c","command":"compact","args":{"future":1}}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"compact","args":"x"}"#).is_err());

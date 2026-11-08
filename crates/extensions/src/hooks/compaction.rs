@@ -4,7 +4,9 @@
 
 use contract::ErrorCode;
 use contract::events::Notice;
-use contract::hook::{BeforeCompaction, BeforeCompactionAnswer, BeforeCompactionOutcome, HookFailure};
+use contract::hook::{
+    BeforeCompaction, BeforeCompactionAnswer, BeforeCompactionOutcome, HookFailure,
+};
 use contract::provider::Input;
 use serde_json::{Map, Value};
 

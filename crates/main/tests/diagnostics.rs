@@ -134,7 +134,7 @@ fn shell_echo() -> Response {
         "name": "shell", "arguments": "{\"command\":\"echo hi\"}"}})])
 }
 
-/// A `compaction` call with a note, as `loop_timing` answers it: the
+/// A `compact` call with a note, as `loop_timing` answers it: the
 /// journey's second tool call.
 fn compaction() -> Response {
     stream(&[json!({"type": "response.output_item.done", "item": {

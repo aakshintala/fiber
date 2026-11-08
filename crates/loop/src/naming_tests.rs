@@ -69,7 +69,7 @@ fn fold_ignores_other_events() {
 
 fn control_with(name: Option<&str>) -> Control {
     Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: name.map(str::to_owned),
@@ -80,7 +80,7 @@ fn control_with(name: Option<&str>) -> Control {
 fn judge_writes_only_a_completed_call_with_a_name() {
     let with_name = control_with(Some("Fix the parser"));
     let compaction_only = Control {
-        compaction: Some("note".into()),
+        compact: Some("note".into()),
         questions: None,
         skill: None,
         name: None,

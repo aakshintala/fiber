@@ -158,7 +158,7 @@ pub enum Command {
     /// Sets the session's name.
     Name(Name),
     /// Starts a compaction.
-    Compaction(Compaction),
+    Compact(Compact),
     /// Starts a new session that continues a session from an earlier point.
     Rewind(RewindArgs),
     /// Starts a new session that continues this session in another workspace.
@@ -521,10 +521,10 @@ pub struct Name {
     pub text: String,
 }
 
-/// The `args` of `compaction`.
+/// The `args` of `compact`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Compaction {
+pub struct Compact {
     /// What the next stretch of work focuses on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
@@ -749,7 +749,6 @@ pub const BUILT_IN_COMMANDS: &[&str] = &[
     "rewind",
     "cd",
     "fork",
-    "compaction",
     "compact",
     "name",
     "rename",

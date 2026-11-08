@@ -28,7 +28,7 @@ use serde_json::{Map, Value, json};
 
 use support::{
     DEADLINE, ENDED, OPENING, REPLY, STEP, Session, StartHooks, assert_kinds, calls_reply,
-    delivery, compaction, kinds, of_kind, start_added, start_empty,
+    compaction, delivery, kinds, of_kind, start_added, start_empty,
 };
 
 /// One reply calling one skill: streamed arguments, requests, then runs.
@@ -211,7 +211,7 @@ impl Tool for Skill {
                 text: format!("{path}\n\n{body}"),
             }],
             control: Some(Control {
-                compaction: None,
+                compact: None,
                 questions: None,
                 skill: Some(SkillLoad {
                     name,
@@ -1180,7 +1180,7 @@ fn hosted_skill() -> Scripted {
         kept: None,
         changes: None,
         control: Some(Control {
-            compaction: None,
+            compact: None,
             questions: None,
             skill: Some(SkillLoad {
                 name: "alpha".into(),

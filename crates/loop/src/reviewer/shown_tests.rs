@@ -10,10 +10,10 @@
 )]
 
 use contract::events::{
-    Answer, AssistantMessageCompleted, Event, FormAnswer, CompactionCompleted, InputItem, Interaction,
-    InteractionRequested, InteractionResolved, KeptMessage, MessageOutcome, Note, Outcome,
-    ResolvedBy, ReviewerKept, SessionStarted, SteeringApplied, TextCompleted, ToolCallRequested,
-    TurnCompleted, TurnOutcome, TurnStarted, Variables, VariablesSource,
+    Answer, AssistantMessageCompleted, CompactionCompleted, Event, FormAnswer, InputItem,
+    Interaction, InteractionRequested, InteractionResolved, KeptMessage, MessageOutcome, Note,
+    Outcome, ResolvedBy, ReviewerKept, SessionStarted, SteeringApplied, TextCompleted,
+    ToolCallRequested, TurnCompleted, TurnOutcome, TurnStarted, Variables, VariablesSource,
 };
 use contract::provider::Input;
 use contract::shapes::{Choice, ContentPart, Failure, Origin, Question, Sender, True};
@@ -881,7 +881,8 @@ fn the_live_fold_and_the_history_fold_agree_at_each_side_of_the_cut() {
         Some(ActionId("a_1".into())),
     )
     .unwrap();
-    log.append(&compaction_completed(), Some(turn), None).unwrap();
+    log.append(&compaction_completed(), Some(turn), None)
+        .unwrap();
     log.append(
         &Event::TurnStarted(TurnStarted {
             input: vec![message("now run it", driver())],

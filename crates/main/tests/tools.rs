@@ -3211,7 +3211,7 @@ fn ask_user_ends_the_run_with_its_questions_and_a_resume_answers_them() {
     assert_eq!(requests.len(), 1);
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(tool_in(&body, "ask_user")["strict"], false);
-    assert_eq!(tool_in(&body, "compaction")["strict"], true);
+    assert_eq!(tool_in(&body, "compact")["strict"], true);
 
     let id = first.session_id().to_owned();
     let second = setup.run(&["ask", "--resume", &id, "main; call it fiber"]);

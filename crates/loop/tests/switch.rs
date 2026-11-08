@@ -23,7 +23,9 @@ use contract::provider::Provider;
 use contract::{Envelope, ErrorCode, ThinkingLevel};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
-use r#loop::{CompactionSettings, Hosted, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable};
+use r#loop::{
+    CompactionSettings, Hosted, Model, NO_SWITCH, Prepare, Prepared, Reviewer, Switchable,
+};
 
 use support::{
     DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, allow, assert_kinds, delivery, kinds,

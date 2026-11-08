@@ -66,7 +66,13 @@ fn accessors_read_the_per_model_value_over_the_top_level() {
             "models.\"a/b\".compaction.tokens=200000",
         ])
         .unwrap();
-    assert_eq!(config.count("compaction.tokens", Some("a/b")), Some(200_000));
-    assert_eq!(config.count("compaction.tokens", Some("c/d")), Some(300_000));
+    assert_eq!(
+        config.count("compaction.tokens", Some("a/b")),
+        Some(200_000)
+    );
+    assert_eq!(
+        config.count("compaction.tokens", Some("c/d")),
+        Some(300_000)
+    );
     assert_eq!(config.count("compaction.tokens", None), Some(300_000));
 }

@@ -1831,11 +1831,11 @@ mod window {
     use std::path::PathBuf;
 
     use contract::events::{
-        AskStep, DecidedBy, Decision, Empty, Environment, Event, FiberExited, FiberStarted, Grant,
-        CompactionCompleted, CompactionStarted, CompactionTrigger, InputItem, JobCompleted, JobStarted,
-        Note, OpeningMessage, Outcome, PermissionRequested, PermissionResolved, ReviewerRef,
-        RuleScope, SessionStarted, StandingRule, TextCompleted, TurnStarted, UsageRecorded,
-        Variables, VariablesSource,
+        AskStep, CompactionCompleted, CompactionStarted, CompactionTrigger, DecidedBy, Decision,
+        Empty, Environment, Event, FiberExited, FiberStarted, Grant, InputItem, JobCompleted,
+        JobStarted, Note, OpeningMessage, Outcome, PermissionRequested, PermissionResolved,
+        ReviewerRef, RuleScope, SessionStarted, StandingRule, TextCompleted, TurnStarted,
+        UsageRecorded, Variables, VariablesSource,
     };
     use contract::shapes::{ContentPart, DeclaredEffects, Effect, Origin, Sender, Tokens, Usage};
     use contract::{ActionId, Envelope, ErrorCode, GenerationId, JobId, RequestId, SessionId};
@@ -2757,7 +2757,7 @@ fn skilled_result(status: contract::events::CallStatus, name: &str, path: &str) 
         kept: None,
         changes: None,
         control: Some(contract::events::Control {
-            compaction: None,
+            compact: None,
             questions: None,
             skill: Some(contract::events::SkillLoad {
                 name: name.into(),
@@ -3008,9 +3008,9 @@ mod from_log {
     use log::Log;
 
     use super::events::{
-        assistant, completed_event, fiber_started, compaction_done, compaction_started, hosted_requested,
-        job_completed, job_started, kinds_of, message_started, opening_of, requested, result_of,
-        started, steering, text_of, texts, user_turn,
+        assistant, compaction_done, compaction_started, completed_event, fiber_started,
+        hosted_requested, job_completed, job_started, kinds_of, message_started, opening_of,
+        requested, result_of, started, steering, text_of, texts, user_turn,
     };
     use super::line;
     use serde_json::json;
@@ -3629,7 +3629,10 @@ mod from_log {
         let log = LogLines::new();
         before_compaction(&log, true);
         note_lines(&log);
-        log.append(compaction_done(contract::events::Outcome::Failed, &[]), None);
+        log.append(
+            compaction_done(contract::events::Outcome::Failed, &[]),
+            None,
+        );
 
         assert_eq!(
             crate::conversation::rebuild(&log.lines(), MODEL).unwrap(),
@@ -3694,7 +3697,10 @@ mod from_log {
         let log = LogLines::new();
         before_compaction(&log, false);
         note_lines(&log);
-        log.append(compaction_done(contract::events::Outcome::Failed, &[]), None);
+        log.append(
+            compaction_done(contract::events::Outcome::Failed, &[]),
+            None,
+        );
         log.append(user_turn("two"), None);
         log.append(compaction_started(), None);
         log.append(message_started(), Some("a_note2"));
@@ -3855,7 +3861,7 @@ mod from_log {
             panic!("a completion");
         };
         done.control = note.map(|compaction| contract::events::Control {
-            compaction: Some(compaction.into()),
+            compact: Some(compaction.into()),
             ..Default::default()
         });
         Event::ToolCallCompleted(done)
@@ -3971,7 +3977,8 @@ mod from_log {
     fn a_tool_compaction_survives_a_crash_and_a_second_resume() {
         let log = LogLines::new();
         tool_compaction(&log, &[("a_h1", "Tool note.")]);
-        let after_compaction = call_ids(&crate::conversation::rebuild(&log.lines(), MODEL).unwrap());
+        let after_compaction =
+            call_ids(&crate::conversation::rebuild(&log.lines(), MODEL).unwrap());
         for _ in 0..2 {
             log.append(fiber_started(), None);
             log.append(user_turn("again"), None);
@@ -4303,7 +4310,7 @@ fn inner_control_never_changes_the_skills_or_compaction_step() {
             name: "inner".into(),
             path: "inner/SKILL.md".into(),
         }),
-        compaction: Some("inner note".into()),
+        compact: Some("inner note".into()),
         ..Default::default()
     });
     lines[3] = line(

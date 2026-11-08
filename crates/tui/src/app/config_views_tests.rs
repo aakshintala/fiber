@@ -127,7 +127,8 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
         "{rows:?}"
     );
     assert!(
-        rows.iter().any(|row| row.starts_with("› compaction.tokens")),
+        rows.iter()
+            .any(|row| row.starts_with("› compaction.tokens")),
         "{rows:?}"
     );
     assert_eq!(seam.reads(), [PathBuf::from("/w")]);
@@ -141,7 +142,8 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
         "{rows:?}"
     );
     assert!(
-        rows.iter().any(|row| row.starts_with(" › compaction.tokens")),
+        rows.iter()
+            .any(|row| row.starts_with(" › compaction.tokens")),
         "{rows:?}"
     );
 }

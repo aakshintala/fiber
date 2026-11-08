@@ -26,7 +26,7 @@ use r#loop::{BlockLimits, Loop, Model, Permissions, PromptInputs, Reviewer};
 use serde_json::json;
 
 use support::{
-    DEADLINE, MODEL, REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, compaction, kinds,
+    DEADLINE, MODEL, REVIEWER_MODEL, Session, TestTool, calls_reply, compaction, delivery, kinds,
     of_kind, paris, shell,
 };
 
@@ -1328,7 +1328,7 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
     let tool = shell(None, None);
     let mut compactor = TestTool::reads("compactor", "Noted.");
     compactor.output.control = Some(Control {
-        compaction: Some("note".into()),
+        compact: Some("note".into()),
         ..Default::default()
     });
     // One priced reviewer call costs (10 + 3) / 1e6: the review of the

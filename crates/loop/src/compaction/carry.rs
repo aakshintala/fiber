@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use contract::ActionId;
 use contract::events::{
-    ContextNudged, Control, Event, CompactionCompleted, KeptMessage, Note, ShellCommand, SkillLoad,
+    CompactionCompleted, ContextNudged, Control, Event, KeptMessage, Note, ShellCommand, SkillLoad,
 };
 use contract::provider::Input;
 use contract::shapes::Question;
@@ -330,7 +330,10 @@ impl Carry {
                     conversation.insert(
                         at.min(conversation.len()),
                         Input::User {
-                            text: fill(message("compaction-earlier"), &[("message", text.as_str())]),
+                            text: fill(
+                                message("compaction-earlier"),
+                                &[("message", text.as_str())],
+                            ),
                             images: Vec::new(),
                         },
                     );

@@ -72,7 +72,7 @@ fn a_full_table_maps_field_for_field() {
             error: Some(failure(ErrorCode::NonzeroExit, "m".to_owned())),
             details: Some(json!({"count": 3, "nested": {"list": [1, 2]}})),
             control: Some(Control {
-                compaction: Some("n".to_owned()),
+                compact: Some("n".to_owned()),
                 questions: None,
                 skill: None,
                 name: None,

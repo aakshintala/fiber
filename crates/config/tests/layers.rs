@@ -207,7 +207,10 @@ fn a_per_model_key_wins_over_the_same_layers_top_level() {
         Some((json!(0.5), Source::Global(setup.global())))
     );
     assert_eq!(config.get("cache.lifetime", opus).unwrap().0, json!("5m"));
-    assert_eq!(config.get("compaction.tokens", opus).unwrap().0, json!(400000));
+    assert_eq!(
+        config.get("compaction.tokens", opus).unwrap().0,
+        json!(400000)
+    );
     assert_eq!(
         config
             .get("cache.lifetime", Some("openai/gpt-5.6"))
@@ -248,7 +251,10 @@ fn a_run_flag_value_is_json_or_else_a_bare_string() {
         ])
         .unwrap();
     assert!(config.notices().is_empty(), "{:?}", config.notices());
-    assert_eq!(config.get("compaction.enabled", None).unwrap().0, json!(false));
+    assert_eq!(
+        config.get("compaction.enabled", None).unwrap().0,
+        json!(false)
+    );
     assert_eq!(
         config.get("tui.panel.cards", None).unwrap().0,
         json!(["quota"])
@@ -484,7 +490,10 @@ fn a_source_prints_as_where_it_is() {
 #[test]
 fn a_query_that_is_not_a_dotted_key_finds_nothing() {
     let setup = Setup::new();
-    assert_eq!(setup.load(&[]).unwrap().get("compaction..tokens", None), None);
+    assert_eq!(
+        setup.load(&[]).unwrap().get("compaction..tokens", None),
+        None
+    );
 }
 
 #[test]

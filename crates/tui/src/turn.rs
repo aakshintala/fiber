@@ -29,9 +29,9 @@ use crate::window::Delegates;
 
 mod answers;
 mod card;
+mod compaction;
 pub(crate) mod crash;
 mod group;
-mod compaction;
 pub(crate) mod images;
 mod live;
 pub(crate) mod opened;

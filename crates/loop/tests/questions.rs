@@ -38,7 +38,7 @@ fn question(text: &str) -> Question {
 fn asking(name: &'static str, texts: &[&str]) -> TestTool {
     let mut tool = TestTool::reads(name, "Asked.");
     tool.output.control = Some(Control {
-        compaction: None,
+        compact: None,
         questions: Some(texts.iter().map(|text| question(text)).collect()),
         skill: None,
         name: None,
@@ -50,7 +50,7 @@ fn asking(name: &'static str, texts: &[&str]) -> TestTool {
 fn handing_off(name: &'static str) -> TestTool {
     let mut tool = TestTool::reads(name, "Handed off.");
     tool.output.control = Some(Control {
-        compaction: Some("the note".into()),
+        compact: Some("the note".into()),
         questions: None,
         skill: None,
         name: None,

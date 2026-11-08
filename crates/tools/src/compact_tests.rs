@@ -4,15 +4,15 @@ use contract::tool::{EffectsError, Tool};
 use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value, json};
 
-use super::Compaction;
+use super::Compact;
 
 fn run(arguments: &Map<String, Value>) -> contract::tool::Output {
-    Compaction.run(arguments, &CancelToken::new(), &Recorder::default())
+    Compact.run(arguments, &CancelToken::new(), &Recorder::default())
 }
 
 #[test]
 fn the_description_names_carried_context_and_the_cache_miss() {
-    let definition = Compaction.definition();
+    let definition = Compact.definition();
 
     for detail in [
         "Kept messages with their replies",
@@ -31,7 +31,7 @@ fn the_description_names_carried_context_and_the_cache_miss() {
 
 #[test]
 fn it_declares_no_effects() {
-    let effects = Compaction
+    let effects = Compact
         .effects(&fakes::tool_args(json!({"note": "n"})))
         .unwrap();
 
@@ -58,7 +58,7 @@ fn a_missing_or_mistyped_note_is_an_invalid_argument() {
     let arguments = fakes::tool_args(json!({"note": 3}));
 
     assert!(matches!(
-        Compaction.effects(&arguments),
+        Compact.effects(&arguments),
         Err(EffectsError::Arguments(_))
     ));
     let output = run(&arguments);

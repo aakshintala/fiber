@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use contract::events::{
-    ContextNudged, Event, CompactionTrigger, Notice, Outcome, SkillLoad, SkillSent, SkillsResent,
+    CompactionTrigger, ContextNudged, Event, Notice, Outcome, SkillLoad, SkillSent, SkillsResent,
     ToolCallRequested, TurnCompleted, TurnOutcome, group_notices, grouped_lead,
 };
 use contract::provider::{Input, ModelRequest};
@@ -129,10 +129,10 @@ pub(crate) struct State {
     /// A failed compaction blocks the automatic trigger for the rest of the
     /// turn.
     blocked: bool,
-    /// The instructions of each person's `compaction` taken and not yet run, in
+    /// The instructions of each person's `compact` taken and not yet run, in
     /// arrival order: the next step boundary runs them as one compaction.
     pub(crate) held: Vec<Option<String>>,
-    /// Whether this turn began as a person's `compaction` between turns.
+    /// Whether this turn began as a person's `compact` between turns.
     person_turn: bool,
     /// Whether a compaction of any trigger ran in this step: the overflow rule
     /// runs at most once per step, and a tool's compaction does not follow one.
@@ -156,7 +156,7 @@ impl State {
     }
 
     /// A new turn lifts the block. `person` is whether the turn began as a
-    /// person's `compaction` between turns.
+    /// person's `compact` between turns.
     pub(crate) fn new_turn(&mut self, person: bool) {
         self.blocked = false;
         self.person_turn = person;
@@ -312,7 +312,8 @@ impl Loop {
             },
             size,
         )?);
-        if ended.is_none() && self.compaction.person_turn && self.compaction.carry.input.is_empty() {
+        if ended.is_none() && self.compaction.person_turn && self.compaction.carry.input.is_empty()
+        {
             return Ok(Some(crate::ended(TurnOutcome::Completed, None)));
         }
         Ok(ended)
@@ -334,7 +335,8 @@ impl Loop {
             return Ok(false);
         }
         let tokens_before = self.context_estimate();
-        let outcome = self.run_compaction_rows(turn, note::Source::Tools { note }, tokens_before)?;
+        let outcome =
+            self.run_compaction_rows(turn, note::Source::Tools { note }, tokens_before)?;
         Ok(outcome == Outcome::Completed)
     }
 

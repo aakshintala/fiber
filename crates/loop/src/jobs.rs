@@ -54,7 +54,7 @@ pub(crate) enum Queued {
     /// A monitor's batch: written as `job_line`; named in a `jobs` item when
     /// it starts a turn. No claim applies to it.
     Line(JobLine),
-    /// A person's `compaction`: named in a `compaction` item when it starts a
+    /// A person's `compact`: named in a `compaction` item when it starts a
     /// turn, and run at the next step boundary (`docs/compaction.md`, "A
     /// person"); no line is written for it.
     Compaction(CommandId, Option<String>),

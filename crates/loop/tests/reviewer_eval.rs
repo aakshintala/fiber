@@ -40,7 +40,7 @@ use support::reviewer_eval::{
     parse_claude_line, parse_line, parse_pi_file, parse_pi_line, parse_sample_flags, sample,
     scan_line, split_argv, validate_seeded,
 };
-use support::{Session, calls_reply, delivery, compaction, paris, shell};
+use support::{Session, calls_reply, compaction, delivery, paris, shell};
 
 /// A scrub context with synthetic values, never the real environment.
 fn ctx() -> ScrubCtx {

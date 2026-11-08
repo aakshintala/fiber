@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{BlockLimits, Error, CompactionSettings, Loop, Retry, Reviewer};
+use crate::{BlockLimits, CompactionSettings, Error, Loop, Retry, Reviewer};
 use contract::diag::Observe;
 use contract::events::{
     CacheLifetime, CommandInfo, LoadedExtension, Notice, ReloadFailure, ReloadedServers,

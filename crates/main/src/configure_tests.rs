@@ -164,7 +164,10 @@ fn set_writes_the_layers_file_as_config_set_does() {
         &fs::read_to_string(dirs.project_file(&one)).unwrap_or_else(|e| panic!("read: {e}")),
     )
     .unwrap_or_else(|e| panic!("json: {e}"));
-    assert_eq!(written, serde_json::json!({"compaction": {"tokens": 200000}}));
+    assert_eq!(
+        written,
+        serde_json::json!({"compaction": {"tokens": 200000}})
+    );
     let saved = seam
         .set(&one, Layer::Global, "tui.theme", "\"light\"")
         .unwrap_or_else(|e| panic!("set: {e}"));

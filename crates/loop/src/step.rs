@@ -16,7 +16,7 @@ use contract::{ActionId, ErrorCode, TurnId};
 use serde_json::Value;
 use support::lock;
 
-use crate::{Error, Loop, Step, cancel, completion, ended, compaction, mint, usage, util};
+use crate::{Error, Loop, Step, cancel, compaction, completion, ended, mint, usage, util};
 
 impl Loop {
     /// Writes the subdirectory lines the last step's calls queued: after

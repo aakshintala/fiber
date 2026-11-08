@@ -52,8 +52,8 @@ pub use chrome::{
 };
 
 pub use slots::{
-    Answers, ErrorLine, GroupLine, CompactionBand, LedgerRow, Notice, Prompt, PromptImage, ReplyText,
-    RowError, Steer, ThinkingLine,
+    Answers, CompactionBand, ErrorLine, GroupLine, LedgerRow, Notice, Prompt, PromptImage,
+    ReplyText, RowError, Steer, ThinkingLine,
 };
 pub use turn::{
     AnswerDisposition, CallState, CardPrompt, LedgerResult, TurnAnswerPart, TurnAnswers, TurnAside,

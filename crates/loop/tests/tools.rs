@@ -118,7 +118,7 @@ fn a_result_carries_what_the_tool_returned() {
         removed: 0,
     }]);
     tool.output.control = Some(Control {
-        compaction: Some("note".into()),
+        compact: Some("note".into()),
         ..Default::default()
     });
     let (_, lines) = turn(vec![Arc::new(tool)], &[("get_weather", paris())]);
@@ -129,7 +129,7 @@ fn a_result_carries_what_the_tool_returned() {
         done["changes"],
         json!([{"path": "/w/a", "added": 1, "removed": 0}])
     );
-    assert_eq!(done["control"], json!({"compaction": "note"}));
+    assert_eq!(done["control"], json!({"compact": "note"}));
 }
 
 #[test]

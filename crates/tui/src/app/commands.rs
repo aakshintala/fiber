@@ -257,7 +257,7 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_fork,
     },
     CommandEntry {
-        name: "compaction",
+        name: "compact",
         description: "Starts a compaction.",
         hint: Some("[instructions]"),
         run: run_compaction,
@@ -397,7 +397,7 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
 
 fn run_compaction(app: &mut App, rest: &str) -> Option<Effect> {
     let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("compaction", args).0)
+    Some(app.send_command("compact", args).0)
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {

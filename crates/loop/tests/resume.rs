@@ -13,7 +13,7 @@ mod support;
 
 use support::History;
 use support::{
-    assistant, fiber_started, compaction_done, compaction_started, hosted_requested, job_completed,
+    assistant, compaction_done, compaction_started, fiber_started, hosted_requested, job_completed,
     job_started, kinds_of, message_started, opening_of, result_of, texts,
 };
 use support::{completed_event, requested, standing_request, started, user_turn};
@@ -2302,7 +2302,7 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        compaction: Some("the note".into()),
+        compact: Some("the note".into()),
         ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
@@ -2344,7 +2344,7 @@ fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
 fn asking(name: &'static str) -> Arc<support::TestTool> {
     let mut tool = support::TestTool::reads(name, "Asked.");
     tool.output.control = Some(contract::events::Control {
-        compaction: None,
+        compact: None,
         questions: Some(vec![contract::shapes::Question {
             header: "h".into(),
             question: "Which?".into(),
@@ -2596,7 +2596,7 @@ fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_compaction() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        compaction: Some("the note".into()),
+        compact: Some("the note".into()),
         ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
@@ -2668,7 +2668,7 @@ fn a_cancel_after_a_resumed_credential_refusal_skips_the_tool_compaction() {
         .into_iter()
         .find(|line| line.action_id.as_ref().unwrap().0 == "a_2")
         .unwrap();
-    assert_eq!(noted.payload["control"], json!({"compaction": "the note"}));
+    assert_eq!(noted.payload["control"], json!({"compact": "the note"}));
     assert!(
         new_of(&history, "compaction_completed").is_empty(),
         "a cancel that ended the batch skips the tool compaction: {:?}",
@@ -3927,7 +3927,7 @@ fn an_allowed_call_that_sets_control_compaction_hands_off_after_the_batch() {
     let mut wrapup = support::TestTool::reads("wrapup", "");
     wrapup.output.content = Vec::new();
     wrapup.output.control = Some(contract::events::Control {
-        compaction: Some("the note".into()),
+        compact: Some("the note".into()),
         ..Default::default()
     });
     let wrapup = Arc::new(wrapup);
@@ -4916,7 +4916,7 @@ fn a_resume_switching_the_label_marks_orphans_first() {
 fn naming_tool(name: &'static str, called: &str) -> Arc<support::TestTool> {
     let mut tool = support::TestTool::reads(name, "Named.");
     tool.output.control = Some(contract::events::Control {
-        compaction: None,
+        compact: None,
         questions: None,
         skill: None,
         name: Some(called.into()),
@@ -5089,7 +5089,10 @@ fn a_person_name_before_a_compaction_still_pins_the_session() {
     history.write(user_turn("one"), None);
     history.write(named(Some("Mine"), NamedBy::Person), Some("a_0"));
     history.write(support::compaction_started(), Some("a_1"));
-    history.write(support::compaction_done(Outcome::Completed, &[]), Some("a_1"));
+    history.write(
+        support::compaction_done(Outcome::Completed, &[]),
+        Some("a_1"),
+    );
     history.freeze();
 
     let looped = history.resume(tools_of(&[&tool]));

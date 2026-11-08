@@ -2159,12 +2159,12 @@ where
 
 use contract::ErrorCode;
 use contract::events::{
-    AssistantMessageCompleted, CommandAccepted, CommandRejected, ContextNudged, DelegateFinished,
-    DelegateStarted, ExtensionUi, FiberExited, FiberStarted, CompactionCompleted, CompactionStarted,
-    InteractionRequested, InteractionResolved, JobCompleted, JobDelta, JobStarted, McpServerFailed,
-    McpServerReady, ModelChanged, Notice, PermissionRequested, PreambleBuilt, ReasoningCompleted,
-    RetryScheduled, Rewound, SessionNamed, SessionStarted, SessionStatus, ShellCommand,
-    SteeringApplied, SteeringQueue, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    AssistantMessageCompleted, CommandAccepted, CommandRejected, CompactionCompleted,
+    CompactionStarted, ContextNudged, DelegateFinished, DelegateStarted, ExtensionUi, FiberExited,
+    FiberStarted, InteractionRequested, InteractionResolved, JobCompleted, JobDelta, JobStarted,
+    McpServerFailed, McpServerReady, ModelChanged, Notice, PermissionRequested, PreambleBuilt,
+    ReasoningCompleted, RetryScheduled, Rewound, SessionNamed, SessionStarted, SessionStatus,
+    ShellCommand, SteeringApplied, SteeringQueue, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnCompleted, TurnStarted,
     UsageRecorded,
 };

@@ -63,7 +63,12 @@ fn preamble(app: &mut App, trigger_at: Option<u64>) {
 }
 
 fn started(app: &mut App, trigger: &str) {
-    feed(app, "compaction_started", None, json!({ "trigger": trigger }));
+    feed(
+        app,
+        "compaction_started",
+        None,
+        json!({ "trigger": trigger }),
+    );
 }
 
 fn started_at(app: &mut App, trigger: &str, ts: u64) {
@@ -303,7 +308,11 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
     );
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ compaction · automatic at 400k", "402k → … · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ compaction · automatic at 400k",
+            "402k → … · 14:20 "
+        ),
     );
     // A correction to the note's call, a copy and an extension's call are
     // not the first request after it.
@@ -317,7 +326,11 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
     usage(&mut app, "g_ext", 5_000, json!({"extension": "x"}));
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ compaction · automatic at 400k", "402k → … · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ compaction · automatic at 400k",
+            "402k → … · 14:20 "
+        ),
     );
     usage(&mut app, "g_next", 29_000, json!({}));
     assert_eq!(
@@ -361,7 +374,11 @@ fn a_call_that_reported_no_input_tokens_leaves_the_size_waiting() {
     );
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ compaction · automatic at 400k", "402k → … · 14:20 "),
+        full_row(
+            &app,
+            " ⇄ compaction · automatic at 400k",
+            "402k → … · 14:20 "
+        ),
     );
     usage(&mut app, "g_next", 29_000, json!({}));
     assert_eq!(

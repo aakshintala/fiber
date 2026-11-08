@@ -21,8 +21,8 @@ use contract::{ActionId, Envelope, ErrorCode, GenerationId, JobId, SessionId, Tu
 
 use crate::calls::{self, Asked, Decided};
 use crate::cancel::Commit;
-use crate::completion::resolved;
 use crate::compaction::Carry;
+use crate::completion::resolved;
 use crate::jobs::OrphanEnd;
 use crate::reviewer::Reviewed;
 use crate::suspend::Pending;

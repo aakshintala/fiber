@@ -464,7 +464,10 @@ pub(crate) fn frame(
         }
         rows.push(indented(row("Largest tool results", Ink::Heading)));
         if fold.largest.is_empty() {
-            rows.push(indented(row("  none since the last compaction", Ink::Muted)));
+            rows.push(indented(row(
+                "  none since the last compaction",
+                Ink::Muted,
+            )));
         } else {
             for result in &fold.largest {
                 let size = rate.tokens(result.bytes).map_or_else(

@@ -23,8 +23,8 @@ pub use action::{
     TextDelta, ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
 };
 pub use context::{
-    CacheLifetime, ContextNudged, DateChanged, Environment, ExtensionSectionSent, Git,
-    CompactionCompleted, CompactionStarted, CompactionTrigger, InstructionFile, InstructionFileSent,
+    CacheLifetime, CompactionCompleted, CompactionStarted, CompactionTrigger, ContextNudged,
+    DateChanged, Environment, ExtensionSectionSent, Git, InstructionFile, InstructionFileSent,
     InstructionReason, InstructionSent, KeptMessage, ModelChanged, ModelSettings, Note, Notice,
     OpeningMessage, Outcome, PreambleBuilt, PreambleReason, QuotaNoticed, QuotaRearmed,
     RetryScheduled, ReviewerKept, ReviewerUse, SentTool, SkillListed, SkillSent, SkillSource,

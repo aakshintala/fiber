@@ -147,7 +147,7 @@ pub enum Delivery {
     /// Starts a new session that continues this one in another workspace
     /// (`docs/events.md`, "Change workspace").
     ChangeWorkspace(crate::CommandId, crate::commands::ChangeWorkspaceArgs, Ack),
-    /// A person's `compaction`. While a turn runs it is held until the next
+    /// A person's `compact`. While a turn runs it is held until the next
     /// step boundary; while the loop is idle it starts a turn of its own
     /// (`docs/compaction.md`, "A person").
     Compaction(crate::CommandId, crate::commands::Compact, Ack),

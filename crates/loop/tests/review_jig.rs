@@ -13,8 +13,8 @@ mod support;
 
 use contract::clock::Clock as _;
 use contract::events::{
-    Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, EventKind,
-    CompactionCompleted, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
+    Anchor, ArgumentRepair, AskStep, CallStatus, CompactionCompleted, DecidedBy, Decision, Event,
+    EventKind, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
     PermissionRequested, PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef,
     RuleScope, SessionStarted, StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted,
     ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
@@ -33,7 +33,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 use support::review::{RequestKind, ReviewArgs, parse_args, replay};
-use support::{Session, calls_reply, delivery, compaction, paris, shell};
+use support::{Session, calls_reply, compaction, delivery, paris, shell};
 
 /// How long the jig exchange may take once the binary has started.
 /// `.config/nextest.toml` kills a slow test after a 30s period times 4 (120s
@@ -1128,7 +1128,15 @@ fn repeated_compactions_select_from_the_previously_kept_messages() {
     assert_eq!(compactions.len(), 2);
     // The first answer keeps the first order; the second keeps the third,
     // numbered second among the previously kept plus the new message.
-    let lines = check_binary_output(&fixture.dir, "1\n2\n", false, &[], &["a_1"], &compactions, &[]);
+    let lines = check_binary_output(
+        &fixture.dir,
+        "1\n2\n",
+        false,
+        &[],
+        &["a_1"],
+        &compactions,
+        &[],
+    );
     assert_eq!(lines.len(), 3);
     let after = line_texts(lines.get(2).unwrap());
     assert!(!after.iter().any(|text| text.contains("first order")));
@@ -1483,7 +1491,11 @@ fn calls_print_at_their_request_position_without_moving_across_compactions() {
     // early call's replay.
     let early = line_texts(&lines[0]);
     assert!(early.iter().any(|text| text.contains("standing order")));
-    assert!(!early.iter().any(|text| text.contains("after the compaction")));
+    assert!(
+        !early
+            .iter()
+            .any(|text| text.contains("after the compaction"))
+    );
 }
 
 #[test]

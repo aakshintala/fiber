@@ -2728,7 +2728,7 @@ fn replay_databricks_compaction_keeps_labelled_pairs() {
             script.push(replay_text_reply("The skill is loaded."));
             script.push(replay_tool_call(
                 "toolu_2",
-                "compaction",
+                "compact",
                 &json!({"note": "The compaction note."}),
             ));
             script.push(Response::stream(

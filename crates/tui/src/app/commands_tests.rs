@@ -63,13 +63,13 @@ fn compaction_sends_its_instructions() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/compact  do x "));
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "compaction");
+    assert_eq!(lines[0]["command"], "compact");
     assert_eq!(lines[0]["session_id"], SESSION);
     assert_eq!(lines[0]["args"], json!({"instructions": "do x"}));
     assert_eq!(app.draft(), "");
     let lines = sent(enter(&mut app, "/compact"));
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "compaction");
+    assert_eq!(lines[0]["command"], "compact");
     assert_eq!(lines[0].get("args"), None);
 }
 
