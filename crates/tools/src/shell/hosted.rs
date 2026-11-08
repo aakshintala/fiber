@@ -223,22 +223,10 @@ pub(super) fn execute(
 }
 
 /// Builds a keeper-written completion without session-only notice or tail fields.
-pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
-    let mut completed = ended(job_id, Path::new(""), exit);
-    completed.output_tail = None;
-    completed
-}
-
-/// The completion the session writes for a job it took over from a keeper:
-/// a live job's ending, with the tail read from the job's `output` file.
-pub fn adopted_end(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
-    ended(job_id, output, exit)
-}
-
 // The sent_signal || to && mutant is equivalent: where the flags differ,
 // assemble_output returns through Timeout or Capped before reading sent_signal.
 #[cfg_attr(false, mutants::skip)]
-fn ended(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
+pub fn kept_end(job_id: JobId, exit: &Exit) -> JobCompleted {
     let finished = Finished {
         output: Kept::Whole(Vec::new()),
         status: Some(status(exit)),
@@ -249,16 +237,26 @@ fn ended(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
         capped: exit.output_cap,
         flooded: false,
     };
-    super::background::to_completed_reported(
+    let mut completed = super::background::to_completed_reported(
         job_id,
-        output,
+        Path::new(""),
         finished,
         exit.timed_out.then_some(super::Limit {
             ms: 0,
             monitor: false,
         }),
         None,
-    )
+    );
+    completed.output_tail = None;
+    completed
+}
+
+/// The completion the session writes for a job it took over from a keeper:
+/// a live job's ending, with the tail read from the job's `output` file.
+pub fn adopted_end(job_id: JobId, output: &Path, exit: &Exit) -> JobCompleted {
+    let mut completed = kept_end(job_id, exit);
+    completed.output_tail = super::background::output_tail(output);
+    completed
 }
 
 /// Starts a process using the same sandbox and stream builder as the local shell.

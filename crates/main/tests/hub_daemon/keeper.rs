@@ -585,12 +585,7 @@ fn a_resume_takes_a_running_job_from_its_keeper_and_writes_its_ending() {
 
 /// Whether process `pid` still exists.
 fn alive(pid: u32) -> bool {
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap()
-        .success()
+    fakes::pid_alive(pid)
 }
 
 fn parent_of(pid: u32) -> u32 {
@@ -895,11 +890,12 @@ fn a_second_crash_leaves_one_keeper_the_log_and_the_third_resume_orphans_the_oth
 }
 
 const MIB: u64 = 1 << 20;
+const CHUNK: usize = 1 << 20;
 /// One chunk of the flood: a mebibyte of 64-byte lines that name their chunk
 /// and their place in it.
 fn flood_chunk(chunk: u64) -> Vec<u8> {
     let pad = "x".repeat(53);
-    let mut bytes = Vec::with_capacity(MIB as usize);
+    let mut bytes = Vec::with_capacity(CHUNK);
     for line in 0..16_384 {
         bytes.extend_from_slice(format!("{chunk:03}-{line:05}-{pad}\n").as_bytes());
     }
@@ -911,7 +907,7 @@ fn flood_chunk(chunk: u64) -> Vec<u8> {
 fn assert_flood(path: &std::path::Path, chunks: std::ops::Range<u64>) {
     use std::io::{Read as _, Seek as _, SeekFrom};
     let mut file = fs::File::open(path).unwrap();
-    let mut got = vec![0; MIB as usize];
+    let mut got = vec![0; CHUNK];
     for chunk in chunks {
         file.seek(SeekFrom::Start(chunk * MIB)).unwrap();
         file.read_exact(&mut got).unwrap();

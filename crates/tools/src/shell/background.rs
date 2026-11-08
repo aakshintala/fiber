@@ -893,7 +893,7 @@ pub(super) fn to_completed_reported(
 }
 
 /// The last [`TAIL_BYTES`] of the file, read from there, decoded lossily.
-fn output_tail(path: &Path) -> Option<String> {
+pub(super) fn output_tail(path: &Path) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     let window = u64::try_from(TAIL_BYTES).unwrap_or(u64::MAX);
