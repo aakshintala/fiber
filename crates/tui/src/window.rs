@@ -51,7 +51,7 @@ pub(crate) struct Seed {
     next: usize,
     /// Whether a new group starts with its ledger open.
     ledgers: bool,
-    /// The context size an automatic handoff runs at.
+    /// The context size an automatic compaction runs at.
     trigger_at: Option<u64>,
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
@@ -2396,8 +2396,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept
@@ -2472,8 +2472,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept

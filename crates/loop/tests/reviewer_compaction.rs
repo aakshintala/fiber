@@ -1,5 +1,5 @@
-//! The handoff selection (`docs/permissions.md`, "At a handoff"): at each
-//! completed handoff the reviewer is asked which of the person's messages
+//! The compaction selection (`docs/permissions.md`, "At a compaction"): at each
+//! completed compaction the reviewer is asked which of the person's messages
 //! still bind, and its input restarts from those messages, word for word.
 
 #![allow(
@@ -26,12 +26,12 @@ use r#loop::{BlockLimits, Loop, Model, Permissions, PromptInputs, Reviewer};
 use serde_json::json;
 
 use support::{
-    DEADLINE, MODEL, REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, handoff, kinds,
+    DEADLINE, MODEL, REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, compaction, kinds,
     of_kind, paris, shell,
 };
 
 /// The session script every selection flow shares: a reviewed call, a
-/// said message, the handoff's note request, then a reviewed call.
+/// said message, the compaction's note request, then a reviewed call.
 fn script() -> Vec<Scripted> {
     vec![
         calls_reply("", &[("shell", paris())]),
@@ -50,20 +50,20 @@ fn prompt_turn(session: &mut Session, text: &str) -> Vec<Envelope> {
     session.lines()
 }
 
-/// One person handoff turn, asserting it completes.
-fn handoff_turn(session: &mut Session, id: &str) -> Vec<Envelope> {
-    session.inbox.send(handoff(id, None)).unwrap();
+/// One person compaction turn, asserting it completes.
+fn compaction_turn(session: &mut Session, id: &str) -> Vec<Envelope> {
+    session.inbox.send(compaction(id, None)).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     session.lines()
 }
 
-/// The shared flow: a reviewed call, "say hi", a person handoff, then a
+/// The shared flow: a reviewed call, "say hi", a person compaction, then a
 /// reviewed call.
 fn run_flow(session: &mut Session) -> Vec<Envelope> {
     let mut lines = Vec::new();
     lines.extend(prompt_turn(session, "never push to main"));
     lines.extend(prompt_turn(session, "say hi"));
-    lines.extend(handoff_turn(session, "c_h"));
+    lines.extend(compaction_turn(session, "c_h"));
     lines.extend(prompt_turn(session, "now run it"));
     lines
 }
@@ -122,14 +122,14 @@ fn texts(request: &ModelRequest) -> Vec<&str> {
         .collect()
 }
 
-/// The first agent request whose conversation holds the handoff's note
-/// `note`: the first request after the handoff.
+/// The first agent request whose conversation holds the compaction's note
+/// `note`: the first request after the compaction.
 fn noted_request(session: &Session, note: &str) -> ModelRequest {
     session
         .requests()
         .into_iter()
         .find(|request| user_texts(request).contains(&note))
-        .expect("a request after the handoff")
+        .expect("a request after the compaction")
 }
 
 /// A request's user item texts, in order.
@@ -170,7 +170,7 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
         vec![ThinkingLevel::Minimal],
     );
     let lines = run_flow(&mut session);
-    // The whole flow in order: reviewed call, text, handoff with its selection, reviewed call.
+    // The whole flow in order: reviewed call, text, compaction with its selection, reviewed call.
     assert_eq!(
         kinds(&lines),
         [
@@ -208,14 +208,14 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "reviewer_kept",
@@ -267,7 +267,7 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
     assert!(after_texts[2].starts_with("Tool call: "));
     assert!(after_texts[3].starts_with("Call under review: the last tool call above, shell."));
     assert!(after_texts[4].starts_with("## first-pass\n"));
-    // The input's prefix changed, so the first review after the handoff
+    // The input's prefix changed, so the first review after the compaction
     // sends `previous_end: None`.
     assert_eq!(after.previous_end, None);
     // Neither the dropped message nor the dropped call is sent: the one
@@ -281,13 +281,13 @@ fn the_reviewer_keeps_the_selected_messages_then_what_follows() {
         1
     );
 
-    // The agent's first request after the handoff holds the kept message
+    // The agent's first request after the compaction holds the kept message
     // in its earlier-message block, between the opening and the note, and
     // not the dropped one.
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
     assert!(agent[0].starts_with("This message is from Fiber"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — earlier blocks (item 4: "oldest first, each in its own labelled block"), the note (item 6: "The handoff note"); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — earlier blocks (item 4: "oldest first, each in its own labelled block"), the note (item 6: "The compaction note"); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         agent[1..],
         [
@@ -346,14 +346,14 @@ fn selection_prose_never_reaches_a_later_prompt() {
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "reviewer_kept",
@@ -402,14 +402,14 @@ fn a_resume_rebuilds_the_reviewers_input_from_the_selection() {
     ]);
     run_flow(&mut session_a);
 
-    // Run B stops after the handoff turn, drops the loop, resumes from the
+    // Run B stops after the compaction turn, drops the loop, resumes from the
     // log with a reviewer answering what is left, then runs the last turn.
     let tool = shell(None, None);
     let mut session_b = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     session_b.reviewer(vec![Scripted::text("allow"), Scripted::text("1")]);
     prompt_turn(&mut session_b, "never push to main");
     prompt_turn(&mut session_b, "say hi");
-    handoff_turn(&mut session_b, "c_h");
+    compaction_turn(&mut session_b, "c_h");
     drop(session_b.looped.take());
     let resumed = r#loop::resumed(&session_b.dir).unwrap();
     let (tx, rx) = mpsc::channel();
@@ -558,14 +558,14 @@ fn a_failed_selection_keeps_every_earlier_person_message() {
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "reviewer_kept",
@@ -683,14 +683,14 @@ fn an_unreadable_selection_is_asked_once_more() {
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "usage_recorded",
@@ -724,7 +724,7 @@ fn an_unreadable_selection_is_asked_once_more() {
     let second = texts(&requests[2]);
     let note = second[second.len() - 1];
     // The re-ask note is the prompt file's fixed section, not Rust text.
-    assert!(note.starts_with("## handoff-reask\n"));
+    assert!(note.starts_with("## compaction-reask\n"));
     assert!(note.contains("Your reply could not be read: "));
     assert!(!format!("{:?}", requests[2]).contains("keep all"));
     let seq = turn_started_seq(&lines, "never push to main");
@@ -781,14 +781,14 @@ fn an_unreadable_selection_is_asked_once_more() {
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "usage_recorded",
@@ -826,7 +826,7 @@ fn an_unreadable_selection_is_asked_once_more() {
 }
 
 #[test]
-fn none_keeps_nothing_and_a_second_handoff_with_no_person_message_asks_nothing() {
+fn none_keeps_nothing_and_a_second_compaction_with_no_person_message_asks_nothing() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
@@ -842,36 +842,36 @@ fn none_keeps_nothing_and_a_second_handoff_with_no_person_message_asks_nothing()
     let reviewer = session.reviewer(vec![Scripted::text("allow"), Scripted::text("none")]);
     prompt_turn(&mut session, "never push to main");
     prompt_turn(&mut session, "say hi");
-    let mut lines = handoff_turn(&mut session, "c_first");
-    lines.extend(handoff_turn(&mut session, "c_second"));
-    // Both handoffs in order: the first selects and the second asks nothing.
+    let mut lines = compaction_turn(&mut session, "c_first");
+    lines.extend(compaction_turn(&mut session, "c_second"));
+    // Both compactions in order: the first selects and the second asks nothing.
     assert_eq!(
         kinds(&lines),
         [
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "reviewer_kept",
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "reviewer_kept",
             "turn_completed",
@@ -885,12 +885,12 @@ fn none_keeps_nothing_and_a_second_handoff_with_no_person_message_asks_nothing()
         assert_eq!(line.payload["kept"], json!([]));
         assert!(line.payload.get("failed").is_none());
     }
-    // The second handoff holds no person message, so it asks nothing.
+    // The second compaction holds no person message, so it asks nothing.
     assert_eq!(reviewer.requests().len(), 2);
 }
 
 #[test]
-fn without_a_reviewer_a_handoff_writes_no_selection() {
+fn without_a_reviewer_a_compaction_writes_no_selection() {
     let mut session = Session::with_tools(
         vec![
             Scripted::text("Hi."),
@@ -901,30 +901,30 @@ fn without_a_reviewer_a_handoff_writes_no_selection() {
         Vec::new(),
     );
     prompt_turn(&mut session, "hello");
-    let mut lines = handoff_turn(&mut session, "c_h");
+    let mut lines = compaction_turn(&mut session, "c_h");
     assert!(kept_lines(&lines).is_empty());
     assert!(notice(&lines, "reviewer_selection_failed").is_none());
     lines.extend(prompt_turn(&mut session, "after"));
     // Nothing earlier is carried without a selection: the first request
-    // after the handoff holds the opening, the note and this turn's input.
+    // after the compaction holds the opening, the note and this turn's input.
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
     assert!(agent[0].starts_with("This message is from Fiber"));
     assert_eq!(agent[1..], ["The note.", "after"]);
-    // The handoff writes no selection without a reviewer, then the prompt turn.
+    // The compaction writes no selection without a reviewer, then the prompt turn.
     assert_eq!(
         kinds(&lines),
         [
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "turn_completed",
             "turn_started",
@@ -965,8 +965,8 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
     let reviewer = session.reviewer_windowed(vec![Scripted::text("1, 2")], window);
     let mut lines = prompt_turn(&mut session, "never push to main");
     lines.extend(prompt_turn(&mut session, "say hi"));
-    lines.extend(handoff_turn(&mut session, "c_h"));
-    // Two text turns, then the handoff keeping only what fits the window.
+    lines.extend(compaction_turn(&mut session, "c_h"));
+    // Two text turns, then the compaction keeping only what fits the window.
     assert_eq!(
         kinds(&lines),
         [
@@ -993,14 +993,14 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "reviewer_kept",
@@ -1032,8 +1032,8 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
     let reviewer = session.reviewer_windowed(vec![failed("rate limited")], window);
     let mut lines = prompt_turn(&mut session, "never push to main");
     lines.extend(prompt_turn(&mut session, "say hi"));
-    lines.extend(handoff_turn(&mut session, "c_h"));
-    // Two text turns, then the handoff fallback capped to the window, with its notice.
+    lines.extend(compaction_turn(&mut session, "c_h"));
+    // Two text turns, then the compaction fallback capped to the window, with its notice.
     assert_eq!(
         kinds(&lines),
         [
@@ -1060,14 +1060,14 @@ fn the_oldest_kept_messages_drop_past_the_reviewers_window() {
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "reviewer_kept",
@@ -1107,7 +1107,7 @@ fn a_reply_counts_against_the_message_it_answers_window_share() {
     let reviewer = session.reviewer_windowed(vec![Scripted::text("1, 2")], window);
     let mut lines = prompt_turn(&mut session, "never push to main");
     lines.extend(prompt_turn(&mut session, "say hi"));
-    lines.extend(handoff_turn(&mut session, "c_h"));
+    lines.extend(compaction_turn(&mut session, "c_h"));
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
     assert_eq!(
@@ -1145,7 +1145,7 @@ fn a_reply_counts_against_the_message_it_answers_window_share() {
     let reviewer = session.reviewer_windowed(vec![Scripted::text("1, 2")], window);
     let mut lines = prompt_turn(&mut session, "never push to main");
     lines.extend(prompt_turn(&mut session, "say hi"));
-    lines.extend(handoff_turn(&mut session, "c_h"));
+    lines.extend(compaction_turn(&mut session, "c_h"));
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
     assert_eq!(
@@ -1228,7 +1228,7 @@ fn a_tool_call_between_the_text_and_the_message_hides_the_reply() {
 }
 
 #[test]
-fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
+fn a_compaction_keeps_two_reply_pairs_and_drops_the_calls() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(
         vec![
@@ -1246,11 +1246,11 @@ fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
     let mut lines = prompt_turn(&mut session, "go");
     lines.extend(prompt_turn(&mut session, "Blue"));
     lines.extend(prompt_turn(&mut session, "Seven"));
-    lines.extend(handoff_turn(&mut session, "c_h"));
+    lines.extend(compaction_turn(&mut session, "c_h"));
     lines.extend(prompt_turn(&mut session, "now run it"));
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
-    // docs/permissions.md, "At a handoff": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
+    // docs/permissions.md, "At a compaction": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
     assert_eq!(
         kept[0].payload["kept"],
         json!([
@@ -1261,39 +1261,39 @@ fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 2);
     // The selection keeps two distinct reply/message pairs, and no
-    // pre-handoff call.
+    // pre-compaction call.
     let selecting = texts(&requests[0]);
     let at = selecting
         .iter()
         .position(|text| text == &"The person: Blue")
         .unwrap();
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it".
     assert_eq!(selecting[at - 1], "The agent: Which color?");
     let at = selecting
         .iter()
         .position(|text| text == &"The person: Seven")
         .unwrap();
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it".
     assert_eq!(selecting[at - 1], "The agent: Which number?");
     assert!(selecting.contains(&"The person: go"));
     assert!(
         !selecting.iter().any(|text| text.starts_with("Tool call: ")),
-        "no pre-handoff call reaches the selection: {selecting:?}"
+        "no pre-compaction call reaches the selection: {selecting:?}"
     );
-    // The post-handoff review keeps those pairs and the new call, but not
+    // The post-compaction review keeps those pairs and the new call, but not
     // the dropped message.
     let after = texts(&requests[1]);
     let at = after
         .iter()
         .position(|text| text == &"The person: Blue")
         .unwrap();
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it".
     assert_eq!(after[at - 1], "The agent: Which color?");
     let at = after
         .iter()
         .position(|text| text == &"The person: Seven")
         .unwrap();
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it".
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it".
     assert_eq!(after[at - 1], "The agent: Which number?");
     assert!(!after.contains(&"The person: go"));
     assert!(after.contains(&"The person: now run it"));
@@ -1309,9 +1309,9 @@ fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
     // labelled blocks. Ordinary turn input stays unframed.
     let first = noted_request(&session, "The note.");
     let agent = user_texts(&first);
-    // docs/handoff.md, "What the model sees after a handoff", item 2: "A new opening message".
+    // docs/compaction.md, "What the model sees after a compaction", item 2: "A new opening message".
     assert!(agent[0].starts_with("This message is from Fiber"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — earlier blocks (item 4: "oldest first, each in its own labelled block"), the note (item 6: "The handoff note"); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — earlier blocks (item 4: "oldest first, each in its own labelled block"), the note (item 6: "The compaction note"); what follows is ordinary context ("Everything after that boundary in the log follows as usual.").
     assert_eq!(
         agent[1..],
         [
@@ -1326,21 +1326,21 @@ fn a_handoff_keeps_two_reply_pairs_and_drops_the_calls() {
 #[test]
 fn the_selection_is_not_asked_past_the_spending_budget() {
     let tool = shell(None, None);
-    let mut handoffer = TestTool::reads("handoffer", "Noted.");
-    handoffer.output.control = Some(Control {
-        handoff: Some("note".into()),
+    let mut compactor = TestTool::reads("compactor", "Noted.");
+    compactor.output.control = Some(Control {
+        compaction: Some("note".into()),
         ..Default::default()
     });
     // One priced reviewer call costs (10 + 3) / 1e6: the review of the
-    // shell call spends past the tiny budget, so the handoff it triggers
+    // shell call spends past the tiny budget, so the compaction it triggers
     // falls back without a selection request.
     let mut session = Session::with_tools(
         vec![calls_reply(
             "",
-            &[("shell", paris()), ("handoffer", paris())],
+            &[("shell", paris()), ("compactor", paris())],
         )],
         None,
-        vec![tool as Arc<dyn Tool>, Arc::new(handoffer) as Arc<dyn Tool>],
+        vec![tool as Arc<dyn Tool>, Arc::new(compactor) as Arc<dyn Tool>],
     )
     .budget(Some(0.00001));
     let reviewer = session.reviewer_priced(
@@ -1357,7 +1357,7 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
     session.inbox.send(delivery("go")).unwrap();
     session.turn();
     let lines = session.lines();
-    // The single turn in order: the tool-triggered handoff falls back past the budget.
+    // The single turn in order: the tool-triggered compaction falls back past the budget.
     assert_eq!(
         kinds(&lines),
         [
@@ -1380,7 +1380,7 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
             "tool_call_started",
             "tool_call_completed",
             "tool_call_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "reviewer_kept",
             "notice",
@@ -1396,10 +1396,10 @@ fn the_selection_is_not_asked_past_the_spending_budget() {
     assert!(notice(&lines, "reviewer_selection_failed").is_some());
 }
 
-/// The handoff selection's usage names its purpose and no call: it
+/// The compaction selection's usage names its purpose and no call: it
 /// reviewed no tool call, so `action_id` is absent.
 #[test]
-fn the_handoff_selection_marks_its_usage_with_no_call() {
+fn the_compaction_selection_marks_its_usage_with_no_call() {
     let tool = shell(None, None);
     let mut session = Session::with_tools(script(), None, vec![tool as Arc<dyn Tool>]);
     let _reviewer = session.reviewer(vec![
@@ -1408,7 +1408,7 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
         Scripted::text("allow"),
     ]);
     let lines = run_flow(&mut session);
-    // The whole flow in order: reviewed call, text, handoff with its
+    // The whole flow in order: reviewed call, text, compaction with its
     // selection, reviewed call (`docs/testing.md`, "Event streams").
     assert_eq!(
         kinds(&lines),
@@ -1447,14 +1447,14 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
             "turn_completed",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "usage_recorded",
             "reviewer_kept",
@@ -1485,7 +1485,7 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
     let turn = kept[0].turn_id.clone();
-    // The selection runs in the handoff's turn, beside the note request:
+    // The selection runs in the compaction's turn, beside the note request:
     // only the reviewer's model picks it out.
     let selection: Vec<_> = lines
         .iter()
@@ -1499,7 +1499,7 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
     assert_eq!(selection[0].action_id, None);
     assert_eq!(
         selection[0].payload["reviewer"],
-        json!({"purpose": "handoff"})
+        json!({"purpose": "compaction"})
     );
     // Every reviewer stage names the call it reviewed, and no other line
     // carries a reviewer.
@@ -1531,7 +1531,7 @@ fn the_handoff_selection_marks_its_usage_with_no_call() {
 }
 
 #[test]
-fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
+fn a_compaction_with_session_start_context_and_a_reviewer_completes() {
     use support::{StartHooks, start_added, start_empty};
 
     fn hook(hooks: Arc<StartHooks>, session: &mut Session) {
@@ -1541,9 +1541,9 @@ fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
             .map(|looped| looped.hooks(hooks as Arc<dyn contract::hook::Hooks>));
     }
 
-    // A person's handoff during a turn with input, judged by a
-    // reviewer: the selection runs after the handoff's guard is
-    // released, so the handoff completes instead of deadlocking.
+    // A person's compaction during a turn with input, judged by a
+    // reviewer: the selection runs after the compaction's guard is
+    // released, so the compaction completes instead of deadlocking.
     let mut session = support::Session::new(
         vec![
             Scripted::text("Done."),
@@ -1555,10 +1555,10 @@ fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
     let reviewer = session.reviewer(vec![Scripted::text("1")]);
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
-    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    hooks.answer(start_added("fiber.test/inbox", "at compaction"));
     hook(Arc::clone(&hooks), &mut session);
     session.inbox.send(delivery("hi")).unwrap();
-    session.inbox.send(handoff("c_h", None)).unwrap();
+    session.inbox.send(compaction("c_h", None)).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     // The hook's context follows the new opening message, and the
@@ -1571,14 +1571,14 @@ fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
             "opening_message",
             "turn_started",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "context_added",
             "usage_recorded",
@@ -1595,7 +1595,7 @@ fn a_handoff_with_session_start_context_and_a_reviewer_completes() {
     );
     assert_eq!(
         of_kind(&lines, "context_added")[0].payload["text"],
-        "at handoff"
+        "at compaction"
     );
     assert_eq!(reviewer.requests().len(), 1);
     drop(session.looped.take());
@@ -1618,19 +1618,19 @@ fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
         None,
         Vec::new(),
     )
-    .handoff(r#loop::HandoffSettings {
+    .compaction(r#loop::CompactionSettings {
         tokens: trigger,
         nudge: false,
-        ..r#loop::HandoffSettings::default()
+        ..r#loop::CompactionSettings::default()
     });
     session.reviewer(vec![Scripted::text("1, 2")]);
     prompt_turn(&mut session, &long);
     let lines = prompt_turn(&mut session, "second");
-    // The second turn starts over the trigger: one handoff, and the
+    // The second turn starts over the trigger: one compaction, and the
     // context it starts is over the trigger too, which does not hand off again
     // in that step.
-    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
-    assert_eq!(of_kind(&lines, "handoff_completed").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_completed").len(), 1);
     let kept = kept_lines(&lines);
     assert_eq!(kept.len(), 1);
     assert_eq!(kept[0].payload["kept"].as_array().unwrap().len(), 2);
@@ -1639,12 +1639,12 @@ fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
     assert!(agent[0].starts_with("This message is from Fiber"));
     // The kept message stays whole in its earlier-message block, before
     // the labelled current input and the note.
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — the kept message stays whole in its earlier block (item 4), before the labelled current input (item 5) and the note (item 6).
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — the kept message stays whole in its earlier block (item 4), before the labelled current input (item 5) and the note (item 6).
     assert_eq!(
         agent[2..],
         ["The person's new message:\nsecond", "The note."]
     );
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "They are the `reviewer_kept` selection unchanged" — the kept message is carried whole.
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "They are the `reviewer_kept` selection unchanged" — the kept message is carried whole.
     assert_eq!(
         agent[1],
         format!("The person's earlier message:\nThe person: {long}"),

@@ -76,7 +76,7 @@ fn it_prints_the_merged_configuration_and_the_notices() {
         &setup.repository(),
         r#"{"model": "databricks/databricks-claude-opus-5", "tui": {"hover": false}}"#,
     );
-    setup.write(&setup.project(), r#"{"handoff": {"tokens": 100}}"#);
+    setup.write(&setup.project(), r#"{"compaction": {"tokens": 100}}"#);
     let out = resolve(&setup, &["--model", "a/b", "-c", "retry.attempts=9"]);
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");
@@ -85,7 +85,7 @@ fn it_prints_the_merged_configuration_and_the_notices() {
         merged["model"],
         json!("databricks/databricks-claude-opus-5")
     );
-    assert_eq!(merged["handoff"]["tokens"], json!(100));
+    assert_eq!(merged["compaction"]["tokens"], json!(100));
     assert_eq!(merged["retry"]["attempts"], json!(9));
     assert_eq!(merged["cache"]["lifetime"], json!("5m"));
     assert_eq!(merged["tui"]["hover"], json!(true));

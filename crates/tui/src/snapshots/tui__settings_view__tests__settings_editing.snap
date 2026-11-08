@@ -5,7 +5,7 @@ expression: "drawn(&settings, None, 80, 24)"
  Settings  /settings                                                 Esc returns
   key                                value                    layer
   diagnostics.level                  info                     default
-› handoff.tokens                     400000                   default
+› compaction.tokens                     400000                   default
   model                              a/b                      global
   providers.openai.credentials.work  command op               global
   repository_extensions              unset                    default
@@ -23,6 +23,6 @@ expression: "drawn(&settings, None, 80, 24)"
 
 
 
-handoff.tokens, written to the project file:
+compaction.tokens, written to the project file:
 > 400000
 Tab layer · Enter save · Esc cancel

@@ -1,4 +1,4 @@
-//! Tests for the handoff band and the nudge, driven through the app.
+//! Tests for the compaction band and the nudge, driven through the app.
 
 use std::path::PathBuf;
 
@@ -63,13 +63,13 @@ fn preamble(app: &mut App, trigger_at: Option<u64>) {
 }
 
 fn started(app: &mut App, trigger: &str) {
-    feed(app, "handoff_started", None, json!({ "trigger": trigger }));
+    feed(app, "compaction_started", None, json!({ "trigger": trigger }));
 }
 
 fn started_at(app: &mut App, trigger: &str, ts: u64) {
     feed_ts(
         app,
-        "handoff_started",
+        "compaction_started",
         None,
         ts,
         json!({ "trigger": trigger }),
@@ -77,11 +77,11 @@ fn started_at(app: &mut App, trigger: &str, ts: u64) {
 }
 
 fn completed(app: &mut App, payload: Value) {
-    feed(app, "handoff_completed", None, payload);
+    feed(app, "compaction_completed", None, payload);
 }
 
 fn completed_at(app: &mut App, payload: Value, ts: u64) {
-    feed_ts(app, "handoff_completed", None, ts, payload);
+    feed_ts(app, "compaction_completed", None, ts, payload);
 }
 
 fn usage(app: &mut App, id: &str, input: u64, extra: Value) {
@@ -153,7 +153,7 @@ fn band_line(app: &App) -> ratatui::text::Line<'static> {
 #[test]
 fn the_closed_band_is_one_row_with_edges() {
     let app = closed_auto();
-    let left = " ⇄ handoff · automatic at 400k";
+    let left = " ⇄ compaction · automatic at 400k";
     let right = "402k → … · 14:20 ";
     assert_eq!(band(&app), full_row(&app, left, right));
     // The band row is exactly the conversation's width.
@@ -172,7 +172,7 @@ fn each_trigger_reads_as_the_band_says_it() {
     for (trigger_at, trigger, says) in [
         (Some(400_000), "auto", "automatic at 400k"),
         (None, "auto", "automatic"),
-        (Some(400_000), "person", "you asked with /handoff"),
+        (Some(400_000), "person", "you asked with /compact"),
         (Some(400_000), "overflow", "the request did not fit"),
     ] {
         let mut app = app();
@@ -183,7 +183,7 @@ fn each_trigger_reads_as_the_band_says_it() {
             band(&app),
             full_row(
                 &app,
-                &format!(" ⇄ handoff · {says}"),
+                &format!(" ⇄ compaction · {says}"),
                 "● writing the note… · 14:20 "
             ),
             "{trigger}"
@@ -199,7 +199,7 @@ fn each_trigger_reads_as_the_band_says_it() {
         band(&app),
         full_row(
             &app,
-            " ⇄ handoff · automatic",
+            " ⇄ compaction · automatic",
             "● writing the note… · 14:20 "
         ),
     );
@@ -220,7 +220,7 @@ fn the_band_takes_its_time_from_the_started_envelope() {
         band(&app),
         full_row(
             &app,
-            " ⇄ handoff · the model handed off",
+            " ⇄ compaction · the model handed off",
             "402k → … · 14:20 "
         ),
     );
@@ -239,7 +239,7 @@ fn a_time_past_jiffs_range_omits_the_clock() {
     );
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ handoff · automatic at 400k", "402k → …"),
+        full_row(&app, " ⇄ compaction · automatic at 400k", "402k → …"),
     );
 }
 
@@ -282,7 +282,7 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
         Some("a_n"),
         json!({"text": "## Note\nkeep going"}),
     );
-    // The note's own call sizes nothing: the handoff has not completed.
+    // The note's own call sizes nothing: the compaction has not completed.
     usage(&mut app, "g_note", 1_000, json!({}));
     let lines = texts(&app);
     let at = band_at(&app);
@@ -290,7 +290,7 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
         lines[at],
         full_row(
             &app,
-            " ⇄ handoff · automatic at 400k",
+            " ⇄ compaction · automatic at 400k",
             "● writing the note… · 14:20 "
         ),
     );
@@ -303,7 +303,7 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
     );
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ handoff · automatic at 400k", "402k → … · 14:20 "),
+        full_row(&app, " ⇄ compaction · automatic at 400k", "402k → … · 14:20 "),
     );
     // A correction to the note's call, a copy and an extension's call are
     // not the first request after it.
@@ -317,14 +317,14 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
     usage(&mut app, "g_ext", 5_000, json!({"extension": "x"}));
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ handoff · automatic at 400k", "402k → … · 14:20 "),
+        full_row(&app, " ⇄ compaction · automatic at 400k", "402k → … · 14:20 "),
     );
     usage(&mut app, "g_next", 29_000, json!({}));
     assert_eq!(
         band(&app),
         full_row(
             &app,
-            " ⇄ handoff · automatic at 400k",
+            " ⇄ compaction · automatic at 400k",
             "402k → 32k · 14:20 "
         ),
     );
@@ -334,7 +334,7 @@ fn the_note_goes_into_the_band_and_the_size_waits_for_the_next_call() {
         band(&app),
         full_row(
             &app,
-            " ⇄ handoff · automatic at 400k",
+            " ⇄ compaction · automatic at 400k",
             "402k → 32k · 14:20 "
         ),
     );
@@ -361,21 +361,21 @@ fn a_call_that_reported_no_input_tokens_leaves_the_size_waiting() {
     );
     assert_eq!(
         band(&app),
-        full_row(&app, " ⇄ handoff · automatic at 400k", "402k → … · 14:20 "),
+        full_row(&app, " ⇄ compaction · automatic at 400k", "402k → … · 14:20 "),
     );
     usage(&mut app, "g_next", 29_000, json!({}));
     assert_eq!(
         band(&app),
         full_row(
             &app,
-            " ⇄ handoff · automatic at 400k",
+            " ⇄ compaction · automatic at 400k",
             "402k → 32k · 14:20 "
         ),
     );
 }
 
 #[test]
-fn a_failed_or_cancelled_handoff_leaves_the_context_unchanged() {
+fn a_failed_or_cancelled_compaction_leaves_the_context_unchanged() {
     let mut app = app();
     start(&mut app);
     started_at(&mut app, "person", TEA);
@@ -389,7 +389,7 @@ fn a_failed_or_cancelled_handoff_leaves_the_context_unchanged() {
         band(&app),
         full_row(
             &app,
-            " ⇄ handoff · you asked with /handoff",
+            " ⇄ compaction · you asked with /compact",
             "failed · the context is unchanged · 14:20 "
         ),
     );
@@ -406,7 +406,7 @@ fn a_failed_or_cancelled_handoff_leaves_the_context_unchanged() {
         lines[at],
         full_row(
             &app,
-            " ⇄ handoff · you asked with /handoff",
+            " ⇄ compaction · you asked with /compact",
             "failed · the context is unchanged · 14:20 "
         ),
     );
@@ -452,13 +452,13 @@ fn the_band_row_styles_each_part() {
     let app = sized_auto();
     let line = band_line(&app);
     let bold = Modifier::BOLD;
-    // " ⇄ " and "handoff" in secondary, both bold.
+    // " ⇄ " and "compaction" in secondary, both bold.
     assert_eq!(line.spans[0].content, " ⇄ ");
     assert_eq!(
         line.spans[0].style,
         style(Role::Secondary).add_modifier(bold)
     );
-    assert_eq!(line.spans[1].content, "handoff");
+    assert_eq!(line.spans[1].content, "compaction");
     assert_eq!(
         line.spans[1].style,
         style(Role::Secondary).add_modifier(bold)
@@ -480,9 +480,9 @@ fn the_band_row_styles_each_part() {
         .find(|span| span.content.contains("14:20"))
         .expect("the clock span");
     assert!(clock.style.add_modifier.contains(Modifier::DIM));
-    // The content row sits on the handoff tint.
-    assert_eq!(line.style.bg, Some(Role::Handoff.color()));
-    // The edges read in handoff over the default background.
+    // The content row sits on the compaction tint.
+    assert_eq!(line.style.bg, Some(Role::Compaction.color()));
+    // The edges read in compaction over the default background.
     let lines = app.lines();
     let at = lines
         .iter()
@@ -491,7 +491,7 @@ fn the_band_row_styles_each_part() {
     for edge in [&lines[at - 1], &lines[at + 1]] {
         assert_eq!(edge.style.bg, None);
         for span in &edge.spans {
-            assert_eq!(span.style.fg, Some(Role::Handoff.color()));
+            assert_eq!(span.style.fg, Some(Role::Compaction.color()));
         }
     }
     assert!(lines[at - 1].to_string().chars().all(|c| c == '▄'));
@@ -575,7 +575,7 @@ fn the_fit_boundary_cuts_left_but_keeps_right() {
     // A sized band carries no "…" of its own, so the cut's one "…" is
     // the row's only one. Above the full width the row draws whole;
     // at and below it the left is cut and the right keeps its columns.
-    let left = " ⇄ handoff · automatic at 400k";
+    let left = " ⇄ compaction · automatic at 400k";
     let right = "402k → 32k · 14:20 ";
     let full = crate::format::width(left) + 1 + crate::format::width(right);
     let mut drawn = Vec::new();
@@ -664,10 +664,10 @@ fn a_finished_band_is_not_marked() {
 }
 
 #[test]
-fn a_hooks_note_and_a_tool_started_handoff() {
+fn a_hooks_note_and_a_tool_started_compaction() {
     let mut app = app();
     start(&mut app);
-    // The model's own tool writes no `handoff_started`.
+    // The model's own tool writes no `compaction_started`.
     completed_at(
         &mut app,
         json!({"outcome": "completed", "tokens_before": 300_000,
@@ -680,7 +680,7 @@ fn a_hooks_note_and_a_tool_started_handoff() {
         lines[at],
         full_row(
             &app,
-            " ⇄ handoff · the model handed off",
+            " ⇄ compaction · the model handed off",
             "300k → … · 14:20 "
         ),
     );
@@ -749,8 +749,8 @@ fn the_band_ends_the_open_group() {
 
 #[test]
 fn the_nudge_is_one_dim_line_where_it_happened() {
-    let nudge = "◔ Context at 268k, two thirds of the way to the 400k handoff. The \
-                 model was told a handoff keeps the work going.";
+    let nudge = "◔ Context at 268k, two thirds of the way to the 400k compaction. The \
+                 model was told a compaction keeps the work going.";
     let mut app = app();
     feed(
         &mut app,
@@ -776,8 +776,8 @@ fn the_nudge_is_one_dim_line_where_it_happened() {
             "you 00:00 ",
             "",
             "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " ◔ Context at 268k, two thirds of the way to the 400k handoff. The model was",
-            " told a handoff keeps the work going.",
+            " ◔ Context at 268k, two thirds of the way to the 400k compaction. The model was",
+            " told a compaction keeps the work going.",
             "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
@@ -786,7 +786,7 @@ fn the_nudge_is_one_dim_line_where_it_happened() {
         app.lines()
             .iter()
             .filter(|line| line.to_string().starts_with(" ◔ Context")
-                || line.to_string() == " was told a handoff keeps the work going.")
+                || line.to_string() == " was told a compaction keeps the work going.")
             .all(|line| line
                 .style
                 .add_modifier
@@ -871,7 +871,7 @@ fn seamed(
 fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
     use crate::ext::tests::{SlotRenderer, SlotScript, raw};
     std::rc::Rc::new(SlotRenderer::filling(
-        &["handoff_band"],
+        &["compaction_band"],
         SlotScript::Replace(vec![vec![raw("custom")]]),
     ))
 }
@@ -889,10 +889,10 @@ fn done_with_note() -> super::Band {
 }
 
 #[test]
-fn an_animated_handoff_band_keeps_its_tag() {
+fn an_animated_compaction_band_keeps_its_tag() {
     use crate::ext::tests::AnimatedRenderer;
     let fake = std::rc::Rc::new(AnimatedRenderer::filling(
-        "handoff_band",
+        "compaction_band",
         std::time::Duration::from_millis(500),
         1,
     ));
@@ -924,13 +924,13 @@ fn an_animated_handoff_band_keeps_its_tag() {
 }
 
 #[test]
-fn a_handoff_band_replacement_draws_instead_of_the_band_row() {
+fn a_compaction_band_replacement_draws_instead_of_the_band_row() {
     let band = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = replaced();
     let (rows, _) = seamed(&band, 40, &fake, false);
     // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by input and width.)
     assert_eq!(fake.calls.borrow().len(), 1);
-    assert_eq!(fake.calls.borrow()[0].1, "handoff_band");
+    assert_eq!(fake.calls.borrow()[0].1, "compaction_band");
     let shown: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
     assert!(
         shown.iter().any(|row| row.starts_with("custom")),
@@ -940,7 +940,7 @@ fn a_handoff_band_replacement_draws_instead_of_the_band_row() {
 }
 
 #[test]
-fn a_handoff_band_replacement_keeps_the_note_below() {
+fn a_compaction_band_replacement_keeps_the_note_below() {
     // The seam replaces the band row only: the note toggle and body stay
     // the terminal's, with the note's own target.
     let band = done_with_note();
@@ -965,11 +965,11 @@ fn a_handoff_band_replacement_keeps_the_note_below() {
 }
 
 #[test]
-fn a_handoff_band_decorator_draws_the_built_in_row_under_its_badge() {
+fn a_compaction_band_decorator_draws_the_built_in_row_under_its_badge() {
     use crate::ext::tests::{SlotRenderer, SlotScript, raw};
     let band = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = std::rc::Rc::new(SlotRenderer::filling(
-        &["handoff_band"],
+        &["compaction_band"],
         SlotScript::Decorate {
             badge: vec![vec![raw("BADGE")]],
             trim: 5,
@@ -986,12 +986,12 @@ fn a_handoff_band_decorator_draws_the_built_in_row_under_its_badge() {
 }
 
 #[test]
-fn a_handoff_band_error_falls_back_with_one_failure() {
+fn a_compaction_band_error_falls_back_with_one_failure() {
     use crate::ext::FailureKind;
     use crate::ext::tests::{SlotRenderer, SlotScript};
     let band = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = std::rc::Rc::new(SlotRenderer::filling(
-        &["handoff_band"],
+        &["compaction_band"],
         SlotScript::Fail {
             kind: FailureKind::HookFailed,
             message: "boom".into(),
@@ -1018,17 +1018,17 @@ fn a_handoff_band_error_falls_back_with_one_failure() {
     let listed = bound.cache.take_failures();
     // (`docs/tui.md`, "When an extension fails": one notice names the extension and slot once until `/reload`.)
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].0, "handoff_band");
+    assert_eq!(listed[0].0, "compaction_band");
     assert_eq!(listed[0].1.kind, FailureKind::HookFailed);
 }
 
 #[test]
-fn a_flat_handoff_band_replacement_drops_every_style() {
+fn a_flat_compaction_band_replacement_drops_every_style() {
     use crate::ext::tests::{SlotRenderer, SlotScript};
     use ratatui::style::Style;
     let band = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = std::rc::Rc::new(SlotRenderer::filling(
-        &["handoff_band"],
+        &["compaction_band"],
         SlotScript::Replace(vec![vec![crate::ext::RawSpan {
             text: "custom".into(),
             bold: true,
@@ -1048,11 +1048,11 @@ fn a_flat_handoff_band_replacement_drops_every_style() {
 }
 
 #[test]
-fn a_writing_handoff_replacement_keeps_its_link_pad_and_spinner() {
+fn a_writing_compaction_replacement_keeps_its_link_pad_and_spinner() {
     use crate::ext::tests::{SlotRenderer, SlotScript};
     let band = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = std::rc::Rc::new(SlotRenderer::filling(
-        &["handoff_band"],
+        &["compaction_band"],
         SlotScript::Replace(vec![vec![crate::ext::RawSpan {
             text: "go".to_owned(),
             link: Some("https://example.com".to_owned()),
@@ -1072,7 +1072,7 @@ fn a_writing_handoff_replacement_keeps_its_link_pad_and_spinner() {
 }
 
 #[test]
-fn a_writing_handoff_band_replacement_spins_but_a_done_one_does_not() {
+fn a_writing_compaction_band_replacement_spins_but_a_done_one_does_not() {
     let writing = super::Band::new(1, "automatic".to_owned(), TEA);
     let fake = replaced();
     let (_, texts) = seamed(&writing, 40, &fake, false);

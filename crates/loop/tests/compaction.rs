@@ -1,5 +1,5 @@
-//! Handoff (`docs/handoff.md`): the automatic trigger, the nudge, the note
-//! request and how a handoff is recorded, failed and cancelled. The trigger is
+//! Compaction (`docs/compaction.md`): the automatic trigger, the nudge, the note
+//! request and how a compaction is recorded, failed and cancelled. The trigger is
 //! 1,000 tokens here, so a scripted reply puts the context exactly at,
 //! below or above it.
 
@@ -26,12 +26,12 @@ use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider};
-use r#loop::{HandoffSettings, Hosted, Prepare, Prepared, Retry, Switchable};
+use r#loop::{CompactionSettings, Hosted, Prepare, Prepared, Retry, Switchable};
 use serde_json::json;
 
 use support::{
     DEADLINE, ENDED, MODEL, OPENING, REPLY, STEP, Session, StartHooks, TestTool, assert_kinds,
-    assert_no_stored_attempt, attempt_numbers, calls_reply, delivery, handoff, ignore, kinds,
+    assert_no_stored_attempt, attempt_numbers, calls_reply, delivery, compaction, ignore, kinds,
     model, of_kind, reasoning_reply, start_added, start_empty, start_failed, start_noticed,
     tool_call_reply, with_tokens,
 };
@@ -43,44 +43,44 @@ fn hook(hooks: Arc<StartHooks>, session: &mut Session) {
         .map(|looped| looped.hooks(hooks as Arc<dyn contract::hook::Hooks>));
 }
 
-/// A handoff that completed on a one-part note, then the hook's context.
+/// A compaction that completed on a one-part note, then the hook's context.
 const HANDED_CTX: &[&str] = &[
-    "handoff_started",
+    "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
     "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
     "opening_message",
     "context_added",
 ];
-/// A handoff whose note is ready but whose hook failed: no opening.
+/// A compaction whose note is ready but whose hook failed: no opening.
 const FAILED_CTX: &[&str] = &[
-    "handoff_started",
+    "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
     "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
 ];
 
 /// The trigger in these tests.
 const TRIGGER: u64 = 1_000;
 
-fn settings() -> HandoffSettings {
-    HandoffSettings {
+fn settings() -> CompactionSettings {
+    CompactionSettings {
         tokens: TRIGGER,
         nudge: false,
-        ..HandoffSettings::default()
+        ..CompactionSettings::default()
     }
 }
 
-fn nudging() -> HandoffSettings {
-    HandoffSettings {
+fn nudging() -> CompactionSettings {
+    CompactionSettings {
         nudge: true,
         ..settings()
     }
@@ -102,9 +102,9 @@ fn said(text: &str, tokens: u64) -> Scripted {
     with_tokens(Scripted::text(text), tokens, 0)
 }
 
-fn session(script: Vec<Scripted>, settings: HandoffSettings) -> Session {
+fn session(script: Vec<Scripted>, settings: CompactionSettings) -> Session {
     Session::with_tools(script, None, vec![weather()])
-        .handoff(settings)
+        .compaction(settings)
         .retry(no_wait())
 }
 
@@ -144,28 +144,28 @@ const CALL_BODY: &[&str] = &[
     "tool_call_started",
     "tool_call_completed",
 ];
-/// A handoff that completed on a one-part note, to the new opening message.
+/// A compaction that completed on a one-part note, to the new opening message.
 const HANDED_OFF: &[&str] = &[
-    "handoff_started",
+    "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
     "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
     "opening_message",
 ];
-/// A handoff whose one-text-part note reply did not make a note.
+/// A compaction whose one-text-part note reply did not make a note.
 const FAILED_AFTER_TEXT: &[&str] = &[
-    "handoff_started",
+    "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
     "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
 ];
 
 fn user(text: &str) -> Input {
@@ -199,7 +199,7 @@ fn a_context_below_the_trigger_does_not_hand_off() {
     assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert!(of_kind(&lines, "handoff_started").is_empty());
+    assert!(of_kind(&lines, "compaction_started").is_empty());
     assert_eq!(session.requests().len(), 2);
 }
 
@@ -212,7 +212,7 @@ fn a_context_one_token_short_of_the_trigger_does_not_hand_off() {
     assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert!(of_kind(&lines, "handoff_started").is_empty());
+    assert!(of_kind(&lines, "compaction_started").is_empty());
     assert_eq!(session.requests().len(), 2);
 }
 
@@ -228,7 +228,7 @@ fn a_context_exactly_at_the_trigger_hands_off() {
         ],
         settings(),
     )
-    .on_handoff(Arc::new(move || {
+    .on_compaction(Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
     }));
 
@@ -239,10 +239,10 @@ fn a_context_exactly_at_the_trigger_hands_off() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let started = of_kind(&lines, "handoff_started");
+    let started = of_kind(&lines, "compaction_started");
     assert_eq!(started[0].payload["trigger"], "auto");
     let note_message = of_kind(&lines, "assistant_message_started")[1];
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(
         serde_json::Value::Object(done[0].payload.clone()),
@@ -287,7 +287,7 @@ fn a_context_exactly_at_the_trigger_hands_off() {
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
     assert_eq!(requests[2].previous_end, None);
@@ -298,7 +298,7 @@ fn a_context_exactly_at_the_trigger_hands_off() {
 }
 
 #[test]
-fn the_live_conversation_after_a_handoff_is_what_a_rebuild_renders() {
+fn the_live_conversation_after_a_compaction_is_what_a_rebuild_renders() {
     let mut session = session(
         vec![
             called(TRIGGER - 1),
@@ -317,7 +317,7 @@ fn the_live_conversation_after_a_handoff_is_what_a_rebuild_renders() {
 
     let requests = session.requests();
     let rebuilt = session.rebuilt();
-    // The request after the handoff, then the reply it got.
+    // The request after the compaction, then the reply it got.
     assert_eq!(rebuilt.len(), 4);
     assert_eq!(rebuilt[..3], requests[2].conversation[..]);
     assert_eq!(text_of(&rebuilt[3]), "Done.");
@@ -347,13 +347,13 @@ fn a_note_of_several_text_parts_joins_them_with_a_newline() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "text_completed",
                 "text_completed",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
             ],
             REPLY,
@@ -382,7 +382,7 @@ fn a_failed_note_request_leaves_the_context_and_blocks_the_rest_of_the_turn() {
         ],
         settings(),
     )
-    .on_handoff(Arc::new(move || {
+    .on_compaction(Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
     }));
 
@@ -395,7 +395,7 @@ fn a_failed_note_request_leaves_the_context_and_blocks_the_rest_of_the_turn() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "usage_recorded",
                 "assistant_message_completed",
@@ -403,7 +403,7 @@ fn a_failed_note_request_leaves_the_context_and_blocks_the_rest_of_the_turn() {
                 "assistant_message_started",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
             ],
             CALL_BODY,
             STEP,
@@ -413,8 +413,8 @@ fn a_failed_note_request_leaves_the_context_and_blocks_the_rest_of_the_turn() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
-    let done = of_kind(&lines, "handoff_completed");
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "provider_unavailable");
@@ -453,18 +453,18 @@ fn a_new_turn_may_hand_off_after_a_failed_one() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
             ],
             REPLY,
             ENDED,
         ],
     );
     assert_eq!(
-        of_kind(&first, "handoff_completed")[0].payload["outcome"],
+        of_kind(&first, "compaction_completed")[0].payload["outcome"],
         "failed"
     );
 
@@ -475,7 +475,7 @@ fn a_new_turn_may_hand_off_after_a_failed_one() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let done = of_kind(&second, "handoff_completed");
+    let done = of_kind(&second, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "completed");
     // 1,200 from the reply, and the new prompt: five bytes, two tokens.
@@ -483,7 +483,7 @@ fn a_new_turn_may_hand_off_after_a_failed_one() {
     let requests = session.requests();
     let carried = &requests.last().unwrap().conversation;
     assert!(is_opening(&carried[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(carried[1], user("The person's new message:\nagain"));
     assert_eq!(carried[2], user("Second note."));
 }
@@ -498,8 +498,8 @@ fn a_cancel_during_the_note_request_ends_the_turn_interrupted() {
         2,
         vec![weather()],
     )
-    .handoff(settings())
-    .on_handoff(Arc::new(move || {
+    .compaction(settings())
+    .on_compaction(Arc::new(move || {
         counter.fetch_add(1, Ordering::SeqCst);
     }));
 
@@ -512,10 +512,10 @@ fn a_cancel_during_the_note_request_ends_the_turn_interrupted() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "usage_recorded",
-                "handoff_completed",
+                "compaction_completed",
             ],
             ENDED,
         ],
@@ -526,15 +526,15 @@ fn a_cancel_during_the_note_request_ends_the_turn_interrupted() {
     assert_eq!(
         tail[tail.len() - 5..],
         [
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "usage_recorded",
-            "handoff_completed",
+            "compaction_completed",
             "turn_completed"
         ]
         .map(EventKind::from_name)
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(
         serde_json::Value::Object(done[0].payload.clone()),
         json!({"outcome": "cancelled", "tokens_before": TRIGGER})
@@ -561,11 +561,11 @@ fn a_note_with_no_text_fails_unreadable_reply() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
             ],
             REPLY,
             ENDED,
@@ -573,7 +573,7 @@ fn a_note_with_no_text_fails_unreadable_reply() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "unreadable_reply");
     // The context stays as it was.
@@ -607,7 +607,7 @@ fn a_whitespace_note_fails_unreadable_reply() {
         ],
     );
 
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["error"]["code"], "unreadable_reply");
 }
 
@@ -635,7 +635,7 @@ fn a_note_cut_off_by_the_output_limit_fails_output_truncated() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "output_truncated");
     let requests = session.requests();
@@ -655,7 +655,7 @@ fn a_tool_call_in_the_note_reply_never_runs_and_does_not_stop_the_note() {
         None,
         vec![tool.clone()],
     )
-    .handoff(settings());
+    .compaction(settings());
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
@@ -666,7 +666,7 @@ fn a_tool_call_in_the_note_reply_never_runs_and_does_not_stop_the_note() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "assistant_message_delta",
                 "tool_call_arguments_delta",
@@ -675,7 +675,7 @@ fn a_tool_call_in_the_note_reply_never_runs_and_does_not_stop_the_note() {
                 "usage_recorded",
                 "assistant_message_completed",
                 "tool_call_completed",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
             ],
             REPLY,
@@ -686,7 +686,7 @@ fn a_tool_call_in_the_note_reply_never_runs_and_does_not_stop_the_note() {
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     // Only the first step's call ran.
     assert_eq!(tool.ran().len(), 1);
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["outcome"], "completed");
     let completions = of_kind(&lines, "tool_call_completed");
     assert_eq!(completions.len(), 2);
@@ -698,7 +698,7 @@ fn a_tool_call_in_the_note_reply_never_runs_and_does_not_stop_the_note() {
 }
 
 #[test]
-fn an_exhausted_budget_fails_the_handoff_and_then_the_turn() {
+fn an_exhausted_budget_fails_the_compaction_and_then_the_turn() {
     let model = r#loop::Model {
         reference: MODEL.into(),
         cost: Some(contract::provider::Cost {
@@ -718,7 +718,7 @@ fn an_exhausted_budget_fails_the_handoff_and_then_the_turn() {
         vec![weather()],
         model,
     )
-    .handoff(settings())
+    .compaction(settings())
     .budget(Some(0.0005));
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -729,13 +729,13 @@ fn an_exhausted_budget_fails_the_handoff_and_then_the_turn() {
             STEP,
             CALL_BODY,
             STEP,
-            &["handoff_started", "handoff_completed"],
+            &["compaction_started", "compaction_completed"],
             ENDED,
         ],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Failed));
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "budget_exceeded");
     let ended = of_kind(&lines, "turn_completed");
@@ -746,7 +746,7 @@ fn an_exhausted_budget_fails_the_handoff_and_then_the_turn() {
 
 #[test]
 fn a_budget_refused_note_stops_nothing_and_the_turn_end_stops_once() {
-    // As `an_exhausted_budget_fails_the_handoff_and_then_the_turn`, with
+    // As `an_exhausted_budget_fails_the_compaction_and_then_the_turn`, with
     // the session's jobs attached: the refused note must not stop
     // anything, and the turn's next `send` stops the delegates exactly
     // once through the one budget-end function.
@@ -767,7 +767,7 @@ fn a_budget_refused_note_stops_nothing_and_the_turn_end_stops_once() {
         vec![weather()],
         model,
     )
-    .handoff(settings())
+    .compaction(settings())
     .budget(Some(0.0005));
     let jobs = fakes::jobs::FakeJobs::new(&session.workspace);
     let looped = session.looped.take().unwrap();
@@ -780,10 +780,10 @@ fn a_budget_refused_note_stops_nothing_and_the_turn_end_stops_once() {
 }
 
 #[test]
-fn automatic_handoff_off_never_hands_off() {
+fn automatic_compaction_off_never_hands_off() {
     let mut session = session(
         vec![called(TRIGGER * 5), said("Done.", TRIGGER * 5)],
-        HandoffSettings {
+        CompactionSettings {
             enabled: false,
             nudge: true,
             ..settings()
@@ -794,7 +794,7 @@ fn automatic_handoff_off_never_hands_off() {
     assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert!(of_kind(&lines, "handoff_started").is_empty());
+    assert!(of_kind(&lines, "compaction_started").is_empty());
     assert!(of_kind(&lines, "context_nudged").is_empty());
     assert_eq!(session.requests().len(), 2);
 }
@@ -803,11 +803,11 @@ fn automatic_handoff_off_never_hands_off() {
 fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
     // A trigger of one token is passed by any context. Before the first
     // reply nothing has measured the context, so the first request is sent;
-    // after the handoff the new context is unmeasured again, so the request
+    // after the compaction the new context is unmeasured again, so the request
     // from the note is sent too, and the turn does not hand off twice.
     let mut session = session(
         vec![called(5), Scripted::text("The note."), said("Done.", 5)],
-        HandoffSettings {
+        CompactionSettings {
             tokens: 1,
             ..settings()
         },
@@ -820,7 +820,7 @@ fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
     assert_eq!(session.requests().len(), 3);
 }
 
@@ -889,7 +889,7 @@ fn the_nudge_can_be_turned_off() {
 }
 
 #[test]
-fn each_handoff_starts_a_context_that_can_be_nudged_again() {
+fn each_compaction_starts_a_context_that_can_be_nudged_again() {
     let mut session = session(
         vec![
             called(700),
@@ -904,7 +904,7 @@ fn each_handoff_starts_a_context_that_can_be_nudged_again() {
     let (outcome, lines) = run(&mut session, "hi");
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    // One nudge before the handoff, and none at it: the handoff took its
+    // One nudge before the compaction, and none at it: the compaction took its
     // place. One in the new context.
     assert_kinds(
         &lines,
@@ -933,7 +933,7 @@ fn the_nudge_fires_when_three_times_the_size_equals_twice_the_trigger() {
     let at = |prompt: u64, expected: &[&[&str]]| {
         let mut session = session(
             vec![called(prompt), said("Done.", 100)],
-            HandoffSettings {
+            CompactionSettings {
                 tokens: 999,
                 ..nudging()
             },
@@ -958,7 +958,7 @@ fn the_nudge_fires_when_three_times_the_size_equals_twice_the_trigger() {
 
 #[test]
 fn a_new_context_is_unmeasured_in_the_next_turn_too() {
-    // The request after the handoff fails, so no reply measures the new
+    // The request after the compaction fails, so no reply measures the new
     // context. The next turn must not read the old context's size.
     let mut session = session(
         vec![
@@ -976,7 +976,7 @@ fn a_new_context_is_unmeasured_in_the_next_turn_too() {
     );
     assert_eq!(first, Some(TurnOutcome::Failed));
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["outcome"],
+        of_kind(&lines, "compaction_completed")[0].payload["outcome"],
         "completed"
     );
 
@@ -984,7 +984,7 @@ fn a_new_context_is_unmeasured_in_the_next_turn_too() {
     assert_kinds(&lines, &[&["turn_started"], STEP, REPLY, ENDED]);
 
     assert_eq!(second, Some(TurnOutcome::Completed));
-    assert!(of_kind(&lines, "handoff_started").is_empty());
+    assert!(of_kind(&lines, "compaction_started").is_empty());
 }
 
 #[test]
@@ -1007,7 +1007,7 @@ fn a_notes_reasoning_is_not_part_of_the_note() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "reasoning_started",
                 "reasoning_delta",
@@ -1016,7 +1016,7 @@ fn a_notes_reasoning_is_not_part_of_the_note() {
                 "text_completed",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
             ],
             REPLY,
@@ -1027,9 +1027,9 @@ fn a_notes_reasoning_is_not_part_of_the_note() {
     assert_eq!(session.requests()[2].conversation[2], user("The note."));
 }
 
-// A person's handoff (`docs/handoff.md`, "A person").
+// A person's compaction (`docs/compaction.md`, "A person").
 
-/// The `handoff-note` text, to its last line.
+/// The `compaction-note` text, to its last line.
 const NOTE_REQUEST_END: &str = "Reply with the note only, and make no tool calls.";
 
 /// The text of the note request, the last input of `request`.
@@ -1044,26 +1044,26 @@ fn answered() -> (Ack, mpsc::Receiver<Answer>) {
 }
 
 /// A session whose first model call sends `during`, with the weather tool.
-fn injected(script: Vec<Scripted>, during: Vec<Delivery>, settings: HandoffSettings) -> Session {
+fn injected(script: Vec<Scripted>, during: Vec<Delivery>, settings: CompactionSettings) -> Session {
     Session::with_tools_injecting(script, during, vec![weather()])
-        .handoff(settings)
+        .compaction(settings)
         .retry(no_wait())
 }
 
-/// The script of one handoff after a tool step: the call, the note, the
+/// The script of one compaction after a tool step: the call, the note, the
 /// answer.
 fn handed_after_a_call() -> Vec<Scripted> {
     vec![called(100), Scripted::text("The note."), said("Done.", 50)]
 }
 
 #[test]
-fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
+fn a_person_compaction_during_a_turn_runs_at_the_next_step_boundary() {
     let (ack, answer) = answered();
     let mut session = injected(
         handed_after_a_call(),
-        vec![Delivery::Handoff(
+        vec![Delivery::Compaction(
             contract::CommandId("c_h".into()),
-            contract::commands::Handoff {
+            contract::commands::Compact {
                 instructions: Some("focus on tests".into()),
             },
             ack,
@@ -1087,12 +1087,12 @@ fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
             .is_none()
     );
     assert_eq!(
-        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
         "person"
     );
     let note_message = of_kind(&lines, "assistant_message_started")[1];
     assert_eq!(
-        serde_json::Value::Object(of_kind(&lines, "handoff_completed")[0].payload.clone()),
+        serde_json::Value::Object(of_kind(&lines, "compaction_completed")[0].payload.clone()),
         json!({
             "outcome": "completed",
             "note": [note_message.action_id.as_ref().unwrap().0],
@@ -1110,10 +1110,10 @@ fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
         )),
         "{asked}"
     );
-    // The request after the handoff starts from the note.
+    // The request after the compaction starts from the note.
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
     assert_eq!(requests[2].previous_end, None);
@@ -1122,11 +1122,11 @@ fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
 }
 
 #[test]
-fn a_person_handoff_runs_with_automatic_handoff_off() {
+fn a_person_compaction_runs_with_automatic_compaction_off() {
     let mut session = injected(
         handed_after_a_call(),
-        vec![handoff("c_h", None)],
-        HandoffSettings {
+        vec![compaction("c_h", None)],
+        CompactionSettings {
             enabled: false,
             ..settings()
         },
@@ -1140,20 +1140,20 @@ fn a_person_handoff_runs_with_automatic_handoff_off() {
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
-        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
         "person"
     );
 }
 
 #[test]
-fn commands_before_one_boundary_make_one_handoff_with_their_instructions_joined() {
+fn commands_before_one_boundary_make_one_compaction_with_their_instructions_joined() {
     let mut session = injected(
         handed_after_a_call(),
         vec![
-            handoff("c_1", Some("first")),
-            handoff("c_2", None),
-            handoff("c_3", Some("")),
-            handoff("c_4", Some("second")),
+            compaction("c_1", Some("first")),
+            compaction("c_2", None),
+            compaction("c_3", Some("")),
+            compaction("c_4", Some("second")),
         ],
         settings(),
     );
@@ -1165,9 +1165,9 @@ fn commands_before_one_boundary_make_one_handoff_with_their_instructions_joined(
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["instructions"],
+        of_kind(&lines, "compaction_completed")[0].payload["instructions"],
         "first\n\nsecond"
     );
     let requests = session.requests();
@@ -1179,10 +1179,10 @@ fn commands_before_one_boundary_make_one_handoff_with_their_instructions_joined(
 }
 
 #[test]
-fn a_handoff_with_no_instructions_asks_for_the_note_only() {
+fn a_compaction_with_no_instructions_asks_for_the_note_only() {
     let mut session = injected(
         handed_after_a_call(),
-        vec![handoff("c_1", None), handoff("c_2", Some(""))],
+        vec![compaction("c_1", None), compaction("c_2", Some(""))],
         settings(),
     );
 
@@ -1193,7 +1193,7 @@ fn a_handoff_with_no_instructions_asks_for_the_note_only() {
     );
 
     assert!(
-        !of_kind(&lines, "handoff_completed")[0]
+        !of_kind(&lines, "compaction_completed")[0]
             .payload
             .contains_key("instructions")
     );
@@ -1205,7 +1205,7 @@ fn a_handoff_with_no_instructions_asks_for_the_note_only() {
 }
 
 #[test]
-fn a_handoff_held_at_the_end_of_the_turn_continues_the_turn() {
+fn a_compaction_held_at_the_end_of_the_turn_continues_the_turn() {
     // The first reply calls no tool, and the command arrived while it was
     // being written: the end-of-turn check finds it.
     let mut session = injected(
@@ -1214,7 +1214,7 @@ fn a_handoff_held_at_the_end_of_the_turn_continues_the_turn() {
             Scripted::text("The note."),
             said("More.", 50),
         ],
-        vec![handoff("c_h", Some("go on"))],
+        vec![compaction("c_h", Some("go on"))],
         settings(),
     );
 
@@ -1229,7 +1229,7 @@ fn a_handoff_held_at_the_end_of_the_turn_continues_the_turn() {
     assert_eq!(requests.len(), 3);
     // The note request holds the reply the turn had just ended on.
     assert_eq!(text_of(&requests[1].conversation[2]), "Hello.");
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         requests[2].conversation[1],
         user("The person's new message:\nhi")
@@ -1238,14 +1238,14 @@ fn a_handoff_held_at_the_end_of_the_turn_continues_the_turn() {
 }
 
 #[test]
-fn a_person_handoff_on_the_automatic_boundary_runs_once_as_the_persons() {
+fn a_person_compaction_on_the_automatic_boundary_runs_once_as_the_persons() {
     let mut session = injected(
         vec![
             called(TRIGGER),
             Scripted::text("The note."),
             said("Done.", 50),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         settings(),
     );
 
@@ -1256,18 +1256,18 @@ fn a_person_handoff_on_the_automatic_boundary_runs_once_as_the_persons() {
     );
 
     assert_eq!(
-        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
         "person"
     );
 }
 
 #[test]
-fn a_steer_drop_cannot_drop_a_handoff() {
+fn a_steer_drop_cannot_drop_a_compaction() {
     let (ack, answer) = answered();
     let mut session = injected(
         handed_after_a_call(),
         vec![
-            handoff("c_h", None),
+            compaction("c_h", None),
             Delivery::SteerDrop(contract::CommandId("c_h".into()), ack),
         ],
         settings(),
@@ -1287,10 +1287,10 @@ fn a_steer_drop_cannot_drop_a_handoff() {
 }
 
 #[test]
-fn a_steer_drop_between_turns_cannot_drop_a_handoff_either() {
+fn a_steer_drop_between_turns_cannot_drop_a_compaction_either() {
     let (ack, answer) = answered();
     let mut session = session(vec![Scripted::text("The note.")], settings());
-    session.inbox.send(handoff("c_h", None)).unwrap();
+    session.inbox.send(compaction("c_h", None)).unwrap();
     session
         .inbox
         .send(Delivery::SteerDrop(contract::CommandId("c_h".into()), ack))
@@ -1309,7 +1309,7 @@ fn a_steer_drop_between_turns_cannot_drop_a_handoff_either() {
 }
 
 #[test]
-fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
+fn a_person_compaction_between_turns_is_a_turn_of_its_own() {
     let (ack, answer) = answered();
     let mut session = session(
         vec![
@@ -1321,9 +1321,9 @@ fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
     );
     session
         .inbox
-        .send(Delivery::Handoff(
+        .send(Delivery::Compaction(
             contract::CommandId("c_h".into()),
-            contract::commands::Handoff {
+            contract::commands::Compact {
                 instructions: Some("focus".into()),
             },
             ack,
@@ -1344,10 +1344,10 @@ fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
     );
     assert_eq!(
         serde_json::Value::Object(of_kind(&lines, "turn_started")[0].payload.clone()),
-        json!({"input": [{"type": "handoff", "command_id": "c_h"}]})
+        json!({"input": [{"type": "compaction", "command_id": "c_h"}]})
     );
     assert_eq!(
-        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
         "person"
     );
     // No request after the note.
@@ -1357,7 +1357,7 @@ fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
     // measured it: its size is estimated at a token to four bytes.
     let opening = text_of(&requests[0].conversation[0]);
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["tokens_before"],
+        of_kind(&lines, "compaction_completed")[0].payload["tokens_before"],
         opening.len().div_ceil(4)
     );
     assert_eq!(requests[0].conversation.len(), 2);
@@ -1380,7 +1380,7 @@ fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
 }
 
 #[test]
-fn a_prompt_in_the_drain_of_a_handoff_is_carried_and_answered_after_it() {
+fn a_prompt_in_the_drain_of_a_compaction_is_carried_and_answered_after_it() {
     for prompt_first in [false, true] {
         let (prompt_ack, prompt_answer) = answered();
         let mut session = session(
@@ -1388,7 +1388,7 @@ fn a_prompt_in_the_drain_of_a_handoff_is_carried_and_answered_after_it() {
             settings(),
         );
         let prompt = Delivery::Prompt(support::message("hi"), prompt_ack);
-        let command = handoff("c_h", None);
+        let command = compaction("c_h", None);
         for delivery in if prompt_first {
             [prompt, command]
         } else {
@@ -1418,9 +1418,9 @@ fn a_prompt_in_the_drain_of_a_handoff_is_carried_and_answered_after_it() {
         assert_eq!(
             types,
             if prompt_first {
-                ["message", "handoff"]
+                ["message", "compaction"]
             } else {
-                ["handoff", "message"]
+                ["compaction", "message"]
             }
         );
         let requests = session.requests();
@@ -1428,7 +1428,7 @@ fn a_prompt_in_the_drain_of_a_handoff_is_carried_and_answered_after_it() {
         // The note request holds the prompt, and the answer is asked from
         // the note after it.
         assert_eq!(requests[0].conversation[1], user("hi"));
-        // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+        // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
         assert_eq!(
             requests[1].conversation[1],
             user("The person's new message:\nhi")
@@ -1438,12 +1438,12 @@ fn a_prompt_in_the_drain_of_a_handoff_is_carried_and_answered_after_it() {
 }
 
 #[test]
-fn a_failed_handoff_between_turns_still_ends_the_turn_without_a_request() {
+fn a_failed_compaction_between_turns_still_ends_the_turn_without_a_request() {
     let mut session = session(
         vec![failed(ErrorCode::InvalidRequest), said("Never.", 1)],
         settings(),
     );
-    session.inbox.send(handoff("c_h", None)).unwrap();
+    session.inbox.send(compaction("c_h", None)).unwrap();
 
     let outcome = session.turn();
     let lines = session.lines();
@@ -1453,11 +1453,11 @@ fn a_failed_handoff_between_turns_still_ends_the_turn_without_a_request() {
             OPENING,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
             ],
             ENDED,
         ],
@@ -1465,15 +1465,15 @@ fn a_failed_handoff_between_turns_still_ends_the_turn_without_a_request() {
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["outcome"],
+        of_kind(&lines, "compaction_completed")[0].payload["outcome"],
         "failed"
     );
     assert_eq!(session.requests().len(), 1);
 }
 
 #[test]
-fn a_turn_a_job_started_goes_on_after_a_handoff() {
-    // The turn's input holds no message, but it did not begin as a handoff.
+fn a_turn_a_job_started_goes_on_after_a_compaction() {
+    // The turn's input holds no message, but it did not begin as a compaction.
     let notice = Delivery::Job(contract::inbox::JobNotice {
         completed: contract::events::JobCompleted {
             job_id: contract::JobId("j_1".into()),
@@ -1491,7 +1491,7 @@ fn a_turn_a_job_started_goes_on_after_a_handoff() {
     });
     let mut session = injected(
         handed_after_a_call(),
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         settings(),
     );
     session.inbox.send(notice).unwrap();
@@ -1522,15 +1522,15 @@ fn a_turn_a_job_started_goes_on_after_a_handoff() {
 }
 
 #[test]
-fn a_handoff_is_refused_closing_once_close_was_taken_with_nothing_to_start() {
+fn a_compaction_is_refused_closing_once_close_was_taken_with_nothing_to_start() {
     let (ack, answer) = answered();
     let mut session = session(vec![said("Never.", 1)], settings());
     session.inbox.send(Delivery::Close(ignore())).unwrap();
     session
         .inbox
-        .send(Delivery::Handoff(
+        .send(Delivery::Compaction(
             contract::CommandId("c_h".into()),
-            contract::commands::Handoff { instructions: None },
+            contract::commands::Compact { instructions: None },
             ack,
         ))
         .unwrap();
@@ -1546,7 +1546,7 @@ fn a_handoff_is_refused_closing_once_close_was_taken_with_nothing_to_start() {
 }
 
 #[test]
-fn a_handoff_after_close_joins_a_turn_that_already_has_input() {
+fn a_compaction_after_close_joins_a_turn_that_already_has_input() {
     let (ack, answer) = answered();
     let mut session = session(
         vec![Scripted::text("The note."), said("Done.", 50)],
@@ -1556,9 +1556,9 @@ fn a_handoff_after_close_joins_a_turn_that_already_has_input() {
     session.inbox.send(Delivery::Close(ignore())).unwrap();
     session
         .inbox
-        .send(Delivery::Handoff(
+        .send(Delivery::Compaction(
             contract::CommandId("c_h".into()),
-            contract::commands::Handoff { instructions: None },
+            contract::commands::Compact { instructions: None },
             ack,
         ))
         .unwrap();
@@ -1571,14 +1571,14 @@ fn a_handoff_after_close_joins_a_turn_that_already_has_input() {
     assert!(Deadline::after(DEADLINE).recv(&answer).unwrap().is_ok());
 }
 
-// A tool's handoff (`docs/handoff.md`, "A tool").
+// A tool's compaction (`docs/compaction.md`, "A tool").
 
-/// A tool that returns no content and `control.handoff` of `note`.
+/// A tool that returns no content and `control.compact` of `note`.
 fn wrapping(name: &'static str, note: &str) -> Arc<TestTool> {
     let mut tool = TestTool::reads(name, "");
     tool.output.content = Vec::new();
     tool.output.control = Some(Control {
-        handoff: Some(note.into()),
+        compaction: Some(note.into()),
         ..Default::default()
     });
     Arc::new(tool)
@@ -1604,7 +1604,7 @@ fn tool_session(script: Vec<Scripted>, tools: Vec<Arc<TestTool>>) -> Session {
             .map(|tool| tool as Arc<dyn contract::tool::Tool>)
             .collect(),
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait())
 }
 
@@ -1621,7 +1621,7 @@ fn call_lines(count: usize) -> Vec<&'static str> {
 }
 
 #[test]
-fn a_call_that_sets_control_handoff_restarts_the_context_from_its_note() {
+fn a_call_that_sets_control_compaction_restarts_the_context_from_its_note() {
     let mut session = tool_session(
         vec![calling(&["wrapup"], 500), said("Done.", 50)],
         vec![wrapping("wrapup", "Tool note.")],
@@ -1634,7 +1634,7 @@ fn a_call_that_sets_control_handoff_restarts_the_context_from_its_note() {
             OPENING,
             STEP,
             &call_lines(1),
-            &["handoff_completed", "opening_message"],
+            &["compaction_completed", "opening_message"],
             STEP,
             REPLY,
             ENDED,
@@ -1644,7 +1644,7 @@ fn a_call_that_sets_control_handoff_restarts_the_context_from_its_note() {
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let call = of_kind(&lines, "tool_call_requested")[0];
     assert_eq!(
-        serde_json::Value::Object(of_kind(&lines, "handoff_completed")[0].payload.clone()),
+        serde_json::Value::Object(of_kind(&lines, "compaction_completed")[0].payload.clone()),
         json!({
             "outcome": "completed",
             "note": [call.action_id.as_ref().unwrap().0],
@@ -1652,13 +1652,13 @@ fn a_call_that_sets_control_handoff_restarts_the_context_from_its_note() {
         })
     );
     // No note request: the tool's argument was the note.
-    assert!(of_kind(&lines, "handoff_started").is_empty());
+    assert!(of_kind(&lines, "compaction_started").is_empty());
     let requests = session.requests();
     assert_eq!(requests.len(), 2);
     let next = &requests[1].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("Tool note."));
     assert_eq!(requests[1].previous_end, None);
@@ -1682,7 +1682,7 @@ fn the_other_calls_of_the_step_follow_the_note_in_call_order() {
             OPENING,
             STEP,
             &call_lines(3),
-            &["handoff_completed", "opening_message"],
+            &["compaction_completed", "opening_message"],
             STEP,
             REPLY,
             ENDED,
@@ -1694,13 +1694,13 @@ fn the_other_calls_of_the_step_follow_the_note_in_call_order() {
         .map(|line| line.action_id.as_ref().unwrap().0.as_str())
         .collect();
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["note"],
+        of_kind(&lines, "compaction_completed")[0].payload["note"],
         json!([ids[1]])
     );
     // The prompt tokens, and the two one-token results written after the
     // reply that measured them.
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["tokens_before"],
+        of_kind(&lines, "compaction_completed")[0].payload["tokens_before"],
         502
     );
     let requests = session.requests();
@@ -1737,7 +1737,7 @@ fn the_other_calls_of_the_step_follow_the_note_in_call_order() {
 }
 
 #[test]
-fn two_calls_that_set_control_handoff_join_their_notes_in_call_order() {
+fn two_calls_that_set_control_compaction_join_their_notes_in_call_order() {
     // Call order, not name order.
     let mut session = tool_session(
         vec![
@@ -1759,7 +1759,7 @@ fn two_calls_that_set_control_handoff_join_their_notes_in_call_order() {
             OPENING,
             STEP,
             &call_lines(3),
-            &["handoff_completed", "opening_message"],
+            &["compaction_completed", "opening_message"],
             STEP,
             REPLY,
             ENDED,
@@ -1771,7 +1771,7 @@ fn two_calls_that_set_control_handoff_join_their_notes_in_call_order() {
         .map(|line| line.action_id.as_ref().unwrap().0.as_str())
         .collect();
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["note"],
+        of_kind(&lines, "compaction_completed")[0].payload["note"],
         json!([ids[0], ids[2]])
     );
     let next = &session.requests()[1].conversation;
@@ -1785,24 +1785,24 @@ fn two_calls_that_set_control_handoff_join_their_notes_in_call_order() {
 
 #[test]
 fn the_loop_acts_on_the_field_and_never_on_the_tool_name() {
-    // A tool named `handoff` that sets nothing does not hand off.
+    // A tool named `compaction` that sets nothing does not hand off.
     let mut session = tool_session(
-        vec![calling(&["handoff"], 500), said("Done.", 50)],
-        vec![Arc::new(TestTool::reads("handoff", "Not a note."))],
+        vec![calling(&["compaction"], 500), said("Done.", 50)],
+        vec![Arc::new(TestTool::reads("compaction", "Not a note."))],
     );
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(&lines, &[OPENING, STEP, &call_lines(1), STEP, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert!(of_kind(&lines, "handoff_completed").is_empty());
+    assert!(of_kind(&lines, "compaction_completed").is_empty());
 }
 
 #[test]
 fn a_call_that_failed_does_not_hand_off_whatever_it_set() {
     let mut tool = TestTool::failing("wrapup", ErrorCode::ToolError);
     tool.output.control = Some(Control {
-        handoff: Some("Never.".into()),
+        compaction: Some("Never.".into()),
         ..Default::default()
     });
     let mut session = tool_session(
@@ -1813,21 +1813,21 @@ fn a_call_that_failed_does_not_hand_off_whatever_it_set() {
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(&lines, &[OPENING, STEP, &call_lines(1), STEP, REPLY, ENDED]);
 
-    assert!(of_kind(&lines, "handoff_completed").is_empty());
+    assert!(of_kind(&lines, "compaction_completed").is_empty());
 }
 
 #[test]
-fn a_held_person_handoff_still_runs_at_the_boundary_after_a_tool_handoff() {
+fn a_held_person_compaction_still_runs_at_the_boundary_after_a_tool_compaction() {
     let mut session = Session::with_tools_injecting(
         vec![
             calling(&["wrapup"], 500),
             Scripted::text("The note."),
             said("Done.", 50),
         ],
-        vec![handoff("c_h", Some("focus"))],
+        vec![compaction("c_h", Some("focus"))],
         vec![wrapping("wrapup", "Tool note.")],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -1837,7 +1837,7 @@ fn a_held_person_handoff_still_runs_at_the_boundary_after_a_tool_handoff() {
             OPENING,
             STEP,
             &call_lines(1),
-            &["handoff_completed", "opening_message"],
+            &["compaction_completed", "opening_message"],
             STEP,
             HANDED_OFF,
             REPLY,
@@ -1846,14 +1846,14 @@ fn a_held_person_handoff_still_runs_at_the_boundary_after_a_tool_handoff() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    // The person's handoff asked for its note from the context the tool's
-    // handoff made.
+    // The person's compaction asked for its note from the context the tool's
+    // compaction made.
     let requests = session.requests();
     assert_eq!(requests[1].conversation[2], user("Tool note."));
     assert_eq!(requests[2].conversation[2], user("The note."));
 }
 
-// Overflow (`docs/handoff.md`, "Overflow").
+// Overflow (`docs/compaction.md`, "Overflow").
 
 /// A request the provider rejected for size: one assistant message, failed.
 const REJECTED: &[&str] = &[
@@ -1861,13 +1861,13 @@ const REJECTED: &[&str] = &[
     "usage_recorded",
     "assistant_message_completed",
 ];
-/// A handoff whose note request failed.
+/// A compaction whose note request failed.
 const FAILED_NOTE: &[&str] = &[
-    "handoff_started",
+    "compaction_started",
     "assistant_message_started",
     "usage_recorded",
     "assistant_message_completed",
-    "handoff_completed",
+    "compaction_completed",
 ];
 /// A reply that calls two tools, with their runs.
 const TWO_CALLS: &[&str] = &[
@@ -1926,7 +1926,7 @@ fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
         None,
         both_tools(),
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -1939,7 +1939,7 @@ fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
-        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
         "overflow"
     );
     let completions = of_kind(&lines, "tool_call_completed");
@@ -1996,7 +1996,7 @@ fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
     let next = &requests[3].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
     assert_eq!(requests[3].previous_end, None);
@@ -2017,7 +2017,7 @@ fn a_retried_note_request_counts_its_own_attempts() {
         None,
         both_tools(),
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -2031,7 +2031,7 @@ fn a_retried_note_request_counts_its_own_attempts() {
             STEP,
             REJECTED,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "usage_recorded",
                 "assistant_message_completed",
@@ -2042,7 +2042,7 @@ fn a_retried_note_request_counts_its_own_attempts() {
                 "text_completed",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
             ],
             REPLY,
@@ -2063,7 +2063,7 @@ fn a_note_request_rejected_for_size_fails_the_turn_context_overflow() {
         None,
         both_tools(),
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -2073,7 +2073,7 @@ fn a_note_request_rejected_for_size_fails_the_turn_context_overflow() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Failed));
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(error_of(done[0]), "context_overflow");
     assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
@@ -2081,10 +2081,10 @@ fn a_note_request_rejected_for_size_fails_the_turn_context_overflow() {
 }
 
 #[test]
-fn a_provider_overflow_with_automatic_handoff_off_fails_the_turn() {
+fn a_provider_overflow_with_automatic_compaction_off_fails_the_turn() {
     let mut session =
         Session::with_tools(vec![called_both(100), overflowing()], None, both_tools())
-            .handoff(HandoffSettings {
+            .compaction(CompactionSettings {
                 enabled: false,
                 ..settings()
             })
@@ -2099,9 +2099,9 @@ fn a_provider_overflow_with_automatic_handoff_off_fails_the_turn() {
 }
 
 #[test]
-fn an_overflow_in_the_step_of_a_failed_automatic_handoff_fails_the_turn() {
-    // The automatic handoff at the step's start fails, then the step's
-    // request overflows: one handoff per step.
+fn an_overflow_in_the_step_of_a_failed_automatic_compaction_fails_the_turn() {
+    // The automatic compaction at the step's start fails, then the step's
+    // request overflows: one compaction per step.
     let mut session = session(
         vec![
             called(TRIGGER - 1),
@@ -2118,13 +2118,13 @@ fn an_overflow_in_the_step_of_a_failed_automatic_handoff_fails_the_turn() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Failed));
-    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
     assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
 }
 
 #[test]
-fn an_overflow_in_a_later_step_than_a_failed_automatic_handoff_hands_off() {
-    // Step 2: the automatic handoff fails, and the request goes on. Step 3:
+fn an_overflow_in_a_later_step_than_a_failed_automatic_compaction_hands_off() {
+    // Step 2: the automatic compaction fails, and the request goes on. Step 3:
     // the automatic trigger stays blocked, but the overflow rule runs.
     let mut session = session(
         vec![
@@ -2157,7 +2157,7 @@ fn an_overflow_in_a_later_step_than_a_failed_automatic_handoff_hands_off() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let started = of_kind(&lines, "handoff_started");
+    let started = of_kind(&lines, "compaction_started");
     assert_eq!(started[0].payload["trigger"], "auto");
     assert_eq!(started[1].payload["trigger"], "overflow");
 }
@@ -2184,7 +2184,7 @@ fn a_second_overflow_in_one_step_fails_the_turn() {
 
     assert_eq!(outcome, Some(TurnOutcome::Failed));
     assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
-    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
 }
 
 #[test]
@@ -2201,7 +2201,7 @@ fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation
         vec![support::steer("and more")],
         vec![weather()],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -2223,7 +2223,7 @@ fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation
     );
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
-        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
         "overflow"
     );
     let requests = session.requests();
@@ -2233,9 +2233,9 @@ fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation
     assert!(text_of(asked.last().unwrap()).starts_with("Fiber is about to restart"));
     // The carried input and steer are labelled as the person's new message.
     let next = &requests[3].conversation;
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[2], user("The person's new message:\nand more"));
     assert_eq!(next[3], user("The note."));
 }
@@ -2296,7 +2296,7 @@ fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["outcome"],
+        of_kind(&lines, "compaction_completed")[0].payload["outcome"],
         "completed"
     );
     let requests = session.requests();
@@ -2313,7 +2313,7 @@ fn a_cancel_during_the_overflow_note_request_ends_the_turn_interrupted() {
         3,
         vec![weather()],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -2326,10 +2326,10 @@ fn a_cancel_during_the_overflow_note_request_ends_the_turn_interrupted() {
             STEP,
             REJECTED,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "usage_recorded",
-                "handoff_completed",
+                "compaction_completed",
             ],
             ENDED,
         ],
@@ -2337,7 +2337,7 @@ fn a_cancel_during_the_overflow_note_request_ends_the_turn_interrupted() {
 
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
     assert_eq!(
-        of_kind(&lines, "handoff_completed")[0].payload["outcome"],
+        of_kind(&lines, "compaction_completed")[0].payload["outcome"],
         "cancelled"
     );
     assert_eq!(session.requests().len(), 3);
@@ -2345,8 +2345,8 @@ fn a_cancel_during_the_overflow_note_request_ends_the_turn_interrupted() {
 
 /// A settings whose automatic trigger is twice the window, so an estimate
 /// over the window is not handed off at the step's start.
-fn beyond_the_window() -> HandoffSettings {
-    HandoffSettings {
+fn beyond_the_window() -> CompactionSettings {
+    CompactionSettings {
         tokens: 1_000_000,
         window_fraction: 2.0,
         ..settings()
@@ -2355,9 +2355,9 @@ fn beyond_the_window() -> HandoffSettings {
 
 const WINDOW: u64 = 1_000;
 
-fn windowed(script: Vec<Scripted>, settings: HandoffSettings, window: u64) -> Session {
+fn windowed(script: Vec<Scripted>, settings: CompactionSettings, window: u64) -> Session {
     Session::windowed(script, vec![weather()], window)
-        .handoff(settings)
+        .compaction(settings)
         .retry(no_wait())
 }
 
@@ -2381,7 +2381,7 @@ fn an_estimate_over_a_known_window_hands_off_before_sending() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    let started = of_kind(&lines, "handoff_started");
+    let started = of_kind(&lines, "compaction_started");
     assert_eq!(started[0].payload["trigger"], "overflow");
     // No request that would not fit was made: the note request, then the
     // step's request from the new context.
@@ -2410,10 +2410,10 @@ fn an_estimate_exactly_at_the_window_is_sent() {
 }
 
 #[test]
-fn automatic_handoff_off_skips_the_size_check() {
+fn automatic_compaction_off_skips_the_size_check() {
     let mut session = windowed(
         vec![called(WINDOW), said("Done.", 50)],
-        HandoffSettings {
+        CompactionSettings {
             enabled: false,
             ..beyond_the_window()
         },
@@ -2426,12 +2426,12 @@ fn automatic_handoff_off_skips_the_size_check() {
 }
 
 #[test]
-fn an_estimate_over_the_window_after_a_handoff_in_the_step_fails_the_turn() {
+fn an_estimate_over_the_window_after_a_compaction_in_the_step_fails_the_turn() {
     // The window is 1,000, so the automatic trigger is 700: it hands off at
     // the step's start, and the next request is still estimated over.
     let mut session = windowed(
         vec![called(WINDOW), Scripted::text(&"x".repeat(8_000))],
-        HandoffSettings {
+        CompactionSettings {
             window_fraction: 0.7,
             ..beyond_the_window()
         },
@@ -2442,13 +2442,13 @@ fn an_estimate_over_the_window_after_a_handoff_in_the_step_fails_the_turn() {
 
     assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, ENDED]);
     assert_eq!(outcome, Some(TurnOutcome::Failed));
-    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
     assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
     assert_eq!(session.requests().len(), 2);
 }
 
 #[test]
-fn the_live_conversation_after_an_overflow_handoff_is_what_a_rebuild_renders() {
+fn the_live_conversation_after_an_overflow_compaction_is_what_a_rebuild_renders() {
     let mut session = Session::with_tools(
         vec![
             called_both(100),
@@ -2460,7 +2460,7 @@ fn the_live_conversation_after_an_overflow_handoff_is_what_a_rebuild_renders() {
         None,
         both_tools(),
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     let (_, lines) = run(&mut session, "hi");
@@ -2473,14 +2473,14 @@ fn the_live_conversation_after_an_overflow_handoff_is_what_a_rebuild_renders() {
 
     let requests = session.requests();
     let rebuilt = session.rebuilt();
-    // The request after the handoff, then the reply it got.
+    // The request after the compaction, then the reply it got.
     assert_eq!(rebuilt.len(), 4);
     assert_eq!(rebuilt[..3], requests[3].conversation[..]);
     assert_eq!(text_of(&rebuilt[3]), "Done.");
 }
 
 #[test]
-fn a_failed_overflow_handoff_leaves_what_a_rebuild_renders_as_before() {
+fn a_failed_overflow_compaction_leaves_what_a_rebuild_renders_as_before() {
     let mut session = Session::with_tools(
         vec![
             called_both(100),
@@ -2491,7 +2491,7 @@ fn a_failed_overflow_handoff_leaves_what_a_rebuild_renders_as_before() {
         None,
         both_tools(),
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     let (_, lines) = run(&mut session, "hi");
@@ -2506,7 +2506,7 @@ fn a_failed_overflow_handoff_leaves_what_a_rebuild_renders_as_before() {
 }
 
 #[test]
-fn a_result_carried_past_a_tool_handoff_keeps_its_artifact_for_an_overflow() {
+fn a_result_carried_past_a_tool_compaction_keeps_its_artifact_for_an_overflow() {
     let mut session = tool_session(
         vec![
             calling(&["wrapup", "long"], 500),
@@ -2524,7 +2524,7 @@ fn a_result_carried_past_a_tool_handoff_keeps_its_artifact_for_an_overflow() {
             OPENING,
             STEP,
             TWO_CALLS,
-            &["handoff_completed", "opening_message"],
+            &["compaction_completed", "opening_message"],
             STEP,
             REJECTED,
             HANDED_OFF,
@@ -2556,8 +2556,8 @@ fn a_result_carried_past_a_tool_handoff_keeps_its_artifact_for_an_overflow() {
 }
 
 #[test]
-fn a_handoff_rebuilds_the_section_from_its_current_files() {
-    let held = fakes::TempDir::new("fiber-handoff-sections");
+fn a_compaction_rebuilds_the_section_from_its_current_files() {
+    let held = fakes::TempDir::new("fiber-compaction-sections");
     let file = held.path().join("index.md");
     std::fs::write(&file, "Section v1.\n").unwrap();
     let mut session = Session::open_sectioned(
@@ -2577,7 +2577,7 @@ fn a_handoff_rebuilds_the_section_from_its_current_files() {
         },
         vec![("fiber.test/notes".into(), vec![file.clone()], None)],
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
 
     // The first turn stays below the trigger: its opening carries v1.
@@ -2594,7 +2594,7 @@ fn a_handoff_rebuilds_the_section_from_its_current_files() {
         }])
     );
 
-    // The file changes before the handoff.
+    // The file changes before the compaction.
     std::fs::write(&file, "Section v2.\n").unwrap();
 
     let (outcome, second) = run(&mut session, "again");
@@ -2613,14 +2613,14 @@ fn a_handoff_rebuilds_the_section_from_its_current_files() {
         ],
     );
     // The turn-start check reports the outside edit as a diff naming the
-    // section, before the handoff rebuilds from the current files.
+    // section, before the compaction rebuilds from the current files.
     let changed = of_kind(&second, "instruction_file");
     assert_eq!(changed.len(), 1);
     assert_eq!(changed[0].payload["reason"], "changed");
     assert_eq!(changed[0].payload["extension"], "fiber.test/notes");
     // A one-line file: the diff headers outweigh it, so the full text.
     assert_eq!(changed[0].payload["sent"], "full");
-    // The handoff's rebuild carries the current content, v2.
+    // The compaction's rebuild carries the current content, v2.
     let rebuilt = of_kind(&second, "opening_message");
     assert_eq!(rebuilt.len(), 1);
     assert_eq!(
@@ -2630,7 +2630,7 @@ fn a_handoff_rebuilds_the_section_from_its_current_files() {
             "files": [{"path": file.display().to_string(), "content": "Section v2.\n"}],
         }])
     );
-    // The request after the handoff sends the rebuilt section.
+    // The request after the compaction sends the rebuilt section.
     let requests = session.requests();
     let next = &requests.last().unwrap().conversation;
     assert!(is_opening(&next[0]));
@@ -2644,9 +2644,9 @@ fn a_handoff_rebuilds_the_section_from_its_current_files() {
 }
 
 #[test]
-fn a_tool_handoff_in_a_step_that_already_handed_off_is_an_ordinary_result() {
+fn a_tool_compaction_in_a_step_that_already_handed_off_is_an_ordinary_result() {
     // The check hands off automatically, then the first reply in the new
-    // context calls a tool that sets `control.handoff`: at most one handoff
+    // context calls a tool that sets `control.compact`: at most one compaction
     // runs per step, so the call's result stays as any result does.
     let mut session = tool_session(
         vec![
@@ -2676,7 +2676,7 @@ fn a_tool_handoff_in_a_step_that_already_handed_off_is_an_ordinary_result() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    assert_eq!(of_kind(&lines, "handoff_completed").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_completed").len(), 1);
     let wrapup = of_kind(&lines, "tool_call_requested")[1]
         .action_id
         .as_ref()
@@ -2686,11 +2686,11 @@ fn a_tool_handoff_in_a_step_that_already_handed_off_is_an_ordinary_result() {
     let requests = session.requests();
     assert_eq!(requests.len(), 4);
     // The context did not restart from the tool's note: the call and its
-    // empty result follow the automatic handoff's note.
+    // empty result follow the automatic compaction's note.
     let next = &requests[3].conversation;
     assert_eq!(next.len(), 5);
     assert!(is_opening(&next[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
     assert!(matches!(&next[3], Input::ToolCall { action_id, .. } if action_id.0 == wrapup));
@@ -2702,7 +2702,7 @@ fn a_tool_handoff_in_a_step_that_already_handed_off_is_an_ordinary_result() {
 }
 
 #[test]
-fn a_tool_may_hand_off_in_the_step_after_an_automatic_handoff() {
+fn a_tool_may_hand_off_in_the_step_after_an_automatic_compaction() {
     let mut session = tool_session(
         vec![
             called(TRIGGER - 1),
@@ -2726,7 +2726,7 @@ fn a_tool_may_hand_off_in_the_step_after_an_automatic_handoff() {
             &call_lines(1),
             STEP,
             &call_lines(1),
-            &["handoff_completed", "opening_message"],
+            &["compaction_completed", "opening_message"],
             STEP,
             REPLY,
             ENDED,
@@ -2740,7 +2740,7 @@ fn a_tool_may_hand_off_in_the_step_after_an_automatic_handoff() {
 }
 
 #[test]
-fn a_skill_written_before_a_handoff_expands_after_it() {
+fn a_skill_written_before_a_compaction_expands_after_it() {
     let mut session = session(
         vec![
             said("Hi.", 100),
@@ -2776,9 +2776,9 @@ fn a_skill_written_before_a_handoff_expands_after_it() {
         "/late 1"
     );
 
-    // A person's handoff rewrites the opening message, which refreshes
+    // A person's compaction rewrites the opening message, which refreshes
     // the set: only that refresh tells the two turns apart.
-    session.inbox.send(handoff("c_h", None)).unwrap();
+    session.inbox.send(compaction("c_h", None)).unwrap();
     let outcome = session.turn();
     let handed = session.lines();
     assert_kinds(&handed, &[&["turn_started"], STEP, HANDED_OFF, ENDED]);
@@ -2828,7 +2828,7 @@ fn prepare_with_window(provider: Arc<ScriptedProvider>, reference: &str, window:
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: window,
                 addendum: None,
-                handoff: HandoffSettings::default(),
+                compaction: CompactionSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
                     code: ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),
@@ -2847,7 +2847,7 @@ fn prepare_with_window(provider: Arc<ScriptedProvider>, reference: &str, window:
 }
 
 #[test]
-fn a_handoff_after_a_model_switch_sizes_notices_by_the_new_window() {
+fn a_compaction_after_a_model_switch_sizes_notices_by_the_new_window() {
     // One skill with a long description: its listing line passes 10% of
     // the switched window, but not of the session's wide start window.
     let mut session = Session::windowed(
@@ -2855,7 +2855,7 @@ fn a_handoff_after_a_model_switch_sizes_notices_by_the_new_window() {
         Vec::new(),
         fakes::CONTEXT_WINDOW,
     )
-    .handoff(settings());
+    .compaction(settings());
     let dir = session.workspace.join(".agents/skills/big");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
@@ -2875,8 +2875,8 @@ fn a_handoff_after_a_model_switch_sizes_notices_by_the_new_window() {
         "the wide window fits the listing"
     );
 
-    // A model switch before the handoff moves the window the size
-    // notices use: the handoff's fresh opening message is sized by the
+    // A model switch before the compaction moves the window the size
+    // notices use: the compaction's fresh opening message is sized by the
     // new window, not the set's startup snapshot.
     let next = Arc::new(ScriptedProvider::new(vec![
         Scripted::text("Again."),
@@ -2900,7 +2900,7 @@ fn a_handoff_after_a_model_switch_sizes_notices_by_the_new_window() {
         ],
     );
 
-    session.inbox.send(handoff("c_h", None)).unwrap();
+    session.inbox.send(compaction("c_h", None)).unwrap();
     let outcome = session.turn();
     let handed = session.lines();
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -2910,14 +2910,14 @@ fn a_handoff_after_a_model_switch_sizes_notices_by_the_new_window() {
             &["turn_started"],
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "assistant_message_delta",
                 "assistant_message_delta",
                 "text_completed",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
                 "notice",
             ],
@@ -2930,13 +2930,13 @@ fn a_handoff_after_a_model_switch_sizes_notices_by_the_new_window() {
 }
 
 #[test]
-fn a_person_handoff_runs_session_start_with_reason_handoff() {
+fn a_person_compaction_runs_session_start_with_reason_compaction() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
-    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    hooks.answer(start_added("fiber.test/inbox", "at compaction"));
     let mut session = injected(
         handed_after_a_call(),
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         settings(),
     );
     hook(Arc::clone(&hooks), &mut session);
@@ -2948,20 +2948,20 @@ fn a_person_handoff_runs_session_start_with_reason_handoff() {
         &[OPENING, STEP, CALL_BODY, STEP, HANDED_CTX, REPLY, ENDED],
     );
     // The hook sees the reason, as at every other start, and not the
-    // handoff note.
+    // compaction note.
     let workspace = session.workspace.display().to_string();
     assert_eq!(
         hooks.seen(),
         vec![
             ("Start".to_owned(), "s_test".to_owned(), workspace.clone()),
-            ("Handoff".to_owned(), "s_test".to_owned(), workspace),
+            ("Compaction".to_owned(), "s_test".to_owned(), workspace),
         ]
     );
     let added = of_kind(&lines, "context_added");
     assert_eq!(added.len(), 1);
     assert_eq!(added[0].payload["hook"], "session_start");
     assert_eq!(added[0].payload["extension"], "fiber.test/inbox");
-    assert_eq!(added[0].payload["text"], "at handoff");
+    assert_eq!(added[0].payload["text"], "at compaction");
     // The next request is the new opening message, the context, the
     // turn's input, the note.
     let requests = session.requests();
@@ -2969,17 +2969,17 @@ fn a_person_handoff_runs_session_start_with_reason_handoff() {
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("at handoff"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    assert_eq!(next[1], user("at compaction"));
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
     assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("The note."));
 }
 
 #[test]
-fn an_automatic_handoff_runs_session_start_with_reason_handoff() {
+fn an_automatic_compaction_runs_session_start_with_reason_compaction() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
-    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    hooks.answer(start_added("fiber.test/inbox", "at compaction"));
     let mut session = session(
         vec![
             called(TRIGGER - 1),
@@ -2997,27 +2997,27 @@ fn an_automatic_handoff_runs_session_start_with_reason_handoff() {
         &[OPENING, STEP, CALL_BODY, STEP, HANDED_CTX, REPLY, ENDED],
     );
     assert_eq!(
-        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        of_kind(&lines, "compaction_started")[0].payload["trigger"],
         "auto"
     );
     assert_eq!(hooks.seen().len(), 2);
-    assert_eq!(hooks.seen()[1].0, "Handoff");
+    assert_eq!(hooks.seen()[1].0, "Compaction");
     let requests = session.requests();
     assert_eq!(requests.len(), 3);
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("at handoff"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    assert_eq!(next[1], user("at compaction"));
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
     assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("The note."));
 }
 
 #[test]
-fn a_tool_handoff_runs_session_start_with_reason_handoff() {
+fn a_tool_compaction_runs_session_start_with_reason_compaction() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
-    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    hooks.answer(start_added("fiber.test/inbox", "at compaction"));
     let mut session = tool_session(
         vec![calling(&["wrapup"], 500), said("Done.", 50)],
         vec![wrapping("wrapup", "Tool note.")],
@@ -3032,32 +3032,32 @@ fn a_tool_handoff_runs_session_start_with_reason_handoff() {
             OPENING,
             STEP,
             &call_lines(1),
-            &["handoff_completed", "opening_message", "context_added"],
+            &["compaction_completed", "opening_message", "context_added"],
             STEP,
             REPLY,
             ENDED,
         ],
     );
     assert_eq!(hooks.seen().len(), 2);
-    assert_eq!(hooks.seen()[1].0, "Handoff");
+    assert_eq!(hooks.seen()[1].0, "Compaction");
     let requests = session.requests();
     assert_eq!(requests.len(), 2);
     let next = &requests[1].conversation;
     assert_eq!(next.len(), 4);
     assert!(is_opening(&next[0]));
-    assert_eq!(next[1], user("at handoff"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
+    assert_eq!(next[1], user("at compaction"));
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — session_start context (item 3), then carried input in a new-message block (item 5).
     assert_eq!(next[2], user("The person's new message:\nhi"));
     assert_eq!(next[3], user("Tool note."));
 }
 
 #[test]
-fn a_blocking_session_start_failure_at_a_person_handoff_fails_the_handoff_and_blocks() {
+fn a_blocking_session_start_failure_at_a_person_compaction_fails_the_compaction_and_blocks() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
     hooks.answer(start_failed("fiber.test/guard", "boom"));
-    // The context stays at the trigger past the failed handoff, so an
-    // unblocked turn would hand off again: one handoff names the block.
+    // The context stays at the trigger past the failed compaction, so an
+    // unblocked turn would hand off again: one compaction names the block.
     let mut session = injected(
         vec![
             called(TRIGGER - 1),
@@ -3065,22 +3065,22 @@ fn a_blocking_session_start_failure_at_a_person_handoff_fails_the_handoff_and_bl
             called(TRIGGER - 1),
             said("Done.", 50),
         ],
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         settings(),
     );
     hook(Arc::clone(&hooks), &mut session);
 
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    // The failed handoff sends from the same step; the blocked check at
-    // the next step starts no second handoff.
+    // The failed compaction sends from the same step; the blocked check at
+    // the next step starts no second compaction.
     assert_kinds(
         &lines,
         &[
             OPENING, STEP, CALL_BODY, STEP, FAILED_CTX, CALL_BODY, STEP, REPLY, ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(
         serde_json::Value::Object(done[0].payload.clone()),
@@ -3088,15 +3088,15 @@ fn a_blocking_session_start_failure_at_a_person_handoff_fails_the_handoff_and_bl
             "outcome": "failed",
             "error": {
                 "code": "hook_failed",
-                "message": "The `session_start` hook of extension fiber.test/guard failed, so the handoff did not complete: boom",
+                "message": "The `session_start` hook of extension fiber.test/guard failed, so the compaction did not complete: boom",
             },
             "tokens_before": TRIGGER,
         })
     );
-    // No opening message, no note, no second handoff: the session goes on
+    // No opening message, no note, no second compaction: the session goes on
     // with the old conversation.
     assert_eq!(of_kind(&lines, "opening_message").len(), 1);
-    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
     let requests = session.requests();
     assert_eq!(requests.len(), 4);
     let next = &requests[2].conversation;
@@ -3108,7 +3108,7 @@ fn a_blocking_session_start_failure_at_a_person_handoff_fails_the_handoff_and_bl
 }
 
 #[test]
-fn a_blocking_session_start_failure_at_a_tool_handoff_keeps_the_results() {
+fn a_blocking_session_start_failure_at_a_tool_compaction_keeps_the_results() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
     hooks.answer(start_failed("fiber.test/guard", "boom"));
@@ -3126,20 +3126,20 @@ fn a_blocking_session_start_failure_at_a_tool_handoff_keeps_the_results() {
             OPENING,
             STEP,
             &call_lines(1),
-            &["handoff_completed"],
+            &["compaction_completed"],
             STEP,
             REPLY,
             ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "hook_failed");
     assert_eq!(
         done[0].payload["error"]["message"],
         "The `session_start` hook of extension fiber.test/guard failed, \
-         so the handoff did not complete: boom"
+         so the compaction did not complete: boom"
     );
     assert!(
         done[0].payload.get("note").is_none(),
@@ -3160,7 +3160,7 @@ fn a_blocking_session_start_failure_at_a_tool_handoff_keeps_the_results() {
 }
 
 #[test]
-fn a_blocking_session_start_failure_at_an_overflow_handoff_fails_context_overflow() {
+fn a_blocking_session_start_failure_at_an_overflow_compaction_fails_context_overflow() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
     hooks.answer(start_failed("fiber.test/guard", "boom"));
@@ -3169,7 +3169,7 @@ fn a_blocking_session_start_failure_at_an_overflow_handoff_fails_context_overflo
         None,
         both_tools(),
     )
-    .handoff(settings())
+    .compaction(settings())
     .retry(no_wait());
     hook(Arc::clone(&hooks), &mut session);
 
@@ -3179,7 +3179,7 @@ fn a_blocking_session_start_failure_at_an_overflow_handoff_fails_context_overflo
         &lines,
         &[OPENING, STEP, TWO_CALLS, STEP, REJECTED, FAILED_CTX, ENDED],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "failed");
     assert_eq!(done[0].payload["error"]["code"], "hook_failed");
@@ -3196,7 +3196,7 @@ fn a_non_blocking_session_start_failure_drops_its_context_with_a_notice() {
     hooks.answer(start_noticed("fiber.test/soft"));
     let mut session = injected(
         handed_after_a_call(),
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         settings(),
     );
     hook(Arc::clone(&hooks), &mut session);
@@ -3204,7 +3204,7 @@ fn a_non_blocking_session_start_failure_drops_its_context_with_a_notice() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     // The complete stream: the soft failure's notice precedes the
-    // handoff's completion, and no hook context follows the new opening.
+    // compaction's completion, and no hook context follows the new opening.
     assert_kinds(
         &lines,
         &[
@@ -3213,7 +3213,7 @@ fn a_non_blocking_session_start_failure_drops_its_context_with_a_notice() {
             CALL_BODY,
             STEP,
             &[
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "assistant_message_delta",
                 "assistant_message_delta",
@@ -3221,34 +3221,34 @@ fn a_non_blocking_session_start_failure_drops_its_context_with_a_notice() {
                 "usage_recorded",
                 "assistant_message_completed",
                 "notice",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
             ],
             REPLY,
             ENDED,
         ],
     );
-    let done = of_kind(&lines, "handoff_completed");
+    let done = of_kind(&lines, "compaction_completed");
     assert_eq!(done.len(), 1);
     assert_eq!(done[0].payload["outcome"], "completed");
     let notice = of_kind(&lines, "notice");
     assert_eq!(notice.len(), 1);
     assert_eq!(notice[0].payload["code"], "hook_failed");
     assert_eq!(notice[0].payload["extension"], "fiber.test/soft");
-    // The handoff completes with no context from the hook.
+    // The compaction completes with no context from the hook.
     assert!(of_kind(&lines, "context_added").is_empty());
     let requests = session.requests();
     assert_eq!(requests.len(), 3);
     let next = &requests[2].conversation;
     assert_eq!(next.len(), 3);
     assert!(is_opening(&next[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(next[1], user("The person's new message:\nhi"));
     assert_eq!(next[2], user("The note."));
 }
 
 #[test]
-fn a_cancel_or_shutdown_inside_the_handoff_hook_cancels_the_handoff() {
+fn a_cancel_or_shutdown_inside_the_compaction_hook_cancels_the_compaction() {
     for shutdown in [false, true] {
         let hooks = StartHooks::new();
         hooks.answer(start_empty());
@@ -3256,7 +3256,7 @@ fn a_cancel_or_shutdown_inside_the_handoff_hook_cancels_the_handoff() {
         hooks.fire_inside_at(2);
         let mut session = injected(
             handed_after_a_call(),
-            vec![handoff("c_h", None)],
+            vec![compaction("c_h", None)],
             settings(),
         );
         hook(Arc::clone(&hooks), &mut session);
@@ -3271,7 +3271,7 @@ fn a_cancel_or_shutdown_inside_the_handoff_hook_cancels_the_handoff() {
             Some(TurnOutcome::Interrupted),
             "shutdown: {shutdown}"
         );
-        let done = of_kind(&lines, "handoff_completed");
+        let done = of_kind(&lines, "compaction_completed");
         assert_eq!(done.len(), 1, "shutdown: {shutdown}");
         assert_eq!(
             done[0].payload["outcome"], "cancelled",
@@ -3288,7 +3288,7 @@ fn a_cancel_or_shutdown_inside_the_handoff_hook_cancels_the_handoff() {
         assert_eq!(
             of_kind(&lines, "opening_message").len(),
             1,
-            "no handoff opening: {shutdown}"
+            "no compaction opening: {shutdown}"
         );
         assert!(
             of_kind(&lines, "context_added").is_empty(),
@@ -3299,13 +3299,13 @@ fn a_cancel_or_shutdown_inside_the_handoff_hook_cancels_the_handoff() {
 }
 
 #[test]
-fn turn_start_does_not_run_at_a_handoff() {
+fn turn_start_does_not_run_at_a_compaction() {
     let hooks = StartHooks::new();
     hooks.answer(start_empty());
-    hooks.answer(start_added("fiber.test/inbox", "at handoff"));
+    hooks.answer(start_added("fiber.test/inbox", "at compaction"));
     let mut session = injected(
         handed_after_a_call(),
-        vec![handoff("c_h", None)],
+        vec![compaction("c_h", None)],
         settings(),
     );
     hook(Arc::clone(&hooks), &mut session);
@@ -3316,16 +3316,16 @@ fn turn_start_does_not_run_at_a_handoff() {
     assert_eq!(
         hooks.turn_calls(),
         1,
-        "the turn's hook runs once; the handoff runs none"
+        "the turn's hook runs once; the compaction runs none"
     );
 }
 
 #[test]
-fn a_failed_tool_handoff_with_questions_writes_the_taken_lines() {
+fn a_failed_tool_compaction_with_questions_writes_the_taken_lines() {
     use contract::shapes::{Effect, Question};
 
-    // A tool handoff whose call also asks: `after_calls` writes what the
-    // step took once the handoff fails, and the turn ends on the
+    // A tool compaction whose call also asks: `after_calls` writes what the
+    // step took once the compaction fails, and the turn ends on the
     // questions.
     let mut tool = TestTool::declaring(
         "wrapup",
@@ -3335,7 +3335,7 @@ fn a_failed_tool_handoff_with_questions_writes_the_taken_lines() {
     );
     tool.output.content = Vec::new();
     tool.output.control = Some(Control {
-        handoff: Some("Tool note.".into()),
+        compaction: Some("Tool note.".into()),
         questions: Some(vec![Question {
             header: "h".into(),
             question: "Go on?".into(),
@@ -3364,12 +3364,12 @@ fn a_failed_tool_handoff_with_questions_writes_the_taken_lines() {
             OPENING,
             STEP,
             &call_lines(1),
-            &["handoff_completed", "instruction_file"],
+            &["compaction_completed", "instruction_file"],
             ENDED,
         ],
     );
-    // The handoff failed, so the taken subdirectory line is written: a
-    // handoff that ran would have dropped it with the old context.
+    // The compaction failed, so the taken subdirectory line is written: a
+    // compaction that ran would have dropped it with the old context.
     let taken = of_kind(&lines, "instruction_file");
     assert_eq!(taken.len(), 1);
     assert_eq!(taken[0].payload["reason"], "subdirectory");

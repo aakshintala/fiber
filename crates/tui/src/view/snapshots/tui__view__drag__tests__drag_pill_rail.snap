@@ -10,7 +10,7 @@ expression: "crate::view::text(&buf)"
 ▌
 ▌ $0.00                                                                                                                                                          test/model
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                    —
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                   handoff at —                         —
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                   compacts at —                         —
 ▌ 2 ✓ READY                0s                                                                                                                                    then a summary, fresh context
 ▌ two                                                                                                                                                            tokens in / out                  1 / 2
 ▌                                                                                                                                                                cache hits                          0%

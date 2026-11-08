@@ -468,7 +468,7 @@ struct Loop<B: Backend> {
     /// thread's permit, reached only through its interface.
     hub: Connection,
     /// The image writer thread, spawned lazily on the first non-empty
-    /// handoff: the sole owner of its teardown.
+    /// compaction: the sole owner of its teardown.
     kitty_writer: Option<KittyWriter>,
     /// The terminal-output lock arbitrating loop writes against writer
     /// chunks. Guards cover actual tty writes only, never event dispatch.
@@ -1247,8 +1247,8 @@ impl<B: Backend> Loop<B> {
         self.start_next_convert();
     }
 
-    /// Spawns the writer on the first non-empty handoff, cloning the
-    /// loop's current tty then. Empty handoffs never spawn. False when the
+    /// Spawns the writer on the first non-empty compaction, cloning the
+    /// loop's current tty then. Empty compactions never spawn. False when the
     /// tty cannot be cloned or the thread cannot start: the terminal is
     /// failing, so the loop takes the terminal-failure path.
     fn ensure_kitty_writer(&mut self) -> bool {

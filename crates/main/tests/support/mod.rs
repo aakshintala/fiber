@@ -2488,7 +2488,7 @@ pub(crate) const TOOL_NAMES: [&str; 18] = [
     "delegate_models",
     "delegate_spawn",
     "edit",
-    "handoff",
+    "compaction",
     "jobs",
     "name_session",
     "read",

@@ -226,7 +226,7 @@ pub(crate) enum Target {
     Thought(usize),
     /// The login a failed turn offers.
     Login,
-    /// A handoff's note.
+    /// A compaction's note.
     Note(usize),
     /// An image's line: clicking it, or Enter on it while focused,
     /// opens it in the system viewer (`docs/tui.md`, "Images").
@@ -2163,8 +2163,8 @@ impl App {
                 | EventKind::InstructionFile
                 | EventKind::DateChanged
                 | EventKind::SkillsChanged
-                | EventKind::HandoffStarted
-                | EventKind::HandoffCompleted
+                | EventKind::CompactionStarted
+                | EventKind::CompactionCompleted
                 | EventKind::SkillsResent
                 | EventKind::ContextNudged
                 | EventKind::ReviewerKept
@@ -2271,8 +2271,8 @@ impl App {
                 | EventKind::InstructionFile
                 | EventKind::DateChanged
                 | EventKind::SkillsChanged
-                | EventKind::HandoffStarted
-                | EventKind::HandoffCompleted
+                | EventKind::CompactionStarted
+                | EventKind::CompactionCompleted
                 | EventKind::SkillsResent
                 | EventKind::ContextNudged
                 | EventKind::ReviewerKept
@@ -2433,8 +2433,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept
@@ -2591,8 +2591,8 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept

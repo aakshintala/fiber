@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 use crate::ErrorCode;
 use crate::SessionId;
 use crate::events::{
-    CallStatus, Event, ExtensionStateSet, ExtensionStateUnset, HandoffTrigger, HookInfo, InputItem,
+    CallStatus, Event, ExtensionStateSet, ExtensionStateUnset, CompactionTrigger, HookInfo, InputItem,
     Notice, OnFork,
 };
 use crate::provider::Input;
@@ -302,14 +302,14 @@ pub struct BeforeMessageAnswer {
     pub notices: Vec<Notice>,
 }
 
-/// What a `before_handoff` hook is given (`docs/extensions.md`, "The hook
-/// points"): what started the handoff, the person's instructions, and the
+/// What a `before_compaction` hook is given (`docs/extensions.md`, "The hook
+/// points"): what started the compaction, the person's instructions, and the
 /// conversation the note request would be built from, without the note
 /// request.
 #[derive(Clone, Copy)]
-pub struct BeforeHandoff<'a> {
-    /// What started the handoff.
-    pub trigger: HandoffTrigger,
+pub struct BeforeCompaction<'a> {
+    /// What started the compaction.
+    pub trigger: CompactionTrigger,
     /// The person's instructions, when there were any.
     pub instructions: Option<&'a str>,
     /// The conversation the note request would be built from, without
@@ -319,11 +319,11 @@ pub struct BeforeHandoff<'a> {
     pub cancel: &'a dyn Cancel,
 }
 
-impl std::fmt::Debug for BeforeHandoff<'_> {
+impl std::fmt::Debug for BeforeCompaction<'_> {
     // The debug string is a developer aid no doc promises and no consumer observes.
     #[cfg_attr(false, mutants::skip)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BeforeHandoff")
+        f.debug_struct("BeforeCompaction")
             .field("trigger", &self.trigger)
             .field("instructions", &self.instructions)
             .field("conversation", &self.conversation)
@@ -331,9 +331,9 @@ impl std::fmt::Debug for BeforeHandoff<'_> {
     }
 }
 
-/// What the chain of `before_handoff` hooks decided.
+/// What the chain of `before_compaction` hooks decided.
 #[derive(Debug, Clone, PartialEq)]
-pub enum BeforeHandoffOutcome {
+pub enum BeforeCompactionOutcome {
     /// No hook wrote a note: Fiber makes its own note request.
     NoNote,
     /// The last note a hook returned, and the extension that wrote it.
@@ -344,16 +344,16 @@ pub enum BeforeHandoffOutcome {
         /// The extension whose note was last returned.
         extension: String,
     },
-    /// A `blocking` hook failed: the handoff does not complete. It
+    /// A `blocking` hook failed: the compaction does not complete. It
     /// carries no note.
     Failed(HookFailure),
 }
 
-/// The answer to a `before_handoff` call.
+/// The answer to a `before_compaction` call.
 #[derive(Debug, Clone, PartialEq)]
-pub struct BeforeHandoffAnswer {
+pub struct BeforeCompactionAnswer {
     /// What the chain decided.
-    pub outcome: BeforeHandoffOutcome,
+    pub outcome: BeforeCompactionOutcome,
     /// The notices the chain raised, such as a `non-blocking` hook's failure.
     pub notices: Vec<Notice>,
 }
@@ -437,9 +437,9 @@ pub trait Hooks: Send + Sync {
     /// Runs every `turn_end` hook on the model's final reply, in order, and
     /// returns the messages they continued the turn with.
     fn turn_end(&self, end: &TurnEnd<'_>) -> ContextAnswer;
-    /// Runs every `before_handoff` hook on the handoff, in order, and
+    /// Runs every `before_compaction` hook on the compaction, in order, and
     /// returns the note they wrote, if any.
-    fn before_handoff(&self, handoff: &BeforeHandoff<'_>) -> BeforeHandoffAnswer;
+    fn before_compaction(&self, compaction: &BeforeCompaction<'_>) -> BeforeCompactionAnswer;
     /// Hands the session loop's inbox to the hooks, so a program an
     /// extension ran can be logged as `extension_exec`.
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);
@@ -472,8 +472,8 @@ pub enum StartReason {
     Fork,
     /// A rewound session.
     Rewind,
-    /// A handoff, once the note is ready.
-    Handoff,
+    /// A compaction, once the note is ready.
+    Compaction,
 }
 
 /// What a `session_start` hook is given (`docs/extensions.md`, "The hook

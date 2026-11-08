@@ -18,7 +18,7 @@ mod completion;
 mod configure;
 mod continue_session;
 mod delegates;
-mod handoff;
+mod compaction;
 mod hub_command;
 mod keeper;
 mod keeper_child;

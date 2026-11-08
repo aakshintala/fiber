@@ -223,7 +223,7 @@ fn incompatible_specific_slot_allows_catch_all_and_preserves_version_notice() {
     quit(run);
 }
 #[test]
-fn timeout_handoff_never_reuses_the_disabled_winners_cached_row() {
+fn timeout_compaction_never_reuses_the_disabled_winners_cached_row() {
     let setup = Setup::new();
     configure(&setup, Some("alpha"));
     write_json(

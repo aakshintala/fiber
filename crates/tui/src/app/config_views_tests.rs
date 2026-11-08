@@ -37,7 +37,7 @@ fn now() -> Instant {
 fn fake() -> Arc<Fake> {
     let mut fake = Fake::new(vec![
         row(
-            "handoff.tokens",
+            "compaction.tokens",
             Shown::Value("400000".to_owned()),
             "default",
             WriteScope::Any { repo: true },
@@ -127,7 +127,7 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
         "{rows:?}"
     );
     assert!(
-        rows.iter().any(|row| row.starts_with("› handoff.tokens")),
+        rows.iter().any(|row| row.starts_with("› compaction.tokens")),
         "{rows:?}"
     );
     assert_eq!(seam.reads(), [PathBuf::from("/w")]);
@@ -141,7 +141,7 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
         "{rows:?}"
     );
     assert!(
-        rows.iter().any(|row| row.starts_with(" › handoff.tokens")),
+        rows.iter().any(|row| row.starts_with(" › compaction.tokens")),
         "{rows:?}"
     );
 }
@@ -373,7 +373,7 @@ fn a_usage_line_sets_the_reload_cost() {
     assert_eq!(
         below,
         Some(vec![
-            "changing handoff.tokens needs a reload (~201k tokens)".to_owned()
+            "changing compaction.tokens needs a reload (~201k tokens)".to_owned()
         ])
     );
 }
@@ -443,7 +443,7 @@ fn the_reload_cost_is_the_session_on_screens_only() {
     app.open_config_view(ConfigView::Settings);
     assert_eq!(
         app.config_view_screen().map(|frame| frame.below),
-        Some(vec!["changing handoff.tokens needs a reload".to_owned()])
+        Some(vec!["changing compaction.tokens needs a reload".to_owned()])
     );
 }
 
@@ -452,9 +452,9 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
     for (on_home, said) in [
         (
             false,
-            "changing handoff.tokens needs a reload (~201k tokens)",
+            "changing compaction.tokens needs a reload (~201k tokens)",
         ),
-        (true, "changing handoff.tokens needs a reload"),
+        (true, "changing compaction.tokens needs a reload"),
     ] {
         let mut app = attached(fake());
         app.on_line(session_line(
@@ -1312,7 +1312,7 @@ fn failed_copy_cleanup_does_not_prevent_store_or_view_reread() {
 fn theme_fake() -> Fake {
     let mut fake = Fake::new(vec![
         row(
-            "handoff.tokens",
+            "compaction.tokens",
             Shown::Value("400000".to_owned()),
             "default",
             WriteScope::Any { repo: true },
@@ -1393,7 +1393,7 @@ fn slash_theme_opens_the_picker_with_live_preview_and_esc_restore() {
     let mut base = theme_fake();
     base.rows = std::sync::Mutex::new(Ok(vec![
         row(
-            "handoff.tokens",
+            "compaction.tokens",
             Shown::Value("400000".to_owned()),
             "default",
             WriteScope::Any { repo: true },
@@ -1528,7 +1528,7 @@ fn slash_theme_without_a_theme_row_opens_the_rows() {
     // With no `tui.theme` row the picker has nothing to choose from:
     // `/theme` opens the rows, as `/settings` does, and queues nothing.
     let seam = Arc::new(Fake::new(vec![row(
-        "handoff.tokens",
+        "compaction.tokens",
         Shown::Value("400000".to_owned()),
         "default",
         WriteScope::Any { repo: true },
@@ -1687,7 +1687,7 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
 fn big_fake() -> Arc<Fake> {
     Arc::new(Fake::new(vec![
         row(
-            "handoff.tokens",
+            "compaction.tokens",
             Shown::Value("400000".to_owned()),
             "default",
             WriteScope::Any { repo: true },
@@ -1723,7 +1723,7 @@ fn big_fake() -> Arc<Fake> {
             WriteScope::Any { repo: true },
         ),
         row(
-            "handoff.dir",
+            "compaction.dir",
             Shown::Value("auto".to_owned()),
             "global",
             WriteScope::Any { repo: true },

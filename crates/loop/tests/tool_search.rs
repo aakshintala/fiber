@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use contract::emit::Emit;
 use contract::events::{CacheLifetime, EventKind, TurnOutcome};
 use contract::hook::{
-    AfterToolAnswer, AfterToolOutcome, BeforeHandoffAnswer, BeforeHandoffOutcome,
+    AfterToolAnswer, AfterToolOutcome, BeforeCompactionAnswer, BeforeCompactionOutcome,
     BeforeMessageAnswer, BeforeMessageOutcome, BeforeToolAnswer, BeforeToolOutcome, CheckAnswer,
     CheckOutcome, ContextAnswer, ContextOutcome,
 };
@@ -203,12 +203,12 @@ impl CatalogTool {
         tool
     }
 
-    /// A tool whose result carries the handoff `note`, ending the context.
+    /// A tool whose result carries the compaction `note`, ending the context.
     fn wrapping(name: &'static str, note: &str) -> Self {
         let mut tool = Self::deferred(name);
         tool.deferred = false;
         tool.output.control = Some(contract::events::Control {
-            handoff: Some(note.into()),
+            compaction: Some(note.into()),
             ..Default::default()
         });
         tool
@@ -420,9 +420,9 @@ impl contract::hook::Hooks for AfterToolHooks {
         }
     }
 
-    fn before_handoff(&self, _: &contract::hook::BeforeHandoff<'_>) -> BeforeHandoffAnswer {
-        BeforeHandoffAnswer {
-            outcome: BeforeHandoffOutcome::NoNote,
+    fn before_compaction(&self, _: &contract::hook::BeforeCompaction<'_>) -> BeforeCompactionAnswer {
+        BeforeCompactionAnswer {
+            outcome: BeforeCompactionOutcome::NoNote,
             notices: Vec::new(),
         }
     }
@@ -829,7 +829,7 @@ fn two_searches_in_one_step_render_at_their_own_positions() {
 }
 
 #[test]
-fn a_handoff_after_a_search_leaves_no_search_result_for_the_next_request() {
+fn a_compaction_after_a_search_leaves_no_search_result_for_the_next_request() {
     let search = Arc::new(SearchScript {
         outputs: Mutex::new(vec![SearchTool::output(&["a"])].into()),
         ..SearchScript::default()
@@ -860,7 +860,7 @@ fn a_handoff_after_a_search_leaves_no_search_result_for_the_next_request() {
         kinds_with(&["tool_call_started", "tool_call_completed"])
     );
     // The second turn hands off on `wrap` with no search in the step: the
-    // handoff drops the earlier search with the turn's conversation.
+    // compaction drops the earlier search with the turn's conversation.
     assert_eq!(harness.turn("again"), Some(TurnOutcome::Completed));
     let lines = harness.lines();
     assert_kinds(
@@ -876,7 +876,7 @@ fn a_handoff_after_a_search_leaves_no_search_result_for_the_next_request() {
             "assistant_message_completed",
             "tool_call_started",
             "tool_call_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "step_started",
             "assistant_message_started",
@@ -890,7 +890,7 @@ fn a_handoff_after_a_search_leaves_no_search_result_for_the_next_request() {
     );
     // Four requests: each turn's own request and its continuation. The
     // restart carries the note but no search result: the earlier loaded
-    // search left the conversation with the handoff.
+    // search left the conversation with the compaction.
     let requests = harness.requests();
     assert_eq!(requests.len(), 4);
     let restart = &requests[3].conversation;
@@ -904,16 +904,16 @@ fn a_handoff_after_a_search_leaves_no_search_result_for_the_next_request() {
         !restart
             .iter()
             .any(|input| matches!(input, Input::ToolSearchResult { .. })),
-        "no search result survives the handoff"
+        "no search result survives the compaction"
     );
     assert!(
         !restart
             .iter()
             .any(|input| matches!(input, Input::ToolCall { .. })),
-        "no search call survives the handoff"
+        "no search call survives the compaction"
     );
     // The earlier load moved back to deferred: declared, loaded, then
-    // dropped by the handoff. The second turn reuses the first build, so
+    // dropped by the compaction. The second turn reuses the first build, so
     // `a` is declared once.
     assert_eq!(harness.rows.declared("a"), 1);
     let states = harness.rows.states("a");
@@ -1130,7 +1130,7 @@ fn a_failed_search_renders_as_an_ordinary_error_result() {
 }
 
 #[test]
-fn a_handoff_carries_a_same_step_search_past_the_note() {
+fn a_compaction_carries_a_same_step_search_past_the_note() {
     let search = Arc::new(SearchScript {
         outputs: Mutex::new(vec![SearchTool::output(&["a"])].into()),
         ..SearchScript::default()
@@ -1179,7 +1179,7 @@ fn a_handoff_carries_a_same_step_search_past_the_note() {
             "tool_call_started",
             "tool_call_completed",
             "tool_call_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "step_started",
             "assistant_message_started",
@@ -1198,7 +1198,7 @@ fn a_handoff_carries_a_same_step_search_past_the_note() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[1].conversation.len(), 5);
     assert!(is_opening(&requests[1].conversation[0]));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert!(
         matches!(&requests[1].conversation[1], Input::User { text, .. } if text == "The person's new message:\nhi")
     );
@@ -1225,7 +1225,7 @@ fn a_handoff_carries_a_same_step_search_past_the_note() {
             .states("a")
             .contains(&contract::events::ToolState::Loaded)
     );
-    // The carried result survives the handoff, so `a` stays loaded.
+    // The carried result survives the compaction, so `a` stays loaded.
     assert_eq!(
         harness.rows.states("a").last(),
         Some(&contract::events::ToolState::Loaded)
@@ -1295,7 +1295,7 @@ fn rows_follow_declared_states_and_search_loads_only_deferred_names() {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: r#loop::HandoffSettings::default(),
+                compaction: r#loop::CompactionSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
                     code: ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),
@@ -1952,7 +1952,7 @@ fn a_rewound_session_off_deferral_renders_the_logged_search_as_text() {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: r#loop::HandoffSettings::default(),
+                compaction: r#loop::CompactionSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
                     code: ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),
@@ -2205,7 +2205,7 @@ fn a_switch_off_and_back_renders_each_way() {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: r#loop::HandoffSettings::default(),
+                compaction: r#loop::CompactionSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
                     code: ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),

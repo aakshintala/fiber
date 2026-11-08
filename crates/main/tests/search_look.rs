@@ -477,8 +477,8 @@ fn copied_sits_below_the_search_box() {
 
 /// A setup whose scripted model reads a large file and then answers
 /// `REPLY`: the read gives the `/context` view tool results to draw,
-/// and both steps report usage under the 400k handoff point, so no
-/// handoff clears them before the views open.
+/// and both steps report usage under the 400k compaction point, so no
+/// compaction clears them before the views open.
 const REPLY: &str = "The quay ledger balances.";
 
 fn setup_with_read() -> Setup {
@@ -500,7 +500,7 @@ fn setup_with_read() -> Setup {
     );
     write_json(
         &setup.home().join("config.json"),
-        &json!({"model": "scripted/s.json", "handoff": {"tokens": 400000},
+        &json!({"model": "scripted/s.json", "compaction": {"tokens": 400000},
             "budget": {"usd": 20}, "hub": {"idle_exit_ms": 1000}}),
     );
     setup
@@ -582,7 +582,7 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
     let setup = setup_with_read();
     let mut run = turned(&setup, "go");
     // `/context`: the top row, the bold sizes, tool results in
-    // `error`, and the handoff marker and label in `attention`.
+    // `error`, and the compaction marker and label in `attention`.
     let grid = open_view(&mut run, "context");
     assert_top_row(&grid, "Context", "/context");
     // The sizes row names the window: the doc's "268k tokens" bold
@@ -598,7 +598,7 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
     for dx in 0..6 {
         assert!(grid.cell(at + dx, sizes).bold, "tokens is bold");
     }
-    // The bar: the handoff marker in `attention` with its label. The
+    // The bar: the compaction marker in `attention` with its label. The
     // base bar draws no colour, so both fail there. (Per-category █
     // runs need a tokens-per-byte rate, which the scripted provider
     // never reports; the unit tests cover them with an injected rate.)
@@ -610,14 +610,14 @@ fn the_context_usage_and_tools_top_rows_match_the_doc() {
     let bar = bar as u16;
     assert!(
         (0..160).any(|x| grid.cell(x, bar).symbol == "│" && grid.cell(x, bar).fg == ATTENTION),
-        "the handoff marker in attention"
+        "the compaction marker in attention"
     );
-    let label = col_at(&grid, bar + 1, "handoff 400k");
+    let label = col_at(&grid, bar + 1, "compaction 400k");
     for dx in 0..12 {
         assert_eq!(
             grid.cell(label + dx, bar + 1).fg,
             ATTENTION,
-            "the handoff label {dx}"
+            "the compaction label {dx}"
         );
     }
     // The read landed in the largest tool results: the heading bold,

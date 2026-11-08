@@ -38,7 +38,7 @@ fn question(text: &str) -> Question {
 fn asking(name: &'static str, texts: &[&str]) -> TestTool {
     let mut tool = TestTool::reads(name, "Asked.");
     tool.output.control = Some(Control {
-        handoff: None,
+        compaction: None,
         questions: Some(texts.iter().map(|text| question(text)).collect()),
         skill: None,
         name: None,
@@ -46,11 +46,11 @@ fn asking(name: &'static str, texts: &[&str]) -> TestTool {
     tool
 }
 
-/// A tool whose calls return `control.handoff`.
+/// A tool whose calls return `control.compact`.
 fn handing_off(name: &'static str) -> TestTool {
     let mut tool = TestTool::reads(name, "Handed off.");
     tool.output.control = Some(Control {
-        handoff: Some("the note".into()),
+        compaction: Some("the note".into()),
         questions: None,
         skill: None,
         name: None,
@@ -307,7 +307,7 @@ fn an_empty_list_of_questions_asks_nothing() {
 }
 
 #[test]
-fn a_handoff_in_the_same_step_applies_before_the_questions_end_the_turn() {
+fn a_compaction_in_the_same_step_applies_before_the_questions_end_the_turn() {
     let mut session = session(
         vec![
             Arc::new(handing_off("hand")),
@@ -329,7 +329,7 @@ fn a_handoff_in_the_same_step_applies_before_the_questions_end_the_turn() {
         "tool_call_started",
         "tool_call_completed",
         "tool_call_completed",
-        "handoff_completed",
+        "compaction_completed",
         "opening_message",
         "turn_completed",
     ]);
@@ -346,7 +346,7 @@ fn a_handoff_in_the_same_step_applies_before_the_questions_end_the_turn() {
             .position(|line| line.kind() == EventKind::from_name(kind))
             .unwrap()
     };
-    assert!(at("handoff_completed") < at("turn_completed"));
+    assert!(at("compaction_completed") < at("turn_completed"));
     assert_eq!(turn_completed(&lines)["questions"], asked(&["Which?"]));
     assert_eq!(session.requests().len(), 1);
 }
@@ -434,7 +434,7 @@ fn a_cancel_that_ends_the_step_drops_the_questions() {
 }
 
 #[test]
-fn a_handoff_the_questions_and_a_queued_line_end_one_step_in_order() {
+fn a_compaction_the_questions_and_a_queued_line_end_one_step_in_order() {
     let mut session = session(
         vec![
             Arc::new(handing_off("hand")),
@@ -460,7 +460,7 @@ fn a_handoff_the_questions_and_a_queued_line_end_one_step_in_order() {
         "tool_call_completed",
         "tool_call_completed",
         "tool_call_completed",
-        "handoff_completed",
+        "compaction_completed",
         "opening_message",
         "turn_completed",
     ]);
@@ -476,7 +476,7 @@ fn a_handoff_the_questions_and_a_queued_line_end_one_step_in_order() {
 }
 
 #[test]
-fn a_directory_scanned_before_a_handoff_sends_its_file_once_in_the_new_context() {
+fn a_directory_scanned_before_a_compaction_sends_its_file_once_in_the_new_context() {
     let mut session = Session::with_tools(
         vec![
             calls_reply(
@@ -511,7 +511,7 @@ fn a_directory_scanned_before_a_handoff_sends_its_file_once_in_the_new_context()
         "tool_call_completed",
         "tool_call_completed",
         "tool_call_completed",
-        "handoff_completed",
+        "compaction_completed",
         "opening_message",
         "turn_completed",
     ]);
@@ -558,10 +558,10 @@ fn a_cancel_after_the_questions_are_collected_ends_the_turn_interrupted() {
         ],
         &["hand", "ask"],
     );
-    // The handoff's restart runs after the questions are collected and
+    // The compaction's restart runs after the questions are collected and
     // before the turn ends: a cancel there is the latest one can land.
     let cancel = Arc::clone(&session.cancel);
-    let mut session = session.on_handoff(Arc::new(move || {
+    let mut session = session.on_compaction(Arc::new(move || {
         cancel.cancel();
     }));
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
@@ -578,7 +578,7 @@ fn a_cancel_after_the_questions_are_collected_ends_the_turn_interrupted() {
         "tool_call_started",
         "tool_call_completed",
         "tool_call_completed",
-        "handoff_completed",
+        "compaction_completed",
         "opening_message",
         "turn_completed",
     ]);
@@ -592,7 +592,7 @@ fn a_cancel_after_the_questions_are_collected_ends_the_turn_interrupted() {
     assert!(
         lines
             .iter()
-            .any(|line| line.kind() == EventKind::HandoffCompleted)
+            .any(|line| line.kind() == EventKind::CompactionCompleted)
     );
     assert_eq!(turn_completed(&lines), json!({"outcome": "interrupted"}));
     assert_eq!(session.requests().len(), 1);

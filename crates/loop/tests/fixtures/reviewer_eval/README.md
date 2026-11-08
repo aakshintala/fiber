@@ -79,7 +79,7 @@ person's messages, the earlier tool calls, and the reply each person
 message answers (the model's text directly before it, marked as the
 agent's). A tool call between that text and the next person message breaks
 the link, so no reply is shown. Every other model prose and every tool
-result is stripped. A compaction marker acts as a handoff: the prefix
+result is stripped. A compaction marker acts as a compaction: the prefix
 resets to every earlier person message, each with the reply it answered.
 A subagent's first user message counts as the person message. Foreign
 entries get synthetic seqs. Everything passes through the scrubber.

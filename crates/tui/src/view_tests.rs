@@ -599,7 +599,7 @@ fn conversation_slots_replace_through_the_seam() {
         json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
     ));
     app.on_line(at(
-        "handoff_started",
+        "compaction_started",
         None,
         3_000,
         json!({"trigger": "auto"}),
@@ -618,7 +618,7 @@ fn conversation_slots_replace_through_the_seam() {
         json!({"text": "the plan"}),
     ));
     app.on_line(at(
-        "handoff_completed",
+        "compaction_completed",
         None,
         4_000,
         json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 100}),
@@ -1848,7 +1848,7 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
     // the same four matches above the input line.
     let (buf, _) = pointed(&mut app, 80, 14, None);
     let shown = text(&buf);
-    // `/h` matches home, hooks, handoff and help in the four-row overlay
+    // `/h` matches home, hooks, compaction and help in the four-row overlay
     // above the input line, the first focused. Its cells sit on the bar in
     // `accent`; the rest keep the surface tint.
     let row = |y: u16| {
@@ -1861,7 +1861,7 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
     for (name, barred) in [
         ("home", true),
         ("hooks", false),
-        ("handoff", false),
+        ("compaction", false),
         ("help", false),
     ] {
         let y = u16::try_from(
@@ -3869,8 +3869,8 @@ fn no_cross_without_conversation_rows() {
 }
 
 #[test]
-fn a_handoff_note_row_keeps_its_sides_without_colour() {
-    // The handoff tint takes the card's side bars when no colour is set
+fn a_compaction_note_row_keeps_its_sides_without_colour() {
+    // The compaction tint takes the card's side bars when no colour is set
     // (`docs/tui.md`, "Look"): a note row sits on that tint alone.
     crate::surface::init(&|name: &str| (name == "NO_COLOR").then(|| "1".to_owned()));
     let mut app = App::new(PathBuf::from("/w"));
@@ -3885,7 +3885,7 @@ fn a_handoff_note_row_keeps_its_sides_without_colour() {
     ));
     app.on_line(session_line(
         S_A,
-        "handoff_started",
+        "compaction_started",
         serde_json::json!({"trigger": "auto"}),
         None,
     ));
@@ -3898,7 +3898,7 @@ fn a_handoff_note_row_keeps_its_sides_without_colour() {
     ));
     app.on_line(session_line(
         S_A,
-        "handoff_completed",
+        "compaction_completed",
         serde_json::json!({"outcome": "completed", "tokens_before": 1_000}),
         None,
     ));

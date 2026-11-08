@@ -1247,9 +1247,9 @@ impl Screen {
 /// names the card with `auto` right-aligned, the directory placeholder
 /// on the next row, the model reads `fake/m` with thinking `high`
 /// right-aligned, the context bar is 17 cells of `▆` with its
-/// marker and size, then the handoff rows; the scripted turn's fixed
+/// marker and size, then the compaction rows; the scripted turn's fixed
 /// usage reads `tokens in / out  10 / 3` with 40% cache hits, the
-/// cache-reset countdown, the context sits at 0% with the handoff
+/// cache-reset countdown, the context sits at 0% with the compaction
 /// marker at 70.0k, the cost is still unknown, and one turn ran
 /// (`panel.rs`).
 fn expected_card(text: usize, _panel: u16) -> Vec<String> {
@@ -1262,23 +1262,23 @@ fn expected_card(text: usize, _panel: u16) -> Vec<String> {
         " ".repeat(text - "fake/m".len() - "high".len())
     ));
     // The context rows: the 17-cell bar with its marker and size, then
-    // the handoff rows. The trigger reads 70.0k.
+    // the compaction rows. The trigger reads 70.0k.
     let bar_pad = text - 17 - 1 - "13".len();
     rows.push(format!(
         "{}│{}13",
         "\u{2586}".repeat(17),
         " ".repeat(bar_pad)
     ));
-    let handoff = "handoff at 70.0k";
+    let compaction = "compacts at 70.0k";
     let share = "0% of window";
-    if handoff.len() + 1 + share.len() <= text {
+    if compaction.len() + 1 + share.len() <= text {
         rows.push(format!(
-            "{handoff}{}0% of window",
-            " ".repeat(text - handoff.len() - share.len())
+            "{compaction}{}0% of window",
+            " ".repeat(text - compaction.len() - share.len())
         ));
     } else {
         let room = text - share.len() - 1;
-        let kept: String = handoff.chars().take(room - 1).collect();
+        let kept: String = compaction.chars().take(room - 1).collect();
         rows.push(format!("{kept}… {share}"));
     }
     rows.push(fit_row("then a summary, fresh context", text));
@@ -1456,7 +1456,7 @@ fn journey_prompt_answer_approval_resize_quit() {
     // floor beside the 84-column conversation minimum), so the grid
     // follows to the new size with the conversation still on it.
     run.resize(116, 30);
-    // The card's handoff phrase is whole only when redrawn: retained
+    // The card's compaction phrase is whole only when redrawn: retained
     // bytes truncated to 116 columns lose its tail. It reads settled
     // turn-1 usage, unlike the card's turn count, which stays stale
     // when `turn_started` lines are missed under load. The parked cursor

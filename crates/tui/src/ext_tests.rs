@@ -2120,9 +2120,9 @@ fn every_answers_field_is_in_the_key() {
 }
 
 #[test]
-fn every_handoff_band_field_is_in_the_key() {
-    use super::{HandoffBand, TurnBandState, TurnSizes};
-    let band = || HandoffBand {
+fn every_compaction_band_field_is_in_the_key() {
+    use super::{CompactionBand, TurnBandState, TurnSizes};
+    let band = || CompactionBand {
         trigger: "the model handed off",
         ts: 1,
         state: TurnBandState::Done(TurnSizes {
@@ -2131,41 +2131,41 @@ fn every_handoff_band_field_is_in_the_key() {
         }),
         flat: false,
     };
-    let one = band().key("handoff_band");
+    let one = band().key("compaction_band");
     assert_ne!(one, band().key("reply"));
     for (index, varied) in [
-        HandoffBand {
+        CompactionBand {
             trigger: "automatic",
             ..band()
         },
-        HandoffBand { ts: 2, ..band() },
-        HandoffBand {
+        CompactionBand { ts: 2, ..band() },
+        CompactionBand {
             state: TurnBandState::Writing,
             ..band()
         },
-        HandoffBand {
+        CompactionBand {
             state: TurnBandState::Unchanged { cancelled: false },
             ..band()
         },
-        HandoffBand {
+        CompactionBand {
             state: TurnBandState::Unchanged { cancelled: true },
             ..band()
         },
-        HandoffBand {
+        CompactionBand {
             state: TurnBandState::Done(TurnSizes {
                 before: 2,
                 after: Some(2),
             }),
             ..band()
         },
-        HandoffBand {
+        CompactionBand {
             state: TurnBandState::Done(TurnSizes {
                 before: 1,
                 after: None,
             }),
             ..band()
         },
-        HandoffBand {
+        CompactionBand {
             flat: true,
             ..band()
         },
@@ -2173,7 +2173,7 @@ fn every_handoff_band_field_is_in_the_key() {
     .into_iter()
     .enumerate()
     {
-        assert_ne!(one, varied.key("handoff_band"), "case {index}");
+        assert_ne!(one, varied.key("compaction_band"), "case {index}");
     }
 }
 

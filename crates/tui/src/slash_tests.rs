@@ -79,7 +79,7 @@ const DRAWN_ORDER: &[&str] = &[
     "rewind",
     "cd",
     "fork",
-    "handoff",
+    "compaction",
     "name",
     "login",
     "logout",
@@ -140,7 +140,7 @@ fn the_doc_table_lists_the_drawn_commands_in_drawn_order() {
         let cell = line.split('|').nth(1).unwrap_or("");
         for part in cell.split(',') {
             let part = part.trim().trim_matches('`');
-            // `/handoff [instructions]`, `/?`.
+            // `/compact [instructions]`, `/?`.
             let name = part
                 .trim_start_matches('/')
                 .split_whitespace()
@@ -353,12 +353,12 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
-    // The table orders `/compact` after `/handoff` (`docs/tui.md`, "Slash commands").
+    // The table orders `/compact` after `/compact` (`docs/tui.md`, "Slash commands").
     let all = rows(&[]);
-    let handoff = all.iter().find(|row| row.name == "handoff");
+    let compaction = all.iter().find(|row| row.name == "compaction");
     assert_eq!(
-        handoff.map(Row::line),
-        Some("/handoff /compact [instructions]  Starts a handoff.  command".to_owned())
+        compaction.map(Row::line),
+        Some("/compact /compact [instructions]  Starts a compaction.  command".to_owned())
     );
     let home = all.iter().find(|row| row.name == "home");
     assert_eq!(

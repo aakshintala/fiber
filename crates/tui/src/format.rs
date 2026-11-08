@@ -123,7 +123,7 @@ pub(crate) struct Kinds {
     pub(crate) messaged_delegates: u64,
     /// `session_message` calls.
     pub(crate) messaged_sessions: u64,
-    /// `session_list`, `session_search`, `handoff` and `name_session`
+    /// `session_list`, `session_search`, `compaction` and `name_session`
     /// calls.
     pub(crate) sessions: u64,
     /// `reviewer_notes_save` calls.
@@ -455,7 +455,7 @@ pub(crate) enum Kind {
     DelegateMessage,
     /// `session_message`.
     SessionMessage,
-    /// `session_list`, `session_search`, `handoff` and `name_session`.
+    /// `session_list`, `session_search`, `compaction` and `name_session`.
     Session,
     /// `reviewer_notes_save`.
     Notes,
@@ -504,7 +504,7 @@ pub(crate) fn kind(name: &str, arguments: &Value) -> Kind {
         "tool_search" => Kind::Tools,
         "delegate_message" => Kind::DelegateMessage,
         "session_message" => Kind::SessionMessage,
-        "session_list" | "session_search" | "handoff" | "name_session" => Kind::Session,
+        "session_list" | "session_search" | "compaction" | "name_session" => Kind::Session,
         "reviewer_notes_save" => Kind::Notes,
         "shell" => match argument(arguments, "command")
             .and_then(|command| command.split_whitespace().next())

@@ -283,11 +283,11 @@ fn slash_hint() {
     type_text(&mut app, "/h");
     insta::assert_snapshot!("slash-hint", screen(&app, 160, 48));
     let buf = buffer(&app, 160, 48);
-    // The handoff row is past the focused one, so its hint keeps its
+    // The compaction row is past the focused one, so its hint keeps its
     // own colour: the argument hint in `attention`, the tag dim.
     let row = (0..48)
-        .find(|y| row_text(&buf, *y).contains("handoff"))
-        .expect("the handoff row");
+        .find(|y| row_text(&buf, *y).contains("compaction"))
+        .expect("the compaction row");
     let text = row_text(&buf, row);
     let hint = text.find("[instructions]").expect("the hint");
     for n in 0.."[instructions]".len() {
@@ -314,7 +314,7 @@ fn the_slash_row_names_share_one_column_and_the_bar_is_black_on_accent() {
     let shown = screen(&app, 160, 48);
     // The names start in one column on every row.
     let mut starts = Vec::new();
-    for name in ["home", "handoff", "help", "thinking"] {
+    for name in ["home", "compaction", "help", "thinking"] {
         let row = (0..48)
             .map(|y| row_text(&buf, y))
             .find(|row| row.contains(name))

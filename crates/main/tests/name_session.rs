@@ -141,7 +141,7 @@ fn naming_writes_session_named_before_the_completion() {
         tool["description"]
             .as_str()
             .unwrap()
-            .contains("when the work's topic changes, a handoff included"),
+            .contains("when the work's topic changes, a compaction included"),
         "{tool}"
     );
 }

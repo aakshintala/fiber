@@ -1,9 +1,9 @@
-//! Owns the note request to the model, its recording, and the handoff run.
+//! Owns the note request to the model, its recording, and the compaction run.
 
 use std::sync::Arc;
 
 use contract::events::{
-    ContextAdded, Event, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome,
+    ContextAdded, Event, CompactionCompleted, CompactionStarted, CompactionTrigger, Note, Outcome,
     TurnCompleted, TurnOutcome,
 };
 use contract::provider::{Finish, Input, ModelRequest, Reply, ReplyAction};
@@ -15,21 +15,21 @@ use crate::prompt::{fill, message};
 use crate::retry::Attempted;
 use crate::{Error, Loop, cancel};
 
-/// The request for the note: `handoff-note`, then `handoff-focus` when there
+/// The request for the note: `compaction-note`, then `compaction-focus` when there
 /// are instructions.
 pub(crate) fn note_request_text(session_log: &str, instructions: Option<&str>) -> String {
-    let mut text = fill(message("handoff-note"), &[("session_log", session_log)]);
+    let mut text = fill(message("compaction-note"), &[("session_log", session_log)]);
     if let Some(instructions) = instructions {
         text.push_str("\n\n");
         text.push_str(&fill(
-            message("handoff-focus"),
+            message("compaction-focus"),
             &[("instructions", instructions)],
         ));
     }
     text
 }
 
-/// The turn's end when a handoff was cancelled: a person cancelled the turn.
+/// The turn's end when a compaction was cancelled: a person cancelled the turn.
 pub(super) fn cancelled(outcome: Outcome) -> Option<TurnCompleted> {
     (outcome == Outcome::Cancelled).then(|| crate::ended(TurnOutcome::Interrupted, None))
 }
@@ -38,7 +38,7 @@ pub(super) fn cancelled(outcome: Outcome) -> Option<TurnCompleted> {
 pub(super) enum Noted {
     /// The reply is the note; its message action carries it.
     Note(ActionId),
-    /// A `before_handoff` hook wrote the note instead; no note request
+    /// A `before_compaction` hook wrote the note instead; no note request
     /// was made.
     Hook {
         note_text: String,
@@ -76,7 +76,7 @@ pub(crate) fn reply_note(reply: &Reply) -> String {
         .join("\n")
 }
 
-/// One handoff's completion from its note: `Completed` keeps the note,
+/// One compaction's completion from its note: `Completed` keeps the note,
 /// a `session_start` failure or cancel drops it.
 fn finished(
     note: Option<Note>,
@@ -84,12 +84,12 @@ fn finished(
     instructions: Option<String>,
     started: Started,
 ) -> (
-    HandoffCompleted,
+    CompactionCompleted,
     Vec<(ContextAdded, Vec<contract::hook::StateLine>)>,
 ) {
     match started {
         Started::Contexts(contexts) => (
-            HandoffCompleted {
+            CompactionCompleted {
                 outcome: Outcome::Completed,
                 error: None,
                 note,
@@ -99,7 +99,7 @@ fn finished(
             contexts,
         ),
         Started::Failed(failure) => (
-            HandoffCompleted {
+            CompactionCompleted {
                 outcome: Outcome::Failed,
                 error: Some(failure),
                 note: None,
@@ -109,7 +109,7 @@ fn finished(
             Vec::new(),
         ),
         Started::Cancelled => (
-            HandoffCompleted {
+            CompactionCompleted {
                 outcome: Outcome::Cancelled,
                 error: None,
                 note: None,
@@ -121,27 +121,27 @@ fn finished(
     }
 }
 
-/// What one handoff runs from: a requested note, or the tool calls'
-/// own arguments as the note (`docs/handoff.md`, "A tool").
+/// What one compaction runs from: a requested note, or the tool calls'
+/// own arguments as the note (`docs/compaction.md`, "A tool").
 pub(super) enum Source {
-    /// A handoff with a note request: automatic, a person's or overflow.
+    /// A compaction with a note request: automatic, a person's or overflow.
     Requested {
-        trigger: HandoffTrigger,
+        trigger: CompactionTrigger,
         instructions: Option<String>,
     },
-    /// A tool-started handoff: the taken note, with no note request.
+    /// A tool-started compaction: the taken note, with no note request.
     Tools { note: Vec<ActionId> },
 }
 
 impl Loop {
-    /// What a decided handoff leaves to do: its completion, and on a
+    /// What a decided compaction leaves to do: its completion, and on a
     /// completed one a new context, unmeasured and missing the cache for
     /// everything after the preamble, under a new opening message with
     /// the `session_start` contexts right after it; the files seen are
     /// forgotten. One guard owns the completion, the opening message and
     /// the contexts, across every outcome the hook decided, so a cancel
     /// or a shutdown applies all or none: a refused commit records the
-    /// handoff `cancelled`, with no note, no opening message and no
+    /// compaction `cancelled`, with no note, no opening message and no
     /// context. The guard holds the cancellation lock, so only writes
     /// run under it; forgetting and the reviewer selection run after it
     /// is released. With no hooks there is no guard and no new write:
@@ -149,25 +149,25 @@ impl Loop {
     pub(super) fn restarted(
         &mut self,
         turn: &TurnId,
-        done: HandoffCompleted,
+        done: CompactionCompleted,
         contexts: Vec<(ContextAdded, Vec<contract::hook::StateLine>)>,
         state: Vec<contract::hook::StateLine>,
     ) -> Result<Outcome, Error> {
         let completed = done.outcome == Outcome::Completed;
         if completed {
             self.sent = None;
-            self.handoff.measured = None;
+            self.compaction.measured = None;
         }
         let outcome = done.outcome;
         let tokens_before = done.tokens_before;
         let instructions = done.instructions.clone();
         #[cfg(test)]
-        crate::lifecycle::pause_after_handoff_start_check();
+        crate::lifecycle::pause_after_compaction_start_check();
         if self.hooks.is_some() {
             // One flag at a time: no test arms both, so each is consumed
             // by its own check.
             #[cfg(test)]
-            if crate::timing_tests::take_fail_handoff_completed() {
+            if crate::timing_tests::take_fail_compaction_completed() {
                 return Err(crate::timing_tests::log_io_error());
             }
             #[cfg(test)]
@@ -179,7 +179,7 @@ impl Loop {
                 if completed {
                     self.write_carried(state, Some(turn))?;
                 }
-                self.append(&Event::HandoffCompleted(done), turn, None)?;
+                self.append(&Event::CompactionCompleted(done), turn, None)?;
                 if completed {
                     self.write_opening(Some(turn))?;
                     for (added, state) in &contexts {
@@ -191,7 +191,7 @@ impl Loop {
             });
             let Some(written) = written else {
                 self.append(
-                    &Event::HandoffCompleted(HandoffCompleted {
+                    &Event::CompactionCompleted(CompactionCompleted {
                         outcome: Outcome::Cancelled,
                         error: None,
                         note: None,
@@ -207,10 +207,10 @@ impl Loop {
         } else {
             debug_assert!(contexts.is_empty());
             #[cfg(test)]
-            if crate::timing_tests::take_fail_handoff_completed() {
+            if crate::timing_tests::take_fail_compaction_completed() {
                 return Err(crate::timing_tests::log_io_error());
             }
-            self.append(&Event::HandoffCompleted(done), turn, None)?;
+            self.append(&Event::CompactionCompleted(done), turn, None)?;
             #[cfg(test)]
             if crate::timing_tests::take_fail_restarted() {
                 return Err(crate::timing_tests::log_io_error());
@@ -220,21 +220,21 @@ impl Loop {
             }
         }
         if completed {
-            if let Some(forget) = &self.handoff.forget {
+            if let Some(forget) = &self.compaction.forget {
                 forget();
             }
-            self.reviewer_handoff(turn)?;
+            self.reviewer_compaction(turn)?;
         }
         Ok(outcome)
     }
 
-    /// One handoff, end to end: `handoff_started`, the note request, then
-    /// `handoff_completed` with how it ended (`docs/handoff.md`,
+    /// One compaction, end to end: `compaction_started`, the note request, then
+    /// `compaction_completed` with how it ended (`docs/compaction.md`,
     /// "Recording"). A completed one writes the new opening message. A
     /// tool source makes no request for a note and writes no `started`:
     /// its argument is the note. One guard owns the whole run, across
     /// both sources and their shared recording and restart.
-    pub(super) fn run_handoff(
+    pub(super) fn run_compaction(
         &mut self,
         turn: &TurnId,
         source: Source,
@@ -242,32 +242,32 @@ impl Loop {
     ) -> Result<Outcome, Error> {
         // The end-to-end scope begins before the first mutation and ends
         // after recording and the restart, or any error.
-        let _timer = self.diag.timed(contract::diag::Op::TurnHandoff);
+        let _timer = self.diag.timed(contract::diag::Op::TurnCompaction);
         match source {
             Source::Requested {
                 trigger,
                 instructions,
-            } => self.run_requested_handoff(turn, trigger, instructions, tokens_before),
-            Source::Tools { note } => self.run_tool_handoff(turn, note, tokens_before),
+            } => self.run_requested_compaction(turn, trigger, instructions, tokens_before),
+            Source::Tools { note } => self.run_tool_compaction(turn, note, tokens_before),
         }
     }
 
-    /// A requested handoff: `handoff_started`, the note request, then
-    /// `handoff_completed` with how it ended.
-    fn run_requested_handoff(
+    /// A requested compaction: `compaction_started`, the note request, then
+    /// `compaction_completed` with how it ended.
+    fn run_requested_compaction(
         &mut self,
         turn: &TurnId,
-        trigger: HandoffTrigger,
+        trigger: CompactionTrigger,
         instructions: Option<String>,
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
-        self.handoff.step_ran = true;
+        self.compaction.step_ran = true;
         #[cfg(test)]
-        if crate::timing_tests::take_fail_handoff_started() {
+        if crate::timing_tests::take_fail_compaction_started() {
             return Err(crate::timing_tests::log_io_error());
         }
         self.append(
-            &Event::HandoffStarted(HandoffStarted { trigger }),
+            &Event::CompactionStarted(CompactionStarted { trigger }),
             turn,
             None,
         )?;
@@ -281,13 +281,13 @@ impl Loop {
         let mut request_timer = has_preamble
             .then(|| self.diag.timed(contract::diag::Op::TurnRequest))
             .flatten();
-        let mut full = if trigger == HandoffTrigger::Overflow {
+        let mut full = if trigger == CompactionTrigger::Overflow {
             self.moved_results()
         } else {
             self.conversation.clone()
         };
         full.push(Input::User {
-            text: note_request_text(&self.handoff.carry.session_log, instructions.as_deref()),
+            text: note_request_text(&self.compaction.carry.session_log, instructions.as_deref()),
             images: Vec::new(),
         });
         let request = self.request_for(full);
@@ -343,12 +343,12 @@ impl Loop {
         };
         // The hook runs once the note is ready, with the reason and
         // not the note; its contexts follow the new opening message.
-        // A `blocking` failure ends the handoff `failed` with
+        // A `blocking` failure ends the compaction `failed` with
         // `hook_failed`, and the session goes on. The automatic
         // trigger does not fire again in that turn. A hook's note
-        // completes like the model's: `handoff_start` maps it the same
+        // completes like the model's: `compaction_start` maps it the same
         // way, so a `session_start` failure or cancel after it ends the
-        // handoff `failed` or `cancelled` with no note, as after the
+        // compaction `failed` or `cancelled` with no note, as after the
         // model's.
         let (note, state) = match noted {
             Noted::Note(id) => (Note::Actions { note: vec![id] }, Vec::new()),
@@ -365,11 +365,11 @@ impl Loop {
             ),
             Noted::Failed(failure) => {
                 #[cfg(test)]
-                if crate::timing_tests::take_fail_handoff_completed() {
+                if crate::timing_tests::take_fail_compaction_completed() {
                     return Err(crate::timing_tests::log_io_error());
                 }
                 self.append(
-                    &Event::HandoffCompleted(HandoffCompleted {
+                    &Event::CompactionCompleted(CompactionCompleted {
                         outcome: Outcome::Failed,
                         error: Some(failure),
                         note: None,
@@ -379,16 +379,16 @@ impl Loop {
                     turn,
                     None,
                 )?;
-                self.handoff.blocked = true;
+                self.compaction.blocked = true;
                 return Ok(Outcome::Failed);
             }
             Noted::Cancelled => {
                 #[cfg(test)]
-                if crate::timing_tests::take_fail_handoff_completed() {
+                if crate::timing_tests::take_fail_compaction_completed() {
                     return Err(crate::timing_tests::log_io_error());
                 }
                 self.append(
-                    &Event::HandoffCompleted(HandoffCompleted {
+                    &Event::CompactionCompleted(CompactionCompleted {
                         outcome: Outcome::Cancelled,
                         error: None,
                         note: None,
@@ -405,31 +405,31 @@ impl Loop {
             Some(note),
             tokens_before,
             instructions,
-            self.handoff_start(turn)?,
+            self.compaction_start(turn)?,
         );
         let outcome = self.restarted(turn, done, contexts, state)?;
         if outcome == Outcome::Failed {
-            self.handoff.blocked = true;
+            self.compaction.blocked = true;
         }
         Ok(outcome)
     }
 
-    /// A tool-started handoff: no `started` and no note request, with the
+    /// A tool-started compaction: no `started` and no note request, with the
     /// same completion and restart as a requested one. The state flags
     /// stay the tool path's own: no block is set. A `blocking` failure
-    /// writes no opening message and takes no further handoff this step,
+    /// writes no opening message and takes no further compaction this step,
     /// so the call results stay ordinary results.
-    fn run_tool_handoff(
+    fn run_tool_compaction(
         &mut self,
         turn: &TurnId,
         note: Vec<ActionId>,
         tokens_before: u64,
     ) -> Result<Outcome, Error> {
         let taken = Some(Note::Actions { note });
-        let (done, contexts) = finished(taken, tokens_before, None, self.handoff_start(turn)?);
+        let (done, contexts) = finished(taken, tokens_before, None, self.compaction_start(turn)?);
         let outcome = self.restarted(turn, done, contexts, Vec::new())?;
         if outcome != Outcome::Completed {
-            self.handoff.step_ran = true;
+            self.compaction.step_ran = true;
         }
         Ok(outcome)
     }
@@ -470,13 +470,13 @@ impl Loop {
         if finish == Finish::OutputLimit {
             return Ok(Noted::Failed(failure(
                 ErrorCode::OutputTruncated,
-                "The handoff note reached the output limit.",
+                "The compaction note reached the output limit.",
             )));
         }
         if note.trim().is_empty() {
             return Ok(Noted::Failed(failure(
                 ErrorCode::UnreadableReply,
-                "The handoff note reply held no text.",
+                "The compaction note reply held no text.",
             )));
         }
         Ok(Noted::Note(message))
@@ -511,7 +511,7 @@ impl Loop {
     /// written now, named after the call's action.
     fn artifact_of(&self, action: &ActionId, text: &str) -> Option<String> {
         let relative = match self
-            .handoff
+            .compaction
             .carry
             .artifacts
             .iter()
@@ -525,7 +525,7 @@ impl Loop {
                     .0
             }
         };
-        let session = std::path::Path::new(&self.handoff.carry.session_log).parent();
+        let session = std::path::Path::new(&self.compaction.carry.session_log).parent();
         Some(session.map_or(relative.clone(), |dir| {
             dir.join(&relative).display().to_string()
         }))

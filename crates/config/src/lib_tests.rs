@@ -138,26 +138,26 @@ fn get_equals_the_merged_value_for_every_key_shape() {
         (
             vec![
                 default(),
-                global(json!({"handoff": {"tokens": 1}})),
-                project(json!({"handoff": {"tokens": 2}})),
+                global(json!({"compaction": {"tokens": 1}})),
+                project(json!({"compaction": {"tokens": 2}})),
             ],
-            "handoff.tokens",
+            "compaction.tokens",
             None,
         ),
         // A scalar only in a middle layer.
         (
-            vec![default(), global(json!({"handoff": {"tokens": 1}}))],
-            "handoff.tokens",
+            vec![default(), global(json!({"compaction": {"tokens": 1}}))],
+            "compaction.tokens",
             None,
         ),
         // An object in two layers: the keys merge, naming the highest.
         (
             vec![
                 default(),
-                global(json!({"handoff": {"tokens": 1}})),
-                project(json!({"handoff": {"nudge": false}})),
+                global(json!({"compaction": {"tokens": 1}})),
+                project(json!({"compaction": {"nudge": false}})),
             ],
-            "handoff",
+            "compaction",
             None,
         ),
         // A union key in three layers: every layer's names, naming the
@@ -202,12 +202,12 @@ fn get_equals_the_merged_value_for_every_key_shape() {
         ),
         // An explicit null in the top layer is returned.
         (
-            vec![default(), global(json!({"handoff": {"tokens": null}}))],
-            "handoff.tokens",
+            vec![default(), global(json!({"compaction": {"tokens": null}}))],
+            "compaction.tokens",
             None,
         ),
         // A missing key with a default names the defaults.
-        (vec![default(), global(json!({}))], "handoff.enabled", None),
+        (vec![default(), global(json!({}))], "compaction.enabled", None),
         // A missing key without one is unset.
         (vec![default(), global(json!({}))], "reviewer.model", None),
         // A per-model entry in one layer only. Kills skipping the model
@@ -232,10 +232,10 @@ fn get_equals_the_merged_value_for_every_key_shape() {
         (
             vec![
                 default(),
-                global(json!({"handoff": {"tokens": 1}})),
-                project(json!({"handoff": {}})),
+                global(json!({"compaction": {"tokens": 1}})),
+                project(json!({"compaction": {}})),
             ],
-            "handoff",
+            "compaction",
             None,
         ),
         // An object in three layers, each naming its own leaves: the
@@ -244,11 +244,11 @@ fn get_equals_the_merged_value_for_every_key_shape() {
         (
             vec![
                 default(),
-                repository(json!({"handoff": {"tokens": 1}})),
-                global(json!({"handoff": {"nudge": false}})),
-                project(json!({"handoff": {"tokens": 2}})),
+                repository(json!({"compaction": {"tokens": 1}})),
+                global(json!({"compaction": {"nudge": false}})),
+                project(json!({"compaction": {"tokens": 2}})),
             ],
-            "handoff",
+            "compaction",
             None,
         ),
         // An entry-replaced row under an object key: each entry goes

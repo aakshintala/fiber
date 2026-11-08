@@ -1,46 +1,46 @@
-//! The `before_handoff` chain (`docs/extensions.md`, "The hook points",
+//! The `before_compaction` chain (`docs/extensions.md`, "The hook points",
 //! "When several hooks share a point" and "When a hook fails"): what each
 //! hook is shown, and what its answer decides.
 
 use contract::ErrorCode;
 use contract::events::Notice;
-use contract::hook::{BeforeHandoff, BeforeHandoffAnswer, BeforeHandoffOutcome, HookFailure};
+use contract::hook::{BeforeCompaction, BeforeCompactionAnswer, BeforeCompactionOutcome, HookFailure};
 use contract::provider::Input;
 use serde_json::{Map, Value};
 
-use super::chain::BEFORE_HANDOFF;
+use super::chain::BEFORE_COMPACTION;
 use super::{SessionExtensions, kind, notice};
 use crate::Error;
 
 #[cfg(test)]
-#[path = "handoff_tests.rs"]
+#[path = "compaction_tests.rs"]
 mod tests;
 
-/// Runs every `before_handoff` hook on the handoff, in order: each is shown
+/// Runs every `before_compaction` hook on the compaction, in order: each is shown
 /// the note the hook before it returned, and the last note wins. A `nil`
 /// return, a note that is empty after trimming, and a `non-blocking`
 /// failure leave the note as it stood; a `blocking` failure drops it and
 /// ends the chain. A cancel that landed between two hooks runs no later
 /// hook, and the answer holds no note.
-pub(super) fn before_handoff(
+pub(super) fn before_compaction(
     session: &SessionExtensions,
-    handoff: &BeforeHandoff<'_>,
-) -> BeforeHandoffAnswer {
-    let chain = &session.lifecycle.before_handoff;
+    compaction: &BeforeCompaction<'_>,
+) -> BeforeCompactionAnswer {
+    let chain = &session.lifecycle.before_compaction;
     if chain.is_empty() {
-        return BeforeHandoffAnswer {
-            outcome: BeforeHandoffOutcome::NoNote,
+        return BeforeCompactionAnswer {
+            outcome: BeforeCompactionOutcome::NoNote,
             notices: Vec::new(),
         };
     }
     let mut note: Option<(String, String)> = None;
     let mut pending = Vec::new();
     let mut notices = Vec::new();
-    let messages = render(handoff.conversation);
+    let messages = render(compaction.conversation);
     for (at, entry) in chain.iter().enumerate() {
-        if at > 0 && handoff.cancel.is_cancelled() {
-            return BeforeHandoffAnswer {
-                outcome: BeforeHandoffOutcome::NoNote,
+        if at > 0 && compaction.cancel.is_cancelled() {
+            return BeforeCompactionAnswer {
+                outcome: BeforeCompactionOutcome::NoNote,
                 notices,
             };
         }
@@ -49,7 +49,7 @@ pub(super) fn before_handoff(
         };
         let arg = shown(
             &messages,
-            handoff,
+            compaction,
             note.as_ref().map(|(_, text)| text.as_str()),
         );
         let returned = session
@@ -71,8 +71,8 @@ pub(super) fn before_handoff(
             Ok(None) => {}
             Ok(Some(text)) => note = Some((name.to_owned(), text)),
             Err(error) if entry.blocking => {
-                return BeforeHandoffAnswer {
-                    outcome: BeforeHandoffOutcome::Failed(HookFailure {
+                return BeforeCompactionAnswer {
+                    outcome: BeforeCompactionOutcome::Failed(HookFailure {
                         extension: name.to_owned(),
                         message: error.to_string(),
                     }),
@@ -85,27 +85,27 @@ pub(super) fn before_handoff(
     if note.is_some() {
         session.set_change_lines(pending);
     }
-    BeforeHandoffAnswer {
+    BeforeCompactionAnswer {
         outcome: match note {
-            Some((extension, text)) => BeforeHandoffOutcome::Note { text, extension },
-            None => BeforeHandoffOutcome::NoNote,
+            Some((extension, text)) => BeforeCompactionOutcome::Note { text, extension },
+            None => BeforeCompactionOutcome::NoNote,
         },
         notices,
     }
 }
 
-/// What a `before_handoff` hook is shown: what started the handoff, the
+/// What a `before_compaction` hook is shown: what started the compaction, the
 /// person's instructions when there were any, the conversation as Fiber's
 /// neutral messages, and the note a hook before it returned, when one did.
-fn shown(messages: &Value, handoff: &BeforeHandoff<'_>, note: Option<&str>) -> Value {
-    let trigger = match handoff.trigger {
-        contract::events::HandoffTrigger::Auto => "auto",
-        contract::events::HandoffTrigger::Person => "person",
-        contract::events::HandoffTrigger::Overflow => "overflow",
+fn shown(messages: &Value, compaction: &BeforeCompaction<'_>, note: Option<&str>) -> Value {
+    let trigger = match compaction.trigger {
+        contract::events::CompactionTrigger::Auto => "auto",
+        contract::events::CompactionTrigger::Person => "person",
+        contract::events::CompactionTrigger::Overflow => "overflow",
     };
     let mut shown = Map::new();
     shown.insert("trigger".into(), Value::String(trigger.to_owned()));
-    if let Some(instructions) = handoff.instructions {
+    if let Some(instructions) = compaction.instructions {
         shown.insert(
             "instructions".into(),
             Value::String(instructions.to_owned()),
@@ -263,7 +263,7 @@ fn pdf_part(pdf: &contract::provider::PdfRef) -> Value {
 fn decode(extension: &str, value: Value) -> Result<Option<String>, Error> {
     let bad = |why: String| Error::BadReturn {
         extension: extension.to_owned(),
-        callback: BEFORE_HANDOFF.to_owned(),
+        callback: BEFORE_COMPACTION.to_owned(),
         why,
     };
     let map = match value {
@@ -301,7 +301,7 @@ fn decode(extension: &str, value: Value) -> Result<Option<String>, Error> {
 fn failed_notice(extension: &str, error: &Error) -> Notice {
     notice(
         ErrorCode::HookFailed,
-        format!("The `{BEFORE_HANDOFF}` hook failed, so its change was dropped: {error}"),
+        format!("The `{BEFORE_COMPACTION}` hook failed, so its change was dropped: {error}"),
         Some(extension),
     )
 }

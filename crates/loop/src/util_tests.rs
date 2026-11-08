@@ -3,17 +3,17 @@
 //! Each test runs in its own nextest process, so setting the source here
 //! never leaks into another test.
 //!
-//! The write path every event takes, and what a completed handoff leaves
-//! the reviewer's input holding (`docs/permissions.md`, "At a handoff").
+//! The write path every event takes, and what a completed compaction leaves
+//! the reviewer's input holding (`docs/permissions.md`, "At a compaction").
 
 use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::commands::Handoff;
+use contract::commands::Compact;
 use contract::emit::Emit;
 use contract::events::{
-    CacheLifetime, Event, EventKind, HandoffCompleted, InputItem, Note, Outcome, ToolCallRequested,
+    CacheLifetime, Event, EventKind, CompactionCompleted, InputItem, Note, Outcome, ToolCallRequested,
     TurnOutcome, TurnStarted, VariablesSource,
 };
 use contract::inbox::{Ack, Delivery, Message};
@@ -101,7 +101,7 @@ struct Driven {
 }
 
 fn harness(script: Vec<fakes::Scripted>) -> Driven {
-    let home = fakes::TempDir::new("fiber-handoff-cut");
+    let home = fakes::TempDir::new("fiber-compaction-cut");
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
@@ -191,12 +191,12 @@ impl Driven {
             .unwrap();
     }
 
-    /// Sends the person's `handoff` command.
-    fn handoff(&self) {
+    /// Sends the person's `compact` command.
+    fn compaction(&self) {
         self.inbox
-            .send(Delivery::Handoff(
+            .send(Delivery::Compaction(
                 CommandId("c_h".into()),
-                Handoff { instructions: None },
+                Compaction { instructions: None },
                 Ack(Box::new(|_| {})),
             ))
             .unwrap();
@@ -295,8 +295,8 @@ fn probe_call() -> Event {
     })
 }
 
-fn handoff_completed() -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn compaction_completed() -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome: Outcome::Completed,
         error: None,
         note: Some(Note::Actions {
@@ -307,8 +307,8 @@ fn handoff_completed() -> Event {
     })
 }
 
-fn handoff_failed() -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn compaction_failed() -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome: Outcome::Failed,
         error: Some(Failure {
             code: ErrorCode::ContextOverflow,
@@ -322,8 +322,8 @@ fn handoff_failed() -> Event {
     })
 }
 
-fn handoff_cancelled() -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn compaction_cancelled() -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome: Outcome::Cancelled,
         error: None,
         note: None,
@@ -346,7 +346,7 @@ fn user_text(input: &contract::provider::Input) -> &str {
 }
 
 #[test]
-fn a_completed_handoff_write_resets_the_reviewer_cursor_and_drops_calls() {
+fn a_completed_compaction_write_resets_the_reviewer_cursor_and_drops_calls() {
     let mut driven = harness(Vec::new());
     let mut looped = driven.looped.take().unwrap();
     let turn = TurnId("t_1".into());
@@ -357,10 +357,10 @@ fn a_completed_handoff_write_resets_the_reviewer_cursor_and_drops_calls() {
     looped
         .write(&probe_call(), Some(&turn), Some(&action))
         .unwrap();
-    // A review ran before the handoff, so its prefix end is set.
+    // A review ran before the compaction, so its prefix end is set.
     looped.reviewer_sent = Some(2);
     looped
-        .write(&handoff_completed(), Some(&turn), None)
+        .write(&compaction_completed(), Some(&turn), None)
         .unwrap();
     assert_eq!(looped.reviewer_sent, None);
     assert_eq!(looped.reviewed.len(), 1, "{:?}", looped.reviewed);
@@ -371,8 +371,8 @@ fn a_completed_handoff_write_resets_the_reviewer_cursor_and_drops_calls() {
 }
 
 #[test]
-fn a_failed_or_cancelled_handoff_write_changes_neither_cursor_nor_input() {
-    for event in [handoff_failed(), handoff_cancelled()] {
+fn a_failed_or_cancelled_compaction_write_changes_neither_cursor_nor_input() {
+    for event in [compaction_failed(), compaction_cancelled()] {
         let mut driven = harness(Vec::new());
         let mut looped = driven.looped.take().unwrap();
         let turn = TurnId("t_1".into());
@@ -449,7 +449,7 @@ fn a_poisoned_log_error_converts_to_the_exact_loop_error() {
 }
 
 #[test]
-fn a_reviewerless_handoff_cut_drops_pre_handoff_calls_from_reviewed() {
+fn a_reviewerless_compaction_cut_drops_pre_compaction_calls_from_reviewed() {
     let mut driven = harness(vec![
         call_reply(),
         fakes::Scripted::text("Done."),
@@ -459,7 +459,7 @@ fn a_reviewerless_handoff_cut_drops_pre_handoff_calls_from_reviewed() {
     ]);
     driven.prompt("never push to main");
     assert_eq!(driven.turn(), Some(TurnOutcome::Completed));
-    driven.handoff();
+    driven.compaction();
     assert_eq!(driven.turn(), Some(TurnOutcome::Completed));
     driven.prompt("now run it");
     assert_eq!(driven.turn(), Some(TurnOutcome::Completed));
@@ -512,13 +512,13 @@ fn the_selection_request_after_the_cut_sends_no_previous_end() {
     ]);
     driven.prompt("never push to main");
     assert_eq!(driven.turn(), Some(TurnOutcome::Completed));
-    driven.handoff();
+    driven.compaction();
     assert_eq!(driven.turn(), Some(TurnOutcome::Completed));
     driven.prompt("now run it");
     assert_eq!(driven.turn(), Some(TurnOutcome::Completed));
     let requests = reviewer.requests();
     assert_eq!(requests.len(), 4);
-    // The first review and the first review after the handoff both send
+    // The first review and the first review after the compaction both send
     // the whole input: no stale prefix end survives the cut.
     assert_eq!(requests[0].previous_end, None);
     // The selection itself restarts from the kept persons: the pre-cut

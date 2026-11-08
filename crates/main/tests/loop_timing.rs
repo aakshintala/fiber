@@ -1,7 +1,7 @@
 //! Part 7 operation timers at the binary level (`docs/state.md`,
 //! "Diagnostic logs"): the built `fiber` runs `ask` against the fake
 //! provider server. At `debug` the real main-to-loop shared writer emits
-//! `startup.preamble`, `turn.request`, `turn.model_call` and `turn.handoff`
+//! `startup.preamble`, `turn.request`, `turn.model_call` and `turn.compaction`
 //! with only `op` and `ms`; at the default nothing debug is written.
 
 #![allow(
@@ -98,7 +98,7 @@ fn assert_wire(lines: &[Value], session_id: &str) {
 }
 
 /// Only Part 7's four operations: `startup.preamble`, `turn.request`,
-/// `turn.model_call` and `turn.handoff`. Tool timers land here too once
+/// `turn.model_call` and `turn.compaction`. Tool timers land here too once
 /// Part 8 times them, under their own exact keys.
 fn p7_lines(setup: &Setup) -> Vec<Value> {
     op_lines(setup)
@@ -106,7 +106,7 @@ fn p7_lines(setup: &Setup) -> Vec<Value> {
         .filter(|line| {
             matches!(
                 line["data"]["op"].as_str(),
-                Some("startup.preamble" | "turn.request" | "turn.model_call" | "turn.handoff")
+                Some("startup.preamble" | "turn.request" | "turn.model_call" | "turn.compaction")
             )
         })
         .collect()
@@ -128,11 +128,11 @@ fn shell_echo_call() -> Response {
             "name": "shell", "arguments": "{\"command\":\"echo hi\"}"}})])
 }
 
-/// An `openai-responses` stream calling the `handoff` tool with a note.
-fn handoff_call() -> Response {
+/// An `openai-responses` stream calling the `compact` tool with a note.
+fn compaction_call() -> Response {
     support::stream(&[json!({"type": "response.output_item.done", "item": {
             "type": "function_call", "id": "fc_1", "call_id": "call_1",
-            "name": "handoff", "arguments": "{\"note\":\"Continue with the tests.\"}"}})])
+            "name": "compact", "arguments": "{\"note\":\"Continue with the tests.\"}"}})])
 }
 
 #[test]
@@ -159,7 +159,7 @@ fn a_debug_ask_times_its_preamble_requests_and_attempts() {
         2,
         "one scope per admitted attempt"
     );
-    assert!(ops(&setup, "turn.handoff").is_empty());
+    assert!(ops(&setup, "turn.compaction").is_empty());
     assert_wire(&p7_lines(&setup), &session_id);
     assert_eq!(
         run.kinds(),
@@ -301,9 +301,9 @@ fn a_debug_retry_times_one_request_and_two_attempts() {
 }
 
 #[test]
-fn a_debug_tool_handoff_times_one_handoff_with_no_note_request() {
+fn a_debug_tool_compaction_times_one_compaction_with_no_note_request() {
     let setup = Setup::new();
-    let server = ProviderServer::start([handoff_call(), hello()]).unwrap();
+    let server = ProviderServer::start([compaction_call(), hello()]).unwrap();
     setup.provider(&server);
     debug_config(&setup, json!({}));
     let run = ask(&setup);
@@ -314,15 +314,15 @@ fn a_debug_tool_handoff_times_one_handoff_with_no_note_request() {
     );
     assert_eq!(server.requests().len(), 2);
     let session_id = run.session_id().to_owned();
-    assert_eq!(ops(&setup, "turn.handoff").len(), 1);
+    assert_eq!(ops(&setup, "turn.compaction").len(), 1);
     assert_wire(&p7_lines(&setup), &session_id);
     assert!(
-        !run.kinds().contains(&"handoff_started"),
+        !run.kinds().contains(&"compaction_started"),
         "a tool source writes no started: {:?}",
         run.kinds()
     );
     assert!(
-        run.kinds().contains(&"handoff_completed"),
+        run.kinds().contains(&"compaction_completed"),
         "{:?}",
         run.kinds()
     );
@@ -343,7 +343,7 @@ fn a_debug_tool_handoff_times_one_handoff_with_no_note_request() {
             "assistant_message_completed",
             "tool_call_started",
             "tool_call_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "step_started",
             "assistant_message_started",

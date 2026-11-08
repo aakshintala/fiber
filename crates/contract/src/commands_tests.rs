@@ -122,8 +122,8 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "model", "args": {"model": "opus"}}),
         json!({"id": "c", "command": "credential", "args": {"label": "work"}}),
         json!({"id": "c", "command": "name", "args": {"text": ""}}),
-        json!({"id": "c", "command": "handoff", "args": {"instructions": "i"}}),
-        json!({"id": "c", "command": "handoff", "args": {}}),
+        json!({"id": "c", "command": "compact", "args": {"instructions": "i"}}),
+        json!({"id": "c", "command": "compact", "args": {}}),
         json!({"id": "c", "command": "rewind", "args": {"from_session_id": "s", "seq": 7,
             "summarise": true}}),
         json!({"id": "c", "command": "change_workspace", "args": {"path": "../other"}}),
@@ -326,14 +326,14 @@ fn artifact_page_args_that_do_not_fit_are_invalid_arguments() {
 
 #[test]
 fn a_missing_args_is_read_as_an_empty_object() {
-    let line = parse(r#"{"id":"c","command":"handoff"}"#).unwrap();
+    let line = parse(r#"{"id":"c","command":"compact"}"#).unwrap();
     assert_eq!(
         line.command,
-        Command::Handoff(Handoff { instructions: None })
+        Command::Compact(Compaction { instructions: None })
     );
     assert_eq!(
         line.command,
-        parse(r#"{"id":"c","command":"handoff","args":{}}"#)
+        parse(r#"{"id":"c","command":"compact","args":{}}"#)
             .unwrap()
             .command
     );
@@ -482,10 +482,10 @@ fn close_now_reads_a_boolean_and_refuses_anything_else() {
 
 #[test]
 fn args_that_are_present_are_never_replaced_by_an_empty_object() {
-    // Every key of `handoff` is optional, so only a present `args` that does
+    // Every key of `compaction` is optional, so only a present `args` that does
     // not fit can be refused.
-    assert!(parse(r#"{"id":"c","command":"handoff","args":{"future":1}}"#).is_err());
-    assert!(parse(r#"{"id":"c","command":"handoff","args":"x"}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"compact","args":{"future":1}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"compact","args":"x"}"#).is_err());
     assert!(parse(r#"{"id":"c","command":"rewind","args":{"seq":"7"}}"#).is_err());
     assert!(parse(r#"{"id":"c","args":{}}"#).is_err());
 }
@@ -862,7 +862,7 @@ fn built_in_commands_match_the_tui_doc_table() {
         let cell = line.split('|').nth(1).unwrap_or("");
         for part in cell.split(",") {
             let part = part.trim().trim_matches('`');
-            // `/handoff [instructions]`, `/?`.
+            // `/compact [instructions]`, `/?`.
             let name = part
                 .trim_start_matches('/')
                 .split_whitespace()

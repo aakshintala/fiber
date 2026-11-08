@@ -1392,7 +1392,7 @@ fn holder_dies_child_parks_a_holder() {
 #[test]
 fn holder_dies_with_the_test_process_that_parked_it() {
     // The reader thread starts before the child spawns, so the ack line
-    // cannot land before the reader exists; the pipe crosses on a handoff
+    // cannot land before the reader exists; the pipe crosses on a compaction
     // channel once the spawn makes it.
     let (parked_tx, parked) = mpsc::channel::<(u32, PathBuf)>();
     let (out_tx, out_rx) = mpsc::channel();

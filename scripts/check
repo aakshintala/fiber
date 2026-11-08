@@ -189,7 +189,7 @@ crates/main/tests/delete.rs 13
 crates/main/tests/doctor_command.rs 3
 crates/main/tests/exit_alias.rs 1
 crates/main/tests/group_look.rs 38
-crates/main/tests/handoff_look.rs 24
+crates/main/tests/compaction_look.rs 24
 crates/main/tests/history_page_failed.rs 4
 crates/main/tests/home_rail.rs 17
 crates/main/tests/hover_look.rs 9

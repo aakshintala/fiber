@@ -10,7 +10,7 @@
 )]
 
 use contract::events::{
-    Answer, AssistantMessageCompleted, Event, FormAnswer, HandoffCompleted, InputItem, Interaction,
+    Answer, AssistantMessageCompleted, Event, FormAnswer, CompactionCompleted, InputItem, Interaction,
     InteractionRequested, InteractionResolved, KeptMessage, MessageOutcome, Note, Outcome,
     ResolvedBy, ReviewerKept, SessionStarted, SteeringApplied, TextCompleted, ToolCallRequested,
     TurnCompleted, TurnOutcome, TurnStarted, Variables, VariablesSource,
@@ -407,8 +407,8 @@ fn the_reviewer_keeps_an_inner_call() {
     assert!(matches!(&reviewed[0].input, Input::User { text, .. } if text.contains("fake")));
 }
 
-fn handoff_completed() -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn compaction_completed() -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome: Outcome::Completed,
         error: None,
         note: Some(Note::Actions {
@@ -419,8 +419,8 @@ fn handoff_completed() -> Event {
     })
 }
 
-fn handoff_failed() -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn compaction_failed() -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome: Outcome::Failed,
         error: Some(Failure {
             code: ErrorCode::ContextOverflow,
@@ -434,8 +434,8 @@ fn handoff_failed() -> Event {
     })
 }
 
-fn handoff_cancelled() -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+fn compaction_cancelled() -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome: Outcome::Cancelled,
         error: None,
         note: None,
@@ -496,13 +496,13 @@ fn person_text(reviewed: &[Reviewed]) -> Vec<&str> {
 }
 
 #[test]
-fn a_completed_handoff_drops_earlier_calls_and_keeps_persons_word_for_word() {
+fn a_completed_compaction_drops_earlier_calls_and_keeps_persons_word_for_word() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
     assert_eq!(reviewed.len(), 4);
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -511,7 +511,7 @@ fn a_completed_handoff_drops_earlier_calls_and_keeps_persons_word_for_word() {
         reviewed
             .iter()
             .all(|item| matches!(item.shown, Shown::Person(_))),
-        "no pre-handoff tool call stays in the reviewer's input: {reviewed:?}"
+        "no pre-compact tool call stays in the reviewer's input: {reviewed:?}"
     );
     assert_eq!(
         reviewed,
@@ -535,7 +535,7 @@ fn a_completed_handoff_drops_earlier_calls_and_keeps_persons_word_for_word() {
 }
 
 #[test]
-fn a_completed_handoff_on_calls_only_empties_the_input() {
+fn a_completed_compaction_on_calls_only_empties_the_input() {
     let mut reviewed = Vec::new();
     for (n, action) in ["a_1", "a_2"].iter().enumerate() {
         render_reviewed(
@@ -549,7 +549,7 @@ fn a_completed_handoff_on_calls_only_empties_the_input() {
     assert_eq!(reviewed.len(), 2);
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -558,7 +558,7 @@ fn a_completed_handoff_on_calls_only_empties_the_input() {
 }
 
 #[test]
-fn a_completed_handoff_keeps_every_person_message() {
+fn a_completed_compaction_keeps_every_person_message() {
     let mut reviewed = Vec::new();
     render_reviewed(
         &mut reviewed,
@@ -583,7 +583,7 @@ fn a_completed_handoff_keeps_every_person_message() {
     let before = reviewed.clone();
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -599,11 +599,11 @@ fn a_completed_handoff_keeps_every_person_message() {
 }
 
 #[test]
-fn a_completed_handoff_on_empty_input_stays_empty() {
+fn a_completed_compaction_on_empty_input_stays_empty() {
     let mut reviewed = Vec::new();
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -612,13 +612,13 @@ fn a_completed_handoff_on_empty_input_stays_empty() {
 }
 
 #[test]
-fn a_failed_handoff_keeps_calls_and_persons_byte_identical() {
+fn a_failed_compaction_keeps_calls_and_persons_byte_identical() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
     let before = reviewed.clone();
     render_reviewed(
         &mut reviewed,
-        &handoff_failed(),
+        &compaction_failed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -628,13 +628,13 @@ fn a_failed_handoff_keeps_calls_and_persons_byte_identical() {
 }
 
 #[test]
-fn a_cancelled_handoff_keeps_calls_and_persons_byte_identical() {
+fn a_cancelled_compaction_keeps_calls_and_persons_byte_identical() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
     let before = reviewed.clone();
     render_reviewed(
         &mut reviewed,
-        &handoff_cancelled(),
+        &compaction_cancelled(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -644,12 +644,12 @@ fn a_cancelled_handoff_keeps_calls_and_persons_byte_identical() {
 }
 
 #[test]
-fn reviewer_kept_after_a_completed_handoff_selects_the_kept_persons() {
+fn reviewer_kept_after_a_completed_compaction_selects_the_kept_persons() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -687,12 +687,12 @@ fn lines_without_a_durable_identity_add_nothing() {
 }
 
 #[test]
-fn successive_completed_handoffs_drop_each_cut_before_them() {
+fn successive_completed_compactions_drop_each_cut_before_them() {
     let mut reviewed = Vec::new();
     busy_turn(&mut reviewed);
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -715,7 +715,7 @@ fn successive_completed_handoffs_drop_each_cut_before_them() {
     );
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(60)),
         &mut PendingAsks::default(),
@@ -757,7 +757,7 @@ fn a_call_after_the_cut_stays_and_a_call_before_it_goes() {
     );
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -825,7 +825,7 @@ fn the_cut_releases_the_calls_allocation() {
     assert_eq!(reviewed.len(), 302);
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(400)),
         &mut PendingAsks::default(),
@@ -881,7 +881,7 @@ fn the_live_fold_and_the_history_fold_agree_at_each_side_of_the_cut() {
         Some(ActionId("a_1".into())),
     )
     .unwrap();
-    log.append(&handoff_completed(), Some(turn), None).unwrap();
+    log.append(&compaction_completed(), Some(turn), None).unwrap();
     log.append(
         &Event::TurnStarted(TurnStarted {
             input: vec![message("now run it", driver())],
@@ -1713,7 +1713,7 @@ fn a_reply_answers_only_the_run_on_its_own_line() {
 }
 
 #[test]
-fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
+fn a_completed_compaction_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
     let mut reviewed = Vec::new();
     pair(&mut reviewed, "first?", "one", 20);
     render_reviewed(
@@ -1740,7 +1740,7 @@ fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
     );
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -1754,7 +1754,7 @@ fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
             "The person: two"
         ],
     );
-    // A proposal made before the handoff is cleared: the "yes" after it
+    // A proposal made before the compaction is cleared: the "yes" after it
     // answers nothing.
     render_reviewed(
         &mut reviewed,
@@ -1776,7 +1776,7 @@ fn a_completed_handoff_keeps_the_pairs_and_a_later_yes_carries_no_reply() {
 }
 
 #[test]
-fn a_failed_handoff_with_replies_keeps_everything_byte_identical() {
+fn a_failed_compaction_with_replies_keeps_everything_byte_identical() {
     let mut reviewed = Vec::new();
     pair(&mut reviewed, "first?", "one", 20);
     render_reviewed(
@@ -1796,7 +1796,7 @@ fn a_failed_handoff_with_replies_keeps_everything_byte_identical() {
     let before = reviewed.clone();
     render_reviewed(
         &mut reviewed,
-        &handoff_failed(),
+        &compaction_failed(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -1806,7 +1806,7 @@ fn a_failed_handoff_with_replies_keeps_everything_byte_identical() {
 }
 
 #[test]
-fn a_cancelled_handoff_with_replies_keeps_everything_byte_identical() {
+fn a_cancelled_compaction_with_replies_keeps_everything_byte_identical() {
     let mut reviewed = Vec::new();
     pair(&mut reviewed, "first?", "one", 20);
     render_reviewed(
@@ -1826,7 +1826,7 @@ fn a_cancelled_handoff_with_replies_keeps_everything_byte_identical() {
     let before = reviewed.clone();
     render_reviewed(
         &mut reviewed,
-        &handoff_cancelled(),
+        &compaction_cancelled(),
         None,
         Some(Seq(40)),
         &mut PendingAsks::default(),
@@ -1836,12 +1836,12 @@ fn a_cancelled_handoff_with_replies_keeps_everything_byte_identical() {
 }
 
 #[test]
-fn successive_completed_handoffs_keep_old_pairs_intact() {
+fn successive_completed_compactions_keep_old_pairs_intact() {
     let mut reviewed = Vec::new();
     pair(&mut reviewed, "first?", "one", 20);
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(30)),
         &mut PendingAsks::default(),
@@ -1849,7 +1849,7 @@ fn successive_completed_handoffs_keep_old_pairs_intact() {
     pair(&mut reviewed, "second?", "two", 40);
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(50)),
         &mut PendingAsks::default(),
@@ -1899,7 +1899,7 @@ fn person_pairs_reuse_rendered_replies_for_each_occurrence() {
         &mut PendingAsks::default(),
     );
 
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [
@@ -1929,7 +1929,7 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
         Some(Seq(14)),
         &mut PendingAsks::default(),
     );
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [(kept(14, 0), "The person: unprompted".into())]
@@ -1955,7 +1955,7 @@ fn person_pairs_keep_the_rendered_text_without_guessing_a_reply() {
     let Input::User { text: person, .. } = &reviewed[2].input else {
         panic!("not a rendered person");
     };
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pair reuses the reviewer-rendered reply.
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pair reuses the reviewer-rendered reply.
     assert_eq!(
         Reviewed::person_pairs(&reviewed)[1].1,
         format!("{reply}\n{person}"),
@@ -1988,7 +1988,7 @@ fn a_reply_does_not_cross_a_different_sequence_person() {
         &mut PendingAsks::default(),
     );
 
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "puts the reply it answered before it" — the pairs are the `reviewer_kept` selection unchanged.
     assert_eq!(
         Reviewed::person_pairs(&reviewed),
         [
@@ -2696,18 +2696,18 @@ fn person_input_call_between_request_and_resolve_drops_reply() {
     );
 }
 
-/// A completed handoff clears every staged entry: resolving a pre-handoff
+/// A completed compaction clears every staged entry: resolving a pre-compaction
 /// request renders nothing, no person item (`docs/permissions.md`, "At a
-/// handoff" with "What it is shown": a completed handoff restarts the
+/// compaction" with "What it is shown": a completed compaction restarts the
 /// reviewer's input, so no earlier question answers anything after it).
 #[test]
-fn person_input_handoff_clears_staged_request() {
+fn person_input_compaction_clears_staged_request() {
     let mut reviewed = Vec::new();
     let mut asks = PendingAsks::default();
     render_reviewed(
         &mut reviewed,
         &Event::InteractionRequested(person_requested(
-            "pre-handoff",
+            "pre-compaction",
             person_form(),
             tool_ids(),
             None,
@@ -2718,13 +2718,13 @@ fn person_input_handoff_clears_staged_request() {
     );
     assert!(
         asks.clone()
-            .take(&person_request_id("pre-handoff"))
+            .take(&person_request_id("pre-compaction"))
             .is_some(),
         "the request stages for its resolve: {asks:?}"
     );
     render_reviewed(
         &mut reviewed,
-        &handoff_completed(),
+        &compaction_completed(),
         None,
         Some(Seq(901)),
         &mut asks,
@@ -2732,7 +2732,7 @@ fn person_input_handoff_clears_staged_request() {
     render_reviewed(
         &mut reviewed,
         &Event::InteractionResolved(InteractionResolved {
-            request_id: person_request_id("pre-handoff"),
+            request_id: person_request_id("pre-compaction"),
             by: ResolvedBy::Person,
             answer: person_form_answer(),
         }),
@@ -2744,10 +2744,10 @@ fn person_input_handoff_clears_staged_request() {
         reviewed
             .iter()
             .all(|item| !matches!(item.shown, Shown::Person(_))),
-        "a pre-handoff resolve renders no person item: {reviewed:?}"
+        "a pre-compaction resolve renders no person item: {reviewed:?}"
     );
     assert!(
         reviewed.is_empty(),
-        "a pre-handoff resolve renders nothing: {reviewed:?}"
+        "a pre-compaction resolve renders nothing: {reviewed:?}"
     );
 }

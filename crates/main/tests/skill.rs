@@ -120,7 +120,7 @@ fn denied_skill_kinds() -> Vec<&'static str> {
 }
 
 /// The event kinds of the resumed turn that hands off after one read call
-/// and refuses the credential-linked resend: the handoff completes, no
+/// and refuses the credential-linked resend: the compaction completes, no
 /// `skills_resent` line is written, one notice names the skill, then the
 /// answer. A resume writes no `session_started`.
 fn resent_refused_kinds() -> Vec<&'static str> {
@@ -137,12 +137,12 @@ fn resent_refused_kinds() -> Vec<&'static str> {
         "tool_call_started",
         "tool_call_completed",
         "step_started",
-        "handoff_started",
+        "compaction_started",
         "assistant_message_started",
         "text_completed",
         "usage_recorded",
         "assistant_message_completed",
-        "handoff_completed",
+        "compaction_completed",
         "opening_message",
         "notice",
         "assistant_message_started",
@@ -472,7 +472,7 @@ fn a_skill_linked_into_credentials_is_denied() {
 }
 
 #[test]
-fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_handoff() {
+fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_compaction() {
     const MARKER: &str = "the secret skill body that must never be read";
     let setup = Setup::new();
     install_skill(
@@ -520,7 +520,7 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_handoff() {
     setup.provider(&server);
     fs::write(
         setup.home().join("config.json"),
-        json!({"model": "fake/m", "handoff": {"tokens": 10, "nudge": false}}).to_string(),
+        json!({"model": "fake/m", "compaction": {"tokens": 10, "nudge": false}}).to_string(),
     )
     .unwrap();
     let output = run_to_exit(
@@ -537,7 +537,7 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_handoff() {
         .collect();
 
     assert_eq!(kinds(&lines), resent_refused_kinds());
-    let done = line(&lines, "handoff_completed");
+    let done = line(&lines, "compaction_completed");
     assert_eq!(done["payload"]["outcome"], "completed");
     // The resend runs no tool: nothing is read, started or sent again.
     assert!(
@@ -558,7 +558,7 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_handoff() {
                 && line["payload"]["message"]
                     .as_str()
                     .unwrap_or("")
-                    .starts_with("Skill sec was not sent again after the handoff")
+                    .starts_with("Skill sec was not sent again after the compaction")
         })
         .collect();
     assert_eq!(notices.len(), 1, "{notices:?}");

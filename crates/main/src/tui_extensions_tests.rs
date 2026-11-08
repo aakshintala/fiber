@@ -1288,10 +1288,10 @@ fn the_group_line_table_holds_running_and_aggregates() {
 }
 
 #[test]
-fn the_handoff_band_table_holds_trigger_ts_state_and_sizes() {
-    use tui::ext::{HandoffBand, TurnBandState, TurnSizes};
+fn the_compaction_band_table_holds_trigger_ts_state_and_sizes() {
+    use tui::ext::{CompactionBand, TurnBandState, TurnSizes};
     let band = |state: TurnBandState| {
-        Input::HandoffBand(HandoffBand {
+        Input::CompactionBand(CompactionBand {
             trigger: "the model handed off",
             ts: 1,
             state,

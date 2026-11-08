@@ -1,4 +1,4 @@
-//! A handoff under a shutdown: neither a hook nor a note request runs,
+//! A compaction under a shutdown: neither a hook nor a note request runs,
 //! with hooks set or not.
 
 #![allow(
@@ -13,10 +13,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 use contract::TurnId;
-use contract::events::{EventKind, HandoffTrigger, Outcome};
+use contract::events::{EventKind, CompactionTrigger, Outcome};
 use contract::hook::{
-    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
-    BeforeHandoffOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeCompaction, BeforeCompactionAnswer,
+    BeforeCompactionOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
     BeforeModelCall, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
     CheckOutcome, ContextAnswer, ContextOutcome, Hooks,
 };
@@ -28,13 +28,13 @@ use serde_json::json;
 
 use crate::TurnCancel;
 
-/// A `Hooks` fake that counts its `before_handoff` calls and answers a
+/// A `Hooks` fake that counts its `before_compaction` calls and answers a
 /// hook's note. Under a shutdown it is never called.
-struct HandoffHooks {
+struct CompactionHooks {
     calls: AtomicUsize,
 }
 
-impl HandoffHooks {
+impl CompactionHooks {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             calls: AtomicUsize::new(0),
@@ -46,7 +46,7 @@ impl HandoffHooks {
     }
 }
 
-impl Hooks for HandoffHooks {
+impl Hooks for CompactionHooks {
     fn after_tool(&self, _call: &AfterToolCall<'_>) -> AfterToolAnswer {
         AfterToolAnswer {
             outcome: AfterToolOutcome::Unchanged,
@@ -107,10 +107,10 @@ impl Hooks for HandoffHooks {
         }
     }
 
-    fn before_handoff(&self, _handoff: &BeforeHandoff<'_>) -> BeforeHandoffAnswer {
+    fn before_compaction(&self, _compaction: &BeforeCompaction<'_>) -> BeforeCompactionAnswer {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        BeforeHandoffAnswer {
-            outcome: BeforeHandoffOutcome::Note {
+        BeforeCompactionAnswer {
+            outcome: BeforeCompactionOutcome::Note {
                 text: "Hook note.".into(),
                 extension: "fiber.test/notes".into(),
             },
@@ -122,9 +122,9 @@ impl Hooks for HandoffHooks {
 }
 
 #[test]
-fn a_shutdown_cancels_a_handoff_before_any_hook_or_note_request() {
+fn a_shutdown_cancels_a_compaction_before_any_hook_or_note_request() {
     for with_hooks in [true, false] {
-        let home = fakes::TempDir::new("fiber-handoff-shutdown");
+        let home = fakes::TempDir::new("fiber-compaction-shutdown");
         let workspace = home.path().join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let clock = FakeClock::new();
@@ -135,7 +135,7 @@ fn a_shutdown_cancels_a_handoff_before_any_hook_or_note_request() {
         let provider = Arc::new(ScriptedProvider::new(Vec::new()));
         let (_inbox, rx) = mpsc::channel();
         let cancel = Arc::new(TurnCancel::default());
-        let hooks = HandoffHooks::new();
+        let hooks = CompactionHooks::new();
         let mut looped = crate::Loop::start(
             crate::Session {
                 log: Arc::clone(&log),
@@ -175,10 +175,10 @@ fn a_shutdown_cancels_a_handoff_before_any_hook_or_note_request() {
         assert!(looped.ensure_preamble().unwrap());
         cancel.shutdown(143);
         let outcome = looped
-            .run_handoff(
+            .run_compaction(
                 &TurnId("t_test".into()),
                 super::note::Source::Requested {
-                    trigger: HandoffTrigger::Auto,
+                    trigger: CompactionTrigger::Auto,
                     instructions: None,
                 },
                 1200,
@@ -187,7 +187,7 @@ fn a_shutdown_cancels_a_handoff_before_any_hook_or_note_request() {
         assert_eq!(outcome, Outcome::Cancelled, "with_hooks: {with_hooks}");
         let lines = log::read(&home.path().join("s_test")).unwrap();
         let kinds: Vec<EventKind> = lines.iter().map(|line| line.kind()).collect();
-        // The preamble build is the test's setup; the handoff writes the
+        // The preamble build is the test's setup; the compaction writes the
         // last two lines.
         assert_eq!(
             kinds,
@@ -195,8 +195,8 @@ fn a_shutdown_cancels_a_handoff_before_any_hook_or_note_request() {
                 EventKind::SessionStarted,
                 EventKind::PreambleBuilt,
                 EventKind::OpeningMessage,
-                EventKind::HandoffStarted,
-                EventKind::HandoffCompleted,
+                EventKind::CompactionStarted,
+                EventKind::CompactionCompleted,
             ]
         );
         assert_eq!(

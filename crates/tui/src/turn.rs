@@ -31,7 +31,7 @@ mod answers;
 mod card;
 pub(crate) mod crash;
 mod group;
-mod handoff;
+mod compaction;
 pub(crate) mod images;
 mod live;
 pub(crate) mod opened;
@@ -64,7 +64,7 @@ pub(crate) struct Fold {
     /// Lines outside any turn, each after the turns there were when it
     /// came.
     pub(crate) asides: Vec<(usize, crash::Aside)>,
-    /// The context size an automatic handoff runs at, from the latest
+    /// The context size an automatic compaction runs at, from the latest
     /// `preamble_built`.
     trigger_at: Option<u64>,
     /// What the fold knows of the process and its jobs.
@@ -93,8 +93,8 @@ pub(crate) enum Entry {
     Group(usize),
     /// A line that came while the turn ran.
     Aside(crash::Aside),
-    /// A handoff's band: what follows is the second card.
-    Band(handoff::Band),
+    /// A compaction's band: what follows is the second card.
+    Band(compaction::Band),
     /// The person's answers to a question form.
     Answers(answers::Answered),
     /// A turn-input message from Fiber, a session or an extension.
@@ -760,9 +760,9 @@ pub(crate) fn fold_line(
     {
         turn.retry = None;
     }
-    // The request ends at a handoff, whose note request is its own, and at a
+    // The request ends at a compaction, whose note request is its own, and at a
     // call that completed; a failed call is the request's retry.
-    let request_ended = kind == EventKind::HandoffStarted
+    let request_ended = kind == EventKind::CompactionStarted
         || (kind == EventKind::AssistantMessageCompleted
             && read!(envelope, AssistantMessageCompleted)
                 .is_some_and(|done| done.outcome != MessageOutcome::Failed));
@@ -783,7 +783,7 @@ pub(crate) fn fold_line(
                     InputItem::Message { .. }
                     | InputItem::ShellCommand { .. }
                     | InputItem::Jobs { .. }
-                    | InputItem::Handoff { .. }
+                    | InputItem::Compaction { .. }
                     | InputItem::Rewind { .. }
                     | InputItem::Unknown => None,
                 })
@@ -797,7 +797,7 @@ pub(crate) fn fold_line(
                     } => message_of(&envelope.session_id, sender, content, ts),
                     InputItem::ShellCommand { .. }
                     | InputItem::Jobs { .. }
-                    | InputItem::Handoff { .. }
+                    | InputItem::Compaction { .. }
                     | InputItem::Rewind { .. }
                     | InputItem::Unknown => None,
                 })
@@ -820,8 +820,8 @@ pub(crate) fn fold_line(
             let known = turns
                 .iter()
                 .rposition(|turn| turn.spend.holds(&line.generation_id));
-            // A new call, not a correction, may size a handoff.
-            let sized = known.is_none() && handoff::sized(turns, &line);
+            // A new call, not a correction, may size a compaction.
+            let sized = known.is_none() && compaction::sized(turns, &line);
             let turn = match known {
                 Some(at) => turns.get_mut(at),
                 None => open(turns),
@@ -872,9 +872,9 @@ pub(crate) fn fold_line(
         | EventKind::JobCompleted
         | EventKind::Rewound => crash::fold(turns, fold, envelope),
         EventKind::PreambleBuilt
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
-        | EventKind::ContextNudged => handoff::fold(turns, fold, envelope),
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
+        | EventKind::ContextNudged => compaction::fold(turns, fold, envelope),
         // Interaction lines name their calls in the payload, not the
         // envelope.
         EventKind::InteractionRequested | EventKind::InteractionResolved => {
@@ -1044,8 +1044,8 @@ fn fold_action(
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept
@@ -1132,8 +1132,8 @@ fn fold_action(
                 | EventKind::InstructionFile
                 | EventKind::DateChanged
                 | EventKind::SkillsChanged
-                | EventKind::HandoffStarted
-                | EventKind::HandoffCompleted
+                | EventKind::CompactionStarted
+                | EventKind::CompactionCompleted
                 | EventKind::SkillsResent
                 | EventKind::ContextNudged
                 | EventKind::ReviewerKept

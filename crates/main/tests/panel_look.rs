@@ -1,7 +1,7 @@
 //! Binary-level tests of the panel's look (`docs/tui.md`, "The panel",
 //! "The narrow layout"): the real binary with a scripted session holding
 //! three edited files, a running delegate, a running job and 268k of a
-//! 400k handoff. The 160x48 truecolour run pins the slab's surface,
+//! 400k compaction. The 160x48 truecolour run pins the slab's surface,
 //! edges, padding and bar; the 100x40 run pins the narrow status rows;
 //! the 256-colour run pins the panel tint's quantisation.
 
@@ -61,7 +61,7 @@ fn locate(row: &str, needle: &str) -> u16 {
 /// The scripted turn: three edits, a delegate whose model hangs
 /// mid-stream, a background shell call waiting on the hold FIFO, and a
 /// text step reporting 268k of context, so the panel holds three changed
-/// files, a running delegate, a running job and 268k of the 400k handoff
+/// files, a running delegate, a running job and 268k of the 400k compaction
 /// at once. The background call moves to a job at once, so no timing
 /// decides when the count appears; writing a line to the FIFO releases
 /// it, so nothing leaks.
@@ -90,7 +90,7 @@ fn script(job: &str) -> serde_json::Value {
 }
 
 /// A setup with the scripted session above: the files, the scripts, the
-/// 400k handoff, the pinned panel, the fake provider serving the
+/// 400k compaction, the pinned panel, the fake provider serving the
 /// delegate's hung stream, and a reviewer allowing every call, so no
 /// approval stalls the turn. Returns the setup with its provider
 /// server, held to the test's end, and the hold helper that parks the
@@ -147,7 +147,7 @@ fn panel_setup() -> (Setup, ProviderServer, Hold) {
         &json!({
             "model": "scripted/s.json",
             "reviewer": {"model": "scripted/r.json"},
-            "handoff": {"tokens": 400000},
+            "compaction": {"tokens": 400000},
             "tui": {"panel": {"width": PANEL_SHARE}},
             "hub": {"idle_exit_ms": 200},
         }),
@@ -520,7 +520,7 @@ fn panel_cards_match_the_doc() {
     }
 
     // The context bar: 17 cells of `▆`, eleven in info toward the 400k
-    // handoff, then the marker.
+    // compaction, then the marker.
     let bar = (top + 1..bottom)
         .find(|y| {
             grid.rows[*y as usize].contains("268.0k")
@@ -531,7 +531,7 @@ fn panel_cards_match_the_doc() {
     let fill = (0..17)
         .filter(|n| grid.cell(slab + 2 + n, bar).fg == INFO)
         .count();
-    assert_eq!(fill, 11, "eleven cells toward the handoff");
+    assert_eq!(fill, 11, "eleven cells toward the compaction");
 
     // No empty track anywhere in the panel's columns.
     for y in 0..48 {

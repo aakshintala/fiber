@@ -27,30 +27,30 @@ pub(crate) const WORKLOADS: [Workload; 2] = [
 ];
 
 /// A session to resume: its turns, each one reply of `reply_bytes`, with a
-/// `handoff` driver command after each of the first `handoffs` turns.
+/// `compact` driver command after each of the first `compactions` turns.
 #[derive(Clone, Copy)]
 pub(crate) struct Fixture {
     pub(crate) metric: &'static str,
     pub(crate) turns: usize,
     pub(crate) reply_bytes: usize,
-    pub(crate) handoffs: usize,
+    pub(crate) compactions: usize,
 }
 
 pub(crate) const SMALL: Fixture = Fixture {
     metric: "resume_20k_rss_kib",
     turns: 1,
     reply_bytes: 80_000,
-    handoffs: 0,
+    compactions: 0,
 };
 
 pub(crate) const LARGE: Fixture = Fixture {
     metric: "resume_2m_rss_kib",
     turns: 8,
     reply_bytes: 1_000_000,
-    handoffs: 7,
+    compactions: 7,
 };
 
-/// The note the model writes at each handoff.
+/// The note the model writes at each compaction.
 const NOTE: &str = "the work so far is in the session log";
 
 /// The reply to the prompt the measured run sends.
@@ -60,7 +60,7 @@ impl Fixture {
     /// The provider's replies in the order the session asks for them: each
     /// turn's reply, a note after each handed-off turn, then the measured
     /// run's reply. Each reports the context it was asked over, which a
-    /// handoff restarts from the note, so no automatic handoff runs.
+    /// compaction restarts from the note, so no automatic compaction runs.
     pub(crate) fn script(&self) -> Vec<Response> {
         self.script_with_last(LAST_REPLY)
     }
@@ -91,7 +91,7 @@ impl Fixture {
             let reply = filler(self.reply_bytes, u64::try_from(turn).unwrap_or_default());
             script.push(text_reply(&reply, context));
             context += reply.len();
-            if turn < self.handoffs {
+            if turn < self.compactions {
                 script.push(text_reply(NOTE, context));
                 context = NOTE.len();
             }
@@ -148,8 +148,8 @@ pub(crate) fn subscribe(ctx: &Ctx<'_>, home: &Home, id: &str) -> Result<Client, 
     }
 }
 
-/// Writes the fixture's turns and handoffs through a session of its own,
-/// closes it, and checks every handoff completed and none was automatic.
+/// Writes the fixture's turns and compactions through a session of its own,
+/// closes it, and checks every compaction completed and none was automatic.
 pub(crate) fn generate(
     ctx: &Ctx<'_>,
     home: &Home,
@@ -170,10 +170,10 @@ pub(crate) fn generate(
                 &prompt_id,
                 &command(&prompt_id, "prompt", &content),
             )?;
-            if turn < fixture.handoffs {
-                let handoff_id = format!("c_h{turn}");
-                let line = command(&handoff_id, "handoff", &json!({}));
-                run_turn(ctx, &mut client, &handoff_id, &line)?;
+            if turn < fixture.compactions {
+                let compaction_id = format!("c_h{turn}");
+                let line = command(&compaction_id, "compaction", &json!({}));
+                run_turn(ctx, &mut client, &compaction_id, &line)?;
             }
         }
         client.send(&command("c_close", "close", &json!({})))
@@ -188,14 +188,14 @@ pub(crate) fn generate(
     let lines = read_log(home, id)?;
     expect(
         notes,
-        "completed handoffs",
-        count(&lines, "handoff_completed", "outcome", "completed"),
-        fixture.handoffs,
+        "completed compactions",
+        count(&lines, "compaction_completed", "outcome", "completed"),
+        fixture.compactions,
     );
     expect(
         notes,
-        "automatic handoffs",
-        count(&lines, "handoff_started", "trigger", "auto"),
+        "automatic compactions",
+        count(&lines, "compaction_started", "trigger", "auto"),
         0,
     );
     Ok(())

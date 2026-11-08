@@ -6,7 +6,7 @@
 
 mod blocking;
 pub mod emit;
-mod handoff;
+mod compaction;
 pub mod jobs;
 mod locks;
 mod rules;
@@ -17,7 +17,7 @@ mod tool_io;
 pub use blocking::BlockingProvider;
 pub use emit::{EventLog, Recorder};
 pub use fakes::*;
-pub use handoff::no_note;
+pub use compaction::no_note;
 pub use jobs::StubJobs;
 pub use locks::{FakeLock, NoLock};
 pub use rules::{NoRules, RecordingRules};

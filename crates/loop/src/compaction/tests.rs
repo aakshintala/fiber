@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use contract::ActionId;
 use contract::events::{
-    ContextNudged, Control, HandoffCompleted, Note, Outcome, SkillLoad, ToolCallRequested,
+    ContextNudged, Control, CompactionCompleted, Note, Outcome, SkillLoad, ToolCallRequested,
     TurnOutcome,
 };
 use contract::provider::Input;
@@ -12,15 +12,15 @@ use contract::shapes::{Question, Tokens};
 use serde_json::json;
 
 use super::{
-    Carry, HandoffSettings, context_tokens, estimate, note_request_text, prompt_tokens, trigger_at,
+    Carry, CompactionSettings, context_tokens, estimate, note_request_text, prompt_tokens, trigger_at,
 };
 
-// Task 1 coverage: the skills sent again after a handoff (`docs/handoff.md`,
+// Task 1 coverage: the skills sent again after a compaction (`docs/compaction.md`,
 // item 7) ride in `Carry.resend`, render from `Event::SkillsResent`, and
 // load through the one `admitted` predicate.
 
-fn settings(enabled: bool, tokens: u64, window_fraction: f64) -> HandoffSettings {
-    HandoffSettings {
+fn settings(enabled: bool, tokens: u64, window_fraction: f64) -> CompactionSettings {
+    CompactionSettings {
         enabled,
         tokens,
         window_fraction,
@@ -30,7 +30,7 @@ fn settings(enabled: bool, tokens: u64, window_fraction: f64) -> HandoffSettings
 
 #[test]
 fn the_defaults_are_the_documented_ones() {
-    let defaults = HandoffSettings::default();
+    let defaults = CompactionSettings::default();
     assert!(defaults.enabled);
     assert_eq!(defaults.tokens, 400_000);
     assert!((defaults.window_fraction - 0.7).abs() < f64::EPSILON);
@@ -186,8 +186,8 @@ fn instructions_follow_the_note_section_after_a_blank_line() {
     );
 }
 
-fn completed(note: Option<Note>) -> HandoffCompleted {
-    HandoffCompleted {
+fn completed(note: Option<Note>) -> CompactionCompleted {
+    CompactionCompleted {
         outcome: Outcome::Completed,
         error: None,
         note,
@@ -219,7 +219,7 @@ fn a_restart_is_the_carried_input_then_the_note() {
         note: vec![ActionId("a_note".into())],
     }));
     let restarted = carry.restart(&done);
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in new-message blocks (item 5: "verbatim, in a block labelled as the person's new message"), then the note (item 6).
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in new-message blocks (item 5: "verbatim, in a block labelled as the person's new message"), then the note (item 6).
     assert_eq!(
         restarted,
         [
@@ -376,7 +376,7 @@ fn question(text: &str) -> Question {
 
 fn asking(texts: &[&str]) -> Control {
     Control {
-        handoff: None,
+        compaction: None,
         questions: Some(texts.iter().map(|text| question(text)).collect()),
         skill: None,
         name: None,
@@ -404,10 +404,10 @@ fn the_questions_asked_follow_call_order_not_completion_order() {
 }
 
 #[test]
-fn a_handoff_note_alone_asks_nothing() {
+fn a_compaction_note_alone_asks_nothing() {
     let (mut carry, [first, second, _]) = three_calls();
     let note = Control {
-        handoff: Some("the note".into()),
+        compaction: Some("the note".into()),
         questions: None,
         skill: None,
         name: None,
@@ -421,7 +421,7 @@ fn a_handoff_note_alone_asks_nothing() {
 
 fn skilled(name: &str, path: &str) -> Control {
     Control {
-        handoff: None,
+        compaction: None,
         questions: None,
         skill: Some(SkillLoad {
             name: name.into(),
@@ -494,7 +494,7 @@ fn a_control_without_a_skill_and_no_control_leave_the_list_unchanged() {
 }
 
 #[test]
-fn a_restart_on_a_completed_handoff_leaves_skills_empty() {
+fn a_restart_on_a_completed_compaction_leaves_skills_empty() {
     let (mut carry, [first, ..]) = three_calls();
     carry.call_completed(
         &first,
@@ -511,13 +511,13 @@ fn a_restart_on_a_completed_handoff_leaves_skills_empty() {
 }
 
 #[test]
-fn only_a_cancelled_handoff_ends_the_turn_interrupted() {
-    // A person cancelled the turn: the handoff ends it interrupted.
+fn only_a_cancelled_compaction_ends_the_turn_interrupted() {
+    // A person cancelled the turn: the compaction ends it interrupted.
     assert_eq!(
         super::cancelled(Outcome::Cancelled),
         Some(crate::ended(TurnOutcome::Interrupted, None)),
     );
-    // Every other ending leaves the turn to the handoff's own outcome.
+    // Every other ending leaves the turn to the compaction's own outcome.
     assert_eq!(super::cancelled(Outcome::Completed), None);
     assert_eq!(super::cancelled(Outcome::Failed), None);
 }
@@ -545,7 +545,7 @@ fn the_kept_spot_moves_on_for_the_opening_and_each_session_start_context() {
     carry.opened();
     assert_eq!(carry.place_context(Some(1), "session_start"), Some(1));
     assert_eq!(carry.input_at, None);
-    // A completed handoff arms it at 0; the opening, then each
+    // A completed compaction arms it at 0; the opening, then each
     // `session_start` context, move it on by one.
     carry.input_at = Some(0);
     carry.opened();
@@ -637,7 +637,7 @@ fn render_into(
 }
 
 #[test]
-fn a_restart_on_a_completed_handoff_moves_the_loads_into_resend() {
+fn a_restart_on_a_completed_compaction_moves_the_loads_into_resend() {
     let (mut carry, [first, second, _]) = three_calls();
     carry.call_completed(
         &first,
@@ -713,7 +713,7 @@ fn a_resend_appends_each_skill_after_the_note_in_event_order() {
         ]),
         None,
     );
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    // docs/compaction.md, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         conversation,
         [
@@ -739,7 +739,7 @@ fn a_resend_appends_each_skill_after_the_note_in_event_order() {
 }
 
 #[test]
-fn a_full_handoff_renders_the_opening_then_the_context_then_the_skills() {
+fn a_full_compaction_renders_the_opening_then_the_context_then_the_skills() {
     let (mut carry, [first, second]) = (
         Carry::default(),
         [ActionId("a_1".into()), ActionId("a_2".into())],
@@ -777,14 +777,14 @@ fn a_full_handoff_renders_the_opening_then_the_context_then_the_skills() {
     );
     assert_eq!(conversation.len(), 7);
     assert!(matches!(&conversation[1], Input::User { text, .. } if text == "hook context"));
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    // docs/compaction.md, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         conversation[5],
         user(
             "Skills reloaded from the previous context:\nalpha — /w/alpha/SKILL.md\n\nAlpha body."
         )
     );
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "in the order they were first loaded, once each".
+    // docs/compaction.md, "What the model sees after a compaction", item 8: "in the order they were first loaded, once each".
     assert_eq!(
         conversation[6],
         user("Skills reloaded from the previous context:\nbeta — /w/beta/SKILL.md\n\nBeta body.")
@@ -814,7 +814,7 @@ fn a_skill_sent_again_is_loaded_in_the_new_context() {
         ]),
         None,
     );
-    // The next handoff arms the resend from the skills sent again.
+    // The next compaction arms the resend from the skills sent again.
     carry.restart(&completed(None));
     assert_eq!(
         carry.resend,
@@ -958,7 +958,7 @@ impl FakeSkills {
         Self {
             files: SkillMap::new(),
             bodies: SkillMap::new(),
-            _home: fakes::TempDir::new("loop-handoff-resent"),
+            _home: fakes::TempDir::new("loop-compaction-resent"),
         }
     }
 
@@ -1053,7 +1053,7 @@ fn a_skill_missing_from_the_listing_is_left_out_with_a_notice() {
         notices_of(&left_out),
         [(
             contract::ErrorCode::InvalidArguments,
-            "Skill gone was not sent again after the handoff: it is not in the skills listing now, or it is switched off."
+            "Skill gone was not sent again after the compaction: it is not in the skills listing now, or it is switched off."
         )],
     );
 }
@@ -1078,7 +1078,7 @@ fn a_skill_the_deny_steps_refuse_is_left_out_with_the_verdicts_reason() {
         notices_of(&left_out),
         [(
             contract::ErrorCode::InvalidArguments,
-            "Skill alpha was not sent again after the handoff: A standing rule refuses this call."
+            "Skill alpha was not sent again after the compaction: A standing rule refuses this call."
         )],
     );
 }
@@ -1099,7 +1099,7 @@ fn an_unreadable_body_is_left_out_with_its_message() {
         notices_of(&left_out),
         [(
             contract::ErrorCode::IoFailed,
-            "Skill alpha was not sent again after the handoff: Could not read skill /w/alpha/SKILL.md: gone."
+            "Skill alpha was not sent again after the compaction: Could not read skill /w/alpha/SKILL.md: gone."
         )],
     );
 }
@@ -1117,7 +1117,7 @@ fn an_invalid_body_is_left_out_with_the_header_clause() {
         notices_of(&left_out),
         [(
             contract::ErrorCode::InvalidArguments,
-            "Skill alpha was not sent again after the handoff: its header no longer parses, names another skill, or turns off model invocation."
+            "Skill alpha was not sent again after the compaction: its header no longer parses, names another skill, or turns off model invocation."
         )],
     );
 }
@@ -1134,7 +1134,7 @@ fn a_file_that_does_not_resolve_is_left_out_as_unreadable() {
     assert_eq!(left_out[0].code, contract::ErrorCode::IoFailed);
     assert!(
         left_out[0].message.starts_with(&format!(
-            "Skill gone was not sent again after the handoff: Could not read skill {}:",
+            "Skill gone was not sent again after the compaction: Could not read skill {}:",
             missing.display()
         )),
         "{}",
@@ -1147,7 +1147,7 @@ fn a_file_that_does_not_resolve_is_left_out_as_unreadable() {
 fn a_target_outside_utf8_is_left_out_as_invalid() {
     use std::ffi::OsString;
     use std::os::unix::ffi::OsStringExt;
-    let home = fakes::TempDir::new("loop-handoff-non-utf8");
+    let home = fakes::TempDir::new("loop-compaction-non-utf8");
     let raw = home.path().join("bytes");
     std::fs::create_dir_all(&raw).unwrap();
     let mut bytes = raw.into_os_string().into_vec();
@@ -1165,7 +1165,7 @@ fn a_target_outside_utf8_is_left_out_as_invalid() {
         notices_of(&left_out),
         [(
             contract::ErrorCode::InvalidArguments,
-            "Skill odd was not sent again after the handoff: its path is not valid UTF-8."
+            "Skill odd was not sent again after the compaction: its path is not valid UTF-8."
         )],
     );
 }

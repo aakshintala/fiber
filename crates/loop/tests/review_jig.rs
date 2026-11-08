@@ -14,7 +14,7 @@ mod support;
 use contract::clock::Clock as _;
 use contract::events::{
     Anchor, ArgumentRepair, AskStep, CallStatus, DecidedBy, Decision, Event, EventKind,
-    HandoffCompleted, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
+    CompactionCompleted, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
     PermissionRequested, PermissionResolved, RanBy, Repair, RepairFix, ReviewedCall, ReviewerRef,
     RuleScope, SessionStarted, StandingRule, SteeringApplied, TextCompleted, ToolCallCompleted,
     ToolCallRequested, ToolCallStarted, TurnOutcome, TurnStarted, Variables, VariablesSource,
@@ -33,7 +33,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 use support::review::{RequestKind, ReviewArgs, parse_args, replay};
-use support::{Session, calls_reply, delivery, handoff, paris, shell};
+use support::{Session, calls_reply, delivery, compaction, paris, shell};
 
 /// How long the jig exchange may take once the binary has started.
 /// `.config/nextest.toml` kills a slow test after a 30s period times 4 (120s
@@ -52,14 +52,14 @@ fn prompt_turn(session: &mut Session, text: &str) {
     session.lines();
 }
 
-/// One person handoff turn, asserting it completes.
-fn handoff_turn(session: &mut Session, id: &str) {
-    session.inbox.send(handoff(id, None)).unwrap();
+/// One person compaction turn, asserting it completes.
+fn compaction_turn(session: &mut Session, id: &str) {
+    session.inbox.send(compaction(id, None)).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     session.lines();
 }
 
-/// A session directory holding a reviewed call, a handoff, and another
+/// A session directory holding a reviewed call, a compaction, and another
 /// reviewed call: the native loop's own log, replayed below.
 fn native_session() -> (Session, Arc<fakes::ScriptedProvider>, String) {
     let notes = "Escalate pushes to the person.".to_owned();
@@ -86,7 +86,7 @@ fn native_session() -> (Session, Arc<fakes::ScriptedProvider>, String) {
     ]);
     prompt_turn(&mut session, "never push to main");
     prompt_turn(&mut session, "say hi");
-    handoff_turn(&mut session, "c_h");
+    compaction_turn(&mut session, "c_h");
     prompt_turn(&mut session, "now run it");
     (session, reviewer, notes)
 }
@@ -125,7 +125,7 @@ fn texts(request: &ModelRequest) -> Vec<String> {
 }
 
 #[test]
-fn replay_matches_the_native_reviewer_on_a_call_and_a_handoff() {
+fn replay_matches_the_native_reviewer_on_a_call_and_a_compaction() {
     let (session, reviewer, notes) = native_session();
     let native = reviewer.requests();
     assert_eq!(native.len(), 5);
@@ -685,9 +685,9 @@ fn rule_denied(reason: &str) -> Event {
     })
 }
 
-/// A handoff boundary with `outcome`.
-fn handoff_boundary(outcome: Outcome) -> Event {
-    Event::HandoffCompleted(HandoffCompleted {
+/// A compaction boundary with `outcome`.
+fn compaction_boundary(outcome: Outcome) -> Event {
+    Event::CompactionCompleted(CompactionCompleted {
         outcome,
         error: match outcome {
             Outcome::Completed | Outcome::Cancelled => None,
@@ -705,7 +705,7 @@ fn handoff_boundary(outcome: Outcome) -> Event {
 }
 
 /// The ticket's main fixture: a person message pair, two replayable
-/// outer calls separated by a successful handoff, a session message, a
+/// outer calls separated by a successful compaction, a session message, a
 /// reviewer-blocked call and a headless-denied call.
 fn main_fixture() -> Fixture {
     let fixture = Fixture::new("s_fixture", "/synthetic/workspace");
@@ -729,7 +729,7 @@ fn main_fixture() -> Fixture {
     fixture.append(&prose("agent prose MARKER"), Some("t_1"), None);
     fixture.append(&instruction("instruction MARKER"), Some("t_1"), None);
     fixture.append(&session_steering("peer says hi MARKER"), Some("t_1"), None);
-    fixture.append(&handoff_boundary(Outcome::Completed), Some("t_1"), None);
+    fixture.append(&compaction_boundary(Outcome::Completed), Some("t_1"), None);
     fixture.append(&driver_steering("now run it"), Some("t_2"), None);
     fixture.append(&user_turn(&["also keep logs"]), Some("t_2"), None);
     fixture.append(
@@ -779,7 +779,7 @@ fn projected_review(id: &str, first: &ModelRequest, second: &ModelRequest) -> Va
 /// One projected selection line, from a captured selection request.
 fn projected_selection(seq: u64, request: &ModelRequest) -> Value {
     json!({
-        "handoff": seq,
+        "compaction": seq,
         "system_prompt": request.system_prompt,
         "messages": &request.conversation[..],
     })
@@ -787,7 +787,7 @@ fn projected_selection(seq: u64, request: &ModelRequest) -> Value {
 
 /// Runs the jig on `dir` both ways and asserts the binary prints exactly
 /// the in-process replay's projection: each review in `review_ids` order
-/// from its stage pair, each selection in `handoff_seqs` order, and each
+/// from its stage pair, each selection in `compaction_seqs` order, and each
 /// `unreplayable` line exactly. Returns the binary's lines for the
 /// content assertions. `extra` carries flags such as `--keep-all`.
 fn check_binary_output(
@@ -796,7 +796,7 @@ fn check_binary_output(
     keep_open: bool,
     extra: &[&str],
     review_ids: &[&str],
-    handoff_seqs: &[u64],
+    compaction_seqs: &[u64],
     unreplayable_ids: &[&str],
 ) -> Vec<Value> {
     let keep_all = extra.contains(&"--keep-all");
@@ -829,12 +829,12 @@ fn check_binary_output(
         })
         .collect();
     assert_eq!(stages.len(), review_ids.len() * 2);
-    assert_eq!(selections.len(), handoff_seqs.len());
+    assert_eq!(selections.len(), compaction_seqs.len());
     let output = run_jig(dir, answers, keep_open, extra);
     let lines = stdout_lines(&output);
     let mut reviews = review_ids.iter();
     let mut stage_at = 0;
-    let mut handoffs = handoff_seqs.iter();
+    let mut compactions = compaction_seqs.iter();
     let mut selection_at = 0;
     let mut unreplayable = unreplayable_ids.iter();
     for line in &lines {
@@ -844,8 +844,8 @@ fn check_binary_output(
             let second = stages.get(stage_at + 1).unwrap();
             assert_eq!(line, &projected_review(id, first, second), "review of {id}");
             stage_at += 2;
-        } else if line.get("handoff").is_some() {
-            let seq = handoffs.next().unwrap();
+        } else if line.get("compaction").is_some() {
+            let seq = compactions.next().unwrap();
             let request = selections.get(selection_at).unwrap();
             assert_eq!(line, &projected_selection(*seq, request), "selection {seq}");
             selection_at += 1;
@@ -860,19 +860,19 @@ fn check_binary_output(
         }
     }
     assert_eq!(reviews.len(), 0);
-    assert_eq!(handoffs.len(), 0);
+    assert_eq!(compactions.len(), 0);
     assert_eq!(unreplayable.len(), 0);
     assert_eq!(stage_at, stages.len());
     assert_eq!(selection_at, selections.len());
     lines
 }
 
-/// The `seq` of every completed handoff in `dir`, in order.
-fn completed_handoffs(dir: &Path) -> Vec<u64> {
+/// The `seq` of every completed compaction in `dir`, in order.
+fn completed_compactions(dir: &Path) -> Vec<u64> {
     log::read(dir)
         .unwrap()
         .iter()
-        .filter(|line| line.kind() == EventKind::HandoffCompleted)
+        .filter(|line| line.kind() == EventKind::CompactionCompleted)
         .filter(|line| line.payload.get("outcome").and_then(Value::as_str) == Some("completed"))
         .filter_map(|line| line.seq.map(|seq| seq.0))
         .collect()
@@ -911,15 +911,15 @@ fn line_texts(line: &Value) -> Vec<String> {
 fn built_binary_prints_reviews_and_the_selection_in_order() {
     let fixture = main_fixture();
     let before = fixture.bytes();
-    let handoffs = completed_handoffs(&fixture.dir);
-    assert_eq!(handoffs.len(), 1);
+    let compactions = completed_compactions(&fixture.dir);
+    assert_eq!(compactions.len(), 1);
     let lines = check_binary_output(
         &fixture.dir,
         "1\n",
         false,
         &[],
         &["a_1", "a_2", "a_blocked", "a_headless"],
-        &handoffs,
+        &compactions,
         &[],
     );
     assert_eq!(lines.len(), 5);
@@ -942,7 +942,7 @@ fn built_binary_prints_reviews_and_the_selection_in_order() {
             .any(|text| text.contains("never push to main"))
     );
     assert!(selection.iter().any(|text| text.contains("use tabs")));
-    // After the handoff only the kept message and later events appear:
+    // After the compaction only the kept message and later events appear:
     // no dropped message, no old call, no session message, no prose,
     // no result and no instruction text.
     let after = line_texts(lines.get(2).unwrap());
@@ -966,7 +966,7 @@ fn built_binary_prints_reviews_and_the_selection_in_order() {
     assert_eq!(
         calls.len(),
         1,
-        "the old call leaves at the handoff: {after:?}"
+        "the old call leaves at the compaction: {after:?}"
     );
     // The source log is only read, never written.
     assert_eq!(fixture.bytes(), before);
@@ -1020,14 +1020,14 @@ fn notes_flag_marks_every_system_prompt_and_empty_notes_match_no_notes() {
 #[test]
 fn keep_none_selection_drops_every_earlier_person_message() {
     let fixture = main_fixture();
-    let handoffs = completed_handoffs(&fixture.dir);
+    let compactions = completed_compactions(&fixture.dir);
     let lines = check_binary_output(
         &fixture.dir,
         "none\n",
         false,
         &[],
         &["a_1", "a_2", "a_blocked", "a_headless"],
-        &handoffs,
+        &compactions,
         &[],
     );
     let after = line_texts(lines.get(2).unwrap());
@@ -1078,10 +1078,10 @@ fn malformed_selection_falls_back_without_carrying_reviewer_prose() {
 }
 
 #[test]
-fn empty_person_handoff_prints_no_request_and_reads_no_answer() {
+fn empty_person_compaction_prints_no_request_and_reads_no_answer() {
     let fixture = Fixture::new("s_empty", "/synthetic/workspace");
     fixture.append(&user_turn(&[]), Some("t_1"), None);
-    fixture.append(&handoff_boundary(Outcome::Completed), Some("t_1"), None);
+    fixture.append(&compaction_boundary(Outcome::Completed), Some("t_1"), None);
     fixture.append(
         &requested("shell", json!({"city": "Paris"})),
         Some("t_2"),
@@ -1092,7 +1092,7 @@ fn empty_person_handoff_prints_no_request_and_reads_no_answer() {
         Some("t_2"),
         Some("a_1"),
     );
-    // Stdin is closed at once: the exchange still succeeds, so no handoff
+    // Stdin is closed at once: the exchange still succeeds, so no compaction
     // read anything.
     let lines = check_binary_output(&fixture.dir, "", false, &[], &["a_1"], &[], &[]);
     assert_eq!(lines.len(), 1);
@@ -1104,16 +1104,16 @@ fn empty_person_handoff_prints_no_request_and_reads_no_answer() {
 }
 
 #[test]
-fn repeated_handoffs_select_from_the_previously_kept_messages() {
+fn repeated_compactions_select_from_the_previously_kept_messages() {
     let fixture = Fixture::new("s_repeat", "/synthetic/workspace");
     fixture.append(
         &user_turn(&["first order", "second order"]),
         Some("t_1"),
         None,
     );
-    fixture.append(&handoff_boundary(Outcome::Completed), Some("t_1"), None);
+    fixture.append(&compaction_boundary(Outcome::Completed), Some("t_1"), None);
     fixture.append(&user_turn(&["third order"]), Some("t_2"), None);
-    fixture.append(&handoff_boundary(Outcome::Completed), Some("t_2"), None);
+    fixture.append(&compaction_boundary(Outcome::Completed), Some("t_2"), None);
     fixture.append(
         &requested("shell", json!({"city": "Paris"})),
         Some("t_3"),
@@ -1124,11 +1124,11 @@ fn repeated_handoffs_select_from_the_previously_kept_messages() {
         Some("t_3"),
         Some("a_1"),
     );
-    let handoffs = completed_handoffs(&fixture.dir);
-    assert_eq!(handoffs.len(), 2);
+    let compactions = completed_compactions(&fixture.dir);
+    assert_eq!(compactions.len(), 2);
     // The first answer keeps the first order; the second keeps the third,
     // numbered second among the previously kept plus the new message.
-    let lines = check_binary_output(&fixture.dir, "1\n2\n", false, &[], &["a_1"], &handoffs, &[]);
+    let lines = check_binary_output(&fixture.dir, "1\n2\n", false, &[], &["a_1"], &compactions, &[]);
     assert_eq!(lines.len(), 3);
     let after = line_texts(lines.get(2).unwrap());
     assert!(!after.iter().any(|text| text.contains("first order")));
@@ -1137,11 +1137,11 @@ fn repeated_handoffs_select_from_the_previously_kept_messages() {
 }
 
 #[test]
-fn failed_and_cancelled_handoffs_leave_the_input_intact() {
+fn failed_and_cancelled_compactions_leave_the_input_intact() {
     let fixture = Fixture::new("s_failed", "/synthetic/workspace");
     fixture.append(&user_turn(&["standing order"]), Some("t_1"), None);
-    fixture.append(&handoff_boundary(Outcome::Failed), Some("t_1"), None);
-    fixture.append(&handoff_boundary(Outcome::Cancelled), Some("t_1"), None);
+    fixture.append(&compaction_boundary(Outcome::Failed), Some("t_1"), None);
+    fixture.append(&compaction_boundary(Outcome::Cancelled), Some("t_1"), None);
     fixture.append(
         &requested("shell", json!({"city": "Paris"})),
         Some("t_2"),
@@ -1152,7 +1152,7 @@ fn failed_and_cancelled_handoffs_leave_the_input_intact() {
         Some("t_2"),
         Some("a_1"),
     );
-    // A failed or cancelled handoff selects nothing: no request prints.
+    // A failed or cancelled compaction selects nothing: no request prints.
     let lines = check_binary_output(&fixture.dir, "", false, &[], &["a_1"], &[], &[]);
     assert_eq!(lines.len(), 1);
     let first = line_texts(lines.first().unwrap());
@@ -1381,14 +1381,14 @@ fn unknown_event_kinds_are_ignored() {
         "future_kind",
         json!({"note": "from the future"}),
     );
-    let handoffs = completed_handoffs(&fixture.dir);
+    let compactions = completed_compactions(&fixture.dir);
     let lines = check_binary_output(
         &fixture.dir,
         "1\n",
         false,
         &[],
         &["a_1", "a_2", "a_blocked", "a_headless"],
-        &handoffs,
+        &compactions,
         &[],
     );
     assert_eq!(lines.len(), 5);
@@ -1432,7 +1432,7 @@ fn requests_before_starts_correlate_by_action_with_a_request_time_cut() {
 }
 
 #[test]
-fn calls_print_at_their_request_position_without_moving_across_handoffs() {
+fn calls_print_at_their_request_position_without_moving_across_compactions() {
     let fixture = Fixture::new("s_cross", "/synthetic/workspace");
     fixture.append(&user_turn(&["standing order"]), Some("t_1"), None);
     fixture.append(
@@ -1451,24 +1451,24 @@ fn calls_print_at_their_request_position_without_moving_across_handoffs() {
         Some("t_1"),
         Some("a_blocked"),
     );
-    fixture.append(&handoff_boundary(Outcome::Completed), Some("t_1"), None);
-    fixture.append(&user_turn(&["after the handoff"]), Some("t_2"), None);
-    // The early call's start logs after the handoff, yet its review
+    fixture.append(&compaction_boundary(Outcome::Completed), Some("t_1"), None);
+    fixture.append(&user_turn(&["after the compaction"]), Some("t_2"), None);
+    // The early call's start logs after the compaction, yet its review
     // still prints at its request position, before the selection.
     fixture.append(
         &started(vec![Effect::Executes], false),
         Some("t_2"),
         Some("a_early"),
     );
-    let handoffs = completed_handoffs(&fixture.dir);
-    assert_eq!(handoffs.len(), 1);
+    let compactions = completed_compactions(&fixture.dir);
+    assert_eq!(compactions.len(), 1);
     let lines = check_binary_output(
         &fixture.dir,
         "1\n",
         false,
         &[],
         &["a_early"],
-        &handoffs,
+        &compactions,
         &["a_blocked"],
     );
     assert_eq!(lines.len(), 3);
@@ -1478,12 +1478,12 @@ fn calls_print_at_their_request_position_without_moving_across_handoffs() {
         lines[1],
         json!({"id": "a_blocked", "unreplayable": "declared effects not logged"}),
     );
-    assert_eq!(lines[2].get("handoff").unwrap(), &json!(handoffs[0]));
-    // The request-time cut holds: nothing after the handoff enters the
+    assert_eq!(lines[2].get("compaction").unwrap(), &json!(compactions[0]));
+    // The request-time cut holds: nothing after the compaction enters the
     // early call's replay.
     let early = line_texts(&lines[0]);
     assert!(early.iter().any(|text| text.contains("standing order")));
-    assert!(!early.iter().any(|text| text.contains("after the handoff")));
+    assert!(!early.iter().any(|text| text.contains("after the compaction")));
 }
 
 #[test]

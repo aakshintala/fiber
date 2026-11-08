@@ -10,7 +10,7 @@ expression: text(&buf)
 
                                                                                                                                  test/model
                                                                                                                                  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
-                                                                                                                                 handoff at —                 —
+                                                                                                                                 compacts at —                 —
                                                                                                                                  then a summary, fresh context
                                                                                                                                  tokens in / out          1 / 2
                                                                                                                                  cache hits                  0%

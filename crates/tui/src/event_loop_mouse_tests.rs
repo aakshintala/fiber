@@ -1196,7 +1196,7 @@ fn a_click_on_a_failed_logins_line_opens_the_login_view() {
 }
 
 #[test]
-fn a_click_on_a_handoffs_note_line_opens_the_note() {
+fn a_click_on_a_compactions_note_line_opens_the_note() {
     use serde_json::json;
     let preamble = json!({"reason": "start", "model": "fake/m", "context_window": 1_000_000,
         "tool_choice": "auto", "cache_lifetime": "5m", "system_prompt": "", "tools": [],
@@ -1217,14 +1217,14 @@ fn a_click_on_a_handoffs_note_line_opens_the_note() {
         vec![
             session("preamble_built", preamble, None),
             session("turn_started", started, None),
-            session("handoff_started", json!({"trigger": "auto"}), None),
+            session("compaction_started", json!({"trigger": "auto"}), None),
             session(
                 "text_completed",
                 json!({"text": "## Note\nkeep going"}),
                 Some("a_n"),
             ),
             session(
-                "handoff_completed",
+                "compaction_completed",
                 json!({"outcome": "completed", "note": ["a_n"], "tokens_before": 402_000}),
                 None,
             ),

@@ -270,7 +270,7 @@ fn run_case(plan: Vec<CallKind>) -> Result<(), TestCaseError> {
         tool.script = script;
         if kind.has_control() {
             tool.output.control = Some(Control {
-                handoff: None,
+                compaction: None,
                 questions: Some(vec![question(index)]),
                 skill: None,
                 name: Some(format!("named {index}")),
@@ -549,7 +549,7 @@ fn run_order_case(calls: Vec<OrderKind>, perm: Vec<usize>) -> Result<(), TestCas
         gates.push(gate);
         if matches!(kind, OrderKind::Fails { asks: true }) {
             tool.output.control = Some(Control {
-                handoff: None,
+                compaction: None,
                 questions: Some(vec![question(index)]),
                 skill: None,
                 name: None,

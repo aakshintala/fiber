@@ -6,7 +6,7 @@ mod edit;
 mod error;
 mod files;
 mod guidelines;
-mod handoff;
+mod compaction;
 mod image;
 #[cfg(test)]
 #[path = "job_timing_tests.rs"]
@@ -34,7 +34,7 @@ mod write;
 pub use ask_user::AskUser;
 pub use edit::Edit;
 pub use files::{Files, PathGuard, PathLocks};
-pub use handoff::Handoff;
+pub use compaction::Compaction;
 pub use image::ImageChild;
 pub use name_session::NameSession;
 pub use read::Read;

@@ -2160,7 +2160,7 @@ where
 use contract::ErrorCode;
 use contract::events::{
     AssistantMessageCompleted, CommandAccepted, CommandRejected, ContextNudged, DelegateFinished,
-    DelegateStarted, ExtensionUi, FiberExited, FiberStarted, HandoffCompleted, HandoffStarted,
+    DelegateStarted, ExtensionUi, FiberExited, FiberStarted, CompactionCompleted, CompactionStarted,
     InteractionRequested, InteractionResolved, JobCompleted, JobDelta, JobStarted, McpServerFailed,
     McpServerReady, ModelChanged, Notice, PermissionRequested, PreambleBuilt, ReasoningCompleted,
     RetryScheduled, Rewound, SessionNamed, SessionStarted, SessionStatus, ShellCommand,
@@ -2320,9 +2320,9 @@ fn read_ref_matches_the_clone_for_mcp_and_extension_ui() {
 }
 
 #[test]
-fn read_ref_matches_the_clone_for_handoff_and_context() {
-    read_parity::<HandoffStarted>(serde_json::json!({"trigger": "auto"}));
-    read_parity::<HandoffCompleted>(
+fn read_ref_matches_the_clone_for_compaction_and_context() {
+    read_parity::<CompactionStarted>(serde_json::json!({"trigger": "auto"}));
+    read_parity::<CompactionCompleted>(
         serde_json::json!({"outcome": "completed", "tokens_before": 1000}),
     );
     read_parity::<ContextNudged>(serde_json::json!({"tokens": 1, "trigger_at": 2}));
@@ -2330,7 +2330,7 @@ fn read_ref_matches_the_clone_for_handoff_and_context() {
         serde_json::json!({"content": [{"type": "text", "text": "go"}], "source": "driver"}),
     );
     // A trigger outside the enum never decodes.
-    read_none::<HandoffStarted>(serde_json::json!({"trigger": "manual"}));
+    read_none::<CompactionStarted>(serde_json::json!({"trigger": "manual"}));
     read_none::<ContextNudged>(serde_json::json!({"tokens": 1}));
 }
 

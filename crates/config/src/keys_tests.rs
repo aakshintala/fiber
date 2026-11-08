@@ -250,10 +250,10 @@ const TABBED: &[(SettingsTab, &[&str])] = &[
     (
         SettingsTab::Sessions,
         &[
-            "handoff.enabled",
-            "handoff.tokens",
-            "handoff.window_fraction",
-            "handoff.nudge",
+            "compaction.enabled",
+            "compaction.tokens",
+            "compaction.window_fraction",
+            "compaction.nudge",
             "budget.usd",
             "repository_extensions",
         ],

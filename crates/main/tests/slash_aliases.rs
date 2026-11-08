@@ -173,11 +173,11 @@ fn home_notice(command: &str, prefix: &str, row: &str, rest: &str, notice: &str)
 }
 
 #[test]
-fn compact_starts_a_handoff_like_handoff() {
+fn compact_starts_a_compaction_like_compaction() {
     // The table and alias rule set this row order (`docs/tui.md`, "Slash commands").
-    let row = "handoff /compact";
-    let handoff = home_notice(
-        "/handoff",
+    let row = "compaction /compact";
+    let compaction = home_notice(
+        "/compact",
         "/handof",
         row,
         "f take over\r",
@@ -190,7 +190,7 @@ fn compact_starts_a_handoff_like_handoff() {
         "ct take over\r",
         "No session on screen.",
     );
-    assert_eq!(compact, handoff);
+    assert_eq!(compact, compaction);
 }
 
 #[test]

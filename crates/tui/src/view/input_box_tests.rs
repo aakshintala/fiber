@@ -1421,9 +1421,9 @@ fn the_status_row_holds_both_sides_with_a_dim_joiner() {
     let middle = &row[left.len()..row.len() - right.len()];
     assert!(middle.chars().all(|cell| cell == ' '), "{row:?}");
     assert!(crate::format::width(middle) >= 2, "{row:?}");
-    // The row says nothing about handoff: the handoff point lives in
+    // The row says nothing about compaction: the compaction point lives in
     // the Session status card and the context breakdown.
-    assert!(!row.contains("handoff"), "{row:?}");
+    assert!(!row.contains("compaction"), "{row:?}");
 }
 
 /// The rule above the status row: `─` in `rule` from the stripe's next

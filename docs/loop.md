@@ -36,7 +36,7 @@ A step is one round-trip to the model. Each step does this, in order:
    `after_tool` hooks have run on it (`docs/extensions.md`, "Hooks"); each steering message is logged as its
    own `steering_applied`. Nothing is held back for a later step.
 2. Check how full the context is, and hand off if it is past the threshold
-   (`docs/handoff.md`, "Triggers").
+   (`docs/compaction.md`, "Triggers").
 3. Build the request: the preamble (`docs/prompt-cache.md`) followed by the
    conversation ("What the model is sent"). Then check the budget and run
    `before_model_call` ("Spending budget").
@@ -65,10 +65,10 @@ reply, nothing reads the inbox. A `steer` is queued and `steering_queue`
 written at once, and a `steer_drop` takes effect at once, at any point in the
 turn: the thread reading the connection does both (`docs/architecture.md`,
 "One inbox"). While it waits on an approval, everything else that
-arrives is answered at once: a `handoff` is accepted, a second `reply` is
+arrives is answered at once: a `compaction` is accepted, a second `reply` is
 rejected `stale_request`, and a `close` ends the wait with the request
 unanswerable (`docs/permissions.md`, "Headless"). What these queue (steering
-messages, a handoff, job notices) joins the conversation at the next step
+messages, a compaction, job notices) joins the conversation at the next step
 boundary. Commands answered during a turn, such as `job_stop`, `shell`, `tools`
 and `history`, are answered at once by the door, without the inbox
 (`docs/invocation.md`). A `cancel` ends the turn ("Interrupt").

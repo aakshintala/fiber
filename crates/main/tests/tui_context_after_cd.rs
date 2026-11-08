@@ -148,8 +148,8 @@ fn context_after_cd_shows_the_total_against_the_inherited_window() {
             && !grid
                 .contents
                 .contains("The context shows after the session's first request.")
-            && !grid.contents.contains("automatic handoff")
-            && !grid.contents.contains("handoff 70k")
+            && !grid.contents.contains("automatic compaction")
+            && !grid.contents.contains("compaction 70k")
     });
     run.write(b"\x03\x03\r");
     run.wait_screen("the primary screen with the resume line", |grid| {

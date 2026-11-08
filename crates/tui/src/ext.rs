@@ -20,7 +20,7 @@ pub(crate) mod input;
 
 pub use input::{
     AnswerDisposition, Answers, BranchName, CallState, Card, CardPrompt, ChangedFile, ChangedFiles,
-    Delegate, DelegatesCard, ErrorLine, GroupLine, HandoffBand, Input, Job, JobsCard, LedgerResult,
+    Delegate, DelegatesCard, ErrorLine, GroupLine, CompactionBand, Input, Job, JobsCard, LedgerResult,
     LedgerRow, Notice, Prompt, PromptImage, QueuedImage, Quota, ReplyText, RowError, SessionCard,
     SessionContext, Spend, StatusRows, Steer, SteeringMessage, SteeringQueue, ThinkingLine,
     TurnAnswerPart, TurnAnswers, TurnAside, TurnBand, TurnBandState, TurnCall, TurnCallResult,

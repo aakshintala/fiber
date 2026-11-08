@@ -46,8 +46,8 @@ static REQUEST_SEND_ADVANCE_MS: Mutex<Option<u64>> = Mutex::new(None);
 static REQUEST_NOTE_ADVANCE_MS: Mutex<Option<u64>> = Mutex::new(None);
 static CANCEL_AFTER_SUBSCRIBE: Mutex<bool> = Mutex::new(false);
 static FAIL_STREAM_WRITE: Mutex<Option<bool>> = Mutex::new(None);
-static FAIL_HANDOFF_STARTED: Mutex<Option<bool>> = Mutex::new(None);
-static FAIL_HANDOFF_COMPLETED: Mutex<Option<bool>> = Mutex::new(None);
+static FAIL_COMPACTION_STARTED: Mutex<Option<bool>> = Mutex::new(None);
+static FAIL_COMPACTION_COMPLETED: Mutex<Option<bool>> = Mutex::new(None);
 static FAIL_RESTARTED: Mutex<Option<bool>> = Mutex::new(None);
 
 /// Advances the preamble test clock by `ms` in the exit hook, once.
@@ -80,17 +80,17 @@ fn arm_fail_stream_write() {
     *lock(&FAIL_STREAM_WRITE) = Some(true);
 }
 
-/// Fails the next handoff-started record once with `Error::Log`.
-fn arm_fail_handoff_started() {
-    *lock(&FAIL_HANDOFF_STARTED) = Some(true);
+/// Fails the next compaction-started record once with `Error::Log`.
+fn arm_fail_compaction_started() {
+    *lock(&FAIL_COMPACTION_STARTED) = Some(true);
 }
 
-/// Fails the next handoff-completed record once with `Error::Log`.
-fn arm_fail_handoff_completed() {
-    *lock(&FAIL_HANDOFF_COMPLETED) = Some(true);
+/// Fails the next compaction-completed record once with `Error::Log`.
+fn arm_fail_compaction_completed() {
+    *lock(&FAIL_COMPACTION_COMPLETED) = Some(true);
 }
 
-/// Fails the next handoff restart once with `Error::Log`.
+/// Fails the next compaction restart once with `Error::Log`.
 fn arm_fail_restarted() {
     *lock(&FAIL_RESTARTED) = Some(true);
 }
@@ -134,17 +134,17 @@ pub(crate) fn take_fail_stream_write() -> bool {
     lock(&FAIL_STREAM_WRITE).take().is_some()
 }
 
-/// Whether the next handoff-started record fails. Consumed once.
-pub(crate) fn take_fail_handoff_started() -> bool {
-    lock(&FAIL_HANDOFF_STARTED).take().is_some()
+/// Whether the next compaction-started record fails. Consumed once.
+pub(crate) fn take_fail_compaction_started() -> bool {
+    lock(&FAIL_COMPACTION_STARTED).take().is_some()
 }
 
-/// Whether the next handoff-completed record fails. Consumed once.
-pub(crate) fn take_fail_handoff_completed() -> bool {
-    lock(&FAIL_HANDOFF_COMPLETED).take().is_some()
+/// Whether the next compaction-completed record fails. Consumed once.
+pub(crate) fn take_fail_compaction_completed() -> bool {
+    lock(&FAIL_COMPACTION_COMPLETED).take().is_some()
 }
 
-/// Whether the next handoff restart fails. Consumed once.
+/// Whether the next compaction restart fails. Consumed once.
 pub(crate) fn take_fail_restarted() -> bool {
     lock(&FAIL_RESTARTED).take().is_some()
 }
@@ -177,7 +177,7 @@ impl Rules for EmptyRules {
 struct ReadsTool {
     name: &'static str,
     text: &'static str,
-    handoff: Option<&'static str>,
+    compaction: Option<&'static str>,
 }
 
 impl ReadsTool {
@@ -185,7 +185,7 @@ impl ReadsTool {
         Self {
             name,
             text,
-            handoff: None,
+            compaction: None,
         }
     }
 
@@ -193,7 +193,7 @@ impl ReadsTool {
         Self {
             name,
             text,
-            handoff: Some(note),
+            compaction: Some(note),
         }
     }
 }
@@ -230,8 +230,8 @@ impl Tool for ReadsTool {
             content: vec![ContentPart::Text {
                 text: self.text.into(),
             }],
-            control: self.handoff.map(|note| Control {
-                handoff: Some(note.into()),
+            control: self.compaction.map(|note| Control {
+                compaction: Some(note.into()),
                 questions: None,
                 skill: None,
                 name: None,
@@ -563,9 +563,9 @@ struct Build {
     /// a deterministic cancel between call construction and the
     /// cancellable subscription.
     cancel_at_attempt: Option<usize>,
-    /// Advances the clock on every completed handoff's restart.
+    /// Advances the clock on every completed compaction's restart.
     forget_advance_ms: Option<u64>,
-    handoff: Option<crate::HandoffSettings>,
+    compaction: Option<crate::CompactionSettings>,
     budget: Option<f64>,
     warm: Option<u32>,
     hooks: Option<Arc<dyn contract::hook::Hooks>>,
@@ -587,7 +587,7 @@ fn plain_build(script: Vec<Answer>) -> Build {
         observe: false,
         cancel_at_attempt: None,
         forget_advance_ms: None,
-        handoff: None,
+        compaction: None,
         budget: None,
         warm: None,
         hooks: None,
@@ -635,7 +635,7 @@ fn switcher_for(provider_b: Arc<TimingProvider>) -> crate::Prepare {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: crate::HandoffSettings::default(),
+                compaction: crate::CompactionSettings::default(),
                 reviewer: Err(Failure {
                     code: ErrorCode::NoModel,
                     message: crate::NO_MODEL_MESSAGE.into(),
@@ -797,8 +797,8 @@ fn build(mut opts: Build) -> World {
         looped = looped.observed(Some(observe));
         world_attempts = attempts;
     }
-    if let Some(settings) = opts.handoff {
-        looped = looped.handoff(settings);
+    if let Some(settings) = opts.compaction {
+        looped = looped.compaction(settings);
     }
     if let Some(usd) = opts.budget {
         looped = looped.budget(Some(usd));
@@ -847,7 +847,7 @@ fn build(mut opts: Build) -> World {
     }
     if let Some(ms) = opts.forget_advance_ms {
         let clock = Arc::clone(&clock);
-        looped = looped.on_handoff(Arc::new(move || {
+        looped = looped.on_compaction(Arc::new(move || {
             clock.sleep(Duration::from_millis(ms));
         }));
     }
@@ -882,12 +882,12 @@ fn prompt(world: &World, text: &str) {
         .unwrap();
 }
 
-fn person_handoff(world: &World, instructions: Option<&str>) {
+fn person_compaction(world: &World, instructions: Option<&str>) {
     world
         .inbox_tx
-        .send(Delivery::Handoff(
-            CommandId("c_handoff".into()),
-            contract::commands::Handoff {
+        .send(Delivery::Compaction(
+            CommandId("c_compaction".into()),
+            contract::commands::Compact {
                 instructions: instructions.map(str::to_owned),
             },
             Ack(Box::new(|_| {})),
@@ -976,7 +976,7 @@ fn p7_records(world: &World) -> Vec<OpRecord> {
         .filter(|line| {
             matches!(
                 line.op.as_str(),
-                "startup.preamble" | "turn.request" | "turn.model_call" | "turn.handoff"
+                "startup.preamble" | "turn.request" | "turn.model_call" | "turn.compaction"
             )
         })
         .collect()
@@ -1460,7 +1460,7 @@ fn a_note_request_times_its_assembly() {
         run_answer("Done.", 0),
     ]));
     arm_request_note_advance(4);
-    person_handoff(&world, Some("focus"));
+    person_compaction(&world, Some("focus"));
     prompt(&world, "hi");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
     let requests = ops(&world, "turn.request");
@@ -1469,8 +1469,8 @@ fn a_note_request_times_its_assembly() {
     assert_eq!(requests[1].ms, 0, "the ordinary send advanced nothing");
     assert_wire(&p7_records(&world));
     assert!(
-        kinds(&world).contains(&EventKind::HandoffCompleted),
-        "a handoff ran: {:?}",
+        kinds(&world).contains(&EventKind::CompactionCompleted),
+        "a compaction ran: {:?}",
         kinds(&world)
     );
 }
@@ -1527,7 +1527,7 @@ fn a_missing_preamble_overflow_moves_results_but_times_neither() {
     assert!(matches!(step, crate::Step::Ended(_)));
     assert!(ops(&world, "turn.request").is_empty());
     assert!(ops(&world, "turn.model_call").is_empty());
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let artifacts = world.log.dir().join("artifacts");
     let moved = std::fs::read_dir(&artifacts)
         .map(|entries| entries.count())
@@ -1627,27 +1627,27 @@ impl contract::hook::Hooks for RefusingHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
     fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
 }
 
-/// Hooks answering `before_handoff` with one answer and passing
+/// Hooks answering `before_compaction` with one answer and passing
 /// everything else.
-struct HandoffHooks {
-    answer: Mutex<contract::hook::BeforeHandoffAnswer>,
+struct CompactionHooks {
+    answer: Mutex<contract::hook::BeforeCompactionAnswer>,
 }
 
-impl HandoffHooks {
+impl CompactionHooks {
     fn noting() -> Arc<Self> {
         Arc::new(Self {
-            answer: Mutex::new(contract::hook::BeforeHandoffAnswer {
-                outcome: contract::hook::BeforeHandoffOutcome::Note {
+            answer: Mutex::new(contract::hook::BeforeCompactionAnswer {
+                outcome: contract::hook::BeforeCompactionOutcome::Note {
                     text: "Hook note.".into(),
                     extension: "fiber.test/notes".into(),
                 },
@@ -1658,15 +1658,15 @@ impl HandoffHooks {
 
     fn passing() -> Arc<Self> {
         Arc::new(Self {
-            answer: Mutex::new(contract::hook::BeforeHandoffAnswer {
-                outcome: contract::hook::BeforeHandoffOutcome::NoNote,
+            answer: Mutex::new(contract::hook::BeforeCompactionAnswer {
+                outcome: contract::hook::BeforeCompactionOutcome::NoNote,
                 notices: Vec::new(),
             }),
         })
     }
 }
 
-impl contract::hook::Hooks for HandoffHooks {
+impl contract::hook::Hooks for CompactionHooks {
     fn after_tool(&self, _: &contract::hook::AfterToolCall<'_>) -> contract::hook::AfterToolAnswer {
         contract::hook::AfterToolAnswer {
             outcome: contract::hook::AfterToolOutcome::Unchanged,
@@ -1736,53 +1736,53 @@ impl contract::hook::Hooks for HandoffHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         self.answer.lock().unwrap().clone()
     }
 
     fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
 }
 
-// A handoff whose note a hook wrote holds no `turn.request` scope: the
+// A compaction whose note a hook wrote holds no `turn.request` scope: the
 // assembly's span is stamped, held across the hook, then discarded.
 #[test]
-fn a_hook_note_writes_no_request_scope_for_the_handoff() {
+fn a_hook_note_writes_no_request_scope_for_the_compaction() {
     let mut world = build(Build {
-        hooks: Some(HandoffHooks::noting()),
+        hooks: Some(CompactionHooks::noting()),
         ..plain_build(vec![run_answer("Done.", 0)])
     });
     arm_request_note_advance(4);
-    person_handoff(&world, Some("focus"));
+    person_compaction(&world, Some("focus"));
     prompt(&world, "hi");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     // The answer's own request is the only `turn.request` line: the
-    // handoff's assembly, with its 4 ms advance, wrote none.
+    // compaction's assembly, with its 4 ms advance, wrote none.
     let requests = ops(&world, "turn.request");
     assert_eq!(requests.len(), 1, "{:?}", op_records(&world));
     assert_eq!(requests[0].ms, 0);
     assert_wire(&p7_records(&world));
     assert!(
-        kinds(&world).contains(&EventKind::HandoffCompleted),
-        "a handoff ran: {:?}",
+        kinds(&world).contains(&EventKind::CompactionCompleted),
+        "a compaction ran: {:?}",
         kinds(&world)
     );
     assert_eq!(world.provider.requests.lock().unwrap().len(), 1);
 }
 
-// With no hook note the handoff's assembly writes exactly one
+// With no hook note the compaction's assembly writes exactly one
 // `turn.request` line, carrying the exit hook's advance.
 #[test]
-fn a_model_note_writes_one_request_scope_for_the_handoff() {
+fn a_model_note_writes_one_request_scope_for_the_compaction() {
     let mut world = build(Build {
-        hooks: Some(HandoffHooks::passing()),
+        hooks: Some(CompactionHooks::passing()),
         ..plain_build(vec![run_answer("Note.", 0), run_answer("Done.", 0)])
     });
     arm_request_note_advance(4);
-    person_handoff(&world, Some("focus"));
+    person_compaction(&world, Some("focus"));
     prompt(&world, "hi");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
     let requests = ops(&world, "turn.request");
@@ -1857,7 +1857,7 @@ fn an_overflow_note_moves_results_and_times_three_requests() {
         "send, failed send, note and resend: {:?}",
         ops(&world, "turn.request")
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let artifacts = world.log.dir().join("artifacts");
     let moved = std::fs::read_dir(&artifacts)
         .map(|entries| entries.count())
@@ -2348,10 +2348,10 @@ fn a_bare_switch_keeps_timing_the_ordinary_call() {
     );
 }
 
-// One shared runner owns every handoff end to end: requested sources nest
+// One shared runner owns every compaction end to end: requested sources nest
 // their note request and model scopes inside it, tool sources none.
-fn handoff_settings() -> crate::HandoffSettings {
-    crate::HandoffSettings {
+fn compaction_settings() -> crate::CompactionSettings {
+    crate::CompactionSettings {
         enabled: true,
         tokens: 1_000,
         window_fraction: 0.7,
@@ -2392,14 +2392,14 @@ fn auto_world(script: Vec<Answer>) -> World {
     let weather: Arc<dyn Tool> = Arc::new(ReadsTool::reads("get_weather", "abcd"));
     build(Build {
         tools: vec![weather],
-        handoff: Some(handoff_settings()),
+        compaction: Some(compaction_settings()),
         retry: Some(no_wait()),
         ..plain_build(script)
     })
 }
 
 #[test]
-fn an_automatic_handoff_nests_its_note_scopes() {
+fn an_automatic_compaction_nests_its_note_scopes() {
     let mut world = auto_world(vec![
         run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
         run_answer("The note.", 0),
@@ -2412,26 +2412,26 @@ fn an_automatic_handoff_nests_its_note_scopes() {
         "{:?}",
         kinds(&world)
     );
-    let handoffs = ops(&world, "turn.handoff");
-    assert_eq!(handoffs.len(), 1, "{:?}", op_records(&world));
+    let compactions = ops(&world, "turn.compaction");
+    assert_eq!(compactions.len(), 1, "{:?}", op_records(&world));
     assert_wire(&p7_records(&world));
     assert!(
-        world.loop_mut().handoff.step_ran,
-        "a requested handoff marks the step as run"
+        world.loop_mut().compaction.step_ran,
+        "a requested compaction marks the step as run"
     );
     assert_eq!(ops(&world, "turn.request").len(), 3);
     assert_eq!(ops(&world, "turn.model_call").len(), 3);
     let kinds = kinds(&world);
-    for kind in ["handoff_started", "handoff_completed", "opening_message"] {
+    for kind in ["compaction_started", "compaction_completed", "opening_message"] {
         assert!(kinds.contains(&EventKind::from_name(kind)), "{kinds:?}");
     }
     let started = kinds
         .iter()
-        .position(|kind| *kind == EventKind::HandoffStarted)
+        .position(|kind| *kind == EventKind::CompactionStarted)
         .unwrap();
     let completed = kinds
         .iter()
-        .position(|kind| *kind == EventKind::HandoffCompleted)
+        .position(|kind| *kind == EventKind::CompactionCompleted)
         .unwrap();
     let opening = kinds
         .iter()
@@ -2441,12 +2441,12 @@ fn an_automatic_handoff_nests_its_note_scopes() {
 }
 
 #[test]
-fn a_person_handoff_requests_its_note() {
+fn a_person_compaction_requests_its_note() {
     let mut world = build(plain_build(vec![
         run_answer("The note.", 0),
         run_answer("Done.", 0),
     ]));
-    person_handoff(&world, Some("focus"));
+    person_compaction(&world, Some("focus"));
     prompt(&world, "hi");
     assert_eq!(
         turn(&mut world),
@@ -2454,18 +2454,18 @@ fn a_person_handoff_requests_its_note() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     assert_eq!(ops(&world, "turn.request").len(), 2);
     assert_eq!(ops(&world, "turn.model_call").len(), 2);
     assert!(
-        world.loop_mut().handoff.step_ran,
-        "a person handoff ran this step"
+        world.loop_mut().compaction.step_ran,
+        "a person compaction ran this step"
     );
-    assert!(kinds(&world).contains(&EventKind::HandoffStarted));
+    assert!(kinds(&world).contains(&EventKind::CompactionStarted));
 }
 
 #[test]
-fn an_overflow_handoff_requests_its_note() {
+fn an_overflow_compaction_requests_its_note() {
     let mut world = build(Build {
         retry: Some(no_wait()),
         ..plain_build(vec![
@@ -2481,15 +2481,15 @@ fn an_overflow_handoff_requests_its_note() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     assert_eq!(ops(&world, "turn.request").len(), 3);
     let kinds = kinds(&world);
-    assert!(kinds.contains(&EventKind::HandoffStarted), "{kinds:?}");
-    assert!(kinds.contains(&EventKind::HandoffCompleted), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::CompactionStarted), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::CompactionCompleted), "{kinds:?}");
 }
 
 #[test]
-fn a_tool_handoff_makes_no_note_request() {
+fn a_tool_compaction_makes_no_note_request() {
     let noting: Arc<dyn Tool> = Arc::new(ReadsTool::noting("get_weather", "abcd", "Continue."));
     let mut world = build(Build {
         tools: vec![noting],
@@ -2505,17 +2505,17 @@ fn a_tool_handoff_makes_no_note_request() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     assert!(
-        !world.loop_mut().handoff.step_ran,
-        "a tool handoff leaves the step flag unset"
+        !world.loop_mut().compaction.step_ran,
+        "a tool compaction leaves the step flag unset"
     );
     assert!(
-        !kinds(&world).contains(&EventKind::HandoffStarted),
+        !kinds(&world).contains(&EventKind::CompactionStarted),
         "a tool source writes no started: {:?}",
         kinds(&world)
     );
-    assert!(kinds(&world).contains(&EventKind::HandoffCompleted));
+    assert!(kinds(&world).contains(&EventKind::CompactionCompleted));
     assert_eq!(
         world.provider.requests.lock().unwrap().len(),
         2,
@@ -2524,7 +2524,7 @@ fn a_tool_handoff_makes_no_note_request() {
 }
 
 #[test]
-fn two_tool_notes_join_one_handoff_in_call_order() {
+fn two_tool_notes_join_one_compaction_in_call_order() {
     let first: Arc<dyn Tool> = Arc::new(ReadsTool::noting("get_weather", "abcd", "First."));
     let second: Arc<dyn Tool> = Arc::new(ReadsTool::noting("get_humidity", "efgh", "Second."));
     let mut end = fakes::reply("");
@@ -2556,32 +2556,32 @@ fn two_tool_notes_join_one_handoff_in_call_order() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let completed: Vec<Value> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind() == EventKind::HandoffCompleted)
+        .filter(|line| line.kind() == EventKind::CompactionCompleted)
         .map(|line| Value::Object(line.payload.clone()))
         .collect();
-    assert_eq!(completed.len(), 1, "one joined handoff");
+    assert_eq!(completed.len(), 1, "one joined compaction");
     let note = completed[0]["note"].clone();
     assert_eq!(note.as_array().map(Vec::len), Some(2), "{note}");
 }
 
 #[test]
-fn no_trigger_writes_no_handoff_timing() {
+fn no_trigger_writes_no_compaction_timing() {
     let mut world = build(plain_build(vec![run_answer("Hello.", 0)]));
     prompt(&world, "hi");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
-    assert!(ops(&world, "turn.handoff").is_empty());
+    assert!(ops(&world, "turn.compaction").is_empty());
 }
 
 #[test]
-fn a_disabled_handoff_writes_no_handoff_timing() {
+fn a_disabled_compaction_writes_no_compaction_timing() {
     let weather: Arc<dyn Tool> = Arc::new(ReadsTool::reads("get_weather", "abcd"));
     let mut world = build(Build {
         tools: vec![weather],
-        handoff: Some(crate::HandoffSettings {
+        compaction: Some(crate::CompactionSettings {
             enabled: false,
             ..Default::default()
         }),
@@ -2597,11 +2597,11 @@ fn a_disabled_handoff_writes_no_handoff_timing() {
         "{:?}",
         kinds(&world)
     );
-    assert!(ops(&world, "turn.handoff").is_empty());
+    assert!(ops(&world, "turn.compaction").is_empty());
 }
 
 #[test]
-fn a_tool_result_without_a_note_writes_no_handoff_timing() {
+fn a_tool_result_without_a_note_writes_no_compaction_timing() {
     let weather: Arc<dyn Tool> = Arc::new(ReadsTool::reads("get_weather", "abcd"));
     let mut world = build(Build {
         tools: vec![weather],
@@ -2612,11 +2612,11 @@ fn a_tool_result_without_a_note_writes_no_handoff_timing() {
     });
     prompt(&world, "hi");
     assert_eq!(turn(&mut world), Some(TurnOutcome::Completed));
-    assert!(ops(&world, "turn.handoff").is_empty());
+    assert!(ops(&world, "turn.compaction").is_empty());
 }
 
 #[test]
-fn an_empty_tool_note_still_completes_one_handoff() {
+fn an_empty_tool_note_still_completes_one_compaction() {
     let noting: Arc<dyn Tool> = Arc::new(ReadsTool::noting("get_weather", "abcd", ""));
     let mut world = build(Build {
         tools: vec![noting],
@@ -2632,11 +2632,11 @@ fn an_empty_tool_note_still_completes_one_handoff() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
 }
 
 #[test]
-fn a_second_overflow_in_one_step_writes_no_second_handoff() {
+fn a_second_overflow_in_one_step_writes_no_second_compaction() {
     let mut world = build(Build {
         retry: Some(no_wait()),
         ..plain_build(vec![
@@ -2652,11 +2652,11 @@ fn a_second_overflow_in_one_step_writes_no_second_handoff() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
 }
 
 #[test]
-fn a_refused_note_fails_the_handoff_and_blocks() {
+fn a_refused_note_fails_the_compaction_and_blocks() {
     let mut world = auto_world(vec![
         run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
         run_failed_answer(ErrorCode::InvalidRequest, 0),
@@ -2669,11 +2669,11 @@ fn a_refused_note_fails_the_handoff_and_blocks() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let completed: Vec<Value> = log::read(&world.home.path().join("s_test"))
         .unwrap()
         .into_iter()
-        .filter(|line| line.kind() == EventKind::HandoffCompleted)
+        .filter(|line| line.kind() == EventKind::CompactionCompleted)
         .map(|line| Value::Object(line.payload.clone()))
         .collect();
     assert_eq!(completed.len(), 1);
@@ -2681,11 +2681,11 @@ fn a_refused_note_fails_the_handoff_and_blocks() {
 }
 
 #[test]
-fn an_exhausted_note_retry_fails_the_handoff() {
+fn an_exhausted_note_retry_fails_the_compaction() {
     let weather: Arc<dyn Tool> = Arc::new(ReadsTool::reads("get_weather", "abcd"));
     let mut world = build(Build {
         tools: vec![weather],
-        handoff: Some(handoff_settings()),
+        compaction: Some(compaction_settings()),
         retry: Some(crate::Retry {
             attempts: 1,
             initial: Duration::ZERO,
@@ -2705,12 +2705,12 @@ fn an_exhausted_note_retry_fails_the_handoff() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     assert_eq!(ops(&world, "turn.request").len(), 3);
 }
 
 #[test]
-fn an_output_limited_note_fails_the_handoff() {
+fn an_output_limited_note_fails_the_compaction() {
     let mut world = auto_world(vec![
         run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
         output_limit_answer("Cut off.", 0),
@@ -2723,11 +2723,11 @@ fn an_output_limited_note_fails_the_handoff() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
 }
 
 #[test]
-fn an_empty_note_fails_the_handoff() {
+fn an_empty_note_fails_the_compaction() {
     let mut world = auto_world(vec![
         run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
         run_answer("", 0),
@@ -2740,11 +2740,11 @@ fn an_empty_note_fails_the_handoff() {
         "{:?}",
         kinds(&world)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
 }
 
 #[test]
-fn a_cancel_before_note_admission_times_handoff_but_no_note_model() {
+fn a_cancel_before_note_admission_times_compaction_but_no_note_model() {
     let mut world = auto_world(vec![
         run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
         run_answer("The note.", 7),
@@ -2779,7 +2779,7 @@ fn a_cancel_before_note_admission_times_handoff_but_no_note_model() {
         world.loop_mut().turn().unwrap(),
         Some(TurnOutcome::Interrupted)
     );
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     assert_eq!(
         ops(&world, "turn.model_call").len(),
         1,
@@ -2793,7 +2793,7 @@ fn a_cancel_before_note_admission_times_handoff_but_no_note_model() {
 }
 
 #[test]
-fn a_cancel_mid_note_times_handoff_and_the_entered_note() {
+fn a_cancel_mid_note_times_compaction_and_the_entered_note() {
     fakes::within(
         "a cancel mid note",
         Deadline::after(fakes::MUST_SUCCEED_WITHIN),
@@ -2828,7 +2828,7 @@ fn a_cancel_mid_note_times_handoff_and_the_entered_note() {
                     .expect("the cancelled turn ends");
                 assert_eq!(outcome.unwrap(), Some(TurnOutcome::Interrupted));
             });
-            assert_eq!(ops(&world, "turn.handoff").len(), 1);
+            assert_eq!(ops(&world, "turn.compaction").len(), 1);
             let models = ops(&world, "turn.model_call");
             assert_eq!(models.len(), 2, "{:?}", op_records(&world));
             assert_eq!(models[1].ms, 7);
@@ -2837,39 +2837,39 @@ fn a_cancel_mid_note_times_handoff_and_the_entered_note() {
 }
 
 #[test]
-fn a_failed_handoff_start_writes_one_scope_and_no_started() {
+fn a_failed_compaction_start_writes_one_scope_and_no_started() {
     let mut world = auto_world(vec![
         run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
         run_answer("The note.", 0),
     ]);
-    arm_fail_handoff_started();
+    arm_fail_compaction_started();
     prompt(&world, "hi");
     let Err(error) = world.loop_mut().turn() else {
         panic!("a failed record fails the turn");
     };
     assert_eq!(error.code(), ErrorCode::IoFailed);
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let kinds = kinds(&world);
-    assert!(!kinds.contains(&EventKind::HandoffStarted), "{kinds:?}");
-    assert!(!kinds.contains(&EventKind::HandoffCompleted), "{kinds:?}");
+    assert!(!kinds.contains(&EventKind::CompactionStarted), "{kinds:?}");
+    assert!(!kinds.contains(&EventKind::CompactionCompleted), "{kinds:?}");
 }
 
 #[test]
-fn a_failed_handoff_completion_writes_one_scope_and_no_fabrication() {
+fn a_failed_compaction_completion_writes_one_scope_and_no_fabrication() {
     let mut world = auto_world(vec![
         run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
         run_answer("The note.", 0),
     ]);
-    arm_fail_handoff_completed();
+    arm_fail_compaction_completed();
     prompt(&world, "hi");
     let Err(error) = world.loop_mut().turn() else {
         panic!("a failed record fails the turn");
     };
     assert_eq!(error.code(), ErrorCode::IoFailed);
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let kinds = kinds(&world);
-    assert!(kinds.contains(&EventKind::HandoffStarted), "{kinds:?}");
-    assert!(!kinds.contains(&EventKind::HandoffCompleted), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::CompactionStarted), "{kinds:?}");
+    assert!(!kinds.contains(&EventKind::CompactionCompleted), "{kinds:?}");
 }
 
 #[test]
@@ -2884,9 +2884,9 @@ fn a_failed_restart_writes_one_scope_and_no_second_opening() {
         panic!("a failed restart fails the turn");
     };
     assert_eq!(error.code(), ErrorCode::IoFailed);
-    assert_eq!(ops(&world, "turn.handoff").len(), 1);
+    assert_eq!(ops(&world, "turn.compaction").len(), 1);
     let kinds = kinds(&world);
-    assert!(kinds.contains(&EventKind::HandoffCompleted), "{kinds:?}");
+    assert!(kinds.contains(&EventKind::CompactionCompleted), "{kinds:?}");
     assert_eq!(
         kinds
             .iter()
@@ -2898,13 +2898,13 @@ fn a_failed_restart_writes_one_scope_and_no_second_opening() {
 }
 
 #[test]
-fn a_handoff_measures_its_note_and_restart_end_to_end() {
+fn a_compaction_measures_its_note_and_restart_end_to_end() {
     let weather: Arc<dyn Tool> = Arc::new(ReadsTool::reads("get_weather", "abcd"));
     let mut world = build(Build {
         tools: vec![weather],
-        handoff: Some(handoff_settings()),
+        compaction: Some(compaction_settings()),
         retry: Some(no_wait()),
-        // The restart holds 5 ms through the handoff's own forget hook.
+        // The restart holds 5 ms through the compaction's own forget hook.
         forget_advance_ms: Some(5),
         ..plain_build(vec![
             run_tokens_tool_answer("get_weather", json!({}), 1_000, 3, 0),
@@ -2919,9 +2919,9 @@ fn a_handoff_measures_its_note_and_restart_end_to_end() {
         "{:?}",
         kinds(&world)
     );
-    let handoffs = ops(&world, "turn.handoff");
-    assert_eq!(handoffs.len(), 1);
-    assert_eq!(handoffs[0].ms, 8, "3 ms of note and 5 ms of restart");
+    let compactions = ops(&world, "turn.compaction");
+    assert_eq!(compactions.len(), 1);
+    assert_eq!(compactions[0].ms, 8, "3 ms of note and 5 ms of restart");
     let models = ops(&world, "turn.model_call");
     assert_eq!(models.len(), 3);
     assert_eq!(models[1].ms, 3, "the note scope holds only its run");
@@ -2929,7 +2929,7 @@ fn a_handoff_measures_its_note_and_restart_end_to_end() {
 }
 
 #[test]
-fn a_tool_handoff_measures_its_restart() {
+fn a_tool_compaction_measures_its_restart() {
     let noting: Arc<dyn Tool> = Arc::new(ReadsTool::noting("get_weather", "abcd", "Continue."));
     let mut world = build(Build {
         tools: vec![noting],
@@ -2946,18 +2946,18 @@ fn a_tool_handoff_measures_its_restart() {
         "{:?}",
         kinds(&world)
     );
-    let handoffs = ops(&world, "turn.handoff");
-    assert_eq!(handoffs.len(), 1);
-    assert_eq!(handoffs[0].ms, 5, "the tool restart contributes its hold");
+    let compactions = ops(&world, "turn.compaction");
+    assert_eq!(compactions.len(), 1);
+    assert_eq!(compactions[0].ms, 5, "the tool restart contributes its hold");
 }
 
 #[test]
-fn a_tool_handoff_sets_the_step_flag_only_when_it_does_not_complete() {
+fn a_tool_compaction_sets_the_step_flag_only_when_it_does_not_complete() {
     let mut world = build(plain_build(vec![]));
     let turn_id = TurnId("t_test".into());
     let seed = |world: &mut World| {
         let action = ActionId("a_note".into());
-        let carry = &mut world.loop_mut().handoff.carry;
+        let carry = &mut world.loop_mut().compaction.carry;
         carry.call_requested(
             &action,
             &Input::ToolCall {
@@ -2989,22 +2989,22 @@ fn a_tool_handoff_sets_the_step_flag_only_when_it_does_not_complete() {
     };
     seed(&mut world);
     assert!(
-        world.loop_mut().handoff_from_tools(&turn_id).unwrap(),
-        "a completed tool handoff restarts the context"
+        world.loop_mut().compaction_from_tools(&turn_id).unwrap(),
+        "a completed tool compaction restarts the context"
     );
     assert!(
-        !world.loop_mut().handoff.step_ran,
-        "a completed tool handoff leaves the step flag unset"
+        !world.loop_mut().compaction.step_ran,
+        "a completed tool compaction leaves the step flag unset"
     );
     seed(&mut world);
     assert!(world.cancel.arm(), "a turn must be armed to be cancelled");
     assert!(world.cancel.cancel());
     assert!(
-        !world.loop_mut().handoff_from_tools(&turn_id).unwrap(),
-        "a cancelled tool handoff does not complete"
+        !world.loop_mut().compaction_from_tools(&turn_id).unwrap(),
+        "a cancelled tool compaction does not complete"
     );
     assert!(
-        world.loop_mut().handoff.step_ran,
-        "a tool handoff that does not complete sets the step flag"
+        world.loop_mut().compaction.step_ran,
+        "a tool compaction that does not complete sets the step flag"
     );
 }

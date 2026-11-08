@@ -696,7 +696,7 @@ pub(crate) fn assemble_session(
                 reviewer_notes,
                 budget,
                 retry,
-                handoff,
+                compaction,
                 idle,
                 warm,
                 caps,
@@ -1062,8 +1062,8 @@ pub(crate) fn assemble_session(
                                 .observed(observe)
                                 .reviewer_observed(reviewer_observe)
                                 .reviewer_notes(reviewer_notes)
-                                .handoff(handoff)
-                                .on_handoff(forget)
+                                .compaction(compaction)
+                                .on_compaction(forget)
                                 .switcher(switcher, switchable)
                                 .reloader(reloader)
                                 .sandbox_apply(sandbox_apply)
@@ -1202,7 +1202,7 @@ pub(crate) fn assemble_session(
                 reviewer_notes,
                 budget,
                 retry,
-                handoff,
+                compaction,
                 idle,
                 warm,
                 caps,
@@ -1626,8 +1626,8 @@ pub(crate) fn assemble_session(
                                 .observed(observe)
                                 .reviewer_observed(reviewer_observe)
                                 .reviewer_notes(reviewer_notes)
-                                .handoff(handoff)
-                                .on_handoff(forget)
+                                .compaction(compaction)
+                                .on_compaction(forget)
                                 .switcher(switcher, switchable)
                                 .reloader(reloader)
                                 .sandbox_apply(sandbox_apply)

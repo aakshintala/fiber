@@ -1,29 +1,29 @@
-//! `handoff.*` for the session's model (`docs/configuration.md`).
+//! `compaction.*` for the session's model (`docs/configuration.md`).
 
 use config::Config;
-use r#loop::HandoffSettings;
+use r#loop::CompactionSettings;
 
-/// The `handoff.*` settings for `model`. The config schema supplies the
+/// The `compaction.*` settings for `model`. The config schema supplies the
 /// defaults and refuses a value of another type. A per-model key wins
 /// over the same key at the top level.
-pub(crate) fn handoff_settings(config: &Config, model: &str) -> HandoffSettings {
-    HandoffSettings {
+pub(crate) fn compaction_settings(config: &Config, model: &str) -> CompactionSettings {
+    CompactionSettings {
         enabled: config
-            .flag("handoff.enabled", Some(model))
+            .flag("compaction.enabled", Some(model))
             .unwrap_or_default(),
         tokens: config
-            .count("handoff.tokens", Some(model))
+            .count("compaction.tokens", Some(model))
             .unwrap_or_default(),
         window_fraction: config
-            .get("handoff.window_fraction", Some(model))
+            .get("compaction.window_fraction", Some(model))
             .and_then(|(value, _)| value.as_f64())
             .unwrap_or_default(),
         nudge: config
-            .flag("handoff.nudge", Some(model))
+            .flag("compaction.nudge", Some(model))
             .unwrap_or_default(),
     }
 }
 
 #[cfg(test)]
-#[path = "handoff_tests.rs"]
+#[path = "compaction_tests.rs"]
 mod tests;

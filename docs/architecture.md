@@ -441,5 +441,5 @@ that the other does not.
 - Background jobs are `docs/tools.md` ("Background jobs")
 - Delegates are `docs/delegates.md`
 - MCP is `docs/mcp.md`
-- Handoff is `docs/handoff.md`
+- Compaction is `docs/compaction.md`
 - Memory is `docs/memory.md`

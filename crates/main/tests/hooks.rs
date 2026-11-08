@@ -1940,7 +1940,7 @@ fn session_start_runs_again_on_resume_and_appends_its_context() {
 }
 
 #[test]
-fn a_handoff_runs_session_start_with_reason_handoff() {
+fn a_compaction_runs_session_start_with_reason_compaction() {
     let setup = Setup::new();
     setup.lua(
         "echoer",
@@ -1957,7 +1957,7 @@ fn a_handoff_runs_session_start_with_reason_handoff() {
         hello(),
     ])
     .unwrap();
-    setup.provider_with_extra(&server, &json!({"handoff": {"tokens": 10, "nudge": false}}));
+    setup.provider_with_extra(&server, &json!({"compaction": {"tokens": 10, "nudge": false}}));
     fs::write(
         setup.workspace().join("note.txt"),
         "the password is hunter2\n",
@@ -1983,12 +1983,12 @@ fn a_handoff_runs_session_start_with_reason_handoff() {
             "tool_call_started",
             "tool_call_completed",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "opening_message",
             "context_added",
             "assistant_message_started",
@@ -2000,20 +2000,20 @@ fn a_handoff_runs_session_start_with_reason_handoff() {
             "fiber_exited",
         ]
     );
-    let done = run.first("handoff_completed");
+    let done = run.first("compaction_completed");
     assert_eq!(done["payload"]["outcome"], "completed");
     let requests = server.requests();
     assert_eq!(requests.len(), 3);
-    // The request after the handoff is the new opening message, the
-    // handoff context, the turn's input, the note.
+    // The request after the compaction is the new opening message, the
+    // compaction context, the turn's input, the note.
     let users = user_messages(&requests[2].body);
     assert_eq!(users.len(), 4);
     assert!(users[0].starts_with("This message is from Fiber"));
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — session_start context (item 3), carried input in a new-message block (item 5), then the note (item 6).
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — session_start context (item 3), carried input in a new-message block (item 5), then the note (item 6).
     assert_eq!(
         &users[1..],
         [
-            "reason:handoff",
+            "reason:compaction",
             "The person's new message:\nread the note",
             "The note."
         ]
@@ -2021,13 +2021,13 @@ fn a_handoff_runs_session_start_with_reason_handoff() {
 }
 
 #[test]
-fn a_blocking_session_start_failure_at_a_handoff_fails_the_handoff_and_the_session_goes_on() {
+fn a_blocking_session_start_failure_at_a_compaction_fails_the_compaction_and_the_session_goes_on() {
     let setup = Setup::new();
     setup.lua(
         "guard",
         "fiber.hook(\"session_start\", { timeout = 30000, on_failure = \"blocking\",\n\
            run = function(call)\n\
-             if call.reason == \"handoff\" then error(\"boom\") end\n\
+             if call.reason == \"compaction\" then error(\"boom\") end\n\
              return {} end })\n",
     );
     let server = ProviderServer::start([
@@ -2040,7 +2040,7 @@ fn a_blocking_session_start_failure_at_a_handoff_fails_the_handoff_and_the_sessi
         hello(),
     ])
     .unwrap();
-    setup.provider_with_extra(&server, &json!({"handoff": {"tokens": 10, "nudge": false}}));
+    setup.provider_with_extra(&server, &json!({"compaction": {"tokens": 10, "nudge": false}}));
     fs::write(
         setup.workspace().join("note.txt"),
         "the password is hunter2\n",
@@ -2065,12 +2065,12 @@ fn a_blocking_session_start_failure_at_a_handoff_fails_the_handoff_and_the_sessi
             "tool_call_started",
             "tool_call_completed",
             "step_started",
-            "handoff_started",
+            "compaction_started",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
-            "handoff_completed",
+            "compaction_completed",
             "assistant_message_started",
             "assistant_message_delta",
             "text_completed",
@@ -2080,14 +2080,14 @@ fn a_blocking_session_start_failure_at_a_handoff_fails_the_handoff_and_the_sessi
             "fiber_exited",
         ]
     );
-    let done = run.first("handoff_completed");
+    let done = run.first("compaction_completed");
     assert_eq!(done["payload"]["outcome"], "failed");
     assert_eq!(done["payload"]["error"]["code"], "hook_failed");
     let message = done["payload"]["error"]["message"].as_str().unwrap();
     assert!(
         message.starts_with(
             "The `session_start` hook of extension fiber.test/guard failed, \
-             so the handoff did not complete: "
+             so the compaction did not complete: "
         ) && message.contains("boom"),
         "the failure wording: {message}"
     );
@@ -2115,17 +2115,17 @@ fn diagnostic_file(setup: &Setup, name: &str) -> Vec<Value> {
         .collect()
 }
 
-/// A `before_handoff` hook whose run is `body`.
+/// A `before_compaction` hook whose run is `body`.
 fn noting_hook(on_failure: &str, body: &str) -> String {
     format!(
-        "fiber.hook(\"before_handoff\", {{ timeout = 60000, on_failure = \"{on_failure}\",\n\
+        "fiber.hook(\"before_compaction\", {{ timeout = 60000, on_failure = \"{on_failure}\",\n\
            run = function(h) {body} end }})\n"
     )
 }
 
 /// Runs `fiber ask` where the model reads a file, then the five-token
 /// trigger hands off, with `init` installed and `extra` configured.
-fn handoff_run(
+fn compaction_run(
     setup: &Setup,
     init: &str,
     script: Vec<Response>,
@@ -2140,10 +2140,10 @@ fn handoff_run(
     (run, server)
 }
 
-/// The complete event kinds of a handoff turn whose note a hook wrote:
-/// `tools.rs`'s `HANDOFF_TURN` without the note reply's six lines. Each
+/// The complete event kinds of a compaction turn whose note a hook wrote:
+/// `tools.rs`'s `COMPACTION_TURN` without the note reply's six lines. Each
 /// `hello` below streams its answer in one delta.
-const HOOK_HANDOFF_TURN: &[&str] = &[
+const HOOK_COMPACTION_TURN: &[&str] = &[
     "turn_started",
     "step_started",
     "assistant_message_started",
@@ -2153,8 +2153,8 @@ const HOOK_HANDOFF_TURN: &[&str] = &[
     "tool_call_started",
     "tool_call_completed",
     "step_started",
-    "handoff_started",
-    "handoff_completed",
+    "compaction_started",
+    "compaction_completed",
     "opening_message",
     "assistant_message_started",
     "assistant_message_delta",
@@ -2165,7 +2165,7 @@ const HOOK_HANDOFF_TURN: &[&str] = &[
     "fiber_exited",
 ];
 
-fn handoff_prefix() -> Vec<&'static str> {
+fn compaction_prefix() -> Vec<&'static str> {
     vec![
         "session_started",
         "fiber_started",
@@ -2176,9 +2176,9 @@ fn handoff_prefix() -> Vec<&'static str> {
 }
 
 #[test]
-fn a_before_handoff_hook_writes_the_note_and_no_note_request_is_made() {
+fn a_before_compaction_hook_writes_the_note_and_no_note_request_is_made() {
     let setup = Setup::new();
-    let (run, server) = handoff_run(
+    let (run, server) = compaction_run(
         &setup,
         &noting_hook(
             "non-blocking",
@@ -2192,13 +2192,13 @@ fn a_before_handoff_hook_writes_the_note_and_no_note_request_is_made() {
             )]),
             hello(),
         ],
-        &json!({"handoff": {"tokens": 5}, "diagnostics": {"level": "debug"}}),
+        &json!({"compaction": {"tokens": 5}, "diagnostics": {"level": "debug"}}),
     );
     assert_eq!(
         run.kinds(),
-        [handoff_prefix(), HOOK_HANDOFF_TURN.into()].concat()
+        [compaction_prefix(), HOOK_COMPACTION_TURN.into()].concat()
     );
-    let completed = run.first("handoff_completed");
+    let completed = run.first("compaction_completed");
     let note_text = completed["payload"]["note_text"].as_str().unwrap();
     assert!(note_text.starts_with("Hook note: "), "{note_text}");
     assert_eq!(completed["payload"]["extension"], "fiber.test/notes");
@@ -2211,7 +2211,7 @@ fn a_before_handoff_hook_writes_the_note_and_no_note_request_is_made() {
     let body = second.to_string();
     assert!(body.contains(note_text), "{body}");
     // The debug log holds the hook's chain scope and no `turn.request`
-    // line for the handoff: the call's and the answer's lines only.
+    // line for the compaction: the call's and the answer's lines only.
     let id = run.session_id().to_owned();
     let lines = diagnostic_file(&setup, &format!("ask-{id}.log"));
     let timings: Vec<&Value> = lines
@@ -2221,7 +2221,7 @@ fn a_before_handoff_hook_writes_the_note_and_no_note_request_is_made() {
     assert_eq!(
         timings
             .iter()
-            .filter(|line| line["data"]["op"] == "hook.before_handoff")
+            .filter(|line| line["data"]["op"] == "hook.before_compaction")
             .count(),
         1
     );
@@ -2236,9 +2236,9 @@ fn a_before_handoff_hook_writes_the_note_and_no_note_request_is_made() {
 }
 
 #[test]
-fn a_before_handoff_hook_that_returns_nothing_leaves_the_note_to_the_model() {
+fn a_before_compaction_hook_that_returns_nothing_leaves_the_note_to_the_model() {
     let setup = Setup::new();
-    let (run, server) = handoff_run(
+    let (run, server) = compaction_run(
         &setup,
         &noting_hook("non-blocking", r#"return nil"#),
         vec![
@@ -2250,12 +2250,12 @@ fn a_before_handoff_hook_that_returns_nothing_leaves_the_note_to_the_model() {
             hello(),
             hello(),
         ],
-        &json!({"handoff": {"tokens": 5}}),
+        &json!({"compaction": {"tokens": 5}}),
     );
     assert_eq!(
         run.kinds(),
         [
-            handoff_prefix(),
+            compaction_prefix(),
             vec![
                 "turn_started",
                 "step_started",
@@ -2266,13 +2266,13 @@ fn a_before_handoff_hook_that_returns_nothing_leaves_the_note_to_the_model() {
                 "tool_call_started",
                 "tool_call_completed",
                 "step_started",
-                "handoff_started",
+                "compaction_started",
                 "assistant_message_started",
                 "assistant_message_delta",
                 "text_completed",
                 "usage_recorded",
                 "assistant_message_completed",
-                "handoff_completed",
+                "compaction_completed",
                 "opening_message",
                 "assistant_message_started",
                 "assistant_message_delta",
@@ -2289,9 +2289,9 @@ fn a_before_handoff_hook_that_returns_nothing_leaves_the_note_to_the_model() {
 }
 
 #[test]
-fn a_non_blocking_before_handoff_hook_with_a_bad_return_leaves_the_note_to_the_model() {
+fn a_non_blocking_before_compaction_hook_with_a_bad_return_leaves_the_note_to_the_model() {
     let setup = Setup::new();
-    let (run, server) = handoff_run(
+    let (run, server) = compaction_run(
         &setup,
         &noting_hook("non-blocking", r#"return "x""#),
         vec![
@@ -2303,11 +2303,11 @@ fn a_non_blocking_before_handoff_hook_with_a_bad_return_leaves_the_note_to_the_m
             hello(),
             hello(),
         ],
-        &json!({"handoff": {"tokens": 5}}),
+        &json!({"compaction": {"tokens": 5}}),
     );
     // The model's turn, with the hook's failure as a notice after
-    // `handoff_started`.
-    let mut want = handoff_prefix();
+    // `compaction_started`.
+    let mut want = compaction_prefix();
     want.extend([
         "turn_started",
         "step_started",
@@ -2318,14 +2318,14 @@ fn a_non_blocking_before_handoff_hook_with_a_bad_return_leaves_the_note_to_the_m
         "tool_call_started",
         "tool_call_completed",
         "step_started",
-        "handoff_started",
+        "compaction_started",
         "notice",
         "assistant_message_started",
         "assistant_message_delta",
         "text_completed",
         "usage_recorded",
         "assistant_message_completed",
-        "handoff_completed",
+        "compaction_completed",
         "opening_message",
         "assistant_message_started",
         "assistant_message_delta",
@@ -2339,16 +2339,16 @@ fn a_non_blocking_before_handoff_hook_with_a_bad_return_leaves_the_note_to_the_m
     let notice = run.first("notice");
     assert_eq!(notice["payload"]["code"], "hook_failed");
     assert_eq!(notice["payload"]["extension"], "fiber.test/notes");
-    let completed = run.first("handoff_completed");
+    let completed = run.first("compaction_completed");
     assert_eq!(completed["payload"]["outcome"], "completed");
     assert!(completed["payload"].get("note").is_some());
     assert_eq!(server.requests().len(), 3);
 }
 
 #[test]
-fn a_blocking_before_handoff_failure_fails_the_handoff_hook_failed() {
+fn a_blocking_before_compaction_failure_fails_the_compaction_hook_failed() {
     let setup = Setup::new();
-    let (run, server) = handoff_run(
+    let (run, server) = compaction_run(
         &setup,
         &noting_hook("blocking", r#"error("boom")"#),
         vec![
@@ -2359,9 +2359,9 @@ fn a_blocking_before_handoff_failure_fails_the_handoff_hook_failed() {
             )]),
             hello(),
         ],
-        &json!({"handoff": {"tokens": 5}}),
+        &json!({"compaction": {"tokens": 5}}),
     );
-    let completed = run.first("handoff_completed");
+    let completed = run.first("compaction_completed");
     assert_eq!(completed["payload"]["outcome"], "failed");
     assert_eq!(completed["payload"]["error"]["code"], "hook_failed");
     let message = completed["payload"]["error"]["message"].as_str().unwrap();
@@ -2375,7 +2375,7 @@ fn a_blocking_before_handoff_failure_fails_the_handoff_hook_failed() {
 #[test]
 fn a_hook_note_survives_resume() {
     let setup = Setup::new();
-    let (run, server) = handoff_run(
+    let (run, server) = compaction_run(
         &setup,
         &noting_hook(
             "non-blocking",
@@ -2390,10 +2390,10 @@ fn a_hook_note_survives_resume() {
             hello(),
             hello(),
         ],
-        &json!({"handoff": {"tokens": 5}}),
+        &json!({"compaction": {"tokens": 5}}),
     );
     let id = run.session_id().to_owned();
-    let note_text = run.first("handoff_completed")["payload"]["note_text"]
+    let note_text = run.first("compaction_completed")["payload"]["note_text"]
         .as_str()
         .unwrap()
         .to_owned();

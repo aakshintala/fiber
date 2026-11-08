@@ -1,4 +1,4 @@
-//! State reaches the first hook through resume, forks, rewinds and handoffs.
+//! State reaches the first hook through resume, forks, rewinds and compactions.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -197,15 +197,15 @@ fn resumed_maximum_depth_state_reads_back_through_the_log_reader() {
 }
 
 #[test]
-fn a_handoff_keeps_the_live_state_for_its_session_start() {
+fn a_compaction_keeps_the_live_state_for_its_session_start() {
     let setup = Setup::new_with_fm_root();
     let server = ProviderServer::start([
         support::text_reply("first"),
-        support::text_reply("after handoff"),
+        support::text_reply("after compaction"),
     ])
     .unwrap();
     setup.provider(&server);
-    setup.lua("goal","state.set('goal',7);fiber.hook('before_handoff',{timeout=5000,on_failure='blocking',run=function()state.set('goal',9);return {note='keep working'} end});fiber.hook('session_start',{timeout=5000,on_failure='blocking',run=function(arg) if arg.reason=='handoff' then state.set('seen',state.get('goal')) end end})");
+    setup.lua("goal","state.set('goal',7);fiber.hook('before_compaction',{timeout=5000,on_failure='blocking',run=function()state.set('goal',9);return {note='keep working'} end});fiber.hook('session_start',{timeout=5000,on_failure='blocking',run=function(arg) if arg.reason=='compaction' then state.set('seen',state.get('goal')) end end})");
     let id = doors::mint("s_");
     let mut running = setup.start_session(&id, &[]);
     let client = running.connect(&setup.socket(&id));
@@ -221,11 +221,11 @@ fn a_handoff_keeps_the_live_state_for_its_session_start() {
     extension_harness::until_session(&client, "first turn completed", |line| {
         line["kind"] == "turn_completed"
     });
-    extension_harness::send(&client, r#"{"id":"handoff","command":"handoff","args":{}}"#);
-    extension_harness::until_session(&client, "handoff completed", |line| {
-        line["kind"] == "handoff_completed"
+    extension_harness::send(&client, r#"{"id":"compaction","command":"compact","args":{}}"#);
+    extension_harness::until_session(&client, "compaction completed", |line| {
+        line["kind"] == "compaction_completed"
     });
-    extension_harness::until_session(&client, "handoff turn completed", |line| {
+    extension_harness::until_session(&client, "compaction turn completed", |line| {
         line["kind"] == "turn_completed"
     });
     extension_harness::send(&client, r#"{"id":"close","command":"close","args":{}}"#);

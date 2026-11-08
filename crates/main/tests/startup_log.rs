@@ -69,7 +69,7 @@ impl Setup {
 #[test]
 fn a_config_error_before_the_session_writes_one_ask_line() {
     let setup = Setup::new();
-    let code = setup.run_ask(&["ask", "-c", &format!("handoff.tokens=\"{SECRET}\""), "hi"]);
+    let code = setup.run_ask(&["ask", "-c", &format!("compaction.tokens=\"{SECRET}\""), "hi"]);
     assert_eq!(code, Some(1));
 
     let logs = setup.logs();

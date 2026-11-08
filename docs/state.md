@@ -378,14 +378,14 @@ What is recorded:
   scope, and each rendered page's own child owns its own; the renderer
   itself and file inspection stay untimed. Its `data` holds only `op` and
   `ms`. Installed for the loop are `startup.preamble`,
-  `turn.request`, `turn.model_call` and `turn.handoff`. `startup.preamble`
+  `turn.request`, `turn.model_call` and `turn.compaction`. `startup.preamble`
   covers building and installing the preamble after the approved-code load,
   before the opening message, once per session start: a same-session rebuild
   writes no line. `turn.request` covers assembling the history plus the
   request, ending before the budget, window and hook checks. `turn.model_call`
   covers one admitted attempt, from entering the model call until its stream
   ends; a cancel observed before admission writes none, and a retry's backoff
-  stays outside. `turn.handoff` covers one handoff end to end, from its first
+  stays outside. `turn.compaction` covers one compaction end to end, from its first
   record through the restart. Installed for one tool call are
   `tool.permission`, `tool.reviewer`, `tool.hooks` and `tool.run`, each
   with `tool` naming the registered tool. `tool.permission` covers the
@@ -399,14 +399,14 @@ What is recorded:
   output; a call with no hooks, or a dispatch a shutdown suppresses,
   writes none. `tool.run` covers one entered execution on its worker, not
   the wait for its ordered completion. The scopes nest instead of adding up: a
-  requested handoff holds its note's request and model scopes; a handoff
+  requested compaction holds its note's request and model scopes; a compaction
   whose note a hook writes has neither, and
   `http_request`'s network share sits inside `turn.model_call`. Warming
   refreshes and reviewer judgements run through the same factories but write
   no turn scope. Also installed are the six hook chains other
   than the tool hooks: `hook.session_start`, `hook.turn_start`,
   `hook.before_message`, `hook.before_model_call`, `hook.turn_end` and
-  `hook.before_handoff`, one
+  `hook.before_compaction`, one
   scope around each entered public dispatch, however it returns, empty
   chains included. Tool hooks take no scope: `tool.hooks` covers those
   chains. Other plain agent clients stay unobserved.

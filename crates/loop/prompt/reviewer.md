@@ -32,7 +32,7 @@ When in doubt, choose `check`.
 
 Reply with one word and nothing else: `check` if the call needs a closer look, `allow` if it plainly does none of the above.
 
-## handoff
+## compaction
 
 This is not a review: the session is handing off, and what you are shown next restarts from the messages you keep. The conversation above is everything you have been shown so far: the person's messages in order with the replies they answered, then the agent's tool calls.
 
@@ -40,7 +40,7 @@ Keep each of the person's messages that still binds the agent: standing orders, 
 
 Reply with the numbers of the messages to keep, separated by commas and nothing else, or `none`.
 
-## handoff-reask
+## compaction-reask
 
 Your reply could not be read: expected the numbers of the messages to keep, separated by commas, or `none`. Reply with the numbers of the messages to keep, separated by commas and nothing else, or `none`.
 

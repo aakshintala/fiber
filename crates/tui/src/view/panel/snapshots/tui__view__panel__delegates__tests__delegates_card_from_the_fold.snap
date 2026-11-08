@@ -10,7 +10,7 @@ expression: "crate::view::text(&buf)"
 
 
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
-   handoff at —                 —
+   compacts at —                 —
    then a summary, fresh context
    tokens in / out              —
    cache hits                   —

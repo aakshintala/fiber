@@ -320,10 +320,10 @@ fn a_job_the_old_session_left_running_is_no_orphan_in_the_new_one() {
 }
 
 #[test]
-fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
+fn a_compaction_started_in_the_new_session_after_a_rewind_names_no_job() {
     // A job started before the point with no end in the window would read
-    // as running in the new session's handoff text: the rewind stopped it
-    // in the old log, so the new session's handoff carry holds no job.
+    // as running in the new session's compaction text: the rewind stopped it
+    // in the old log, so the new session's compaction carry holds no job.
     let session = run_a();
     session
         .log
@@ -353,9 +353,9 @@ fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
         None,
         vec![Scripted::text("The note."), Scripted::text("Next.")],
     );
-    tx.send(Delivery::Handoff(
+    tx.send(Delivery::Compaction(
         CommandId("c_h".into()),
-        contract::commands::Handoff { instructions: None },
+        contract::commands::Compact { instructions: None },
         ignore(),
     ))
     .unwrap();
@@ -367,14 +367,14 @@ fn a_handoff_started_in_the_new_session_after_a_rewind_names_no_job() {
     });
     let (b, outcome) = Deadline::after(DEADLINE)
         .recv(&finished)
-        .expect("the handoff turn ended in time");
+        .expect("the compaction turn ended in time");
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let lines = log::read(&dir).unwrap();
     assert!(
         lines
             .iter()
-            .any(|line| line.kind() == EventKind::HandoffCompleted),
-        "the handoff ran"
+            .any(|line| line.kind() == EventKind::CompactionCompleted),
+        "the compaction ran"
     );
     // The next turn sends the restarted conversation: the carried input,
     // the note, and no line for a job.
@@ -1540,7 +1540,7 @@ fn an_ancestor_summary_starts_its_excerpt_after_the_inherited_last_line() {
 }
 
 #[test]
-fn a_summary_reads_through_a_handoff_without_its_note_request() {
+fn a_summary_reads_through_a_compaction_without_its_note_request() {
     let session = run_a_handed();
     let lines = log::read(&session.dir).unwrap();
     let at = turn_start(&lines, 1) - 1;
@@ -1561,7 +1561,7 @@ fn a_summary_reads_through_a_handoff_without_its_note_request() {
     let (looped, tx, provider) = resume_existing(
         &session,
         "s_test",
-        vec![Scripted::text("Across the handoff.")],
+        vec![Scripted::text("Across the compaction.")],
     );
     let (rw, answer) = rewind(args(None, Some(at), true, false));
     drop(drive(looped, &tx, rw));
@@ -1619,7 +1619,7 @@ impl contract::hook::Hooks for SummaryHooks {
     summary_hook_delegate!(before_message, BeforeMessage, BeforeMessageAnswer);
     summary_hook_delegate!(session_start, SessionStart, ContextAnswer);
     summary_hook_delegate!(turn_end, TurnEnd, ContextAnswer);
-    summary_hook_delegate!(before_handoff, BeforeHandoff, BeforeHandoffAnswer);
+    summary_hook_delegate!(before_compaction, BeforeCompaction, BeforeCompactionAnswer);
 
     fn turn_start(&self, turn: &contract::hook::TurnStart<'_>) -> contract::hook::ContextAnswer {
         if self.context
@@ -2367,7 +2367,7 @@ fn a_summary_after_an_idle_switch_uses_the_new_model_and_preamble() {
             cache_lifetime: contract::events::CacheLifetime::OneHour,
             context_window: fakes::CONTEXT_WINDOW,
             addendum: Some("switched addendum".into()),
-            handoff: r#loop::HandoffSettings::default(),
+            compaction: r#loop::CompactionSettings::default(),
             reviewer: Err(contract::shapes::Failure {
                 code: ErrorCode::NoModel,
                 message: "no reviewer".into(),
@@ -3397,17 +3397,17 @@ fn a_summary_checks_jobs_and_the_point_before_starting() {
     assert!(lines.iter().all(|line| line.kind() != EventKind::Rewound));
 }
 
-/// Loop-level handoff rewinds (`docs/events.md`, "Rewind"): session A runs
-/// an in-turn handoff in its first turn, then a plain second turn. A rewind
-/// past the handoff starts from the handoff's context; one before it
-/// ignores the handoff.
-const HANDOFF_TRIGGER: u64 = 1_000;
+/// Loop-level compaction rewinds (`docs/events.md`, "Rewind"): session A runs
+/// an in-turn compaction in its first turn, then a plain second turn. A rewind
+/// past the compaction starts from the compaction's context; one before it
+/// ignores the compaction.
+const COMPACTION_TRIGGER: u64 = 1_000;
 
-fn handed_settings() -> r#loop::HandoffSettings {
-    r#loop::HandoffSettings {
-        tokens: HANDOFF_TRIGGER,
+fn handed_settings() -> r#loop::CompactionSettings {
+    r#loop::CompactionSettings {
+        tokens: COMPACTION_TRIGGER,
         nudge: false,
-        ..r#loop::HandoffSettings::default()
+        ..r#loop::CompactionSettings::default()
     }
 }
 
@@ -3418,7 +3418,7 @@ fn handed_said(text: &str, tokens: u64) -> Scripted {
 
 /// Session A after two turns: turn 1 calls `write_file`, hands off on
 /// the trigger and answers "Done." from the new context; turn 2 answers
-/// "Again." with no handoff. Its tools match the ones `start_b` wires,
+/// "Again." with no compaction. Its tools match the ones `start_b` wires,
 /// so a rewound session's request tools equal the old session's.
 fn run_a_handed() -> Session {
     let tools: Vec<Arc<dyn Tool>> = vec![
@@ -3429,7 +3429,7 @@ fn run_a_handed() -> Session {
         vec![
             support::with_tokens(
                 calls_reply("working", &[("write_file", paris())]),
-                HANDOFF_TRIGGER - 1,
+                COMPACTION_TRIGGER - 1,
                 0,
             ),
             Scripted::text("The note."),
@@ -3439,7 +3439,7 @@ fn run_a_handed() -> Session {
         None,
         tools,
     )
-    .handoff(handed_settings());
+    .compaction(handed_settings());
     session.rules.set(StandingRules {
         global: vec![allow_rule("write_file")],
         project: Vec::new(),
@@ -3475,15 +3475,15 @@ fn user_text(input: &Input) -> &str {
 }
 
 #[test]
-fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
+fn a_rewound_session_after_a_compaction_starts_from_the_compactions_context() {
     let session = run_a_handed();
     let a_lines = log::read(&session.dir).unwrap();
-    // The handoff ran in turn 1: its completion and the new opening sit
+    // The compaction ran in turn 1: its completion and the new opening sit
     // between the two turns.
     let kinds: Vec<EventKind> = a_lines.iter().map(|line| line.kind()).collect();
     let completed = kinds
         .iter()
-        .position(|kind| *kind == EventKind::HandoffCompleted)
+        .position(|kind| *kind == EventKind::CompactionCompleted)
         .unwrap();
     assert_eq!(kinds[completed + 1], EventKind::OpeningMessage);
     assert!(
@@ -3495,7 +3495,7 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
     );
     let a_requests = session.provider.requests();
     assert_eq!(a_requests.len(), 4, "call, note, reply, second turn");
-    // The second turn's first request follows the handoff: the new opening,
+    // The second turn's first request follows the compaction: the new opening,
     // the carried input, the note, then its own prompt.
     let a_second = a_requests.last().unwrap();
     assert_eq!(a_second.conversation.len(), 5);
@@ -3503,7 +3503,7 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
         user_text(&a_second.conversation[0]).starts_with("This message is from Fiber"),
         "the opening message renders first"
     );
-    // docs/handoff.md, "What the model sees after a handoff": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
+    // docs/compaction.md, "What the model sees after a compaction": "In order:" — carried input in a new-message block (item 5: "verbatim, in a block labelled as the person's new message").
     assert_eq!(
         user_text(&a_second.conversation[1]),
         "The person's new message:\nhi"
@@ -3511,11 +3511,11 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
     assert_eq!(user_text(&a_second.conversation[2]), "The note.");
     assert!(
         matches!(&a_second.conversation[3], Input::Assistant { text, .. } if text == "Done."),
-        "turn 1's post-handoff reply stays in the context"
+        "turn 1's post-compaction reply stays in the context"
     );
     assert_eq!(user_text(&a_second.conversation[4]), "again");
     // The point is the line before the second turn's `turn_started`, a
-    // boundary after the handoff.
+    // boundary after the compaction.
     let at = turn_start(&a_lines, 2) - 1;
     let note = rewind_note(&session.dir, Seq(at)).unwrap();
     let k = a_second.conversation.len() - 1;
@@ -3542,7 +3542,7 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
     assert_eq!(first.cache_key, "s_test");
     assert_eq!(first.previous_end, a_second.previous_end);
     assert_eq!(first.tools, a_second.tools);
-    // The handoff's context, then the rewind note, then the new prompt.
+    // The compaction's context, then the rewind note, then the new prompt.
     assert_eq!(&first.conversation[..k], &a_second.conversation[..k]);
     assert_eq!(
         first.conversation[k],
@@ -3555,21 +3555,21 @@ fn a_rewound_session_after_a_handoff_starts_from_the_handoffs_context() {
 }
 
 #[test]
-fn a_rewound_session_before_a_handoff_ignores_it() {
+fn a_rewound_session_before_a_compaction_ignores_it() {
     let session = run_a_handed();
     let a_lines = log::read(&session.dir).unwrap();
     // The point is the boundary just before the step that triggered the
-    // handoff: the tool results answered, the next line a `step_started`.
-    let handoff = a_lines
+    // compaction: the tool results answered, the next line a `step_started`.
+    let compaction = a_lines
         .iter()
-        .find(|line| line.kind() == EventKind::HandoffStarted)
+        .find(|line| line.kind() == EventKind::CompactionStarted)
         .unwrap()
         .seq
         .unwrap()
         .0;
     let step = a_lines
         .iter()
-        .rfind(|line| line.kind() == EventKind::StepStarted && line.seq.unwrap().0 < handoff)
+        .rfind(|line| line.kind() == EventKind::StepStarted && line.seq.unwrap().0 < compaction)
         .unwrap()
         .seq
         .unwrap()
@@ -3583,7 +3583,7 @@ fn a_rewound_session_before_a_handoff_ignores_it() {
             .kind(),
         EventKind::StepStarted
     );
-    // A's note request: the history to the point, then the handoff's
+    // A's note request: the history to the point, then the compaction's
     // instruction. It is the only request ending in one.
     let a_requests = session.provider.requests();
     let noted = a_requests
@@ -3594,7 +3594,7 @@ fn a_rewound_session_before_a_handoff_ignores_it() {
                 .last()
                 .is_some_and(|last| user_text(last).starts_with("Fiber is about to restart"))
         })
-        .expect("the handoff's note request ran");
+        .expect("the compaction's note request ran");
     let k = noted.conversation.len() - 1;
     let note = rewind_note(&session.dir, Seq(at)).unwrap();
     let (b, tx, provider, _dir) = start_b(
@@ -3638,7 +3638,7 @@ fn a_rewound_session_before_a_handoff_ignores_it() {
             | Input::ToolResult { .. }
             | Input::ToolSearchResult { .. } => true,
         }),
-        "no handoff note reaches the rewound session"
+        "no compaction note reaches the rewound session"
     );
 }
 

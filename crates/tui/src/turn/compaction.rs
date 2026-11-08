@@ -1,6 +1,6 @@
-//! The handoff band and the nudge (`docs/tui.md`, "Handoff").
+//! The compaction band and the nudge (`docs/tui.md`, "Compaction").
 //!
-//! A handoff breaks the turn's card: the band stands where it ran, and the
+//! A compaction breaks the turn's card: the band stands where it ran, and the
 //! rows after it are the second card. While the note is being written, the
 //! assistant's text is the note and goes into the band. A child of `turn`,
 //! so it places the band in a card.
@@ -8,7 +8,7 @@
 use contract::Envelope;
 use contract::events::EventKind;
 use contract::events::{
-    ContextNudged, HandoffCompleted, HandoffStarted, HandoffTrigger, Note, Outcome, PreambleBuilt,
+    ContextNudged, CompactionCompleted, CompactionStarted, CompactionTrigger, Note, Outcome, PreambleBuilt,
     UsageRecorded,
 };
 use ratatui::style::{Modifier, Style};
@@ -23,11 +23,11 @@ use crate::format;
 use crate::rows::{RowText, Rows};
 use crate::theme::{Role, style};
 
-/// What the trigger reads for a handoff the model started with its tool,
-/// which writes no `handoff_started`.
+/// What the trigger reads for a compaction the model started with its tool,
+/// which writes no `compaction_started`.
 const BY_MODEL: &str = "the model handed off";
 
-/// How a handoff stands.
+/// How a compaction stands.
 #[derive(Debug, Clone)]
 enum State {
     /// The note is being written.
@@ -47,12 +47,12 @@ struct Part {
     done: bool,
 }
 
-/// A handoff's band.
+/// A compaction's band.
 #[derive(Debug, Clone)]
 pub(crate) struct Band {
     id: usize,
     trigger: String,
-    /// The `handoff_started` envelope's `ts`, or the `handoff_completed`
+    /// The `compaction_started` envelope's `ts`, or the `compaction_completed`
     /// envelope's for a band the model started with its tool: the band's
     /// time reads from it.
     ts: u64,
@@ -165,9 +165,9 @@ impl Band {
 
     /// Its lines: the band row, exactly `width` cells, then "▸ note"
     /// once there is a note, and the note under it when open. The band
-    /// row is one row on the `handoff` tint with half-block edges; the
+    /// row is one row on the `compaction` tint with half-block edges; the
     /// note rows sit under its lower edge on the same tint with no
-    /// edges (`docs/tui.md`, "Handoff", "Look"). A bound `handoff_band`
+    /// edges (`docs/tui.md`, "Compaction", "Look"). A bound `compaction_band`
     /// renderer replaces the band row only: the note toggle and body
     /// stay the terminal's, with the note's own target. A replacement
     /// of a band still being written spins like the built-in row; its
@@ -178,29 +178,29 @@ impl Band {
             // The band keeps its row, but zero width leaves no cells for the seam to paint.
             out.push((Line::default(), None));
             let band_at = out.len().saturating_sub(1);
-            out.on_surface(band_at, width, Role::Handoff, crate::surface::Edges::BOTH);
+            out.on_surface(band_at, width, Role::Compaction, crate::surface::Edges::BOTH);
             return;
         }
         let flat = out.seam.as_ref().is_some_and(|seam| seam.flat);
         let entry = self.turn_entry();
-        let input = crate::ext::HandoffBand {
+        let input = crate::ext::CompactionBand {
             trigger: entry.trigger,
             ts: entry.ts,
             state: entry.state,
             flat,
         };
-        let wrapped = Input::HandoffBand(input);
+        let wrapped = Input::CompactionBand(input);
         let builtin = |input: &Input<'_>, w: u16| {
-            if !matches!(input, Input::HandoffBand(_)) {
+            if !matches!(input, Input::CompactionBand(_)) {
                 return Vec::new();
             }
             let (row, _) = self.band_row(usize::from(w), zone);
             vec![crate::ext::spans::from_ratatui(&row)]
         };
         let writing = matches!(self.state, State::Writing);
-        let rendered = match out.fills_for("handoff_band") {
+        let rendered = match out.fills_for("compaction_band") {
             crate::ext::SlotSelection::Draw { extension } => {
-                out.ext_lines("handoff_band", &extension, &wrapped, width, &builtin)
+                out.ext_lines("compaction_band", &extension, &wrapped, width, &builtin)
             }
             crate::ext::SlotSelection::Absent | crate::ext::SlotSelection::Suppressed => None,
         };
@@ -233,7 +233,7 @@ impl Band {
                     },
                 );
                 let band_at = out.len().saturating_sub(1);
-                out.on_surface(band_at, width, Role::Handoff, crate::surface::Edges::BOTH);
+                out.on_surface(band_at, width, Role::Compaction, crate::surface::Edges::BOTH);
             }
         }
         let note = self.note();
@@ -252,7 +252,7 @@ impl Band {
         out.on_surface(
             note_at,
             width,
-            Role::Handoff,
+            Role::Compaction,
             crate::surface::Edges {
                 top: false,
                 bottom: false,
@@ -264,12 +264,12 @@ impl Band {
     /// while the note is being written: the "●" that survives the fit,
     /// or `None` when the cut removes it.
     fn band_row(&self, max: usize, zone: &jiff::tz::TimeZone) -> (Vec<Span<'static>>, Option<u16>) {
-        // " ⇄ " and "handoff" read bold in secondary
-        // (`docs/tui.md`, "Handoff").
-        let handoff = style(Role::Secondary).add_modifier(Modifier::BOLD);
+        // " ⇄ " and "compaction" read bold in secondary
+        // (`docs/tui.md`, "Compaction").
+        let compaction = style(Role::Secondary).add_modifier(Modifier::BOLD);
         let left = vec![
-            Span::styled(" ⇄ ".to_owned(), handoff),
-            Span::styled("handoff".to_owned(), handoff),
+            Span::styled(" ⇄ ".to_owned(), compaction),
+            Span::styled("compaction".to_owned(), compaction),
             dim_span(format!(" · {}", self.trigger)),
         ];
         let time = crate::local_time::time_of_day(self.ts, zone)
@@ -363,14 +363,14 @@ fn size(tokens: u64) -> String {
         .unwrap_or_else(|| text.to_owned())
 }
 
-/// What started a handoff, as the band says it; `at` is the automatic
-/// trigger's size, when automatic handoff is on.
-fn trigger(trigger: HandoffTrigger, at: Option<u64>) -> String {
+/// What started a compaction, as the band says it; `at` is the automatic
+/// trigger's size, when automatic compaction is on.
+fn trigger(trigger: CompactionTrigger, at: Option<u64>) -> String {
     match (trigger, at) {
-        (HandoffTrigger::Auto, Some(at)) => format!("automatic at {}", size(at)),
-        (HandoffTrigger::Auto, None) => "automatic".to_owned(),
-        (HandoffTrigger::Person, _) => "you asked with /handoff".to_owned(),
-        (HandoffTrigger::Overflow, _) => "the request did not fit".to_owned(),
+        (CompactionTrigger::Auto, Some(at)) => format!("automatic at {}", size(at)),
+        (CompactionTrigger::Auto, None) => "automatic".to_owned(),
+        (CompactionTrigger::Person, _) => "you asked with /compact".to_owned(),
+        (CompactionTrigger::Overflow, _) => "the request did not fit".to_owned(),
     }
 }
 
@@ -411,7 +411,7 @@ impl Turn {
     }
 }
 
-/// Folds `preamble_built`, `handoff_started`, `handoff_completed` and
+/// Folds `preamble_built`, `compaction_started`, `compaction_completed` and
 /// `context_nudged`; false when no card changed.
 pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> bool {
     match envelope.kind() {
@@ -421,7 +421,7 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
             }
             false
         }
-        EventKind::HandoffStarted => read!(envelope, HandoffStarted).is_some_and(|started| {
+        EventKind::CompactionStarted => read!(envelope, CompactionStarted).is_some_and(|started| {
             let trigger = trigger(started.trigger, fold.trigger_at);
             let id = fold.id();
             let ts = envelope.ts;
@@ -430,7 +430,7 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
                 true
             })
         }),
-        EventKind::HandoffCompleted => read!(envelope, HandoffCompleted).is_some_and(|done| {
+        EventKind::CompactionCompleted => read!(envelope, CompactionCompleted).is_some_and(|done| {
             let id = fold.id();
             let ts = envelope.ts;
             open(turns).is_some_and(|turn| {
@@ -455,8 +455,8 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
         }),
         EventKind::ContextNudged => read!(envelope, ContextNudged).is_some_and(|nudged| {
             let line = format::dim(format!(
-                "◔ Context at {}, two thirds of the way to the {} handoff. The model was told \
-                 a handoff keeps the work going.",
+                "◔ Context at {}, two thirds of the way to the {} compaction. The model was told \
+                 a compaction keeps the work going.",
                 size(nudged.tokens),
                 size(nudged.trigger_at)
             ));
@@ -534,11 +534,11 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
     }
 }
 
-/// A new model call's `usage_recorded`: the latest completed handoff still
+/// A new model call's `usage_recorded`: the latest completed compaction still
 /// waiting for its size after takes the call's context size. A copy from
 /// another session, or an extension's own call, is not this context's, and
 /// a call that reported no input tokens measured nothing, so the size waits
-/// for the next (`docs/tui.md`, the handoff band).
+/// for the next (`docs/tui.md`, the compaction band).
 pub(crate) fn sized(turns: &mut [Turn], line: &UsageRecorded) -> bool {
     if line.origin_session_id.is_some() || line.extension.is_some() {
         return false;
@@ -578,5 +578,5 @@ pub(crate) fn sized(turns: &mut [Turn], line: &UsageRecorded) -> bool {
 }
 
 #[cfg(test)]
-#[path = "handoff_tests.rs"]
+#[path = "compaction_tests.rs"]
 mod tests;

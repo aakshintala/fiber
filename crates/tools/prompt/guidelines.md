@@ -24,9 +24,9 @@
 
 - When a tool you need is missing, find it with `tool_search`.
 
-## handoff
+## compaction
 
-- Call `handoff` with your note to restart your context from it, for example when one piece of work ends and an unrelated one begins.
+- Call `compaction` with your note to restart your context from it, for example when one piece of work ends and an unrelated one begins.
 
 ## skill
 

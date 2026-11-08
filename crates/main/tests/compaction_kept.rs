@@ -1,5 +1,5 @@
-//! The person's messages that still bind survive a handoff in the agent's
-//! context (`docs/handoff.md`, "What the model sees after a handoff"), through
+//! The person's messages that still bind survive a compaction in the agent's
+//! context (`docs/compaction.md`, "What the model sees after a compaction"), through
 //! the built `fiber`: a session on a fake vendor server, reviewed by a scripted
 //! model that keeps two reply/message pairs and reloads a skill.
 
@@ -36,7 +36,7 @@ fn fiber(setup: &Setup, args: &[&str]) -> Run {
 }
 
 #[test]
-fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
+fn a_compaction_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
     let setup = Setup::new();
     let skill_path = setup.workspace().join(".agents/skills/review/SKILL.md");
     fs::create_dir_all(skill_path.parent().unwrap()).unwrap();
@@ -51,9 +51,9 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
         stream_call("load_review", "skill", &json!({"name": "review"})),
         text_reply("The skill is loaded."),
         stream_call(
-            "handoff_now",
-            "handoff",
-            &json!({"note": "The handoff note."}),
+            "compaction_now",
+            "compaction",
+            &json!({"note": "The compaction note."}),
         ),
         text_reply("The work continues."),
     ])
@@ -83,7 +83,7 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
     assert_eq!(fourth.code, Some(0), "{}", fourth.stderr);
     lines.extend(fourth.lines);
 
-    // Confirm the reviewer, skill tool and handoff all ran before inspecting
+    // Confirm the reviewer, skill tool and compaction all ran before inspecting
     // the request bytes, so a broken setup cannot masquerade as the regression.
     let color_seq = turn_started_seq(&lines, "Which color?");
     let blue_seq = turn_started_seq(&lines, "Blue.");
@@ -92,7 +92,7 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
         .iter()
         .find(|line| line["kind"] == "reviewer_kept")
         .expect("the reviewer selected messages");
-    // docs/permissions.md, "At a handoff": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
+    // docs/permissions.md, "At a compaction": "The reviewer answers with a selection of messages" — the selection keeps the two answers.
     assert_eq!(
         kept["payload"]["kept"],
         json!([
@@ -113,20 +113,20 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
     let resent = lines
         .iter()
         .find(|line| line["kind"] == "skills_resent")
-        .expect("the loaded skill was resent after handoff");
-    // docs/handoff.md, "What the model sees after a handoff", item 8: "once each" — one loaded skill, resent once.
+        .expect("the loaded skill was resent after compaction");
+    // docs/compaction.md, "What the model sees after a compaction", item 8: "once each" — one loaded skill, resent once.
     assert_eq!(resent["payload"]["skills"].as_array().unwrap().len(), 1);
     let completed = lines
         .iter()
-        .find(|line| line["kind"] == "handoff_completed")
-        .expect("the handoff completed");
+        .find(|line| line["kind"] == "compaction_completed")
+        .expect("the compaction completed");
     assert_eq!(completed["payload"]["outcome"], "completed");
 
     // The built OpenAI Responses serializer writes the four earlier turns,
-    // the note request, then the first request after handoff.
+    // the note request, then the first request after compaction.
     let requests = server.requests();
     // No doc promises the request count, so this pins only the lower bound
-    // the indexing below needs; the order of the post-handoff blocks is
+    // the indexing below needs; the order of the post-compaction blocks is
     // PROMISE's, checked by `assert_order`.
     assert!(requests.len() >= 6, "{}", requests.len());
     let before = requests
@@ -142,7 +142,7 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
         !before.contains("The person's earlier message:")
             && !before.contains("The person's new message:")
             && !before.contains("Skills reloaded from the previous context:"),
-        "handoff-only framing must not leak into ordinary requests"
+        "compaction-only framing must not leak into ordinary requests"
     );
     let skill_result: Value = serde_json::from_slice(&requests[3].body).unwrap();
     assert!(
@@ -156,7 +156,7 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
                         text.contains("Use the current review skill instructions.")
                     })
             }),
-        "the ordinary skill result is present before handoff"
+        "the ordinary skill result is present before compaction"
     );
 
     let messages = user_messages(&requests[5].body);
@@ -164,18 +164,18 @@ fn a_handoff_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() {
         .iter()
         .filter(|text| text.contains("The person's earlier message:"))
         .collect();
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "each in its own labelled block" — two kept answers, two blocks.
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "each in its own labelled block" — two kept answers, two blocks.
     assert_eq!(earlier.len(), 2, "each kept answer has its own block");
     let pair_one =
         "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.";
     let pair_two =
         "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.";
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "oldest first".
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "oldest first".
     assert_eq!(earlier[0].as_str(), pair_one);
-    // docs/handoff.md, "What the model sees after a handoff", item 4: "oldest first".
+    // docs/compaction.md, "What the model sees after a compaction", item 4: "oldest first".
     assert_eq!(earlier[1].as_str(), pair_two);
     let current = "The person's new message:\nPlease hand off now.";
-    let note = "The handoff note.";
+    let note = "The compaction note.";
     let skill = &resent["payload"]["skills"][0];
     let skill_block = format!(
         "Skills reloaded from the previous context:\n{} — {}\n\n{}",
@@ -243,16 +243,16 @@ fn user_messages(body: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// The handoff output order `assert_order` checks, quoted from the doc that
+/// The compaction output order `assert_order` checks, quoted from the doc that
 /// promises it (`docs/testing.md`, "Event streams" wants the promise beside
 /// the assertion).
-const PROMISE: &str = "docs/handoff.md, \"What the model sees after a handoff\": \"In order:\" — \
+const PROMISE: &str = "docs/compaction.md, \"What the model sees after a compaction\": \"In order:\" — \
     \"4. The person's earlier messages that still bind, oldest first, each in its own labelled block.\" \
     \"5. This turn's input from the person and any steering messages applied in this turn, verbatim, in a block labelled as the person's new message.\" \
-    \"6. The handoff note.\" \
+    \"6. The compaction note.\" \
     \"8. A line saying the skills were reloaded from the previous context, then each skill in its own labelled block with its name, path and current text, in the order they were first loaded, once each\"";
 
-/// Asserts the order the handoff contract promises, with the promised
+/// Asserts the order the compaction contract promises, with the promised
 /// quotation beside the assertion (`docs/testing.md`, "Event streams").
 fn assert_order(messages: &[String], expected: &[&str], promise: &str) {
     let positions: Vec<usize> = expected

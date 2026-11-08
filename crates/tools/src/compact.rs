@@ -1,4 +1,4 @@
-//! The `handoff` tool (`docs/handoff.md`, "A tool"): the model restarts its
+//! The `compact` tool (`docs/compaction.md`, "A tool"): the model restarts its
 //! context from a note it writes as the argument.
 
 use contract::emit::Emit;
@@ -18,13 +18,13 @@ struct Args {
 
 /// Restarts the model's context from `note`. It declares no effects, so it is
 /// never reviewed, and its result has no content: it carries only
-/// `control.handoff`, which the loop acts on.
-pub struct Handoff;
+/// `control.compact`, which the loop acts on.
+pub struct Compaction;
 
-impl Tool for Handoff {
+impl Tool for Compaction {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
-            name: "handoff".to_owned(),
+            name: "compaction".to_owned(),
             description: "Restarts your context from the note you give. Kept messages with \
                  their replies, running jobs and loaded skills come along with the note. Write \
                  the note so a fresh agent can continue the work: refer to specs, issues, \
@@ -37,7 +37,7 @@ impl Tool for Handoff {
                 "properties": {
                     "note": {
                         "type": "string",
-                        "description": "The handoff note: what the next context needs to continue."
+                        "description": "The compaction note: what the next context needs to continue."
                     }
                 },
                 "required": ["note"],
@@ -63,7 +63,7 @@ impl Tool for Handoff {
         match crate::tool_util::parsed::<Args>(arguments) {
             Ok(Args { note }) => Output {
                 control: Some(Control {
-                    handoff: Some(note),
+                    compaction: Some(note),
                     questions: None,
                     skill: None,
                     name: None,
@@ -75,10 +75,10 @@ impl Tool for Handoff {
     }
 
     fn guidelines(&self) -> Option<String> {
-        crate::guidelines::of("handoff")
+        crate::guidelines::of("compaction")
     }
 }
 
 #[cfg(test)]
-#[path = "handoff_tests.rs"]
+#[path = "compaction_tests.rs"]
 mod tests;

@@ -61,7 +61,7 @@ fn a_full_table_maps_field_for_field() {
         "content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}],
         "details": {"count": 3, "nested": {"list": [1, 2]}},
         "error": {"code": "nonzero_exit", "message": "m"},
-        "control": {"handoff": "n"},
+        "control": {"compact": "n"},
         "hosts_surfaced": ["https://x.test/a"],
     }))
     .unwrap();
@@ -72,7 +72,7 @@ fn a_full_table_maps_field_for_field() {
             error: Some(failure(ErrorCode::NonzeroExit, "m".to_owned())),
             details: Some(json!({"count": 3, "nested": {"list": [1, 2]}})),
             control: Some(Control {
-                handoff: Some("n".to_owned()),
+                compaction: Some("n".to_owned()),
                 questions: None,
                 skill: None,
                 name: None,
@@ -229,7 +229,7 @@ fn each_return_that_does_not_read_says_why() {
     for (value, why) in cases {
         assert_eq!(output_from(value.clone()), Err(why.to_owned()), "{value}");
     }
-    let Err(why) = output_from(json!({"content": "", "control": {"handoff": 1}})) else {
+    let Err(why) = output_from(json!({"content": "", "control": {"compact": 1}})) else {
         panic!("a bad control read");
     };
     assert!(why.starts_with("a `control` that does not read: "), "{why}");

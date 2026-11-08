@@ -156,7 +156,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     let mut app = attached(160, 40);
     // The first frame draws the context rows and every figure in
     // docs order, after the title, workspace, branch and model slots.
-    let context = ["▆", "handoff at", "then a summary"];
+    let context = ["▆", "compacts at", "then a summary"];
     let first_context: Vec<usize> = context.iter().map(|label| row_y(&app, 40, label)).collect();
     assert_eq!(first_context, vec![5, 6, 7]);
     let first: Vec<usize> = LABELS.iter().map(|label| row_y(&app, 40, label)).collect();
@@ -175,7 +175,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
             .count(),
         17
     );
-    assert!(drawn[6].line.to_string().starts_with("handoff at —"));
+    assert!(drawn[6].line.to_string().starts_with("compacts at —"));
     assert_eq!(drawn[7].line.to_string(), "then a summary, fresh context");
     // Before any data the bar is bare track and every unknown figure
     // a dim dash: the dash span reads muted, not text.
@@ -310,7 +310,7 @@ fn session_card_rows_hold_their_positions_as_figures_land() {
     }
 }
 
-/// A `preamble_built` with `trigger`: `None` leaves automatic handoff
+/// A `preamble_built` with `trigger`: `None` leaves automatic compaction
 /// off.
 fn preamble_line(trigger: Option<u64>) -> Line {
     preamble_line_for("s_aaaaaaaaaaaaaaaa", 1000, trigger)
@@ -662,11 +662,11 @@ fn pct_and_bar_floor() {
     // styles do (see the roles test).
     let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(15) + "119";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // The handoff row fits with three of pad, nothing cut.
+    // The compaction row fits with three of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at 800         11% of window"),
+            .any(|row| *row == "compacts at 800         11% of window"),
         "{drawn:?}"
     );
     assert!(
@@ -693,7 +693,7 @@ fn context_rows_need_a_window_and_a_status() {
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at 800".to_owned() + &" ".repeat(21) + "—"),
+            .any(|row| *row == "compacts at 800".to_owned() + &" ".repeat(21) + "—"),
         "{drawn:?}"
     );
     assert!(
@@ -735,7 +735,7 @@ fn a_zero_context_window_holds_the_empty_bar() {
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(23) + "—"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(23) + "—"),
         "{drawn:?}"
     );
 }
@@ -752,11 +752,11 @@ fn a_full_context_fills_every_cell() {
     // All 17 cells fill, no marker without a trigger, then the size.
     let bar = "\u{2586}".repeat(17) + &" ".repeat(15) + "1.0k";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // With no trigger the handoff point is still unknown.
+    // With no trigger the compaction point is still unknown.
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(10) + "100% of window"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(10) + "100% of window"),
         "{drawn:?}"
     );
 }
@@ -805,11 +805,11 @@ fn the_marker_follows_the_seventeen_cells() {
     let drawn = texts(&app, 40);
     let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(15) + "500";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // The handoff row fits with two of pad, nothing cut.
+    // The compaction row fits with two of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at 1.0k        50% of window"),
+            .any(|row| *row == "compacts at 1.0k        50% of window"),
         "{drawn:?}"
     );
 }
@@ -1057,7 +1057,7 @@ fn the_session_card_names_the_session_status_model_over_the_preamble() {
 }
 
 /// Folds a session with every row present: directory, model and thinking,
-/// context with its bar, marker and handoff, tokens, cache hits, both
+/// context with its bar, marker and compaction, tokens, cache hits, both
 /// costs, speed, turns and a server down.
 fn full_session(app: &mut App) {
     app.on_line(preamble_line(Some(800)));
@@ -1287,7 +1287,7 @@ fn every_context_card_row_opens_the_context_view() {
         .iter()
         .filter(|row| row.spot == Some(Spot::Context))
         .collect();
-    // The bar, the handoff row and the summary row, each opening the
+    // The bar, the compaction row and the summary row, each opening the
     // context breakdown.
     assert_eq!(context_rows.len(), 3);
     assert!(
@@ -2191,7 +2191,7 @@ fn the_blank_row_after_a_card_shows_no_card_tint() {
 
 /// The Session card draws from the first frame: the title, the
 /// working-directory, branch and model slots; context bar with its
-/// handoff and explainer rows; and every figure row with a dim dash
+/// compaction and explainer rows; and every figure row with a dim dash
 /// where its figure is unknown (`docs/tui.md`, "The panel").
 #[test]
 fn the_session_card_reserves_its_rows_from_the_first_frame() {
@@ -2214,13 +2214,13 @@ fn the_session_card_reserves_its_rows_from_the_first_frame() {
         );
     }
     // No preamble and no status: the bar is bare track with a dim dash
-    // for the size, and the handoff point and share are dim dashes.
+    // for the size, and the compaction point and share are dim dashes.
     let bar = "\u{2586}".repeat(17) + &" ".repeat(18) + "—";
     assert!(drawn.contains(&bar), "{drawn:?}");
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "handoff at —".to_owned() + &" ".repeat(23) + "—"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(23) + "—"),
         "{drawn:?}"
     );
     // Zero turns are known, not unknown.
@@ -2292,7 +2292,7 @@ fn full_session_on_main(app: &mut App) {
 
 /// The Session card's rows at width 34: the title, the working directory,
 /// "git" and the branch, the model and thinking, the 17-cell bar with its
-/// handoff rows, and every figure with its label dim and its value
+/// compaction rows, and every figure with its label dim and its value
 /// right-aligned (`docs/tui.md`, "The panel").
 #[test]
 fn session_card_rows_match_the_doc_at_width_34() {
@@ -2313,7 +2313,7 @@ fn session_card_rows_match_the_doc_at_width_34() {
             "git  main".to_owned(),
             "test/model".to_owned() + &" ".repeat(16) + "high",
             bar,
-            "handoff at 800   50% of window".to_owned(),
+            "compacts at 800   50% of window".to_owned(),
             "then a summary, fresh context".to_owned(),
             "tokens in / out".to_owned() + &" ".repeat(5) + "1.1k / 200",
             "cache hits".to_owned() + &" ".repeat(18) + "9%",

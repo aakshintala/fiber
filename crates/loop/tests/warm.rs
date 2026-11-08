@@ -845,7 +845,7 @@ fn a_switch_while_warming_sends_no_refresh_and_restarts_idle_from_the_switch() {
                 cache_lifetime: CacheLifetime::FiveMinutes,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: r#loop::HandoffSettings::default(),
+                compaction: r#loop::CompactionSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
                     code: ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),
@@ -943,7 +943,7 @@ fn a_during_turn_switch_followed_by_a_turn_keeps_warming_the_new_cache() {
                 cache_lifetime: CacheLifetime::FiveMinutes,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: r#loop::HandoffSettings::default(),
+                compaction: r#loop::CompactionSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
                     code: ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),

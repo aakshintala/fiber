@@ -1,6 +1,6 @@
 //! Tests for the turn card's surface: one surface below the bubble,
-//! broken at a handoff's band, with half-block edges
-//! (`docs/tui.md`, "Look", "Turns", "Handoff").
+//! broken at a compaction's band, with half-block edges
+//! (`docs/tui.md`, "Look", "Turns", "Compaction").
 
 use contract::events::EventKind;
 use contract::{ActionId, Envelope, SessionId};
@@ -83,14 +83,14 @@ fn text(cards: &mut Cards, action: &str, text: &str) {
 }
 
 fn band(cards: &mut Cards) {
-    feed(cards, "handoff_started", None, json!({ "trigger": "auto" }));
+    feed(cards, "compaction_started", None, json!({ "trigger": "auto" }));
 }
 
-/// The handoff completes, so later text is a reply, not the note.
+/// The compaction completes, so later text is a reply, not the note.
 fn handed_off(cards: &mut Cards) {
     feed(
         cards,
-        "handoff_completed",
+        "compaction_completed",
         None,
         json!({"outcome": "completed", "tokens_before": 1_000}),
     );
@@ -162,8 +162,8 @@ fn shown_rows(rows: &[Row]) -> Vec<String> {
     rows.iter().map(|(line, _)| line.to_string()).collect()
 }
 
-fn handoff() -> Option<ratatui::style::Color> {
-    Some(Role::Handoff.color())
+fn compaction() -> Option<ratatui::style::Color> {
+    Some(Role::Compaction.color())
 }
 
 fn turn() -> Option<ratatui::style::Color> {
@@ -398,10 +398,10 @@ fn an_ended_summary_leaves_the_open_cards_group_collapsed() {
 }
 
 #[test]
-fn a_handoff_breaks_the_card_into_two_surfaces() {
+fn a_compaction_breaks_the_card_into_two_surfaces() {
     // An edge closes the piece before the band, and one opens the piece
     // after it; the band's line keeps the surface tint
-    // (`docs/tui.md`, "Handoff").
+    // (`docs/tui.md`, "Compaction").
     let mut cards = fresh();
     start(&mut cards, "go");
     text(&mut cards, "a_1", "before");
@@ -425,7 +425,7 @@ fn a_handoff_breaks_the_card_into_two_surfaces() {
     // the card ends at the band, and a second card below it continues
     // the turn.
     assert_eq!(shown[9], "▄".repeat(60));
-    let left = " ⇄ handoff · automatic";
+    let left = " ⇄ compaction · automatic";
     let right = "1k → … · 00:00 ";
     assert_eq!(
         shown[10],
@@ -441,7 +441,7 @@ fn a_handoff_breaks_the_card_into_two_surfaces() {
     assert_eq!(shown[14], "");
     assert_eq!(shown[15], " ▣ completed");
     assert_eq!(shown[16], "▀".repeat(60));
-    assert_eq!(rows[10].0.style.bg, handoff());
+    assert_eq!(rows[10].0.style.bg, compaction());
     // The ▣ line closes the turn once, below the band; none above it.
     assert_eq!(
         shown.iter().filter(|row| row.contains('▣')).count(),
@@ -453,8 +453,8 @@ fn a_handoff_breaks_the_card_into_two_surfaces() {
 #[test]
 fn an_open_note_sits_inside_the_band() {
     // The band row carries the half-block edges; "▸ note" and every
-    // note row sit under its lower edge on the handoff tint with no
-    // edges (`docs/tui.md`, "Handoff").
+    // note row sit under its lower edge on the compaction tint with no
+    // edges (`docs/tui.md`, "Compaction").
     use std::path::PathBuf;
 
     use ratatui::buffer::Buffer;
@@ -484,7 +484,7 @@ fn an_open_note_sits_inside_the_band() {
     );
     feed(
         &mut app,
-        "handoff_started",
+        "compaction_started",
         None,
         json!({"trigger": "auto"}),
     );
@@ -502,7 +502,7 @@ fn an_open_note_sits_inside_the_band() {
     );
     feed(
         &mut app,
-        "handoff_completed",
+        "compaction_completed",
         None,
         json!({"outcome": "completed", "tokens_before": 1_000}),
     );
@@ -524,9 +524,9 @@ fn an_open_note_sits_inside_the_band() {
     assert_eq!(lines[band_at + 2], "  ▸ note");
     assert_eq!(lines[band_at + 3], "    ## Note");
     assert_eq!(lines[band_at + 4], "    keep going");
-    assert_eq!(app.lines()[band_at].style.bg, handoff());
+    assert_eq!(app.lines()[band_at].style.bg, compaction());
     for line in app.lines().iter().skip(band_at + 2).take(3) {
-        assert_eq!(line.style.bg, handoff());
+        assert_eq!(line.style.bg, compaction());
     }
     // Through the view the tint reaches the last text column.
     let area = Rect::new(0, 0, 80, 24);
@@ -540,14 +540,14 @@ fn an_open_note_sits_inside_the_band() {
                 .contains("keep going")
         })
         .expect("a note row on screen");
-    assert_eq!(buf[(78, row)].bg, Role::Handoff.color());
+    assert_eq!(buf[(78, row)].bg, Role::Compaction.color());
 }
 
 #[test]
 fn a_band_first_or_last_draws_no_empty_piece() {
     // A band as the first entry draws no edge pair before it; a running
     // turn whose last entry is a band draws none after it
-    // (`docs/tui.md`, "Handoff").
+    // (`docs/tui.md`, "Compaction").
     let mut cards = fresh();
     start(&mut cards, "go");
     band(&mut cards);
@@ -564,7 +564,7 @@ fn a_band_first_or_last_draws_no_empty_piece() {
     );
     let shown = shown_rows(&rows);
     assert_eq!(shown[6], "▄".repeat(60));
-    assert!(shown[7].starts_with(" ⇄ handoff · automatic"), "{shown:?}");
+    assert!(shown[7].starts_with(" ⇄ compaction · automatic"), "{shown:?}");
     assert_eq!(shown[8], "▀".repeat(60));
     assert_eq!(shown[9], "▄".repeat(60));
     let mut cards = fresh();
@@ -584,7 +584,7 @@ fn a_band_first_or_last_draws_no_empty_piece() {
     // last, the content row above it.
     assert_eq!(shown[shown.len() - 1], "▀".repeat(60));
     assert!(
-        shown[shown.len() - 2].starts_with(" ⇄ handoff · automatic"),
+        shown[shown.len() - 2].starts_with(" ⇄ compaction · automatic"),
         "{shown:?}"
     );
 }
@@ -610,7 +610,7 @@ fn a_blank_reply_draws_no_piece() {
     // last, the content row above it.
     assert_eq!(shown[shown.len() - 1], "▀".repeat(60));
     assert!(
-        shown[shown.len() - 2].starts_with(" ⇄ handoff · automatic"),
+        shown[shown.len() - 2].starts_with(" ⇄ compaction · automatic"),
         "{shown:?}"
     );
 }
@@ -641,7 +641,7 @@ fn edges_the_page_withholds_are_not_drawn() {
     assert_eq!(shown[1], " before");
     assert_eq!(shown[2], "▀".repeat(60));
     assert_eq!(shown[3], "▄".repeat(60));
-    assert!(shown[4].starts_with(" ⇄ handoff · automatic"), "{shown:?}");
+    assert!(shown[4].starts_with(" ⇄ compaction · automatic"), "{shown:?}");
     assert_eq!(shown[5], "▀".repeat(60));
     // The piece after the band still opens with an edge.
     assert_eq!(shown[6], "▄".repeat(60));
@@ -1588,7 +1588,7 @@ fn a_message_image_draws_below_its_text() {
 }
 
 #[test]
-fn an_open_card_or_a_handoff_does_not_get_a_trailing_gap() {
+fn an_open_card_or_a_compaction_does_not_get_a_trailing_gap() {
     let mut cards = fresh();
     start(&mut cards, "go");
     text(&mut cards, "a_1", "hi");

@@ -40,7 +40,7 @@ use support::reviewer_eval::{
     parse_claude_line, parse_line, parse_pi_file, parse_pi_line, parse_sample_flags, sample,
     scan_line, split_argv, validate_seeded,
 };
-use support::{Session, calls_reply, delivery, handoff, paris, shell};
+use support::{Session, calls_reply, delivery, compaction, paris, shell};
 
 /// A scrub context with synthetic values, never the real environment.
 fn ctx() -> ScrubCtx {
@@ -1113,9 +1113,9 @@ fn prompt_turn(session: &mut Session, text: &str) {
     session.lines();
 }
 
-/// One person handoff turn, asserting it completes.
-fn handoff_turn(session: &mut Session, id: &str) {
-    session.inbox.send(handoff(id, None)).unwrap();
+/// One person compaction turn, asserting it completes.
+fn compaction_turn(session: &mut Session, id: &str) {
+    session.inbox.send(compaction(id, None)).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     session.lines();
 }
@@ -1147,11 +1147,11 @@ fn started_session() -> Session {
     session
 }
 
-/// A session holding an allowed call, a handoff, and a blocked call: the
+/// A session holding an allowed call, a compaction, and a blocked call: the
 /// blocked call never starts, so its denial carries its declared effects.
 fn reviewed_session() -> Session {
     let mut session = started_session();
-    handoff_turn(&mut session, "c_h");
+    compaction_turn(&mut session, "c_h");
     prompt_turn(&mut session, "now run it");
     session
 }
@@ -1496,7 +1496,7 @@ fn emission_carries_added_folders_per_cut_and_scrubs() {
             line["payload"] = json!({"path": format!("{workspace}/{extra}"), "inherited": false});
         });
     }
-    handoff_turn(&mut session, "c_h");
+    compaction_turn(&mut session, "c_h");
     prompt_turn(&mut session, "now run it");
     let report = run_sampled(
         Some(&dir),

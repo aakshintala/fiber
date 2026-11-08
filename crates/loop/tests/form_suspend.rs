@@ -87,7 +87,7 @@ fn text(text: &str) -> Output {
 fn to_driver(questions: Vec<Question>) -> Output {
     Output {
         control: Some(Control {
-            handoff: None,
+            compaction: None,
             questions: Some(questions),
             skill: None,
             name: None,

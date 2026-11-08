@@ -172,11 +172,11 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   separate artifact text, the result carries no `kept`, since its ranges would
   not index that artifact.
 - `control`: instructions to the loop, absent on most results. Four fields
-  are defined. `handoff`, a handoff note: the loop restarts the model's
-  context from it at the step boundary (`docs/handoff.md`). `questions`, a
+  are defined. `compaction`, a compaction note: the loop restarts the model's
+  context from it at the step boundary (`docs/compaction.md`). `questions`, a
   `questions` array: once every call in the step has completed, the turn ends
   `completed` with the questions of every call that set it, in call order, on
-  `turn_completed`, after any handoff in the step. `name`, a session name: the
+  `turn_completed`, after any compaction in the step. `name`, a session name: the
   loop writes `session_named` just before the call's `tool_call_completed`, or
   fails the call `name_pinned` while the person's name pins it. `skill`, a
   skill the call loaded: the loop folds every completed call's into the
@@ -225,7 +225,7 @@ by content.
   no dedicated tool for it. A read of `artifacts/` has only the `reads` effect,
   so it is never reviewed.
 - There is no cap across one step's results. When they overflow the context
-  window, the overflow rule in `docs/handoff.md` ("Overflow") moves them to
+  window, the overflow rule in `docs/compaction.md` ("Overflow") moves them to
   the session's `artifacts/`.
 - A cut read continues from an offset, a cut fetch leaves the whole page in the
   artifact, and search runs through the shell ("Search").
@@ -421,8 +421,8 @@ path's directory, ending in `/`.
   down still meets the stored hash and is refused with the message that it
   changed since it was read. A log written before the field existed rebuilds
   nothing, as when the record started empty.
-- A handoff clears what was seen, because the new context has not seen the
-  file (`docs/handoff.md`); a `write` there is refused until the file is read
+- A compaction clears what was seen, because the new context has not seen the
+  file (`docs/compaction.md`); a `write` there is refused until the file is read
   again.
 
 ### How a change lands
@@ -1583,7 +1583,7 @@ first prompt.
   `invalid_arguments`; only the person clears a name, with the `name` command
   and empty text (`docs/invocation.md`, "What each command does").
 - The description tells the model to name the session after the first
-  prompt, and to rename it when the work's topic changes, a handoff included.
+  prompt, and to rename it when the work's topic changes, a compaction included.
 - A name the person set with the `name` command pins it. While pinned, the
   call fails with `name_pinned` and the message "the person named this
   session". Clearing the person's name unpins it. A rewind carries the name and its pin (`docs/events.md`, "Rewind"); a fork starts unnamed.
@@ -1883,9 +1883,9 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
   adding or removing a skill never changes the tool set and the cached prefix
   holds (`docs/prompt-cache.md`).
 - Fiber records each load as the result's `control.skill`, so it knows which
-  skills the current context is working under. A handoff sends them again
+  skills the current context is working under. A compaction sends them again
   after the note
-  (`docs/handoff.md`, "What the model sees after a handoff"), and the terminal
+  (`docs/compaction.md`, "What the model sees after a compaction"), and the terminal
   shows each load as a skill, not as a file read.
 - It declares `reads` on the resolved target of the skill's file, and a link that
   changes before the read fails the call with `path_changed`. It is never reviewed.
@@ -1897,7 +1897,7 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-`handoff` (`docs/handoff.md`), `name_session`, `reviewer_notes_save`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
+`compaction` (`docs/compaction.md`), `name_session`, `reviewer_notes_save`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.
@@ -1999,7 +1999,7 @@ its tools are deferred, change only when the preamble is built.
 - A search is an ordinary tool call. A resume, fork or rewind re-sends its result byte for byte while the preamble defers the same tools; otherwise the result leaves out the names it no longer defers, as above.
 - A cancelled search loads nothing; its result is the line "The search was
   cancelled; no tool was loaded."
-- A loaded tool stays loaded until a handoff, which restarts the conversation after the preamble (`docs/handoff.md`); after that the model searches again. A reload or a model switch keeps it: each request renders every search result from `loaded`, leaving out names the preamble it sends does not defer, and on a model without deferral renders it as text naming the tools.
+- A loaded tool stays loaded until a compaction, which restarts the conversation after the preamble (`docs/compaction.md`); after that the model searches again. A reload or a model switch keeps it: each request renders every search result from `loaded`, leaving out names the preamble it sends does not defer, and on a model without deferral renders it as text naming the tools.
 - A call to a deferred tool that was never loaded runs like any other call,
   after the schema check.
 

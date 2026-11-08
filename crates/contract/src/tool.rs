@@ -26,7 +26,7 @@ pub const BUILT_IN_TOOLS: &[&str] = &[
     "delegate_models",
     "delegate_spawn",
     "edit",
-    "handoff",
+    "compaction",
     "jobs",
     "name_session",
     "read",

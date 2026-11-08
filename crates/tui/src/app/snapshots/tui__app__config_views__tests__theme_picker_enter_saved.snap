@@ -4,7 +4,7 @@ expression: painted_text(&saved)
 ---
   Settings  /settings                                                Esc returns
    key             value   layer
-   handoff.tokens  400000  default
+   compaction.tokens  400000  default
  › tui.theme       dark    global
 
 

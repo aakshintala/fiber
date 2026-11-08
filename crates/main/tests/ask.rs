@@ -2718,7 +2718,7 @@ fn two_runs_send_byte_identical_preambles() {
             "delegate_models",
             "delegate_spawn",
             "edit",
-            "handoff",
+            "compaction",
             "jobs",
             "name_session",
             "read",
@@ -3876,7 +3876,7 @@ fn a_numeric_run_flag_sets_a_number() {
     let server = ProviderServer::start([hello()]).unwrap();
     setup.provider(&server);
 
-    let run = setup.run_with_stdin(&["ask", "-c", "handoff.tokens=200000", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "compaction.tokens=200000", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
 }
@@ -3887,11 +3887,11 @@ fn a_quoted_run_flag_value_is_rejected_as_the_wrong_type() {
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
 
-    let run = setup.run_with_stdin(&["ask", "-c", "handoff.tokens=\"200000\"", "hi"], None);
+    let run = setup.run_with_stdin(&["ask", "-c", "compaction.tokens=\"200000\"", "hi"], None);
     assert_pre_session(&run, 1, "config_invalid");
     let message = run.last()["payload"]["error"]["message"].as_str().unwrap();
     assert!(message.starts_with("-c: "), "{message}");
-    assert!(message.contains("handoff.tokens"), "{message}");
+    assert!(message.contains("compaction.tokens"), "{message}");
     assert!(server.requests().is_empty());
 }
 
@@ -3906,7 +3906,7 @@ fn a_run_flag_without_an_equals_is_a_usage_error() {
     assert_eq!(
         run.last()["payload"]["error"]["message"].as_str().unwrap(),
         "Invalid value 'nokey' for '-c <key>=<value>': expected a dotted key and a value, as in \
-         `-c handoff.tokens=200000`. Run `fiber --help` for usage."
+         `-c compaction.tokens=200000`. Run `fiber --help` for usage."
     );
     assert!(server.requests().is_empty());
     assert!(!setup.home().join("projects").exists());
@@ -3922,7 +3922,7 @@ fn a_run_flag_with_no_key_path_is_a_usage_error() {
     assert_pre_session(&run, 2, "usage");
     assert_eq!(
         run.last()["payload"]["error"]["message"].as_str().unwrap(),
-        "`a..b` is not a dotted key and a value, as in `-c handoff.tokens=200000`. \
+        "`a..b` is not a dotted key and a value, as in `-c compaction.tokens=200000`. \
          Run `fiber --help` for usage."
     );
     assert!(server.requests().is_empty());

@@ -396,11 +396,11 @@ fn the_settings_view_matches_the_doc() {
     let header = row_with(&grid, "layer");
     let key_x = col_at(&grid, header, "key");
     let x0 = key_x - 2;
-    // Move the selection to `handoff.tokens`, a key that applies on
+    // Move the selection to `compaction.tokens`, a key that applies on
     // reload; each press waits for the gutter to move.
     for _ in 0..200 {
         let on = selected_key(&grid, x0, header);
-        if on.as_deref() == Some("handoff.tokens") {
+        if on.as_deref() == Some("compaction.tokens") {
             break;
         }
         run.write(b"\x1b[B");
@@ -410,7 +410,7 @@ fn the_settings_view_matches_the_doc() {
     }
     assert_eq!(
         selected_key(&grid, x0, header).as_deref(),
-        Some("handoff.tokens")
+        Some("compaction.tokens")
     );
     // The header is dim and names the three columns.
     for word in ["key", "value", "layer"] {
@@ -434,14 +434,14 @@ fn the_settings_view_matches_the_doc() {
     );
     assert_eq!(col_at(&grid, model, "global"), layer_x);
     // Every row's layer starts where the header's does.
-    let handoff = row_with(&grid, "handoff.tokens");
-    assert_eq!(col_at(&grid, handoff, "default"), layer_x);
-    assert_eq!(col_at(&grid, handoff, "400000"), value_x);
-    assert!(is_plain_of_reverse(&grid, handoff, "handoff.tokens"));
+    let compaction = row_with(&grid, "compaction.tokens");
+    assert_eq!(col_at(&grid, compaction, "default"), layer_x);
+    assert_eq!(col_at(&grid, compaction, "400000"), value_x);
+    assert!(is_plain_of_reverse(&grid, compaction, "compaction.tokens"));
     // The reload line and the file hint are the view's last two rows, dim.
     let hint = row_with(&grid, "Ctrl+G opens the file");
     assert!(is_dim(&grid, hint, "Ctrl+G opens the file"));
-    let reload = "changing handoff.tokens needs a reload (~84k tokens)";
+    let reload = "changing compaction.tokens needs a reload (~84k tokens)";
     assert_eq!(find_row(&grid, reload), Some(hint - 1), "{}", grid.contents);
     assert!(is_dim(&grid, hint - 1, reload));
     assert!(!grid.contents.contains("↑↓ move"), "{}", grid.contents);

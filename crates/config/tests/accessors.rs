@@ -30,7 +30,7 @@ fn flag_reads_a_set_value_and_the_default() {
     let set = setup.load(&["tui.hover=false"]).unwrap();
     assert_eq!(set.flag("tui.hover", None), Some(false));
     // A count is not a flag.
-    assert_eq!(config.flag("handoff.tokens", None), None);
+    assert_eq!(config.flag("compaction.tokens", None), None);
 }
 
 #[test]
@@ -62,11 +62,11 @@ fn accessors_read_the_per_model_value_over_the_top_level() {
     let setup = Setup::new();
     let config = setup
         .load(&[
-            "handoff.tokens=300000",
-            "models.\"a/b\".handoff.tokens=200000",
+            "compaction.tokens=300000",
+            "models.\"a/b\".compaction.tokens=200000",
         ])
         .unwrap();
-    assert_eq!(config.count("handoff.tokens", Some("a/b")), Some(200_000));
-    assert_eq!(config.count("handoff.tokens", Some("c/d")), Some(300_000));
-    assert_eq!(config.count("handoff.tokens", None), Some(300_000));
+    assert_eq!(config.count("compaction.tokens", Some("a/b")), Some(200_000));
+    assert_eq!(config.count("compaction.tokens", Some("c/d")), Some(300_000));
+    assert_eq!(config.count("compaction.tokens", None), Some(300_000));
 }

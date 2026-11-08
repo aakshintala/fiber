@@ -201,7 +201,7 @@ fn to_driver(questions: Vec<Question>) -> Output {
             text: SENT.to_owned(),
         }],
         control: Some(Control {
-            handoff: None,
+            compaction: None,
             questions: Some(questions),
             skill: None,
             name: None,

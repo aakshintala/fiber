@@ -38,7 +38,7 @@ use contract::tool::{Answered, Ask, Asking, Cancel, Check, Effects, EffectsError
 use contract::{ActionId, CommandId, Envelope, ErrorCode, JobId, RequestId};
 use fakes::Deadline;
 use fakes::{Scripted, ScriptedProvider, StubJobs};
-use r#loop::{Error, HandoffSettings, Loop, Model, Prepared, Switchable};
+use r#loop::{Error, CompactionSettings, Loop, Model, Prepared, Switchable};
 use serde_json::{Map, Value, json};
 
 use support::{
@@ -1181,7 +1181,7 @@ fn prepare_to(provider: Arc<ScriptedProvider>) -> r#loop::Prepare {
                 cache_lifetime: CacheLifetime::OneHour,
                 context_window: fakes::CONTEXT_WINDOW,
                 addendum: None,
-                handoff: HandoffSettings::default(),
+                compaction: CompactionSettings::default(),
                 reviewer: Err(contract::shapes::Failure {
                     code: ErrorCode::NoModel,
                     message: r#loop::NO_MODEL_MESSAGE.into(),
@@ -1407,10 +1407,10 @@ impl Hooks for ArtifactHook {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 

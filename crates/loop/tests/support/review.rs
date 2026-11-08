@@ -7,15 +7,15 @@
 //! prints at its request position in source request order: a requested
 //! call whose start the index holds replays through the loop's own
 //! [`review`](r#loop::Loop::review) on a scratch loop, capturing both
-//! stage requests, so a call requested before a handoff prints before
-//! that handoff's selection even when its start logs later. A reviewed
+//! stage requests, so a call requested before a compaction prints before
+//! that compaction's selection even when its start logs later. A reviewed
 //! call without its start or its denial carrying its declared effects
 //! prints one `unreplayable` line instead of invented input. Calls with explicit non-review native
 //! decisions (a person's allow or deny, a standing rule or grant, a
 //! standing ask) are not review requests and print nothing. At each
-//! completed handoff with person messages the driver prints the selection
+//! completed compaction with person messages the driver prints the selection
 //! request and reads its answer, driving the loop's own
-//! [`reviewer_handoff`](r#loop::Loop::reviewer_handoff); source
+//! [`reviewer_compaction`](r#loop::Loop::reviewer_compaction); source
 //! `reviewer_kept` lines are history, never a second selection. The source
 //! directory is only read, never written.
 
@@ -30,7 +30,7 @@ use super::reviewer_eval::{
     reviewed_items, sample, scan_line,
 };
 use contract::events::{
-    AskStep, DecidedBy, Event, EventKind, HandoffCompleted, Outcome, ReviewedCall, ReviewerUse,
+    AskStep, DecidedBy, Event, EventKind, CompactionCompleted, Outcome, ReviewedCall, ReviewerUse,
     ToolCallRequested, ToolCallStarted,
 };
 use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
@@ -127,12 +127,12 @@ pub(crate) struct ReplayOutcome {
     pub requests: Vec<(RequestKind, ModelRequest)>,
 }
 
-/// Whether a captured request reviewed a call or selected handoff messages.
+/// Whether a captured request reviewed a call or selected compaction messages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RequestKind {
     /// A review stage.
     Stage,
-    /// A handoff selection.
+    /// A compaction selection.
     Selection,
 }
 
@@ -291,7 +291,7 @@ fn stage_answer(calls: u64) -> Reply {
 }
 
 /// The replay's recording provider: it records every request, answers
-/// review stages from the script, and serves handoff selections
+/// review stages from the script, and serves compaction selections
 /// interactively, printing each selection request before reading its
 /// answer.
 struct Seam {
@@ -299,16 +299,16 @@ struct Seam {
     requests: Mutex<Vec<(RequestKind, ModelRequest)>>,
     /// How many stage requests it has answered.
     stages: Mutex<u64>,
-    /// The handoff whose selection is being served, when one is.
+    /// The compaction whose selection is being served, when one is.
     selecting: Mutex<Option<u64>>,
-    /// The handoff already served: its answer is reused without further
+    /// The compaction already served: its answer is reused without further
     /// input, so a re-ask never prints a second request or reads again.
     served: Mutex<Option<u64>>,
-    /// The served handoff's answer: text, or no answer on EOF.
+    /// The served compaction's answer: text, or no answer on EOF.
     cached: Mutex<Option<String>>,
     /// Whether selections fail locally before exposing a request.
     keep_all: bool,
-    /// The selection answers, read one handoff at a time.
+    /// The selection answers, read one compaction at a time.
     input: Mutex<Box<dyn BufRead + Send>>,
     /// Where selection requests and projected lines go.
     output: Mutex<Box<dyn Write + Send>>,
@@ -332,8 +332,8 @@ impl Seam {
         }
     }
 
-    /// Serves a handoff selection: prints its request, flushes it, then
-    /// reads one answer line. A repeat call for the same handoff reuses
+    /// Serves a compaction selection: prints its request, flushes it, then
+    /// reads one answer line. A repeat call for the same compaction reuses
     /// the cached answer with no further input.
     fn selection_call(&self, request: &ModelRequest, seq: u64) -> Box<dyn ModelCall> {
         self.requests
@@ -363,7 +363,7 @@ impl Seam {
             });
         }
         let line = json!({
-            "handoff": seq,
+            "compaction": seq,
             "system_prompt": request.system_prompt,
             "messages": &request.conversation[..],
         });
@@ -475,7 +475,7 @@ struct IndexedCall {
 
 /// What the driver indexes before replaying: every declaration and
 /// decision attribution, so a decision logged after a call's start still
-/// excludes it and a start logged after a handoff still replays at the
+/// excludes it and a start logged after a compaction still replays at the
 /// call's request position.
 struct CallIndex {
     /// Every outer call, by action id.
@@ -630,7 +630,7 @@ impl Driver {
 
     /// Folds the chain and replays it: each call prints at its request
     /// position in source request order, selections print where their
-    /// handoffs completed, and nothing moves across a handoff.
+    /// compactions completed, and nothing moves across a compaction.
     fn drive(&mut self, chain: &[Indexed]) -> Result<(), String> {
         let index = Self::index_chain(chain)?;
         let mut summary = false;
@@ -648,23 +648,23 @@ impl Driver {
                 // A consumer skips any kind it does not recognise.
                 continue;
             };
-            // The gate also covers completed_handoff's render below. None of
+            // The gate also covers completed_compaction's render below. None of
             // the three render paths, or tool reviews, sees summary output.
             if r#loop::summary_skips(&mut summary, &event) {
                 continue;
             }
             if matches!(event, Event::ReviewerKept(_)) {
                 // The driver owns selection: a source record never
-                // overwrites the selection its own handoffs make.
+                // overwrites the selection its own compactions make.
                 continue;
             }
-            if let Event::HandoffCompleted(done) = event {
+            if let Event::CompactionCompleted(done) = event {
                 if done.outcome == Outcome::Completed {
-                    self.completed_handoff(envelope, &done)?;
+                    self.completed_compaction(envelope, &done)?;
                 } else {
                     render_reviewed(
                         &mut self.reviewed,
-                        &Event::HandoffCompleted(done),
+                        &Event::CompactionCompleted(done),
                         envelope.action_id.as_ref(),
                         envelope.seq,
                         &mut self.asks,
@@ -696,7 +696,7 @@ impl Driver {
 
     /// Indexes every declaration and decision attribution ahead of the
     /// replay, so a decision logged after a call's start still excludes
-    /// it and a start logged after a handoff still replays at the call's
+    /// it and a start logged after a compaction still replays at the call's
     /// request position. A repeated request or start id keeps its first
     /// line.
     fn index_chain(chain: &[Indexed]) -> Result<CallIndex, String> {
@@ -837,8 +837,8 @@ impl Driver {
                 | Event::InstructionFile(_)
                 | Event::DateChanged(_)
                 | Event::SkillsChanged(_)
-                | Event::HandoffStarted(_)
-                | Event::HandoffCompleted(_)
+                | Event::CompactionStarted(_)
+                | Event::CompactionCompleted(_)
                 | Event::SkillsResent(_)
                 | Event::ContextNudged(_)
                 | Event::ReviewerKept(_)
@@ -1034,22 +1034,22 @@ impl Driver {
         self.emit(&line)
     }
 
-    /// Replays one completed handoff: renders its boundary, asks the
-    /// selection through the loop's own handoff path, and keeps the
+    /// Replays one completed compaction: renders its boundary, asks the
+    /// selection through the loop's own compaction path, and keeps the
     /// selected messages. The scratch loop's `reviewed` already holds
-    /// the kept selection after `reviewer_handoff` renders it through
+    /// the kept selection after `reviewer_compaction` renders it through
     /// the one write path, so the driver copies it instead of rereading
     /// the scratch log. With no person message the loop records an empty
     /// selection itself: no request prints and no answer is read.
     /// `--keep-all` fails the selection locally before any request prints.
-    fn completed_handoff(
+    fn completed_compaction(
         &mut self,
         envelope: &contract::Envelope,
-        done: &HandoffCompleted,
+        done: &CompactionCompleted,
     ) -> Result<(), String> {
         render_reviewed(
             &mut self.reviewed,
-            &Event::HandoffCompleted(done.clone()),
+            &Event::CompactionCompleted(done.clone()),
             envelope.action_id.as_ref(),
             envelope.seq,
             &mut self.asks,
@@ -1061,11 +1061,11 @@ impl Driver {
         self.looped.reviewed.clone_from(&self.reviewed);
         self.looped
             .write(
-                &Event::HandoffCompleted(done.clone()),
+                &Event::CompactionCompleted(done.clone()),
                 Some(&turn),
                 envelope.action_id.as_ref(),
             )
-            .map_err(|error| format!("review: cannot replay its handoff: {error}"))?;
+            .map_err(|error| format!("review: cannot replay its compaction: {error}"))?;
         if self
             .reviewed
             .iter()
@@ -1077,13 +1077,13 @@ impl Driver {
                 .selecting
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = Some(seq);
-            let answered = self.looped.reviewer_handoff(&turn);
+            let answered = self.looped.reviewer_compaction(&turn);
             *self
                 .seam
                 .selecting
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner) = None;
-            answered.map_err(|error| format!("review: cannot replay its handoff: {error}"))?;
+            answered.map_err(|error| format!("review: cannot replay its compaction: {error}"))?;
             if let Some(error) = self
                 .seam
                 .io_error
@@ -1095,12 +1095,12 @@ impl Driver {
             }
         } else {
             self.looped
-                .reviewer_handoff(&turn)
-                .map_err(|error| format!("review: cannot replay its handoff: {error}"))?;
+                .reviewer_compaction(&turn)
+                .map_err(|error| format!("review: cannot replay its compaction: {error}"))?;
         }
-        // `reviewer_handoff` renders the kept selection into the scratch
+        // `reviewer_compaction` renders the kept selection into the scratch
         // loop's own input through the one write path; copying it folds
-        // the kept messages, so repeated handoffs select from the
+        // the kept messages, so repeated compactions select from the
         // previously kept messages, never the whole earlier transcript.
         self.reviewed.clone_from(&self.looped.reviewed);
         Ok(())
