@@ -2413,6 +2413,11 @@ fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
         },
         0,
         &mut fold,
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
+        },
     );
     assert!(turn.call_completed(
         &contract::SessionId(SESSION.to_owned()),
@@ -2511,7 +2516,17 @@ fn call_timing_measures_start_to_completion() {
     let mut fold = super::Fold::default();
     let mut turn = super::Turn::new(Vec::new(), 0);
     for action in ["a_1", "a_2", "a_3", "a_4"] {
-        turn.call_requested(action, requested("shell"), 0, &mut fold);
+        turn.call_requested(
+            action,
+            requested("shell"),
+            0,
+            &mut fold,
+            &crate::turn::Recipients {
+                sessions: &Default::default(),
+                delegates: &Default::default(),
+                page: None,
+            },
+        );
     }
     assert!(turn.call_started("a_1", 1_000));
     assert!(turn.call_completed(
@@ -2560,6 +2575,11 @@ fn toggle_of_a_call_view_changes_nothing() {
         },
         0,
         &mut fold,
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
+        },
     );
     let id = super::target_id("a_1");
     assert_eq!(turn.toggle(Target::CallView(id)), None);
@@ -2592,6 +2612,11 @@ fn hook_rewrite_turns(actions: &[&[&str]]) -> (Vec<super::Turn>, super::Fold) {
                 },
                 0,
                 &mut fold,
+                &crate::turn::Recipients {
+                    sessions: &Default::default(),
+                    delegates: &Default::default(),
+                    page: None,
+                },
             );
         }
         turns.push(turn);
@@ -2617,7 +2642,17 @@ fn hook_rewrite_line(
         seq: None,
         payload: payload.as_object().cloned().unwrap_or_default(),
     };
-    super::fold_action(turns, fold, &envelope, action)
+    super::fold_action(
+        turns,
+        fold,
+        &envelope,
+        action,
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
+        },
+    )
 }
 
 /// The call `action` in `turns`.

@@ -1211,6 +1211,93 @@ fn tool_group_collapsed() {
     insta::assert_snapshot!("tool_group_collapsed", screen(&app));
 }
 
+/// A `session_status` line naming `session`.
+fn named(session: &str, name: &str) -> Line {
+    session_line(
+        session,
+        "session_status",
+        serde_json::json!({
+            "name": name, "named": true, "workspace": "/w", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 0, "cache_read": 0,
+                "cache_write": {}, "output": 0},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0}),
+        None,
+    )
+}
+
+/// One `(action, name, id)` message call per entry, completed with "ok".
+fn messages(app: &mut App, calls: &[(&str, &str, &str)]) {
+    use serde_json::json;
+    for &(action, name, id) in calls {
+        app.on_line(at(
+            "tool_call_requested",
+            Some(action),
+            0,
+            json!({"name": name, "arguments": {"id": id, "message": "hi"}}),
+        ));
+        app.on_line(at(
+            "tool_call_completed",
+            Some(action),
+            0,
+            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        ));
+    }
+}
+
+/// A message to a session the terminal holds a name for shows the name
+/// on its ledger row; one to a session it holds none for shows the id.
+#[test]
+fn a_session_message_row_shows_its_recipient_name() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(named("s_other", "worker"));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "ask them"));
+    app.on_line(at("step_started", None, 0, serde_json::json!({})));
+    messages(
+        &mut app,
+        &[
+            ("a_1", "session_message", "s_other"),
+            ("a_2", "session_message", "s_nobody"),
+        ],
+    );
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let shown = screen(&app);
+    assert!(shown.contains("message  worker"), "{shown}");
+    assert!(shown.contains("message  s_nobody"), "{shown}");
+    assert!(!shown.contains("s_other"), "{shown}");
+}
+
+/// A message to a delegate the terminal holds a description for shows
+/// the description on its ledger row; one to an unknown id shows the id.
+#[test]
+fn a_delegate_message_row_shows_its_recipient_description() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(at(
+        "job_started",
+        None,
+        0,
+        serde_json::json!({"job_id": "j_abc", "description": "Fix the parser", "output_path": "/o"}),
+    ));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "ask them"));
+    app.on_line(at("step_started", None, 0, serde_json::json!({})));
+    messages(
+        &mut app,
+        &[
+            ("a_1", "delegate_message", "j_abc"),
+            ("a_2", "delegate_message", "j_nobody"),
+        ],
+    );
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let shown = screen(&app);
+    assert!(shown.contains("message  Fix the parser"), "{shown}");
+    assert!(shown.contains("message  j_nobody"), "{shown}");
+    assert!(!shown.contains("j_abc"), "{shown}");
+}
+
 #[test]
 fn tool_group_ledger_open_with_a_call_open() {
     let mut app = empty();

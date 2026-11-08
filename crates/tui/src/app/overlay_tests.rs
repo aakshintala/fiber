@@ -20,6 +20,7 @@ use crate::link::Line;
 use crate::mouse::TargetId;
 use crate::turn::target_id;
 use crate::view::scroll_bar::THUMB;
+use contract::clock::Clock;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -4954,4 +4955,178 @@ mod outside_click {
             "the twin closed"
         );
     }
+}
+
+/// A `job_started` for `job` numbered `seq` under `session`.
+fn job_started_line(session: &str, seq: u64, job: &str, description: &str) -> contract::Envelope {
+    let Line::Session(mut envelope) = line(
+        "job_started",
+        seq,
+        None,
+        json!({"job_id": job, "description": description, "output_path": "/o"}),
+    ) else {
+        unreachable!("a session line");
+    };
+    envelope.session_id = id(session);
+    envelope
+}
+
+/// A completed `delegate_message` call to `job` as a turn from `seq`,
+/// under `session`.
+fn delegate_message_turn(
+    session: &str,
+    seq: &mut u64,
+    call: &str,
+    job: &str,
+) -> Vec<contract::Envelope> {
+    let mut lines = Vec::new();
+    let mut push = |kind: &str, action: Option<&str>, payload: Value| {
+        if let Line::Session(mut envelope) = line(kind, *seq, action, payload) {
+            envelope.session_id = id(session);
+            lines.push(envelope);
+        }
+        *seq += 1;
+    };
+    push(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "ask"}]}]}),
+    );
+    push("step_started", None, json!({}));
+    push(
+        "tool_call_requested",
+        Some(call),
+        json!({"name": "delegate_message", "arguments": {"id": job, "message": "hi"}}),
+    );
+    push(
+        "tool_call_completed",
+        Some(call),
+        json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+    );
+    push("turn_completed", None, json!({"outcome": "completed"}));
+    lines
+}
+
+/// Opens the child segment of a chain through the tail, the count and the
+/// pass, to the landing, then opens every ledger.
+fn open_chain(ancestor: &[contract::Envelope], child: &[contract::Envelope]) -> App {
+    let mut app = reading();
+    app.tail_lines(doors(child, &json!({})));
+    while let Some(args) = app.tail_next() {
+        let pool = if args.get("session_id").is_some() {
+            ancestor
+        } else {
+            child
+        };
+        app.tail_lines(doors(pool, &args));
+    }
+    app.install_tail();
+    while let Some(args) = app.tail_count_next() {
+        let pool = if args.get("session_id").is_some() {
+            ancestor
+        } else {
+            child
+        };
+        app.tail_count_lines(doors(pool, &args));
+    }
+    app.finish_count();
+    let raise: Value = serde_json::from_str(&app.take_raise().unwrap_or_else(|| panic!("a raise")))
+        .unwrap_or_else(|panic| panic!("{panic}"));
+    let raise_id = raise["id"].as_str().unwrap_or_else(|| panic!("an id"));
+    let last = child.len() as u64 - 1;
+    assert!(
+        app.on_line(raise_accepted(SESSION, raise_id, last))
+            .is_empty()
+    );
+    assert!(
+        matches!(app.overlay, Overlay::Folding { .. }),
+        "the pass folds"
+    );
+    for envelope in child {
+        app.on_line(Line::Session(envelope.clone()));
+    }
+    assert!(matches!(app.overlay, Overlay::None), "the pass lands");
+    app.on_key(
+        crate::keys::Key::CtrlO,
+        fakes::clock::FakeClock::new().now(),
+    );
+    app
+}
+
+/// An ancestor holding `starts` and a child of 60 reply turns, a resume
+/// per `resumes`, and one message to `j_abc`, so the child's own window
+/// fills the display and the ancestor loads through the count.
+fn delegate_chain(
+    starts: &[(&str, &str)],
+    resumes: &[(&str, &str)],
+) -> (Vec<contract::Envelope>, Vec<contract::Envelope>) {
+    let mut ancestor = chain_segment(ANCESTOR, None, "root reply", 1);
+    for &(job, description) in starts {
+        let seq = ancestor.len() as u64;
+        ancestor.push(job_started_line(ANCESTOR, seq, job, description));
+    }
+    let point = ancestor.len() as u64 - 1;
+    let mut child = chain_segment(SESSION, Some((ANCESTOR, point)), "child reply", 60);
+    for &(job, description) in resumes {
+        let seq = child.len() as u64;
+        child.push(job_started_line(SESSION, seq, job, description));
+    }
+    let mut seq = child.len() as u64;
+    child.extend(delegate_message_turn(SESSION, &mut seq, "a_msg", "j_abc"));
+    (ancestor, child)
+}
+
+fn screen_text(app: &App) -> String {
+    crate::view::text(&rendered(app))
+}
+
+/// The preview folds only the tail, so a call whose `job_started` sits
+/// before it draws the id; the pass folds the whole log and the landing
+/// swaps the description in (`docs/tui.md`, "History and paging").
+#[test]
+fn a_landing_gives_a_recipient_row_the_description_the_preview_lacked() {
+    let mut seq = 1;
+    let start = job_started_line(SESSION, 0, "j_abc", "Fix the parser");
+    let call = delegate_message_turn(SESSION, &mut seq, "a_1", "j_abc");
+    let preview: Vec<Line> = call.iter().cloned().map(Line::Session).collect();
+    let mut whole = vec![start];
+    whole.extend(call);
+    let fold: Vec<Line> = whole.into_iter().map(Line::Session).collect();
+    let mut app = folding(&preview, &fold, 5);
+    app.on_key(
+        crate::keys::Key::CtrlO,
+        fakes::clock::FakeClock::new().now(),
+    );
+    let before = screen_text(&app);
+    assert!(before.contains("message  j_abc"), "{before}");
+    let Overlay::Folding { fold, .. } = std::mem::take(&mut app.overlay) else {
+        panic!("fold")
+    };
+    app.land(*fold, false);
+    let after = screen_text(&app);
+    assert!(after.contains("message  Fix the parser"), "{after}");
+    assert!(!after.contains("j_abc"), "{after}");
+}
+
+/// A call to a delegate an ancestor segment started draws the
+/// description after opening: the count carries the ancestor's entries
+/// with its pages.
+#[test]
+fn an_ancestors_delegate_gives_a_recipient_row_its_description_after_opening() {
+    let (ancestor, child) = delegate_chain(&[("j_abc", "Fix the parser")], &[]);
+    let app = open_chain(&ancestor, &child);
+    let shown = screen_text(&app);
+    assert!(shown.contains("message  Fix the parser"), "{shown}");
+}
+
+/// A delegate resumed in a descendant keeps the descendant's description
+/// over the ancestor's.
+#[test]
+fn a_delegate_resumed_in_a_descendant_draws_the_descendants_recipient_description() {
+    let (ancestor, child) = delegate_chain(&[("j_abc", "old")], &[("j_abc", "new")]);
+    let app = open_chain(&ancestor, &child);
+    let shown = screen_text(&app);
+    assert!(shown.contains("message  new"), "{shown}");
+    assert!(!shown.contains("message  old"), "{shown}");
 }
