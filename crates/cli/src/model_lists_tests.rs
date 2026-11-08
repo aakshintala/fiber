@@ -6,6 +6,7 @@
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
+use crate::models::tests::set_source_mtime;
 use crate::test_support::write_record;
 use std::cell::Cell;
 use std::os::unix::fs::PermissionsExt;
@@ -178,7 +179,12 @@ fn installed<'a>(
     }
 }
 
-/// Sets the cached list's mtime `ago` before the fake clock's wall.
+/// Sets every source-tree mtime before the fake clock and cached timestamps.
+fn age_source(setup: &Setup, extension: &str) {
+    let dir = setup.home().join("extensions").join(extension);
+    set_source_mtime(&dir, std::time::SystemTime::UNIX_EPOCH);
+}
+
 fn age_cache(setup: &Setup, name: &str, ago: Duration) {
     let clock = fakes::clock::FakeClock::new();
     let file = setup
@@ -264,6 +270,7 @@ fn an_age_checked_refresh_with_a_fresh_cache_loads_no_provider_file() {
     );
     setup.install_lua("lazy", &script, &json!({"acme":["http://127.0.0.1:1/v1"]}));
     setup.write_cache("acme", &["cached"]);
+    age_source(&setup, "lazy");
     let clock = fakes::clock::FakeClock::new();
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/cached"]);
@@ -441,6 +448,7 @@ fn stale_refreshes_with_the_age_check_and_every_without() {
         &server_models(&server.url()),
         &json!({"acme": [format!("{}/v1", server.url())]}),
     );
+    age_source(&setup, "acme-ext");
     let clock = Arc::new(fakes::clock::FakeClock::new());
     // No cached copy: the first read runs `models()` at once.
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
@@ -469,6 +477,7 @@ fn every_refreshes_whatever_the_cache_holds() {
         &server_models(&server.url()),
         &json!({"acme": [format!("{}/v1", server.url())]}),
     );
+    age_source(&setup, "acme-ext");
     let clock = Arc::new(fakes::clock::FakeClock::new());
     let catalogue = bounded(&setup, &clock, ModelLists::Refresh { check_age: true }).unwrap();
     assert_eq!(references(&catalogue), ["acme/m1"]);

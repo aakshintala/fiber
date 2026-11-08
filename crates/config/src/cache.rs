@@ -112,6 +112,11 @@ pub fn model_cache_lock_file(home: &Path, provider: &str) -> Result<PathBuf, Con
     cache_file(home, provider).map(|path| path.with_extension("lock"))
 }
 
+/// The file that holds the cached model list of `provider`.
+pub fn model_cache_file(home: &Path, provider: &str) -> Result<PathBuf, ConfigError> {
+    cache_file(home, provider)
+}
+
 fn cache_file(home: &Path, provider: &str) -> Result<PathBuf, ConfigError> {
     if !one_file_name(provider) {
         return Err(ConfigError::WrongType {
