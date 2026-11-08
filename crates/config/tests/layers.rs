@@ -319,6 +319,31 @@ fn known_key_accepts_a_documented_key_and_refuses_an_unknown_one() {
     assert!(!config::known_key("frobnicate"));
 }
 
+/// The retired name for the `compaction` block gets no alias: a config
+/// that still sets it loads with a notice and the default stays.
+#[test]
+fn the_retired_name_is_an_unknown_key_on_load() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"handoff": {"tokens": 200000}, "model": "a/b"}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let notices = config.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ConfigKeyIgnored);
+    assert_eq!(
+        notices[0].message,
+        format!(
+            "{}: ignored `handoff`, which this Fiber does not know.",
+            setup.global().display()
+        )
+    );
+    let merged = config.merged(None);
+    assert_eq!(merged.get("handoff"), None);
+    assert_eq!(merged["compaction"]["tokens"], json!(400_000));
+}
+
 #[test]
 fn an_unknown_key_is_a_notice_and_is_otherwise_ignored() {
     let setup = Setup::new();

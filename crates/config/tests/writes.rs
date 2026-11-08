@@ -887,6 +887,38 @@ fn set_of_an_unknown_key_is_refused_and_writes_nothing() {
     }
 }
 
+/// The retired name for `compaction.tokens` gets no alias: `set` refuses
+/// it as it refuses any key this Fiber does not know.
+#[test]
+fn set_of_the_retired_name_is_refused_and_writes_nothing() {
+    for layer in [Layer::Global, Layer::Project, Layer::Repository] {
+        let setup = Setup::new();
+        setup.write(&setup.global(), r#"{"model": "a/b"}"#);
+        let e = set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            layer,
+            "handoff.tokens",
+            json!(200000),
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), ErrorCode::Usage, "{layer:?}");
+        assert!(e.to_string().contains("`handoff.tokens`"), "{layer:?}: {e}");
+        assert!(
+            e.to_string().contains("this Fiber does not know it"),
+            "{layer:?}: {e}"
+        );
+        assert_eq!(
+            fs::read_to_string(setup.global()).unwrap(),
+            r#"{"model": "a/b"}"#,
+            "{layer:?}"
+        );
+        assert!(!setup.project().exists(), "{layer:?}");
+        assert!(!setup.repository().exists(), "{layer:?}");
+    }
+}
+
 #[test]
 fn set_of_a_repo_settable_key_at_the_repository_layer_is_written() {
     let setup = Setup::new();
