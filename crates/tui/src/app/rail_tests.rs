@@ -416,16 +416,6 @@ fn numbers_are_kept_without_the_rail() {
     assert_eq!(number(&app, A), Some(1));
 }
 
-#[test]
-fn no_home_no_numbers() {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.attach(contract::SessionId(A.to_owned()));
-    app.on_line(hello());
-    app.on_line(live(A, json!({})));
-    assert!(app.rail_cards().is_none());
-    assert_eq!(number(&app, A), None);
-}
-
 /// Presses `key`.
 fn press(app: &mut App, key: Key) -> Effect {
     app.on_key(key, fakes::clock::FakeClock::new().now())
@@ -605,18 +595,6 @@ fn alt_n_on_home_opens_the_card() {
     let commands = commands(app.on_line(accepted(B, out[0]["id"].as_str().unwrap_or_default())));
     assert_eq!(commands, vec![asks_commands(&commands[0]["id"], B)]);
     assert_eq!(on_screen(&app), Some(B));
-}
-
-#[test]
-fn alt_n_without_home_does_nothing() {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.attach(contract::SessionId(A.to_owned()));
-    app.on_line(hello());
-    app.on_line(live(A, json!({})));
-    app.on_line(live(B, json!({})));
-    assert_eq!(press(&mut app, Key::AltDigit(1)), Effect::None);
-    assert_eq!(press(&mut app, Key::AltDigit(2)), Effect::None);
-    assert_eq!(on_screen(&app), Some(A));
 }
 
 #[test]
@@ -1607,13 +1585,13 @@ fn clicking_done_expands_more_around_the_first_exited_row() {
         app.on_line(left(session, "exited"));
     }
     // Four exits collapse the project to three shown behind `more`.
-    let hidden = app.home.as_ref().and_then(|home| {
-        home.sessions
-            .sections(home.launch_project())
-            .into_iter()
-            .find(|section| section.project == "-w")
-            .map(|section| section.hidden())
-    });
+    let hidden = app
+        .home
+        .sessions
+        .sections(app.home.launch_project())
+        .into_iter()
+        .find(|section| section.project == "-w")
+        .map(|section| section.hidden());
     assert_eq!(hidden, Some(1));
     let out = sent(app.on_click(TargetId::Rail(Spot::Done(key(&app, A)))));
     assert_eq!(out, vec![subscribe(&out[0]["id"], A, "summary")]);
@@ -1631,13 +1609,13 @@ fn clicking_done_expands_more_around_the_first_exited_row() {
         app.focused(),
         Some(TargetId::Home(HomeSpot::Entry(row_key(&app, E))))
     );
-    let hidden = app.home.as_ref().and_then(|home| {
-        home.sessions
-            .sections(home.launch_project())
-            .into_iter()
-            .find(|section| section.project == "-w")
-            .map(|section| section.hidden())
-    });
+    let hidden = app
+        .home
+        .sessions
+        .sections(app.home.launch_project())
+        .into_iter()
+        .find(|section| section.project == "-w")
+        .map(|section| section.hidden());
     assert_eq!(hidden, Some(0));
 }
 
@@ -1859,11 +1837,8 @@ fn resume_list_focuses_the_first_off_screen_exited_row() {
     answer_recent(&mut app, &recent, &exited);
     let first = app
         .home
-        .as_ref()
-        .and_then(|home| {
-            home.sessions
-                .row(&contract::SessionId(exited[0].to_owned()))
-        })
+        .sessions
+        .row(&contract::SessionId(exited[0].to_owned()))
         .map(|row| row.key)
         .unwrap_or_else(|| panic!("the first exited row is listed"));
     app.resume_list();
@@ -1893,8 +1868,8 @@ fn focus_row_expands_a_project_hiding_the_row_behind_more() {
     answer_recent(&mut app, &recent, &refs);
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&contract::SessionId(refs[4].to_owned())))
+        .sessions
+        .row(&contract::SessionId(refs[4].to_owned()))
         .map(|row| row.key)
         .unwrap_or_else(|| panic!("the fifth exited row is listed"));
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
@@ -1905,14 +1880,14 @@ fn focus_row_expands_a_project_hiding_the_row_behind_more() {
         "the fifth exited row hides behind more"
     );
     app.focus_row(key);
-    let hidden = app.home.as_ref().map(|home| {
-        home.sessions
-            .sections(home.launch_project())
-            .into_iter()
-            .find(|section| section.project == "-w")
-            .map(|section| section.hidden())
-    });
-    assert_eq!(hidden, Some(Some(0)), "focus_row expands the project");
+    let hidden = app
+        .home
+        .sessions
+        .sections(app.home.launch_project())
+        .into_iter()
+        .find(|section| section.project == "-w")
+        .map(|section| section.hidden());
+    assert_eq!(hidden, Some(0), "focus_row expands the project");
     let mut first_buf = ratatui::buffer::Buffer::empty(area);
     let first = render_home(&app, &mut first_buf);
     assert!(app.drawn(&first));
@@ -2150,8 +2125,6 @@ fn plain(code: Code) -> Stroke {
 /// The home row key of `session`.
 fn row_key(app: &App, session: &str) -> u64 {
     app.home
-        .as_ref()
-        .expect("home draws the rail")
         .sessions
         .row(&contract::SessionId(session.to_owned()))
         .expect("session has a row")
@@ -2191,6 +2164,17 @@ fn left_in_an_empty_box_focuses_the_on_screen_card() {
     assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
     assert_eq!(rail_focus(&app), Some(Spot::Card(key(&app, A))));
     assert_eq!(app.focused(), None);
+}
+
+#[test]
+fn left_focuses_no_rail_below_the_floor() {
+    // Below the floor there is no layout, so no rail to focus: the same
+    // Left in an empty box focuses the on-screen card above it.
+    let mut app = opened(&[A, B], A);
+    app.set_size(30, 8);
+    app.settle();
+    assert_eq!(stroke_press(&mut app, plain(Code::Left)), Effect::None);
+    assert_eq!(rail_focus(&app), None);
 }
 
 #[test]
@@ -4047,8 +4031,8 @@ fn the_cross_hides_the_card_here_and_sends_nothing() {
     assert!(carded(&app, A) && carded(&app, C));
     assert!(
         app.home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&contract::SessionId(B.to_owned())))
+            .sessions
+            .row(&contract::SessionId(B.to_owned()))
             .is_some(),
         "home still lists the row"
     );
@@ -4068,8 +4052,8 @@ fn a_later_unreadable_status_keeps_the_card_hidden() {
     assert!(carded(&app, A) && carded(&app, C));
     assert!(
         app.home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&contract::SessionId(B.to_owned())))
+            .sessions
+            .row(&contract::SessionId(B.to_owned()))
             .is_some(),
         "the later status still reached home"
     );
@@ -4120,8 +4104,8 @@ fn the_card_stays_hidden_across_a_reconnect() {
     assert!(carded(&app, A) && carded(&app, C));
     assert!(
         app.home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&contract::SessionId(B.to_owned())))
+            .sessions
+            .row(&contract::SessionId(B.to_owned()))
             .is_some(),
         "the later status still reached home"
     );

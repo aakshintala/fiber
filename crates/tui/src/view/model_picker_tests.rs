@@ -1980,7 +1980,10 @@ fn an_all_left_out_section_stays_visible_in_a_short_viewport() {
             .any(|line| line.contains("1 model needs workspace: run `fiber login opencode`")),
         "{lines:?}"
     );
-    // End to end, the count row renders under its heading.
+    // End to end, the count row renders under its heading. The layout is
+    // the app's own size, so the full screen is set on it first.
+    app.set_size(80, 24);
+    app.settle();
     let text = screen(&app, 80, 24);
     assert!(text.contains("opencode"), "{text}");
     assert!(

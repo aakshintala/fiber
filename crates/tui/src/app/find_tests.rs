@@ -52,7 +52,7 @@ fn hello() -> Line {
 pub(super) fn attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     app.attach(contract::SessionId(SESSION.to_owned()));
     app
 }
@@ -2754,7 +2754,7 @@ fn attaching_another_session_resets_the_search() {
     assert!(app.find_bar().is_some());
     assert!(app.find.total() > 0);
     app.attach(contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()));
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     assert!(
         app.find_bar().is_none(),
         "the new session starts with no search"

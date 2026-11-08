@@ -3,18 +3,18 @@ source: crates/tui/src/view/offer_tests.rs
 expression: screen
 ---
 
-  MCP server c · declared in .fiber/config.json
-  MCP server: c
-  declared in: .fiber/config.json
-  runs: /bin/echo
-  ( ) approve   (•) skip for this session   ( ) never
+   MCP server c · declared in .fiber/config.json
+   MCP server: c
+   declared in: .fiber/config.json
+   runs: /bin/echo
+   ( ) approve   (•) skip for this session   ( ) never
 
-A package's TUI files are never installed from a repository.
-
-↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside
-▸ Send · 0 approve, 3 skip, 0 never
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ ›
-▌──────────────────────────────────────────────────────────────────────────────
-▌auto                                                        ctx ▆▆▆▆▆▆▆▆ — · —
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+⋮A package's TUI files are never installed from a repository.
+⋮
+⋮↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside
+ ▸ Send · 0 approve, 3 skip, 0 never
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

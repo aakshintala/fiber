@@ -44,9 +44,7 @@ fn home_at(open_at: OpenAt) -> App {
 
 /// Whether the launch's open is spent: back to home.
 fn spent(app: &App) -> bool {
-    app.home
-        .as_ref()
-        .is_some_and(|home| home.launch.open_at == OpenAt::Home)
+    app.home.launch.open_at == OpenAt::Home
 }
 
 /// A hub `command_accepted` for `id` with `result`.

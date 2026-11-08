@@ -1149,6 +1149,17 @@ fn home_refuses_an_unknown_slash_and_keeps_its_built_ins() {
 #[test]
 fn start_carries_no_content() {
     let mut app = App::new(PathBuf::from("/w"));
+    // A home with a model chosen, so Enter sends a `start` instead of
+    // opening the model picker.
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
     // Held before `hub_hello`, sent after it.
     assert_eq!(enter(&mut app, "hi"), Effect::None);
     let hello = hub_line("hub_hello", json!({}));
@@ -1157,8 +1168,14 @@ fn start_carries_no_content() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "start");
+    // The held `start` goes first, then home's startup reads.
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line["command"].clone())
+            .collect::<Vec<_>>(),
+        [json!("start"), json!("feed"), json!("recent")]
+    );
     assert_eq!(lines[0]["args"], json!({"workspace": "/w"}));
 }
 

@@ -136,10 +136,23 @@ fn hello() -> Line {
 
 /// An app attached at `width` by `height`, showing one done turn with
 /// `text`.
+/// Fills the rows below the conversation with notices until it has `rows`
+/// rows: the Chrome floor keeps the screen from being short enough.
+fn leave_rows(app: &mut App, rows: usize) {
+    for n in 0..10 {
+        if app.conversation_height() <= rows {
+            break;
+        }
+        app.push_notice(contract::ErrorCode::SkillShadowed, format!("notice {n}"));
+        app.settle();
+    }
+    assert_eq!(app.conversation_height(), rows, "the conversation's rows");
+}
+
 fn replied(width: u16, height: u16, text: &str) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.on_line(line(
         "turn_started",
@@ -210,8 +223,8 @@ fn a_bare_url_inside_a_markdown_label_keeps_the_markdown_destination() {
 
 #[test]
 fn a_bare_url_wrapped_over_three_rows_opens_whole_from_each_row() {
-    let url = "http://example.com/aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh";
-    let mut app = replied(24, 16, &format!("see {url} for more"));
+    let url = "http://example.com/aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh-iiii-jjjj-kkkk-llll-mmmm-nnnn-oooo";
+    let mut app = replied(40, 16, &format!("see {url} for more"));
     app.set_opener(true);
     let area = app.conversation_area();
     let found = app.visible_links(area);
@@ -575,9 +588,9 @@ fn a_focused_table_link_reserves_its_hint_row() {
     // The reserved row is one blank card row: every cell shares its
     // background, so no previous frame's cells show past the hint. The
     // scroll bar paints the last column after the rows.
-    let bg = buf[(0, gap)].bg;
+    let bg = buf[(2, gap)].bg;
     let last_col = buf.area.width.saturating_sub(1);
-    for x in 0..last_col {
+    for x in 2..last_col {
         assert_eq!(buf[(x, gap)].bg, bg, "gap cell {x}");
     }
     // The focused link stays where it was, on its tint.
@@ -738,9 +751,9 @@ fn a_focused_link_pushes_the_last_row_off_the_screen() {
 fn a_focused_link_on_a_partially_visible_wrapped_line_keeps_its_hint_in_bounds() {
     use crate::format;
 
-    let url = "http://example.com/aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh-iiii-jjjj-kkkk";
+    let url = "http://example.com/aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh-iiii-jjjj-kkkk-llll-mmmm-nnnn-oooo-pppp-qqqq-rrrr-ssss-tttt-uuuu-vvvv";
     let paragraphs: Vec<String> = (0..20).map(|n| format!("paragraph {n}")).collect();
-    let mut app = replied(24, 16, &paragraphs.join("\n\n"));
+    let mut app = replied(40, 16, &paragraphs.join("\n\n"));
     // Shell output is a plain, unpadded row. The long bare URL wraps only
     // when drawn, so its final wrapped rows can fall beyond the viewport.
     app.screen.pages_mut().add_shell(Some(url.to_owned()));
@@ -806,7 +819,7 @@ fn a_focused_link_reserves_its_hint_above_the_new_below_pill() {
 
     let text = "paragraph one\n\nparagraph two paragraph two paragraph two paragraph two\n\n[docs](https://example.com/a)\n\nafter";
     let mut app = App::new(PathBuf::from("/w"));
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.set_size(40, 13);
     app.on_line(line(
@@ -875,7 +888,8 @@ fn a_focused_link_can_scroll_to_the_conversations_first_row_and_keep_its_hint() 
     use crate::theme::Role;
 
     let url = "http://example.com/a";
-    let mut app = replied(60, 7, "a reply");
+    let mut app = replied(60, 10, "a reply");
+    leave_rows(&mut app, 2);
     app.set_opener(true);
     app.screen.pages_mut().add_shell(Some(url.to_owned()));
     app.settle();
@@ -917,7 +931,8 @@ fn a_focused_link_filling_its_window_draws_no_hint() {
     // only row: no row below can free the hint's row and no row above
     // can give way, so only the focused look paints (`docs/tui.md`,
     // "Links"). PageUp steps one row in a one-row window.
-    let mut app = replied(60, 6, "[docs](https://example.com/a)");
+    let mut app = replied(60, 10, "[docs](https://example.com/a)");
+    leave_rows(&mut app, 1);
     app.set_opener(true);
     let mut found = None;
     for _ in 0..10 {
@@ -1047,7 +1062,7 @@ fn a_bare_url_in_a_prompt_bubble_is_on_its_drawn_cells() {
     let prompt = "see http://example.com/a";
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 12);
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.on_line(line(
         "turn_started",
@@ -1190,7 +1205,7 @@ fn a_swapped_view_on_home_tints_the_focused_row_and_lifts_the_hovered_row() {
 fn call_with_bare_link() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(60, 16);
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.on_line(line(
         "turn_started",

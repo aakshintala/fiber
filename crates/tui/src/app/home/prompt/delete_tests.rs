@@ -1125,10 +1125,7 @@ fn stale_set_after_stop_returns_home_with_stopped_rows() {
     assert!(lines.iter().any(|line| line["command"] == "recent"));
     insta::assert_snapshot!("stale_set", frame(&app));
     assert!(
-        app.home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&SessionId(A.to_owned())))
-            .is_some(),
+        app.home.sessions.row(&SessionId(A.to_owned())).is_some(),
         "the stopped row stays for a retry"
     );
 }

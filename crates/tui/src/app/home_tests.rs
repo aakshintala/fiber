@@ -159,8 +159,10 @@ fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
 }
 
 #[test]
-fn an_app_without_home_draws_the_conversation_screen() {
-    let app = App::new(PathBuf::from("/w"));
+fn a_new_app_with_a_session_draws_the_conversation_screen() {
+    let mut app = App::new(PathBuf::from("/w"));
+    assert!(app.on_home());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert!(!app.on_home());
     assert!(app.home_screen().is_none());
 }
@@ -534,15 +536,11 @@ fn rows(app: &App) -> Vec<String> {
 /// Every listed row's line, drawn or not: what the feed and `recent` folded.
 fn listed(app: &App) -> Vec<String> {
     app.home
-        .as_ref()
-        .map(|home| {
-            home.sessions
-                .all()
-                .iter()
-                .map(|row| crate::home::line(row, home.launch_project()))
-                .collect()
-        })
-        .unwrap_or_default()
+        .sessions
+        .all()
+        .iter()
+        .map(|row| crate::home::line(row, app.home.launch_project()))
+        .collect()
 }
 
 #[test]
@@ -920,7 +918,7 @@ fn keys(app: &App) -> Vec<u64> {
 /// The drawn `More` row's key for `project`: the first hidden loaded
 /// row when one hides, else the key the total path assigned.
 fn more_key(app: &App, project: &str) -> Option<u64> {
-    let home = app.home.as_ref()?;
+    let home = &app.home;
     app.home_screen()?
         .list
         .into_iter()
@@ -1988,7 +1986,7 @@ fn slash_close_sends_close_now_and_no_subscribe() {
 }
 
 #[test]
-fn home_without_home_state_sends_nothing_on_leave() {
+fn leaving_a_fresh_home_sends_nothing() {
     let mut app = App::new(PathBuf::from("/w"));
     assert_eq!(app.leave(), Effect::None);
 }
@@ -2093,7 +2091,7 @@ fn the_file_listing_follows_an_opened_row_outside_the_launch_workspace() {
 }
 
 #[test]
-fn without_home_the_workspace_is_the_launch_directory() {
+fn a_new_apps_workspace_is_the_launch_directory() {
     let app = App::new(PathBuf::from("/w"));
     assert_eq!(app.workspace(), Some(PathBuf::from("/w")));
 }
@@ -2466,8 +2464,8 @@ fn slash_resume_from_a_session_focuses_the_first_exited_row_after_the_home_frame
         .expect("the exited row follows the live row");
     let row = app
         .home
-        .as_ref()
-        .and_then(|home| home.sessions.by_key(exited))
+        .sessions
+        .by_key(exited)
         .unwrap_or_else(|| panic!("the exited row is present"));
     assert_eq!(row.left, Some(crate::home::Left::Exited));
     assert_eq!(
@@ -3026,7 +3024,7 @@ fn no_page_is_asked_from_a_feed_row() {
         &recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "fix the parser")]}),
     ));
-    assert!(app.home.as_ref().is_some_and(|home| home.sessions.more()));
+    assert!(app.home.sessions.more());
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
@@ -3058,7 +3056,7 @@ fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
         ))
         .is_empty()
     );
-    assert!(app.home.as_ref().is_some_and(|home| !home.sessions.more()));
+    assert!(!app.home.sessions.more());
     // ↓ returns nothing with focus on the row's line.
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.focused(), None);
@@ -3297,11 +3295,7 @@ fn a_rejected_prompt_sets_none() {
         app.on_line(hub_refused(id, "invalid_arguments", "bad prompt"))
             .is_empty()
     );
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.blockers.is_empty())
-    );
+    assert!(app.home.blockers.is_empty());
 }
 
 #[test]
@@ -4478,11 +4472,7 @@ fn an_accepted_delete_closes_its_question() {
     assert_eq!(rows(&app), ["○  older work"]);
     // Its answer closes the question it asked about: the prompt clears,
     // so the drawn question goes with it.
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.questions.prompt().is_none())
-    );
+    assert!(app.home.questions.prompt().is_none());
     assert!(
         app.home_screen()
             .is_some_and(|screen| screen.question.is_none())
@@ -5171,11 +5161,8 @@ fn opening_a_row_then_closing_names_no_back_key() {
     ));
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| {
-            home.sessions
-                .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
-        })
+        .sessions
+        .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
         .map(|row| row.key)
         .expect("row B");
     open(&mut app, key);
@@ -5207,11 +5194,8 @@ fn a_card_switch_then_closing_names_no_back_key() {
     let _ = app.leave();
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| {
-            home.sessions
-                .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
-        })
+        .sessions
+        .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
         .map(|row| row.key)
         .expect("row B");
     app.open_entry(key);
@@ -5942,8 +5926,8 @@ fn down_on_the_last_row_pages_the_project_while_it_holds_more() {
 /// The row key of `session` on home.
 fn row_key(app: &App, session: &str) -> u64 {
     app.home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&contract::SessionId(session.to_owned())))
+        .sessions
+        .row(&contract::SessionId(session.to_owned()))
         .map(|row| row.key)
         .unwrap_or_else(|| panic!("row {session}"))
 }
@@ -6569,9 +6553,7 @@ fn line_id(line: &Value) -> &str {
 
 /// The stored scoped total for `project`.
 fn stored(app: &App, project: &str) -> Option<usize> {
-    app.home
-        .as_ref()
-        .and_then(|home| home.sessions.total_for(project))
+    app.home.sessions.total_for(project)
 }
 
 #[test]
@@ -7273,6 +7255,23 @@ fn hub_hello_sends_homes_startup_reads() {
 }
 
 #[test]
+fn only_a_remote_launch_owes_the_hubs_import_offer() {
+    // A local launch ignores the debt through the offer read (a local
+    // terminal has no hub home to read), so the field is the proof.
+    let mut app = App::new(PathBuf::from("/w"));
+    assert!(!app.home.import_owed);
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        ..Default::default()
+    });
+    assert!(app.home.import_owed);
+    app.set_home(launch());
+    assert!(!app.home.import_owed);
+}
+
+#[test]
 fn set_home_replaces_the_seeded_home() {
     let mut app = App::new(None);
     // The seed queues nothing before a hub line arrives.
@@ -7298,5 +7297,6 @@ fn set_home_replaces_the_seeded_home() {
         rail_hidden: true,
         ..launch()
     });
+    app.settle();
     assert_eq!(app.chrome().layout().expect("a layout").rail, None);
 }

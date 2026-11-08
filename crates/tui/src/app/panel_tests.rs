@@ -1025,7 +1025,7 @@ fn no_query_without_the_session_card() {
 }
 
 #[test]
-fn no_query_without_home() {
+fn no_query_for_a_status_with_no_row() {
     let mut app = App::new(PathBuf::from("/w"));
     app.attach(contract::SessionId(SESSION.to_owned()));
     assert!(

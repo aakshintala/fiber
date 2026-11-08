@@ -3234,12 +3234,7 @@ fn saving_on_home_writes_at_once_and_sets_the_saved_list() {
     assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
-    assert_eq!(
-        app.home
-            .as_ref()
-            .map(|home| home.launch.scoped_models.clone()),
-        Some(vec!["acme/m1".to_owned()])
-    );
+    assert_eq!(app.home.launch.scoped_models, vec!["acme/m1".to_owned()]);
 }
 
 #[test]
