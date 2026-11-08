@@ -1035,7 +1035,7 @@ impl State {
             workspace: self.sources.workspace.clone(),
             clock: now.loader.clock.clone(),
             cache_diagnostics: config.flag("cache.diagnostics", None).unwrap_or_default(),
-            databricks_request_tags: None,
+            databricks_request_tags: self.switching.databricks_request_tags().cloned(),
         };
         let (reviewer, reviewer_observe, credential_files, publish) =
             self.switching.reviewer_for(route, &config, &here);

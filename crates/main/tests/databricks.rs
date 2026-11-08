@@ -187,9 +187,18 @@ fn credentials(host: &str) -> [(&str, &str); 2] {
     [("DATABRICKS_TOKEN", "dapi-test"), ("DATABRICKS_HOST", host)]
 }
 
+/// A request's tags header, parsed.
+fn tags_header(request: &Request) -> Value {
+    let raw = request
+        .header("databricks-ai-gateway-request-tags")
+        .unwrap_or_else(|| panic!("no tags header: {request:?}"));
+    serde_json::from_str(raw).unwrap()
+}
+
 /// A turn's three requests: the two discovery answers, then the model's.
-/// Every request carries the package's header.
-fn assert_turn(requests: &[Request], model_path: &str) {
+/// Both discovery requests carry the source-only header; the model's
+/// carries `model_tags`, parsed.
+fn assert_tagged_turn(requests: &[Request], model_path: &str, model_tags: &Value) {
     assert_eq!(requests.len(), 3, "{requests:?}");
     assert_eq!(
         requests[0].path,
@@ -200,14 +209,22 @@ fn assert_turn(requests: &[Request], model_path: &str) {
         "/api/ai-gateway/v2/external-provider-models?page_size=1000"
     );
     assert_eq!(requests[2].path, model_path);
-    for request in requests {
+    for request in &requests[..2] {
         assert_eq!(
-            request.header("databricks-ai-gateway-request-tags"),
-            Some("{\"source\":\"fiber\"}"),
+            tags_header(request),
+            json!({"source": "fiber"}),
             "{request:?}"
         );
+    }
+    assert_eq!(tags_header(&requests[2]), *model_tags, "{:?}", requests[2]);
+    for request in requests {
         assert_fingerprint(request, "authorization", "Bearer dapi-test");
     }
+}
+
+/// A turn's three requests with the default, source-only model header.
+fn assert_turn(requests: &[Request], model_path: &str) {
+    assert_tagged_turn(requests, model_path, &json!({"source": "fiber"}));
 }
 
 #[test]
@@ -529,4 +546,93 @@ fn discovered_default_level_sends_without_a_suffix() {
     let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
     assert_eq!(body["thinking"], json!({"type": "adaptive"}));
     assert_eq!(body["output_config"], json!({"effort": "medium"}));
+}
+
+/// One `fiber ask` turn on `model` with `-c providers.databricks.request_tags=<tags>`:
+/// the run and the three requests the fake server saw.
+fn tagged_ask(model: &str, reply: Response, tags: &str) -> (Run, Vec<Request>) {
+    let setup = Setup::new();
+    let server = ProviderServer::start(discovery().into_iter().chain([reply])).unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
+    let flag = format!("providers.databricks.request_tags={tags}");
+    let run = run(
+        &setup,
+        &["ask", "-c", &flag, "--model", model, "hi"],
+        &credentials(&host),
+    );
+    (run, server.requests())
+}
+
+#[test]
+fn request_tags_ask_accepts_native_objects() {
+    let routes = [
+        (
+            "databricks/databricks-claude-opus-5",
+            anthropic_hello(),
+            "/ai-gateway/anthropic/v1/messages",
+        ),
+        (
+            "databricks/databricks-gpt-6-sol",
+            hello(),
+            "/ai-gateway/codex/v1/responses",
+        ),
+        (
+            "databricks/databricks-glm-5.3",
+            completions_hello(),
+            "/ai-gateway/mlflow/v1/chat/completions",
+        ),
+    ];
+    for (model, reply, path) in routes {
+        let (run, requests) = tagged_ask(model, reply, r#"{"run":"r1"}"#);
+        assert_eq!(run.code, Some(0), "{model}: {}", run.stderr);
+        assert_eq!(run.kinds(), HELLO_KINDS, "{model}");
+        assert_tagged_turn(&requests, path, &json!({"source": "fiber", "run": "r1"}));
+    }
+    // A `source` in the value never replaces `fiber`.
+    let (run, requests) = tagged_ask(
+        "databricks/databricks-glm-5.3",
+        completions_hello(),
+        r#"{"run":"r1","source":"mine"}"#,
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_tagged_turn(
+        &requests,
+        "/ai-gateway/mlflow/v1/chat/completions",
+        &json!({"source": "fiber", "run": "r1"}),
+    );
+}
+
+#[test]
+fn request_tags_invalid_value_uses_default() {
+    let (run, requests) = tagged_ask(
+        "databricks/databricks-glm-5.3",
+        completions_hello(),
+        r#"{"run":"r1","bad":7}"#,
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let notices: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "config_invalid");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("providers.databricks.request_tags"),
+        "{message}"
+    );
+    assert!(!message.contains("r1"), "{message}");
+    let kinds: Vec<&str> = run
+        .kinds()
+        .into_iter()
+        .filter(|kind| *kind != "notice")
+        .collect();
+    assert_eq!(kinds, HELLO_KINDS);
+    assert_eq!(run.text_completed(), "Hello.");
+    assert_turn(&requests, "/ai-gateway/mlflow/v1/chat/completions");
 }

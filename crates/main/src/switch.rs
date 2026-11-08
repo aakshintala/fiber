@@ -377,6 +377,16 @@ impl Switching {
             .map_err(|error| crate::failed(error.code(), error))
     }
 
+    /// The request tags fixed when the session started: the reviewer's
+    /// reconstructed connection reads them here, never from the reloaded
+    /// configuration (`docs/configuration.md`, "When Fiber reads
+    /// configuration").
+    pub(crate) fn databricks_request_tags(
+        &self,
+    ) -> Option<&std::collections::BTreeMap<String, String>> {
+        self.startup_config.databricks_request_tags()
+    }
+
     pub(crate) fn reviewer_for(
         self: &Arc<Self>,
         route: &r#loop::ReloadRoute,
@@ -474,7 +484,7 @@ impl Switching {
                     .startup_config
                     .flag("cache.diagnostics", None)
                     .unwrap_or_default(),
-                databricks_request_tags: None,
+                databricks_request_tags: shared.startup_config.databricks_request_tags().cloned(),
             };
             let provider = connect(
                 resolved,
@@ -744,7 +754,7 @@ pub(crate) fn prepare(
             .config
             .flag("cache.diagnostics", None)
             .unwrap_or_default(),
-        databricks_request_tags: None,
+        databricks_request_tags: switching.startup_config.databricks_request_tags().cloned(),
     };
     // The session's route with its observed factory when the session
     // shared its writer; without one the switch carries no factories.

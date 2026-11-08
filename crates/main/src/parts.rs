@@ -628,7 +628,7 @@ fn parts_inner(
         workspace: workspace.clone(),
         clock: Arc::clone(&clock),
         cache_diagnostics: config.flag("cache.diagnostics", None).unwrap_or_default(),
-        databricks_request_tags: None,
+        databricks_request_tags: config.databricks_request_tags().cloned(),
     };
     let (provider, observe) = settle(
         connect_observed(
