@@ -592,16 +592,14 @@ as the model's, not to contain an extension.
 which runs a Lua script. The script calls tools with `host.tool` ("Running a
 tool"), filters what they return and prints only what the model needs. Every
 other tool the session can call is reachable this way: a built-in, an MCP
-server's tool or another extension's. `codemode` itself is not, by the rule in
-"Running a tool" that a tool cannot run itself.
+server's tool or another extension's.
 
 - **Input.** An object with one required string, `source`, the Lua to run:
   `{"source": "print('hi')"}`. The script's output is what it passes to
   `print`; a chunk's return value is ignored. `host.tool` is its only host
   call.
 - **It is on by default.** It is part of a fresh install ("A fresh install")
-  and loads unless switched off. Admission is the outer call's: the tool
-  declares `executes`, so the reviewer sees the script. It has a 60 s timeout.
+  and loads unless switched off. It has a 60 s timeout.
 - **Three ways to turn it off, each different.**
   - `extensions."codemode".enabled = false` stops the extension's parts
     loading, in every project when set globally or in one project's file
@@ -614,9 +612,10 @@ server's tool or another extension's. `codemode` itself is not, by the rule in
 - **What the model gets back.** The script's printed lines, then one status
   line, then one ledger row per inner call that finished.
   - The result is bounded like any other (`docs/tools.md`, "Bounded results"):
-    at the 16 KiB default, a cut keeps the first and last 8 KiB, so the status
-    line and the ledger survive, and the whole output goes to the session's
-    `artifacts/`.
+    at the 16 KiB default, a cut keeps the first and last 8 KiB, with a notice
+    between them. The status line and ledger rows follow the printed lines, so
+    a long enough print or ledger pushes them into the cut part. The whole
+    output goes to the session's `artifacts/`.
   - The status line is `Script finished`, or `Script failed: <error>` when the
     script did not load or raised an error. Lines printed before a failure are
     kept.
@@ -627,8 +626,6 @@ server's tool or another extension's. `codemode` itself is not, by the rule in
     returning leaves no row. An inner call's output reaches the script whole,
     so a row has a path only when the outcome supplies an artifact, such as
     one an `after_tool` hook wrote; an ordinary uncut call has none.
-- **In the terminal**, the outer call shows its inner calls nested under it
-  (`docs/tui.md`, "Tool groups and the ledger").
 
 ## State
 
