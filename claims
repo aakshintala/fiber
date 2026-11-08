@@ -206,3 +206,14 @@ crates/main/tests/delegation/ask_worktree.rs	fiber-4443	plan	2026-11-08T23:18:37
 crates/main/tests/providers/databricks.rs	fiber-4443	plan	2026-11-08T23:18:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/providers/placeholders.rs	fiber-4443	plan	2026-11-08T23:18:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/timing_tests.rs	fiber-4443	plan	2026-11-08T23:18:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/diag/src/diag.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/diag/src/diag_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/doors/src/isolation/timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/extensions/tests/provider_diagnostics.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/jobs/src/timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/main/src/timed_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/mcp/src/timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/net/src/timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/provider/src/http_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/job_timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
+crates/tools/src/picture_timing_tests.rs	fiber-4312	plan	2026-11-08T23:30:33Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber	
