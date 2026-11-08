@@ -41,6 +41,10 @@ pub mod git;
 /// A new id from random bytes, such as a session's or a command's.
 pub mod id;
 
+/// The pacing rule for streamed output: the interval a delta costs and the
+/// cap on held text (`docs/tools.md`, "Progress").
+pub mod pace;
+
 /// The stoppable read: a socket reader that a `Stop` ends on demand.
 pub mod stoppable;
 

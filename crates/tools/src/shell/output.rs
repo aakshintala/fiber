@@ -12,17 +12,13 @@ use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{Event, JobDelta, Progress};
+use support::pace::{self, HELD_MAX};
 
 use super::spill::{Config as SpillConfig, SPILL_AT, Spill};
 
 /// A job's output file stops growing past this: 5 GB, decimal
 /// (`docs/tools.md`, "Background jobs").
 pub(super) const OUTPUT_CAP: u64 = 5_000_000_000;
-
-/// The most delta bytes a holder keeps: 64 KiB (`docs/events.md`,
-/// `job_delta`). Past it the oldest bytes are dropped, so only the job's
-/// output file holds the whole output.
-const HELD_MAX: usize = 65_536;
 
 /// Bytes written to the file that no `job_delta` has carried yet. Past
 /// `HELD_MAX` the oldest bytes are dropped and the newest kept, starting
@@ -440,18 +436,11 @@ pub(super) fn write_or_drop(file: &mut File, bytes: &[u8]) {
     }
 }
 
-/// At most one `job_delta` every 100 ms (`docs/tools.md`, "Progress").
-const MIN_INTERVAL: Duration = Duration::from_millis(100);
-
-/// The byte rate the interval grows past the minimum with: 100 KiB/s.
-const BYTES_PER_SECOND: u64 = 102_400;
-
 /// A running job's `job_delta` lines (`docs/events.md`, `job_delta`), paced
 /// as `tool_call_delta` is (`docs/tools.md`, "Progress"): the first change
 /// after idle goes out at once, held changes collapse into one per
 /// interval, and the end flushes what is held. Only the job's drive thread
 /// holds one, so nothing emits after the job's end is reported.
-// debt: the pacing duplicates crates/loop/src/progress.rs, until a third paced emitter moves it to a shared place
 pub(super) struct JobStream {
     job_id: JobId,
     emit: Arc<dyn Emit>,
@@ -503,13 +492,11 @@ impl JobStream {
         let complete = complete_prefix(&bytes);
         self.carry = bytes.split_off(complete);
         self.held.push_str(&String::from_utf8_lossy(&bytes));
-        cap_held(&mut self.held);
+        pace::cap_held(&mut self.held);
         let now = clock.now();
         if !self.held.is_empty() && self.next_due.is_none_or(|due| now >= due) {
             let bytes = self.send();
-            let paced =
-                Duration::from_nanos(bytes.saturating_mul(1_000_000_000) / BYTES_PER_SECOND);
-            self.next_due = now.checked_add(paced.max(MIN_INTERVAL)).or(Some(now));
+            self.next_due = now.checked_add(pace::interval(bytes)).or(Some(now));
         }
     }
 
@@ -534,7 +521,7 @@ impl JobStream {
         self.carry.extend_from_slice(&fresh);
         let rest = std::mem::take(&mut self.carry);
         self.held.push_str(&String::from_utf8_lossy(&rest));
-        cap_held(&mut self.held);
+        pace::cap_held(&mut self.held);
         if !self.held.is_empty() {
             self.send();
         }
@@ -573,13 +560,6 @@ fn escaped_len(text: &str) -> u64 {
         });
     }
     len
-}
-
-/// Drops the oldest bytes past `HELD_MAX`, keeping the newest starting at
-/// a character boundary, so the text stays valid UTF-8.
-fn cap_held(text: &mut String) {
-    let cut = text.len().saturating_sub(HELD_MAX);
-    text.drain(..text.ceil_char_boundary(cut));
 }
 
 /// Drops a partial character at the start of a cut, so a tail does not
