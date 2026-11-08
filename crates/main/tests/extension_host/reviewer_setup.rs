@@ -96,7 +96,7 @@ fn install_skill(home: &std::path::Path) {
     fs::create_dir_all(&dir).unwrap();
     fs::write(
         dir.join("SKILL.md"),
-        include_str!("../../../docs/skills/reviewer-setup/SKILL.md"),
+        include_str!("../../../../docs/skills/reviewer-setup/SKILL.md"),
     )
     .unwrap();
 }

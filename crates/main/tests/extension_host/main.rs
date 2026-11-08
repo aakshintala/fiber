@@ -45,6 +45,7 @@ mod repository_load;
 mod repository_offer;
 mod repository_servers;
 mod review_sweep;
+mod reviewer_evidence;
 mod reviewer_notes;
 mod reviewer_setup;
 mod skill;

@@ -439,7 +439,7 @@ fn install_docs_skills(home: &Path) {
         ),
         (
             "reviewer-setup",
-            include_str!("../../../docs/skills/reviewer-setup/SKILL.md"),
+            include_str!("../../../../docs/skills/reviewer-setup/SKILL.md"),
         ),
     ] {
         let dir = home.join("docs/skills").join(name);
