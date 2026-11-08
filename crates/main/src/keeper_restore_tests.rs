@@ -244,6 +244,13 @@ fn an_ending_before_the_runner_runs_stays_accounted_until_it_reads_it() {
         Some(3)
     );
     assert_eq!(world.output("j_quick"), b"early\nlate\n");
+    // A session-written ending carries the output tail, as a live job's does:
+    // without it a later resume would take it for a keeper-written ending and
+    // tell the model of it again.
+    assert_eq!(
+        notice.completed.output_tail.as_deref(),
+        Some("early\nlate\n")
+    );
     assert!(world.registry.running().is_empty());
     active.keep();
 }

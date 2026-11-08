@@ -37,6 +37,8 @@ struct Sinks {
 
 struct Runner {
     job_id: JobId,
+    /// The job's output file, for the tail of its ending.
+    output_path: PathBuf,
     events: Receiver<HostEvent>,
     sinks: Arc<Mutex<Sinks>>,
     /// Taken by the runner's one report, or dropped with an abandoned
@@ -275,6 +277,7 @@ pub(crate) fn restore(
         restored.ids.push(job.job_id.clone());
         restored.runners.push(Runner {
             job_id: job.job_id,
+            output_path: job.output_path.clone(),
             events,
             sinks: Arc::new(Mutex::new(Sinks {
                 output: Some(opened.file),
@@ -335,7 +338,11 @@ impl Runner {
                         self.show(&shown);
                         self.deliver(feed.as_mut(), true);
                         if let Some(end) = self.end.take() {
-                            (end.0)(tools::kept_end(self.job_id.clone(), &exit));
+                            (end.0)(tools::adopted_end(
+                                self.job_id.clone(),
+                                &self.output_path,
+                                &exit,
+                            ));
                         }
                         return;
                     }

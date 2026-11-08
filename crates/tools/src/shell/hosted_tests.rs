@@ -465,6 +465,28 @@ fn keeper_end_maps_every_process_failure_without_a_tail() {
 }
 
 #[test]
+fn an_adopted_end_reads_the_output_tail_a_kept_end_leaves_out() {
+    let dir = fakes::TempDir::new("fiber-hosted-adopted-end");
+    let output = dir.path().join("job.log");
+    std::fs::write(&output, "first\nlast\n").unwrap();
+    let exit = Exit {
+        code: Some(0),
+        signal: None,
+        timed_out: false,
+        output_cap: false,
+    };
+    let adopted = super::adopted_end(JobId("j_one".into()), &output, &exit);
+    assert_eq!(adopted.status, Outcome::Completed);
+    assert_eq!(adopted.output_tail.as_deref(), Some("first\nlast\n"));
+    // The same exit, written by the keeper, has no tail to give.
+    assert!(kept_end(JobId("j_one".into()), &exit).output_tail.is_none());
+    // A file the session cannot read gives no tail and no failure.
+    let missing = super::adopted_end(JobId("j_one".into()), &dir.path().join("none"), &exit);
+    assert!(missing.output_tail.is_none());
+    assert_eq!(missing.status, Outcome::Completed);
+}
+
+#[test]
 fn a_hosted_background_receipt_names_the_kept_timeout_stop() {
     // The fake clock's wall starts at 2023-11-14T22:13:20Z, so a keeper-held
     // 60 s timeout stops the job at 2023-11-14T22:14:20Z. The drive keeps no
