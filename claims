@@ -263,3 +263,5 @@ crates/tui/src/app/snapshots/*	fiber-3745	plan	2026-11-08T03:34:05Z	Amoghs-MacBo
 crates/tui/src/turn/snapshots/*	fiber-3745	plan	2026-11-08T03:34:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/snapshots/*	fiber-3745	plan	2026-11-08T03:34:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src	fiber-3745	grant	2026-11-08T03:35:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/3745-app-home-required	
+crates/tui/src/snapshots/tui__view__hook_rewrite_tests__hook_rewrite_ledger_100x24.snap	fiber-4389	grant	2026-11-08T03:51:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4389-hook-rewritten-args	
+crates/tui/src/hook_rewrite_tests.rs	fiber-4389	grant	2026-11-08T03:51:21Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4389-hook-rewritten-args	
