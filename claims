@@ -384,3 +384,6 @@ crates/tui/src/app.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/U
 crates/tui/src/app/items.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/input_box_tests.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/main_journeys.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/delegate_steering_tests.rs	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
+crates/tui/src/app/snapshots/tui__app__delegate_steering_tests__queued_delegate_steering.snap	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
+crates/main/tests/main_journeys/delegate_steering.rs	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
