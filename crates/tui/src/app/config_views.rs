@@ -130,6 +130,8 @@ pub(in crate::app) struct ConfigViews {
     /// The doctor report reader `main` injected: the `/doctor` view
     /// shows its snapshot, and none opens the Unavailable shape.
     doctor: Option<contract::feedback::ReadDoctor>,
+    /// The login opened automatically while completing first-run setup.
+    automatic_login: bool,
     /// The sole owner of an outstanding hub editor copy.
     copy: Option<crate::remote::RemoteCopy>,
     /// The open view.
@@ -157,6 +159,7 @@ impl Default for ConfigViews {
             models: None,
             feedback: None,
             doctor: None,
+            automatic_login: false,
             copy: None,
             open: None,
             theme: None,
@@ -169,6 +172,13 @@ impl Default for ConfigViews {
 }
 
 impl App {
+    /// Opens the login for first-run without changing the home draft.
+    pub(crate) fn open_first_run_login(&mut self) -> Effect {
+        let effect = self.open_config_view(ConfigView::Login);
+        self.config_views.automatic_login = true;
+        effect
+    }
+
     /// Sets the seam the views read and write through.
     pub(crate) fn set_configure(&mut self, seam: Arc<dyn Configure>) {
         self.config_views.seam = seam;
@@ -720,7 +730,22 @@ impl App {
     /// Carries out what the view asked.
     fn config_act(&mut self, act: Act) -> Effect {
         match act {
-            Act::Stay => Effect::None,
+            Act::Stay => {
+                let finished = self.config_views.automatic_login
+                    && self.login_view().is_some_and(Login::ended_successfully);
+                if finished {
+                    self.config_views.automatic_login = false;
+                    self.config_views.open = None;
+                    if self
+                        .home
+                        .as_ref()
+                        .is_some_and(|home| home.launch.model.is_none())
+                    {
+                        self.start_model_pick();
+                    }
+                }
+                Effect::None
+            }
             Act::Close => {
                 self.config_views.open = None;
                 Effect::None

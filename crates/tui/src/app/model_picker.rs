@@ -52,7 +52,7 @@ impl App {
             if has_credential {
                 self.start_model_pick();
             } else {
-                self.open_config_view(super::ConfigView::Login);
+                self.open_first_run_login();
             }
         }
     }

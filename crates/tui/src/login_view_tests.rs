@@ -2618,6 +2618,32 @@ fn a_secret_still_ends_the_login_at_once() {
 }
 
 #[test]
+fn first_run_secret_and_reviewer_saves_signal_success_only_at_last_save() {
+    let fake = fake_with(targets());
+    let mut secret = Login::open(&ctx(&fake));
+    open_secret_panel(&mut secret, &fake);
+    typed(&mut secret, &fake, "v1");
+    assert!(matches!(secret.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(secret.ended_successfully());
+
+    let mut browser = waiting(&fake, LoginTicket(1));
+    browser.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Done(Ok(Stored {
+            path: "credentials/codex/alice@example.com".to_owned(),
+            replaced: false,
+        })),
+    );
+    assert!(!browser.ended_successfully());
+    browser.step(
+        LoginTicket(1),
+        crate::login_worker::LoginStep::Reviewer(Ok(choices(&["m1"], Some("m1")))),
+    );
+    assert!(matches!(browser.key(&Key::Enter, &ctx(&fake)), Act::Stay));
+    assert!(browser.ended_successfully());
+}
+
+#[test]
 fn a_browser_done_prepares_on_its_ticket_until_the_reviewer_lands() {
     let fake = fake_with(targets());
     let mut login = waiting(&fake, LoginTicket(1));
