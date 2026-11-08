@@ -1235,16 +1235,22 @@ fn a_styled_footer_replaces_the_plain_one_and_an_empty_one_leaves_it() {
 /// `area`-sized frame copies.
 fn copied_from(frame: &Frame, width: u16, height: u16) -> String {
     let mut app = app();
-    match drag_over(
+    let effect = drag_over(
         &mut app,
         frame,
         width,
         height,
         (0, 1),
         (width - 1, height - 2),
-    ) {
-        crate::app::Effect::Copy(text) => text,
-        other => panic!("no copy: {other:?}"),
+    );
+    assert!(
+        matches!(effect, crate::app::Effect::Copy(_)),
+        "no copy: {effect:?}"
+    );
+    if let crate::app::Effect::Copy(text) = effect {
+        text
+    } else {
+        String::new()
     }
 }
 
