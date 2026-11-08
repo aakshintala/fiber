@@ -844,3 +844,24 @@ fn an_interrupt_leaves_both_drafts_and_the_parents_queue_for_the_close() {
     assert!(text.contains("parent steer"), "{text}");
     assert!(text.contains("parent two"), "{text}");
 }
+
+#[test]
+fn a_delegate_waiting_to_retry_shows_the_retry_form_with_no_target_but_the_card() {
+    let mut app = running_view();
+    app.on_line(line_of(DELEGATE_A, "step_started", json!({})));
+    app.on_line(line_of(
+        DELEGATE_A,
+        "retry_scheduled",
+        json!({"code": "rate_limited", "attempt": 1,
+            "delay_ms": 4_000, "last_attempt": 4}),
+    ));
+    app.settle();
+    let (text, targets, _) = frame(&app);
+    assert!(!text.contains("Working"), "{text}");
+    assert!(!text.contains("or click to interrupt"), "{text}");
+    // The card's target remains, and the key still interrupts the turn.
+    let found = interrupt_targets(&targets);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(text.contains("⏸ interrupt"), "{text}");
+    assert_eq!(cancels(&press(&mut app, "alt+i")), [DELEGATE_A]);
+}

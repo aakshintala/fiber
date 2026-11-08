@@ -267,9 +267,9 @@ fn a_named_hint_replaces_the_esc_hint_and_keeps_the_rest() {
     let laid = lay_with_hint(&working(Some(started)), now, "⠋", 80, hint);
     assert_eq!(laid.text, "  ⠋ Working 5s · ⌥I or click to interrupt");
     // The target covers the hint's own cells, past " · ".
-    let head = "  ⠋ Working 5s · ".chars().count();
-    let end = laid.text.chars().count();
-    assert_eq!(laid.interrupt, Some(head as u16..end as u16));
+    let head = u16::try_from("  ⠋ Working 5s · ".chars().count()).unwrap_or(u16::MAX);
+    let end = u16::try_from(laid.text.chars().count()).unwrap_or(u16::MAX);
+    assert_eq!(laid.interrupt, Some(head..end));
     assert_eq!(laid.word, Some(4..11));
     assert_eq!(laid.spinner, Some(2));
     // The default entry is the Esc hint through the same layout.
@@ -285,7 +285,7 @@ fn a_named_hint_sheds_whole_one_cell_short_of_its_width() {
     let now = Some(started + 5_000);
     let hint = "⌥I or click to interrupt";
     let full = "  ⠋ Working 5s · ⌥I or click to interrupt";
-    let width = full.chars().count() as u16;
+    let width = u16::try_from(full.chars().count()).unwrap_or(u16::MAX);
     let exact = lay_with_hint(&working(Some(started)), now, "⠋", width, hint);
     assert_eq!(exact.text, full);
     assert!(exact.interrupt.is_some());
