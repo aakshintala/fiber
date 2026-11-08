@@ -1,6 +1,7 @@
 //! The provider a model reaches (`docs/model-routing.md`, "Protocols and
 //! providers").
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -35,6 +36,41 @@ pub struct Here {
     pub clock: Arc<dyn Clock>,
     /// Whether observed model calls hash their cacheable prefix segments.
     pub cache_diagnostics: bool,
+    /// The session's `providers.databricks.request_tags`, validated once at
+    /// startup (`docs/model-routing.md`, "What a provider extension
+    /// declares"): `None` sends the provider's declared header unchanged.
+    pub databricks_request_tags: Option<BTreeMap<String, String>>,
+}
+
+/// The provider whose model calls carry the per-session request tags.
+const DATABRICKS: &str = "databricks";
+
+/// The header that carries them. Its value is a JSON object whose `source`
+/// is always `fiber`.
+const REQUEST_TAGS_HEADER: &str = "Databricks-Ai-Gateway-Request-Tags";
+
+/// `headers` with the request-tags header replaced, whatever case its name
+/// was declared in, by one holding `tags` and `source: fiber`. A `source`
+/// among `tags` never replaces `fiber`. JSON escapes every quote, backslash
+/// and control character in a tag.
+fn with_request_tags(
+    headers: Vec<(String, String)>,
+    tags: &BTreeMap<String, String>,
+) -> Result<Vec<(String, String)>, Failure> {
+    let mut object = tags.clone();
+    object.insert("source".into(), "fiber".into());
+    let value = serde_json::to_string(&object).map_err(|e| {
+        failure(
+            ErrorCode::ConfigInvalid,
+            format!("`providers.databricks.request_tags` cannot be sent: {e}"),
+        )
+    })?;
+    let mut headers: Vec<(String, String)> = headers
+        .into_iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case(REQUEST_TAGS_HEADER))
+        .collect();
+    headers.push((REQUEST_TAGS_HEADER.into(), value));
+    Ok(headers)
 }
 
 /// The session's diagnostic writer and connector timing, as the observed
@@ -172,17 +208,23 @@ fn build(
         Some((lua, _)) => lua.registers("credential").unwrap_or(false),
         None => false,
     };
+    let mut headers: Vec<(String, String)> = model
+        .provider
+        .headers
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if model.provider.name == DATABRICKS
+        && let Some(tags) = &here.databricks_request_tags
+    {
+        headers = with_request_tags(headers, tags)?;
+    }
     let endpoint = Endpoint {
         provider: model.provider.name.clone(),
         model: model.model.id.clone(),
         base_url: model.model.base_url.clone(),
         key,
-        headers: model
-            .provider
-            .headers
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
+        headers,
         signer,
         compat: Compat::from_data(&model.model.compat),
         max_output_tokens: model.model.max_output_tokens,

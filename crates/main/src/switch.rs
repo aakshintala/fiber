@@ -474,6 +474,7 @@ impl Switching {
                     .startup_config
                     .flag("cache.diagnostics", None)
                     .unwrap_or_default(),
+                databricks_request_tags: None,
             };
             let provider = connect(
                 resolved,
@@ -743,6 +744,7 @@ pub(crate) fn prepare(
             .config
             .flag("cache.diagnostics", None)
             .unwrap_or_default(),
+        databricks_request_tags: None,
     };
     // The session's route with its observed factory when the session
     // shared its writer; without one the switch carries no factories.

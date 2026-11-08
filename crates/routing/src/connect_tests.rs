@@ -78,6 +78,7 @@ fn connect_fetches_quota_for_its_label() {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
+        databricks_request_tags: None,
     };
     // `connect` can wait on Lua registration, so it runs on its own thread
     // under a deadline instead of hanging the test.
@@ -129,6 +130,7 @@ fn provider_for(protocol: &str, deferred_tools: bool) -> Arc<dyn Provider> {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
+        databricks_request_tags: None,
     };
     let model = extensions::Model {
         provider: &data,
@@ -172,6 +174,7 @@ fn observed(data: &config::ProviderData, workspace: &std::path::Path, debug: boo
         workspace: workspace.to_path_buf(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
+        databricks_request_tags: None,
     };
     let diag = crate::Diagnostics {
         log: Arc::new(crate::test_support::Level { debug }),
@@ -208,4 +211,204 @@ fn connect_observed_builds_no_factory_for_a_scripted_model_at_debug() {
     providers.add_scripted("scripted/s.json");
     let data = providers.get("scripted").unwrap().clone();
     assert!(!observed(&data, root.path(), true));
+}
+
+/// The request-tags header as the fake server records it (names are
+/// lowercased there).
+const TAGS_HEADER: &str = "databricks-ai-gateway-request-tags";
+
+/// Provider `name` with one model on `protocol` at `base_url`, declaring the
+/// source-only tags header under `tags_name` and one unrelated header.
+fn tagged(name: &str, protocol: &str, base_url: &str, tags_name: &str) -> config::ProviderData {
+    serde_json::from_value(json!({
+        "name": name,
+        "headers": {
+            tags_name: "{\"source\":\"fiber\"}",
+            "X-Other": "keep",
+        },
+        "models": [{
+            "id": "m",
+            "protocol": protocol,
+            "base_url": base_url,
+        }],
+    }))
+    .unwrap()
+}
+
+fn here_with(tags: Option<&[(&str, &str)]>) -> crate::Here {
+    crate::Here {
+        workspace: std::path::PathBuf::new(),
+        clock: fakes::clock::FakeClock::new(),
+        cache_diagnostics: false,
+        databricks_request_tags: tags.map(|pairs| {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect()
+        }),
+    }
+}
+
+/// Runs `call` to its end under a deadline, so a hung call fails the test.
+fn finish(call: Box<dyn contract::provider::ModelCall>) {
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        drop(done.send(call.run(&mut |_| {})));
+    });
+    // The fake answers an error status; the call's outcome is not the
+    // subject, only that it ended.
+    drop(
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+            .recv(&finished)
+            .expect("the call ended in time"),
+    );
+}
+
+/// Which way a request is made.
+#[derive(Clone, Copy)]
+enum Way {
+    Plain,
+    Observed,
+}
+
+/// The request one model call sends to a fake server, through `connect` or
+/// the observed factory `connect_observed` builds.
+fn sent(
+    way: Way,
+    name: &str,
+    protocol: &str,
+    tags_name: &str,
+    tags: Option<&[(&str, &str)]>,
+) -> fakes::Request {
+    let server = fakes::ProviderServer::start([fakes::Response::status(400, "{}")]).unwrap();
+    let data = tagged(name, protocol, &format!("{}/v1", server.url()), tags_name);
+    let model = extensions::Model {
+        provider: &data,
+        model: &data.models[0],
+        thinking: None,
+    };
+    let key = Some(contract::Secret::new("k".to_owned()));
+    let here = here_with(tags);
+    match way {
+        Way::Plain => {
+            let provider = crate::connect(model, key, None, None, &here).unwrap();
+            finish(provider.call(&request()));
+        }
+        Way::Observed => {
+            let diag = crate::Diagnostics {
+                log: Arc::new(crate::test_support::Level { debug: true }),
+                timings: Arc::new(|_, _, _| None),
+            };
+            let (_provider, observe) =
+                crate::connect_observed(model, key, None, None, &here, &diag).unwrap();
+            let observe = observe.expect("a factory at debug");
+            finish(observe(&request(), std::num::NonZeroU32::MIN));
+        }
+    }
+    assert!(
+        server.await_requests(1, Deadline::after(fakes::MUST_SUCCEED_WITHIN)),
+        "the model call never reached the server"
+    );
+    server.requests().into_iter().next().unwrap()
+}
+
+/// The one tags header of `request`, parsed.
+fn parsed_tags(request: &fakes::Request) -> serde_json::Value {
+    let all: Vec<&str> = request
+        .headers
+        .iter()
+        .filter(|(name, _)| name == TAGS_HEADER)
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(
+        all.len(),
+        1,
+        "exactly one tags header: {:?}",
+        request.headers
+    );
+    let raw = all.first().unwrap();
+    assert!(
+        !raw.contains(['\n', '\r']),
+        "no raw line break in the header: {raw:?}"
+    );
+    serde_json::from_str(raw).unwrap()
+}
+
+const PROTOCOLS: [&str; 3] = [
+    "anthropic-messages",
+    "openai-responses",
+    "openai-completions",
+];
+const NAME: &str = "Databricks-Ai-Gateway-Request-Tags";
+/// A tag with a quote, a backslash, a newline and a non-ASCII character.
+const AWKWARD: &str = "a\"b\\c\nd é";
+
+#[test]
+fn request_tags_merge_for_plain_and_observed_connections() {
+    for way in [Way::Plain, Way::Observed] {
+        for protocol in PROTOCOLS {
+            let with = |tags| sent(way, "databricks", protocol, NAME, tags);
+            // No tags: the declared source-only header stands.
+            assert_eq!(parsed_tags(&with(None)), json!({"source": "fiber"}));
+            // An empty object sends the same.
+            assert_eq!(parsed_tags(&with(Some(&[]))), json!({"source": "fiber"}));
+            // Tags merge beside the source.
+            assert_eq!(
+                parsed_tags(&with(Some(&[("run", "r1")]))),
+                json!({"source": "fiber", "run": "r1"})
+            );
+            // Special characters survive the wire, escaped in the header.
+            assert_eq!(
+                parsed_tags(&with(Some(&[("run", AWKWARD)]))),
+                json!({"source": "fiber", "run": AWKWARD})
+            );
+        }
+    }
+}
+
+#[test]
+fn request_tags_keep_source_and_other_headers() {
+    for way in [Way::Plain, Way::Observed] {
+        for protocol in PROTOCOLS {
+            let baseline = sent(way, "databricks", protocol, NAME, None);
+            // The declared name is mixed-case and differs from the canonical
+            // one: it is replaced, not duplicated.
+            for declared in [NAME, "databricks-AI-gateway-request-TAGS"] {
+                let request = sent(
+                    way,
+                    "databricks",
+                    protocol,
+                    declared,
+                    Some(&[("source", "other"), ("run", "r1")]),
+                );
+                assert_eq!(
+                    parsed_tags(&request),
+                    json!({"source": "fiber", "run": "r1"})
+                );
+                // Every other header, credentials included, is unchanged.
+                let rest = |r: &fakes::Request| {
+                    r.headers
+                        .iter()
+                        .filter(|(name, _)| name != TAGS_HEADER && name != "host")
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(rest(&request), rest(&baseline));
+                assert_eq!(request.header("x-other"), Some("keep"));
+            }
+        }
+    }
+}
+
+#[test]
+fn request_tags_leave_other_providers_unchanged() {
+    for way in [Way::Plain, Way::Observed] {
+        for protocol in PROTOCOLS {
+            let request = sent(way, "other", protocol, NAME, Some(&[("run", "r1")]));
+            assert_eq!(parsed_tags(&request), json!({"source": "fiber"}));
+            // A provider that declares no such header gains none.
+            let request = sent(way, "other", protocol, "X-Declared", Some(&[("run", "r1")]));
+            assert_eq!(request.header(TAGS_HEADER), None);
+        }
+    }
 }
