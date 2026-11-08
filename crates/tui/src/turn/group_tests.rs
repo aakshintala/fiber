@@ -2201,6 +2201,11 @@ fn answered_ask_call(id: usize) -> Call {
         },
         0,
         &mut fold,
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
+        },
     );
     let mut turns = vec![turn];
     for (kind, payload) in [
@@ -2269,6 +2274,11 @@ fn outer_action_id_stored_from_ran_by() {
             },
             0,
             &mut fold,
+            &crate::turn::Recipients {
+                sessions: &Default::default(),
+                delegates: &Default::default(),
+                page: None,
+            },
         );
         turn.groups()
             .flat_map(|group| group.sections.iter())
@@ -2457,6 +2467,43 @@ fn a_decorator_draws_the_built_in_row_plus_its_badge() {
     // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by its input and the width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(crate::work::take().renderer_calls, 1);
+}
+
+/// A message call's built-in row draws the recipient the terminal held
+/// as its target, on one line, and the id when it held none; a held
+/// name of only whitespace is drawn, not replaced by the id.
+#[test]
+fn a_message_row_draws_its_recipient_else_the_id() {
+    let group = Group::default();
+    let call = |recipient: Option<&str>| Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "delegate_message".to_owned(),
+        arguments: json!({"id": "j_abc", "message": "hi"}),
+        recipient: recipient.map(str::to_owned),
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    let text = |recipient: Option<&str>| -> String {
+        let call = call(recipient);
+        let row = group.ledger_input(&call, "", false);
+        group
+            .builtin_row(&row, 72)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let named = text(Some("Fix\nthe parser"));
+    assert!(named.contains("Fix the parser"), "{named:?}");
+    assert!(!named.contains("j_abc"), "{named:?}");
+    assert!(text(None).contains("j_abc"));
+    assert!(!text(Some(" ")).contains("j_abc"));
+    // A recipient wider than the room is cut with "…", as the id is.
+    let long = "d".repeat(100);
+    let cut = text(Some(&long));
+    assert!(cut.contains('…'), "{cut:?}");
+    assert!(crate::format::width(&cut) <= 72, "{cut:?}");
 }
 
 /// The renderer gets the row width less the six-column gutter: 74 at
@@ -3300,6 +3347,39 @@ fn a_flat_thinking_replacement_drops_every_style() {
 /// The card entry of `group`, with `running` as the turn computes it.
 fn entry_of(group: &Group, running: bool) -> crate::ext::TurnGroup<'_> {
     group.turn_entry(running)
+}
+
+/// A message call's card fields carry the recipient its ledger row
+/// does; a call that holds none carries none.
+#[test]
+fn a_card_call_carries_the_ledger_rows_recipient() {
+    let call = |recipient: Option<&str>| Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "delegate_message".to_owned(),
+        arguments: json!({"id": "j_abc", "message": "hi"}),
+        recipient: recipient.map(str::to_owned),
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    for (held, want) in [
+        (Some("Fix the parser"), Some("Fix the parser")),
+        (None, None),
+    ] {
+        let group = Group {
+            sections: vec![Section {
+                step: 1,
+                calls: vec![call(held)],
+                ..Section::default()
+            }],
+            ..Group::default()
+        };
+        let entry = entry_of(&group, false);
+        let calls = &entry.sections[0].calls;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].recipient, want);
+    }
 }
 
 /// A cut group is cut however the caller names running: `Cut` wins

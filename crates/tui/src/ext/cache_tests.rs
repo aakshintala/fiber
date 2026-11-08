@@ -69,6 +69,7 @@ fn input<'a>(name: &'a str, output: &'a str, arguments: &'a serde_json::Value) -
             output,
         }),
         answer: None,
+        recipient: None,
         flat: false,
     })
 }
@@ -427,6 +428,7 @@ mod context_regressions {
                 output: "done",
             }),
             answer: None,
+            recipient: None,
             flat: false,
         })
     }

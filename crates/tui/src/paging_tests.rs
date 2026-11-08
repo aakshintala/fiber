@@ -15,14 +15,14 @@ use contract::{ActionId, Envelope, Seq, SessionId};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
-use super::{Draw, Folded, Pages, Part, fold, shell_target};
+use super::{Delegates, Draw, Folded, Pages, Part, fold as fold_with, shell_target};
 use crate::app::{App, Effect, Target};
 use crate::ext::{Failure, Handle, Input, RawSpan, Renderer};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::local_time::new_york;
 use crate::rows::Rows;
-use crate::turn::{Entry, Row, Turn, target_id};
+use crate::turn::{Entry, Recipients, Row, Turn, target_id};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -236,6 +236,19 @@ fn history(lines: &[Envelope], range: &RangeInclusive<Seq>) -> Vec<Envelope> {
         .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
         .cloned()
         .collect()
+}
+
+/// One line folded into `part` with no session or delegate held.
+fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
+    fold_with(
+        part,
+        envelope,
+        &Recipients {
+            sessions: &HashMap::new(),
+            delegates: &Delegates::default(),
+            page: None,
+        },
+    )
 }
 
 /// What one fold of every line draws, with the totals `pages` kept.
@@ -5468,6 +5481,539 @@ fn a_dropped_page_draw_keeps_the_frame_wall_time() {
     assert!(!rows.is_empty(), "the dropped page draws");
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(fake.nows.borrow().clone(), vec![1_000]);
+}
+
+/// One turn of message calls, `(action, name, id)` each, every one
+/// completed: the turn closes, so its calls sit in a ledger.
+fn message_turn(stream: &mut Stream, calls: &[(&str, &str, &str)]) {
+    stream.durable("turn_started", None, json!({"input": []}));
+    stream.durable("step_started", None, json!({}));
+    for &(action, name, id) in calls {
+        stream.durable(
+            "tool_call_requested",
+            Some(action),
+            json!({"name": name, "arguments": {"id": id, "message": "hi"}}),
+        );
+        stream.complete(action, false);
+    }
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+}
+
+/// Every drawn row of every resident page with the ledgers open.
+fn ledger_rows(pages: &mut Pages) -> Vec<String> {
+    pages.toggle_ledgers();
+    let mut out = Vec::new();
+    for at in 0..=pages.index().pages().len() {
+        let mut rows = Rows::default();
+        if let Some(part) = pages.part(at) {
+            pages.draw(at, part, &mut rows);
+        }
+        out.extend(rows.iter().map(|(line, _)| line.to_string()));
+    }
+    pages.toggle_ledgers();
+    out
+}
+
+fn labels(names: &[(&str, &str)]) -> std::sync::Arc<HashMap<SessionId, String>> {
+    std::sync::Arc::new(
+        names
+            .iter()
+            .map(|&(id, name)| (SessionId(id.to_owned()), name.to_owned()))
+            .collect(),
+    )
+}
+
+#[test]
+fn a_session_message_row_stores_its_recipient_name_when_folded() {
+    let mut pages = Pages::new(80);
+    pages.set_session_labels(labels(&[("s_other", "worker")]));
+    let mut stream = Stream::new(false);
+    message_turn(
+        &mut stream,
+        &[
+            ("a_1", "session_message", "s_other"),
+            ("a_2", "session_message", "s_unknown"),
+        ],
+    );
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(rows.iter().any(|row| row.contains("message  worker")));
+    assert!(rows.iter().any(|row| row.contains("message  s_unknown")));
+    assert!(!rows.iter().any(|row| row.contains("s_other")));
+}
+
+/// A rename redraws every resident page from its stored cards: the
+/// resident row keeps the name held when it folded, and a call folded
+/// after the rename takes the new one.
+#[test]
+fn a_rename_leaves_a_resident_recipient_row_as_folded() {
+    let mut pages = Pages::new(80);
+    pages.set_session_labels(labels(&[("s_other", "worker")]));
+    let mut stream = Stream::new(false);
+    message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    pages.set_session_labels(labels(&[("s_other", "renamed")]));
+    let before = ledger_rows(&mut pages);
+    assert!(before.iter().any(|row| row.contains("message  worker")));
+    assert!(!before.iter().any(|row| row.contains("renamed")));
+    let mut later = Stream::new(false);
+    later.seq = stream.seq;
+    message_turn(&mut later, &[("a_2", "session_message", "s_other")]);
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let after = ledger_rows(&mut pages);
+    assert!(after.iter().any(|row| row.contains("message  worker")));
+    assert!(after.iter().any(|row| row.contains("message  renamed")));
+}
+
+/// Only an empty name counts as not held: the row draws the id for it,
+/// and a name of only whitespace is held, so the row does not.
+#[test]
+fn an_empty_recipient_name_draws_the_id_and_a_blank_one_does_not() {
+    for (name, draws_id) in [("", true), (" ", false)] {
+        let mut pages = Pages::new(80);
+        pages.set_session_labels(labels(&[("s_other", name)]));
+        let mut stream = Stream::new(false);
+        message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+        for line in &stream.lines {
+            pages.apply(line);
+        }
+        let rows = ledger_rows(&mut pages);
+        assert!(
+            rows.iter().any(|row| row.contains("message")),
+            "{name:?}: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter().any(|row| row.contains("s_other")),
+            draws_id,
+            "{name:?}: {rows:?}"
+        );
+    }
+}
+
+/// Folds every line of `lines` live into a fresh `Pages`.
+fn applied(lines: &[Envelope]) -> Pages {
+    let mut pages = Pages::new(80);
+    for line in lines {
+        pages.apply(line);
+    }
+    pages
+}
+
+fn has_row(rows: &[String], text: &str) -> bool {
+    rows.iter().any(|row| row.contains(text))
+}
+
+#[test]
+fn a_delegate_message_row_stores_its_recipient_description_when_folded() {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "Fix the parser");
+    message_turn(
+        &mut stream,
+        &[
+            ("a_1", "delegate_message", "j_abc"),
+            ("a_2", "delegate_message", "j_unknown"),
+        ],
+    );
+    let rows = ledger_rows(&mut applied(&stream.lines));
+    assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
+    assert!(has_row(&rows, "message  j_unknown"), "{rows:?}");
+    assert!(!has_row(&rows, "j_abc"), "{rows:?}");
+}
+
+#[test]
+fn an_empty_recipient_description_draws_the_id() {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "");
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    let rows = ledger_rows(&mut applied(&stream.lines));
+    assert!(has_row(&rows, "message  j_abc"), "{rows:?}");
+}
+
+/// A resumed job writes a second `job_started`: calls folded after it take
+/// the new description, and the rows folded before keep theirs.
+#[test]
+fn a_resumed_recipient_description_applies_to_later_calls_only() {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "Fix the parser");
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    job_started(&mut stream, "j_abc", "Review the fix");
+    message_turn(&mut stream, &[("a_2", "delegate_message", "j_abc")]);
+    let rows = ledger_rows(&mut applied(&stream.lines));
+    assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
+    assert!(has_row(&rows, "message  Review the fix"), "{rows:?}");
+}
+
+/// The first page holds the start, the second the call, a third closes
+/// the second.
+fn start_then_call() -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "Fix the parser");
+    pad(&mut stream);
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    stream.lines
+}
+
+/// The range of closed page `at`.
+fn page_range(pages: &Pages, at: usize) -> RangeInclusive<Seq> {
+    let page = pages.index().pages().get(at).expect("a closed page");
+    page.first_seq..=page.last_seq
+}
+
+#[test]
+fn a_dropped_recipient_row_draws_its_description_when_its_page_loads_again() {
+    let lines = start_then_call();
+    let mut pages = applied(&lines);
+    assert_eq!(
+        pages.index().pages().len(),
+        3,
+        "two closed pages and the open one"
+    );
+    drop_all(&mut pages);
+    let range = page_range(&pages, 1);
+    pages.load(&SessionId(SESSION.to_owned()), &history(&lines, &range));
+    let rows = ledger_rows(&mut pages);
+    assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
+}
+
+/// Reloading the page of an old start never takes back a resumed
+/// description, whatever order the loads and the live lines come in.
+#[test]
+fn a_reloaded_old_start_does_not_replace_a_resumed_recipient_description() {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "old");
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    job_started(&mut stream, "j_abc", "new");
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    let mut pages = applied(&stream.lines);
+    assert_eq!(pages.index().pages().len(), 3);
+    drop_all(&mut pages);
+    let range = page_range(&pages, 0);
+    pages.load(
+        &SessionId(SESSION.to_owned()),
+        &history(&stream.lines, &range),
+    );
+    let mut later = Stream::new(false);
+    later.seq = stream.seq;
+    message_turn(&mut later, &[("a_9", "delegate_message", "j_abc")]);
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(has_row(&rows, "message  new"), "{rows:?}");
+    assert!(!has_row(&rows, "message  old"), "{rows:?}");
+}
+
+/// One closed page holding a start "old", a call and a start "new".
+fn old_call_new() -> (Pages, Vec<Envelope>) {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "old");
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    job_started(&mut stream, "j_abc", "new");
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    let pages = applied(&stream.lines);
+    assert_eq!(
+        pages.index().pages().len(),
+        2,
+        "one closed page and the open one"
+    );
+    (pages, stream.lines)
+}
+
+/// Folds closed page 0 of `pages` from `lines` with `held` as the held
+/// delegates, and draws it.
+fn load_with(pages: &mut Pages, lines: &[Envelope], held: &Delegates) -> Vec<String> {
+    drop_all(pages);
+    let range = page_range(pages, 0);
+    let group = history(lines, &range);
+    let refs: Vec<&Envelope> = group.iter().collect();
+    let names = HashMap::new();
+    let kept = pages.residency.load(
+        0,
+        &refs,
+        &pages.seeds,
+        &pages.overrides,
+        &super::Resolve {
+            sessions: &names,
+            held,
+        },
+    );
+    assert!(kept.is_some(), "the page loads");
+    ledger_rows(pages)
+}
+
+/// Each line is noted just before it folds: with nothing held, the call
+/// resolves to the start before it, not the later start on its page.
+#[test]
+fn a_recipient_resolves_to_the_start_before_it_on_its_page() {
+    let (mut pages, lines) = old_call_new();
+    let rows = load_with(&mut pages, &lines, &Delegates::default());
+    assert!(has_row(&rows, "message  old"), "{rows:?}");
+    assert!(!has_row(&rows, "message  new"), "{rows:?}");
+}
+
+/// A held description later in stream order than the page's own start
+/// wins over it.
+#[test]
+fn a_later_held_recipient_description_wins_over_an_earlier_start_on_the_page() {
+    let (mut pages, lines) = old_call_new();
+    let mut held = Delegates::default();
+    for line in &lines {
+        if line.kind() == EventKind::JobStarted && line.payload["description"] == "new" {
+            held.note_live(line);
+        }
+    }
+    let rows = load_with(&mut pages, &lines, &held);
+    assert!(has_row(&rows, "message  new"), "{rows:?}");
+    assert!(!has_row(&rows, "message  old"), "{rows:?}");
+}
+
+/// A held entry from another segment, or with no `seq`, is never
+/// overtaken by a loaded line; one from the same segment is, only by a
+/// later `seq`.
+#[test]
+fn a_loaded_recipient_start_overtakes_a_held_one_only_by_stream_order() {
+    let start = |session: &str, seq: Option<u64>, text: &str| {
+        let mut line = envelope(
+            "job_started",
+            None,
+            json!({"job_id": "j_abc", "description": text, "output_path": "/o"}),
+        );
+        line.session_id = SessionId(session.to_owned());
+        line.seq = seq.map(Seq);
+        line
+    };
+    let job = contract::JobId("j_abc".to_owned());
+    let overlay = |held: &Delegates, loaded: &Envelope| {
+        let mut overlay = Delegates::default();
+        overlay.note_page(loaded, held);
+        overlay.get(&job).map(str::to_owned)
+    };
+    let mut held = Delegates::default();
+    held.note_live(&start("s_a", Some(5), "held"));
+    // The same segment: a lower seq loses, the same loses, a higher wins.
+    assert_eq!(overlay(&held, &start("s_a", Some(4), "low")), None);
+    assert_eq!(overlay(&held, &start("s_a", Some(5), "same")), None);
+    assert_eq!(
+        overlay(&held, &start("s_a", Some(6), "high")).as_deref(),
+        Some("high")
+    );
+    // Another segment never overtakes, whatever its seq.
+    assert_eq!(overlay(&held, &start("s_b", Some(9), "other")), None);
+    // A line with no seq is never recorded.
+    assert_eq!(
+        overlay(&Delegates::default(), &start("s_a", None, "x")),
+        None
+    );
+    // A held entry with no seq is never overtaken.
+    let mut unsequenced = Delegates::default();
+    unsequenced.note_live(&start("s_a", None, "held"));
+    assert_eq!(overlay(&unsequenced, &start("s_a", Some(9), "x")), None);
+    // Nothing held: any sequenced start is recorded.
+    assert_eq!(
+        overlay(&Delegates::default(), &start("s_b", Some(1), "first")).as_deref(),
+        Some("first")
+    );
+}
+
+/// A scratch fold for search borrows the held map: its work stays in
+/// proportion to the page's lines, not the jobs held.
+#[test]
+fn a_search_fold_does_not_copy_the_held_recipient_descriptions() {
+    use std::hint::black_box;
+    let ((), probe) = fakes::alloc::bytes_during(|| {
+        drop(black_box(Vec::<u8>::with_capacity(fakes::alloc::LARGE)));
+    });
+    assert!(
+        probe.peak() >= fakes::alloc::LARGE,
+        "the counting allocator is installed"
+    );
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "Fix the parser");
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    let mut pages = applied(&stream.lines);
+    assert_eq!(pages.index().pages().len(), 2);
+    for job in 0..14_000 {
+        let started = envelope(
+            "job_started",
+            None,
+            json!({"job_id": format!("j_{job}"), "description": "d".repeat(64), "output_path": "/o"}),
+        );
+        pages.delegates.note_live(&started);
+    }
+    // Copying the held map would take one block past `LARGE`.
+    let ((), copy) = fakes::alloc::bytes_during(|| drop(black_box(pages.delegates.clone())));
+    assert!(
+        copy.peak() >= fakes::alloc::LARGE,
+        "the held map is large: {}",
+        copy.peak()
+    );
+    drop_all(&mut pages);
+    let range = page_range(&pages, 0);
+    let page = history(&stream.lines, &range);
+    let (folded, bytes) = fakes::alloc::bytes_during(|| pages.fold_text(0, black_box(&page)));
+    assert!(
+        bytes.peak() < fakes::alloc::LARGE,
+        "the search fold peaks at {}",
+        bytes.peak()
+    );
+    let (rows, _) = folded.expect("the page folds");
+    let drawn = texts(&rows);
+    assert!(has_row(&drawn, "message  Fix the parser"), "{drawn:?}");
+}
+
+/// A copy of the pages keeps the held descriptions, and a cleared one
+/// holds none.
+#[test]
+fn a_fresh_pages_keeps_recipient_descriptions_and_a_cleared_one_drops_them() {
+    let mut first = Stream::new(false);
+    job_started(&mut first, "j_abc", "Fix the parser");
+    let mut pages = applied(&first.lines);
+    let mut copy = pages.fresh();
+    let mut later = Stream::new(false);
+    message_turn(&mut later, &[("a_1", "delegate_message", "j_abc")]);
+    for line in &later.lines {
+        copy.apply(line);
+    }
+    assert!(has_row(&ledger_rows(&mut copy), "message  Fix the parser"));
+    pages.clear();
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(has_row(&rows, "message  j_abc"), "{rows:?}");
+}
+
+/// A carry fills only the gaps: the descendant's entry stays, and the
+/// ancestor's other entries arrive.
+#[test]
+fn a_recipient_carry_fills_gaps_and_keeps_the_descendants_entry() {
+    let start = |job: &str, text: &str, seq: u64| {
+        let mut line = envelope(
+            "job_started",
+            None,
+            json!({"job_id": job, "description": text, "output_path": "/o"}),
+        );
+        line.seq = Some(Seq(seq));
+        line
+    };
+    let mut ancestor = Delegates::default();
+    ancestor.note_live(&start("j_abc", "ancestor", 1));
+    ancestor.note_live(&start("j_def", "other", 2));
+    let mut descendant = Delegates::default();
+    descendant.note_live(&start("j_abc", "descendant", 9));
+    descendant.fill_from(&ancestor);
+    let get = |job: &str| {
+        descendant
+            .get(&contract::JobId(job.to_owned()))
+            .map(str::to_owned)
+    };
+    assert_eq!(get("j_abc").as_deref(), Some("descendant"));
+    assert_eq!(get("j_def").as_deref(), Some("other"));
+}
+
+/// A start on the page later than the held one wins over it: the overlay
+/// is read before the held map.
+#[test]
+fn a_page_start_later_than_the_held_one_wins_the_recipient_description() {
+    let (_, mut lines) = old_call_new();
+    // Shift the lines up, so a held start at seq 0 comes before them all.
+    for line in &mut lines {
+        line.seq = line.seq.map(|seq| Seq(seq.0 + 1));
+    }
+    let mut earlier = envelope(
+        "job_started",
+        None,
+        json!({"job_id": "j_abc", "description": "held", "output_path": "/o"}),
+    );
+    earlier.seq = Some(Seq(0));
+    let mut held = Delegates::default();
+    held.note_live(&earlier);
+    let mut pages = applied(&lines);
+    let rows = load_with(&mut pages, &lines, &held);
+    assert!(has_row(&rows, "message  old"), "{rows:?}");
+    assert!(!has_row(&rows, "message  held"), "{rows:?}");
+}
+
+/// A kept page's starts join the held map, so a live call after the
+/// page loads resolves the start the held map lacked.
+#[test]
+fn a_loaded_page_start_is_held_for_a_later_live_recipient_call() {
+    let lines = start_then_call();
+    let mut pages = applied(&lines);
+    pages.delegates = Delegates::default();
+    drop_all(&mut pages);
+    let range = page_range(&pages, 0);
+    pages.load(&SessionId(SESSION.to_owned()), &history(&lines, &range));
+    let mut later = Stream::new(false);
+    later.seq = lines.len() as u64;
+    message_turn(&mut later, &[("a_9", "delegate_message", "j_abc")]);
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
+}
+
+/// A `session_status` line naming `session` `name`.
+fn status_line(session: &str, name: &str) -> Line {
+    let mut line = envelope(
+        "session_status",
+        None,
+        json!({"name": name, "named": true, "workspace": "/w", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 0, "cache_read": 0,
+                "cache_write": {}, "output": 0},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0}),
+    );
+    line.session_id = SessionId(session.to_owned());
+    Line::Session(line)
+}
+
+/// The row a rename never redraws on a resident page, folded again when
+/// its page is dropped and loaded again (`docs/tui.md`, "Tool groups and
+/// the ledger").
+#[test]
+fn a_dropped_page_folds_its_recipient_row_again_with_the_name_held_then() {
+    let mut stream = Stream::new(false);
+    message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+    for turn in 0..6 {
+        stream.turn(turn, 30);
+    }
+    let lines = stream.lines;
+    let mut app = app(80, 20);
+    app.on_key(Key::CtrlO, now());
+    app.on_line(status_line("s_other", "worker"));
+    open(&mut app, &lines);
+    app.jump(0);
+    frame(&mut app, &lines);
+    assert!(has_row(&page_texts(&app, 0), "message  worker"));
+    // A rename redraws the resident page from its stored card.
+    app.on_line(status_line("s_other", "renamed"));
+    let resident = page_texts(&app, 0);
+    assert!(has_row(&resident, "message  worker"), "{resident:?}");
+    assert!(!has_row(&resident, "renamed"), "{resident:?}");
+    // Dropped, then loaded again: folded again with the name held now.
+    app.on_key(Key::End, now());
+    frame(&mut app, &lines);
+    assert!(app.pages().part(0).is_none(), "page 0 is dropped");
+    app.jump(0);
+    frame(&mut app, &lines);
+    let reloaded = page_texts(&app, 0);
+    assert!(has_row(&reloaded, "message  renamed"), "{reloaded:?}");
 }
 
 const SENT: &str = "sent with your next prompt";

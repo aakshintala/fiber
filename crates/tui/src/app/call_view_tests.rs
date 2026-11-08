@@ -2159,27 +2159,6 @@ fn refresh_with_a_queued_fill_keeps_it() {
 }
 
 #[test]
-fn find_call_parts_pins_action_name_and_arguments() {
-    let mut app = attached(80, 24);
-    turn_started(&mut app);
-    let arguments = json!({"command": COMMAND});
-    requested(&mut app, "shell", arguments.clone(), ACTION);
-    completed(
-        &mut app,
-        ACTION,
-        "one\ntwo",
-        json!({"command": COMMAND, "exit_code": 0}),
-        None,
-        None,
-    );
-    let id = crate::turn::target_id(ACTION);
-    let (action, name, args) = app.find_call_parts(id).expect("the call is on the screen");
-    assert_eq!(action, ACTION, "the action pins");
-    assert_eq!(name, "shell", "the tool name pins");
-    assert_eq!(args, arguments, "the arguments pin");
-}
-
-#[test]
 fn refresh_ignores_a_completion_for_another_call() {
     let mut app = attached(80, 24);
     turn_started(&mut app);
@@ -2800,4 +2779,338 @@ fn a_message_wraps_at_the_width_of_the_view() {
     let rows = frame_text(&app);
     assert_eq!(rows[0], "to j_abc", "{rows:?}");
     assert_eq!(rows[1], paragraph, "{rows:?}");
+}
+
+/// About 90 characters of distinct short words ending in a unique word:
+/// one row at width 100, several at width 40.
+const MESSAGE: &str =
+    "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november zulu9";
+
+/// A completed `delegate_message` call carrying [`MESSAGE`], opened as a
+/// view on an app `width` wide.
+fn open_message_view(width: u16) -> (App, usize) {
+    let mut app = attached(width, 24);
+    turn_started(&mut app);
+    requested(
+        &mut app,
+        "delegate_message",
+        json!({"id": "j_abc", "message": MESSAGE}),
+        ACTION,
+    );
+    completed(&mut app, ACTION, "delivered", json!(null), None, None);
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    app.open_call_view(id);
+    (app, id)
+}
+
+/// The drawn rows holding the message's words, in order. Each count
+/// and order a test reads from them is promised by `docs/tui.md`, "Tool
+/// groups and the ledger", "A message call": the message is rendered "at
+/// the width of the view it is drawn in", so one row wide and several
+/// rows narrow.
+fn message_rows(shown: &str) -> Vec<&str> {
+    let words: Vec<&str> = MESSAGE.split(' ').collect();
+    shown
+        .lines()
+        .filter(|row| words.iter().any(|word| row.contains(word)))
+        .collect()
+}
+
+#[test]
+fn a_call_view_message_wraps_at_the_new_width_after_a_resize() {
+    let (mut app, _) = open_message_view(100);
+    let wide = screen(&app, 100, 24);
+    // Count: one row at the view's width (message call, "at the width of
+    // the view it is drawn in", `docs/tui.md`, "Tool groups and the ledger").
+    assert_eq!(message_rows(&wide).len(), 1, "{wide}");
+    assert!(wide.contains("zulu9"), "{wide}");
+    app.set_size(40, 24);
+    let narrow = screen(&app, 40, 24);
+    let rows = message_rows(&narrow);
+    // Count: wraps at the new, narrower view width (same doc line).
+    assert!(rows.len() > 1, "the message wraps: {narrow}");
+    assert!(
+        narrow.contains("zulu9"),
+        "the last word is cut off: {narrow}"
+    );
+    // Every word shows whole, in order, across the wrapped rows: the
+    // message text is the same text, laid out at the view's width.
+    let joined = rows
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(joined.contains(MESSAGE), "{narrow}");
+}
+
+#[test]
+fn a_call_view_widens_after_a_narrow_open() {
+    let (mut app, _) = open_message_view(40);
+    let narrow = screen(&app, 40, 24);
+    assert!(message_rows(&narrow).len() > 1, "{narrow}");
+    app.set_size(100, 24);
+    let wide = screen(&app, 100, 24);
+    let rows = message_rows(&wide);
+    // Count: one row at the wider view width (message call, "at the
+    // width of the view it is drawn in", `docs/tui.md`, "Tool groups and
+    // the ledger").
+    assert_eq!(rows.len(), 1, "the message re-flows to one row: {wide}");
+    assert!(rows[0].contains(MESSAGE), "{wide}");
+}
+
+/// A `delegate_message` call carrying `message`, requested and, when
+/// `done` is given, completed with it as the result's artifact choice.
+/// Returns its id, opened inline.
+fn message_call(app: &mut App, message: &str, artifact: Option<&str>) -> usize {
+    turn_started(app);
+    requested(
+        app,
+        "delegate_message",
+        json!({"id": "j_abc", "message": message}),
+        ACTION,
+    );
+    completed(app, ACTION, "delivered", json!(null), artifact, None);
+    let id = crate::turn::target_id(ACTION);
+    open_inline(app, id);
+    id
+}
+
+/// A paragraph of `words` distinct words: one row at width 100 only
+/// when it is short, about `words` / 3 rows at 40.
+fn long_message(words: usize) -> String {
+    (0..words)
+        .map(|i| format!("w{i:03}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The view's list as (selected, top).
+fn scroll_of(app: &App) -> (usize, usize) {
+    let list = app.call_view().expect("open").list;
+    (list.selected(), list.top())
+}
+
+#[test]
+fn a_paged_message_keeps_its_pages_follow_and_scroll_across_a_resize() {
+    let mut app = attached(100, 24);
+    let id = message_call(&mut app, MESSAGE, Some(ARTIFACT));
+    let first = page_request(app.open_call_view(id));
+    let text = lined_file();
+    page_to_end_from_zero(&mut app, first, &text);
+    for _ in 0..3 {
+        app.on_key(Key::Up, now());
+    }
+    let state = |app: &App| {
+        let view = app.call_view().expect("open");
+        let held: Vec<u64> = view.pager.pages.keys().copied().collect();
+        (held, view.follow, view.list, view.artifact.clone())
+    };
+    let before = state(&app);
+    assert!(!before.1, "Up left follow");
+    app.set_size(40, 24);
+    assert_eq!(state(&app), before, "narrowing moved paging state");
+    let rows = frame_text(&app);
+    // Order: "to <id>" first, then the message text, before the paged
+    // output (`docs/tui.md`, "Tool groups and the ledger", "A message
+    // call": "When the result has an artifact, the swapped view draws
+    // these rows before the paged output").
+    assert_eq!(rows[0], "to j_abc", "{rows:?}");
+    assert!(rows[1].starts_with("alpha"), "{rows:?}");
+    assert!(
+        rows.iter().any(|row| row.ends_with("zulu9")),
+        "the message wraps: {rows:?}"
+    );
+    assert!(rows.iter().any(|row| row == "L149"), "{rows:?}");
+    app.set_size(100, 24);
+    assert_eq!(state(&app), before, "widening moved paging state");
+}
+
+#[test]
+fn a_call_view_rebuilds_only_when_the_column_width_changes() {
+    let (mut app, _) = open_message_view(100);
+    let emptied = |app: &mut App| {
+        let view = app.call_view_mut().expect("open");
+        view.plain.clear();
+    };
+    let has_message = |app: &App| frame_text(app).iter().any(|row| row.contains("zulu9"));
+    assert!(has_message(&app));
+    // A new height keeps the width, and so the emptied rows.
+    emptied(&mut app);
+    app.set_size(100, 30);
+    assert!(!has_message(&app), "a same-width settle rebuilt the rows");
+    app.set_size(100, 24);
+    assert!(!has_message(&app), "a same-width settle rebuilt the rows");
+    // One column narrower lays the rows out again.
+    app.set_size(99, 24);
+    assert!(has_message(&app), "a one-column change did not rebuild");
+    assert_eq!(app.call_view().expect("open").width, app.column_width());
+}
+
+#[test]
+fn a_call_view_wraps_at_the_new_width_when_its_call_left_the_held_pages() {
+    let (mut app, id) = open_message_view(100);
+    app.screen.pages_mut().clear();
+    assert!(
+        app.find_call(id).is_none(),
+        "the call is gone from the pages"
+    );
+    app.set_size(40, 24);
+    let narrow = screen(&app, 40, 24);
+    assert!(message_rows(&narrow).len() > 1, "{narrow}");
+    assert!(narrow.contains("zulu9"), "{narrow}");
+    app.set_size(100, 24);
+    // Count: one row at the wide view width (`docs/tui.md`, "Tool groups
+    // and the ledger", "A message call": "at the width of the view it is
+    // drawn in").
+    assert_eq!(message_rows(&screen(&app, 100, 24)).len(), 1);
+}
+
+#[test]
+fn widening_a_scrolled_view_pulls_its_selection_back_onto_the_rows() {
+    let message = long_message(400);
+    let mut app = attached(40, 24);
+    let id = message_call(&mut app, &message, None);
+    app.open_call_view(id);
+    for _ in 0..6 {
+        app.on_key(Key::PageDown, now());
+    }
+    let (selected, top) = scroll_of(&app);
+    app.set_size(100, 24);
+    let rows = frame_text(&app).len();
+    assert!(
+        selected >= rows && top >= rows,
+        "setup: the scroll starts past the widened rows ({selected}, {top}, {rows})"
+    );
+    let (selected, top) = scroll_of(&app);
+    // Count: the view "scrolls as the conversation does" (`docs/tui.md`,
+    // "Swapped views", "A call's view"), which never leaves the selection
+    // or the first row shown past the last row.
+    assert!(selected < rows && top < rows, "({selected}, {top}, {rows})");
+    let shown = screen(&app, 100, 24);
+    // The last row stays on screen; a stale top would draw no body row.
+    assert!(shown.contains("delivered"), "the body went blank: {shown}");
+}
+
+#[test]
+fn a_resize_keeps_a_scroll_that_is_still_in_range() {
+    let message = long_message(400);
+    let mut app = attached(40, 24);
+    let id = message_call(&mut app, &message, None);
+    app.open_call_view(id);
+    app.on_key(Key::Up, now());
+    assert_eq!(app.on_wheel(&wheel(10, 5, true)), Effect::None);
+    let before = scroll_of(&app);
+    assert!(before.1 > 0, "setup: the view is scrolled {before:?}");
+    app.set_size(100, 24);
+    // Setup bound, not a promise: the scroll stays in range of the
+    // widened rows (`docs/tui.md`, "Swapped views", "A call's view":
+    // "scrolls as the conversation does").
+    assert!(
+        before.1 < frame_text(&app).len(),
+        "setup: the top is in range"
+    );
+    assert_eq!(scroll_of(&app), before);
+}
+
+#[test]
+fn a_resize_recomputes_the_matches_for_the_new_rows() {
+    let (mut app, _) = open_message_view(100);
+    type_query(&mut app, "l");
+    let wide = app.call_view().expect("open").matches.len();
+    app.set_size(40, 24);
+    let rows = frame_text(&app);
+    let expected: Vec<usize> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.contains('l'))
+        .map(|(at, _)| at)
+        .collect();
+    let view = app.call_view().expect("open");
+    // Count: search "matches inside the view only" (`docs/tui.md`,
+    // "Swapped views", "A call's view"), so one match per drawn row
+    // holding the query; the wrap changes how many rows draw.
+    assert_ne!(expected.len(), wide, "setup: the wrap changes the count");
+    assert_eq!(view.matches.len(), expected.len(), "{:?}", view.matches);
+    assert!(view.current.is_none_or(|at| at < view.matches.len()));
+}
+
+#[test]
+fn a_frozen_conversation_still_lays_a_call_view_out_again() {
+    let (mut app, _) = open_message_view(100);
+    app.attached_screen_mut().set_frozen(true);
+    assert!(app.screen.frozen());
+    app.set_size(40, 24);
+    let narrow = screen(&app, 40, 24);
+    assert!(message_rows(&narrow).len() > 1, "{narrow}");
+    assert!(narrow.contains("zulu9"), "{narrow}");
+}
+
+#[test]
+fn a_shell_call_view_keeps_its_rows_across_a_resize() {
+    let mut app = attached(100, 24);
+    turn_started(&mut app);
+    let id = shell_whole(&mut app, ACTION);
+    open_inline(&mut app, id);
+    app.open_call_view(id);
+    let before = frame_text(&app);
+    assert!(
+        before.iter().any(|row| row.contains("$ cargo test -p log")),
+        "{before:?}"
+    );
+    app.set_size(60, 24);
+    assert_eq!(frame_text(&app), before);
+}
+
+#[test]
+fn a_failed_message_keeps_its_error_row_first_after_a_resize() {
+    let mut app = attached(100, 24);
+    turn_started(&mut app);
+    requested(
+        &mut app,
+        "delegate_message",
+        json!({"id": "j_abc", "message": MESSAGE}),
+        ACTION,
+    );
+    app.on_line(envelope(
+        "tool_call_completed",
+        json!({"status": "failed", "content": [],
+            "error": {"code": "not_found", "message": "no such job"}}),
+        Some(ACTION),
+    ));
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    app.open_call_view(id);
+    let before = frame_text(&app);
+    // Order: "a failed call's '<code>: <message>' still comes first",
+    // then "to <id>" (`docs/tui.md`, "Tool groups and the ledger", "A
+    // message call").
+    assert_eq!(before[0], "not_found: no such job", "{before:?}");
+    app.set_size(40, 24);
+    let rows = frame_text(&app);
+    assert_eq!(rows[0], "not_found: no such job", "{rows:?}");
+    assert_eq!(rows[1], "to j_abc", "{rows:?}");
+    // Count: the message wraps at the narrower view width (same doc line).
+    assert!(rows.len() > before.len(), "{rows:?}");
+}
+
+#[test]
+fn a_call_completed_after_the_view_opened_rebuilds_from_the_completed_call() {
+    let mut app = attached(100, 24);
+    turn_started(&mut app);
+    requested(
+        &mut app,
+        "delegate_message",
+        json!({"id": "j_abc", "message": MESSAGE}),
+        ACTION,
+    );
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    app.open_call_view(id);
+    completed(&mut app, ACTION, "delivered", json!(null), None, None);
+    assert!(frame_text(&app).iter().any(|row| row == "delivered"));
+    app.set_size(40, 24);
+    let rows = frame_text(&app);
+    assert!(rows.iter().any(|row| row == "delivered"), "{rows:?}");
+    assert!(rows.iter().any(|row| row.contains("zulu9")), "{rows:?}");
 }

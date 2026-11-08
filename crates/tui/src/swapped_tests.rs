@@ -1047,3 +1047,24 @@ fn wheel_targets_window_holds_exact_edges() {
         (5, 1)
     );
 }
+
+/// A re-flow that leaves the selection or the first row shown past the
+/// last row brings them onto it; a list in range stays put.
+#[test]
+fn clamp_moves_a_list_only_when_it_is_past_the_last_row() {
+    // Selection 9, top 5: the last row is 9 at ten rows.
+    let list = pressed(&vec![Key::Down; 9], 20, 5);
+    assert_eq!((list.selected(), list.top()), (9, 5));
+    let mut at_edge = list;
+    at_edge.clamp(10);
+    assert_eq!(at_edge, list, "the last row is in range");
+    let mut past = list;
+    past.clamp(9);
+    assert_eq!((past.selected(), past.top()), (8, 5));
+    let mut both = list;
+    both.clamp(5);
+    assert_eq!((both.selected(), both.top()), (4, 4));
+    let mut none = list;
+    none.clamp(0);
+    assert_eq!((none.selected(), none.top()), (0, 0));
+}
