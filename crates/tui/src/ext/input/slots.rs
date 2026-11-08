@@ -157,8 +157,12 @@ pub struct Notice<'a> {
 pub struct LedgerRow<'a> {
     /// The tool's name.
     pub name: &'a str,
-    /// The call's arguments.
+    /// The call's arguments: the ones that ran, when a `before_tool` hook
+    /// rewrote them.
     pub arguments: &'a Value,
+    /// With a rewrite, the extensions whose hooks rewrote the arguments,
+    /// in the order they ran; absent when none took attribution.
+    pub changed_by: Option<&'a [String]>,
     /// What the call is doing, or how it ended.
     pub state: CallState<'a, LedgerResult<'a>, ()>,
     /// The suffix a form's answer replaces the status with.
@@ -188,6 +192,7 @@ impl<'a> LedgerRow<'a> {
         slot.hash(&mut key);
         self.name.hash(&mut key);
         hash_value(self.arguments, &mut key);
+        self.changed_by.hash(&mut key);
         hash_call_state(&self.state, hash_ledger_result, |_: &(), _key| {}, &mut key);
         self.answer.hash(&mut key);
         self.recipient.hash(&mut key);

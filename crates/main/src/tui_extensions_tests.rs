@@ -76,6 +76,7 @@ fn ctx(half: Option<Vec<(&str, &str)>>) -> SessionCtx {
 fn render(renderer: &dyn Renderer, ctx: &SessionCtx) -> Decision {
     let args = json!({});
     let row = tui::ext::LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &args,
         state: CallState::Completed(LedgerResult {
@@ -309,6 +310,7 @@ fn render_deadline_reports_typed_extension_failure_and_switches_off() {
     assert!(notices.is_empty());
     let args = json!({});
     let row = tui::ext::LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &args,
         state: CallState::Completed(LedgerResult {
@@ -769,6 +771,7 @@ fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
                     open: false,
                 }],
                 calls: vec![tui::ext::TurnCall {
+                    changed_by: None,
                     name: "read",
                     arguments: &json!({"path": "a.rs"}),
                     state: CallState::Running,
@@ -967,6 +970,7 @@ fn every_call_state_projects_its_documented_shape() {
     fn ledger(state: CallState<'static, LedgerResult<'static>, ()>) -> serde_json::Value {
         let args = json!({});
         input_value(&Input::LedgerRow(tui::ext::LedgerRow {
+            changed_by: None,
             name: "shell",
             arguments: &args,
             state,
@@ -1026,6 +1030,7 @@ fn every_call_state_projects_its_documented_shape() {
             "code {code:?} message {message:?}"
         );
         let call = tui::ext::TurnCall {
+            changed_by: None,
             name: "shell",
             arguments: &json!({}),
             state: CallState::Failed {
@@ -1090,6 +1095,7 @@ fn every_call_state_projects_its_documented_shape() {
     assert_eq!(table["status"], "denied");
     assert_eq!(table["error"], serde_json::Value::Null);
     let denied = tui::ext::TurnCall {
+        changed_by: None,
         name: "shell",
         arguments: &json!({}),
         state: CallState::Denied {
@@ -1411,6 +1417,7 @@ fn render_frame(
 ) -> (Decision, bool) {
     let args = json!({});
     let row = tui::ext::LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &args,
         state: CallState::Completed(LedgerResult {
@@ -1587,6 +1594,7 @@ fn animated_deadline_reports_typed_extension_failure_and_switches_off() {
     assert!(notices.is_empty());
     let args = json!({});
     let row = tui::ext::LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &args,
         state: CallState::Completed(LedgerResult {
@@ -3057,4 +3065,91 @@ fn the_input_status_table_holds_the_docs_fields() {
         flat: true,
     });
     assert_eq!(input_value(&bare), json!({"mode": "auto", "flat": true}));
+}
+
+/// A ledger row's table, over a running `shell` call rewritten by
+/// `changed_by`.
+fn hook_rewrite_ledger(changed_by: Option<&[String]>) -> Value {
+    let args = json!({"command": "cargo test --quiet"});
+    input_value(&Input::LedgerRow(tui::ext::LedgerRow {
+        changed_by,
+        name: "shell",
+        arguments: &args,
+        state: tui::ext::CallState::Running,
+        answer: None,
+        flat: false,
+    }))
+}
+
+/// A turn card's one call table, over a running `shell` call rewritten by
+/// `changed_by`.
+fn hook_rewrite_card_call(changed_by: Option<&[String]>) -> Value {
+    let args = json!({"command": "cargo test --quiet"});
+    let table = input_value(&Input::TurnCard(tui::ext::TurnCard {
+        prompts: Vec::new(),
+        entries: vec![tui::ext::TurnEntry::Group(tui::ext::TurnGroup {
+            first: 1,
+            last: 2,
+            state: TurnGroupState::Finished,
+            open: false,
+            sections: vec![tui::ext::TurnSection {
+                step: 1,
+                thoughts: Vec::new(),
+                calls: vec![tui::ext::TurnCall {
+                    changed_by,
+                    name: "shell",
+                    arguments: &args,
+                    state: tui::ext::CallState::Running,
+                    answer: None,
+                    open: false,
+                    asking: false,
+                }],
+                failed: Vec::new(),
+            }],
+            streaming: Vec::new(),
+        })],
+        started: 0,
+        calls: 1,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: Default::default(),
+                output: 0,
+            },
+            cost: None,
+            subscription_cost: 0.0,
+        },
+        state: TurnCardState::Running,
+        flat: false,
+    }));
+    table["entries"][0]["sections"][0]["calls"][0].clone()
+}
+
+#[test]
+fn hook_rewrite_key_ledger_row_holds_changed_by_only_when_a_hook_rewrote() {
+    let names = ["guard".to_owned(), "audit".to_owned()];
+    let table = hook_rewrite_ledger(Some(&names));
+    assert_eq!(table["changed_by"], json!(["guard", "audit"]));
+    let table = hook_rewrite_ledger(None);
+    assert!(
+        table
+            .as_object()
+            .is_some_and(|keys| !keys.contains_key("changed_by")),
+        "an absent key, never null: {table}"
+    );
+}
+
+#[test]
+fn hook_rewrite_key_turn_card_call_holds_changed_by_only_when_a_hook_rewrote() {
+    let names = ["guard".to_owned()];
+    let table = hook_rewrite_card_call(Some(&names));
+    assert_eq!(table["changed_by"], json!(["guard"]));
+    let table = hook_rewrite_card_call(None);
+    assert!(
+        table
+            .as_object()
+            .is_some_and(|keys| !keys.contains_key("changed_by")),
+        "an absent key, never null: {table}"
+    );
 }

@@ -77,6 +77,13 @@ pub(crate) fn count(n: u64, one: &str, many: &str) -> String {
     }
 }
 
+/// The mark on a call whose arguments a `before_tool` hook rewrote:
+/// "via" and the extensions that took attribution, joined with ", ";
+/// none for an empty list (`docs/tui.md`, "Tool groups and the ledger").
+pub(crate) fn via(changed_by: &[String]) -> Option<String> {
+    (!changed_by.is_empty()).then(|| format!("via {}", changed_by.join(", ")))
+}
+
 /// What a group's calls did, by kind, and how often the model thought.
 /// Read, edited and written files count distinct `path` arguments per
 /// kind; kinds with no calls are left out of the summary.

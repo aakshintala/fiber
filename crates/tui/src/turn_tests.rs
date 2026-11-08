@@ -2590,3 +2590,252 @@ fn toggle_of_a_call_view_changes_nothing() {
             .is_none_or(|call| !call.open)
     );
 }
+
+/// Turns holding `shell` calls requested as `cargo test`, one turn per
+/// entry of `actions`, folded without an app.
+fn hook_rewrite_turns(actions: &[&[&str]]) -> (Vec<super::Turn>, super::Fold) {
+    use contract::events::ToolCallRequested;
+    let mut fold = super::Fold::default();
+    let mut turns = Vec::new();
+    for calls in actions {
+        let mut turn = super::Turn::new(Vec::new(), 0);
+        for action in *calls {
+            turn.call_requested(
+                action,
+                ToolCallRequested {
+                    name: "shell".to_owned(),
+                    arguments: json!({"command": "cargo test"}),
+                    provider_id: None,
+                    repair: None,
+                    ran_by: None,
+                    provider_item: None,
+                },
+                0,
+                &mut fold,
+            );
+        }
+        turns.push(turn);
+    }
+    (turns, fold)
+}
+
+/// Folds one line about `action` into `turns`.
+fn hook_rewrite_line(
+    turns: &mut [super::Turn],
+    fold: &mut super::Fold,
+    kind: &str,
+    action: &str,
+    payload: Value,
+) -> bool {
+    let envelope = contract::Envelope {
+        kind: EventKind::from_name(kind),
+        session_id: contract::SessionId(SESSION.to_owned()),
+        ts: 5,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: Some(contract::ActionId(action.to_owned())),
+        seq: None,
+        payload: payload.as_object().cloned().unwrap_or_default(),
+    };
+    super::fold_action(turns, fold, &envelope, action)
+}
+
+/// The call `action` in `turns`.
+fn hook_rewrite_call<'a>(turns: &'a [super::Turn], action: &str) -> &'a super::group::Call {
+    turns
+        .iter()
+        .flat_map(|turn| turn.groups())
+        .flat_map(|group| group.calls())
+        .find(|call| call.action == action)
+        .expect("the driven call")
+}
+
+/// A started line's payload with `arguments` and `changed_by` as given.
+fn hook_rewrite_started(arguments: Option<Value>, changed_by: Option<Value>) -> Value {
+    let mut payload = json!({"effects": ["executes"], "reversible": false});
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(arguments) = arguments {
+            object.insert("arguments".to_owned(), arguments);
+        }
+        if let Some(changed_by) = changed_by {
+            object.insert("changed_by".to_owned(), changed_by);
+        }
+    }
+    payload
+}
+
+#[test]
+fn hook_rewrite_arguments_with_no_changed_by_replace_the_arguments_unmarked() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    let payload = hook_rewrite_started(Some(json!({"command": "cargo test --quiet"})), None);
+    assert!(hook_rewrite_line(
+        &mut turns,
+        &mut fold,
+        "tool_call_started",
+        "a_1",
+        payload
+    ));
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "cargo test --quiet"}));
+    assert_eq!(call.changed_by, None);
+    assert!(call.has_started());
+}
+
+#[test]
+fn hook_rewrite_changed_by_with_no_arguments_changes_nothing() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    let payload = hook_rewrite_started(None, Some(json!(["guard"])));
+    hook_rewrite_line(&mut turns, &mut fold, "tool_call_started", "a_1", payload);
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "cargo test"}));
+    assert_eq!(call.changed_by, None);
+    assert!(call.has_started());
+}
+
+#[test]
+fn hook_rewrite_an_empty_changed_by_names_no_one() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    let payload = hook_rewrite_started(Some(json!({"command": "x"})), Some(json!([])));
+    hook_rewrite_line(&mut turns, &mut fold, "tool_call_started", "a_1", payload);
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "x"}));
+    assert_eq!(call.changed_by, None);
+}
+
+#[test]
+fn hook_rewrite_a_persons_decision_leaves_the_arguments_and_clears_asking() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    let asked = json!({"request_id": "r_1", "effects": ["executes"], "reversible": false,
+        "step": "standing_ask"});
+    assert!(hook_rewrite_line(
+        &mut turns,
+        &mut fold,
+        "permission_requested",
+        "a_1",
+        asked
+    ));
+    assert!(hook_rewrite_call(&turns, "a_1").asking);
+    let decided = json!({"request_id": "r_1", "decision": "allow_once", "decided_by": "person"});
+    assert!(hook_rewrite_line(
+        &mut turns,
+        &mut fold,
+        "permission_resolved",
+        "a_1",
+        decided
+    ));
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert!(!call.asking);
+    assert_eq!(call.arguments, json!({"command": "cargo test"}));
+    assert_eq!(call.changed_by, None);
+}
+
+#[test]
+fn hook_rewrite_a_reviewers_denial_carries_the_rewrite() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    let denied = json!({"decision": "deny", "decided_by": "reviewer", "reason": "no",
+        "reviewer": {"model": "m", "stage": 1}, "effects": ["executes"], "reversible": false,
+        "arguments": {"command": "cargo test --quiet"}, "changed_by": ["guard"]});
+    assert!(hook_rewrite_line(
+        &mut turns,
+        &mut fold,
+        "permission_resolved",
+        "a_1",
+        denied
+    ));
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "cargo test --quiet"}));
+    assert_eq!(call.changed_by, Some(vec!["guard".to_owned()]));
+    assert!(!call.has_started());
+}
+
+#[test]
+fn hook_rewrite_lands_on_a_call_in_an_earlier_turn() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"], &["a_2"]]);
+    let payload = hook_rewrite_started(
+        Some(json!({"command": "cargo test --quiet"})),
+        Some(json!(["guard"])),
+    );
+    assert!(hook_rewrite_line(
+        &mut turns,
+        &mut fold,
+        "tool_call_started",
+        "a_1",
+        payload
+    ));
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "cargo test --quiet"}));
+    assert_eq!(call.changed_by, Some(vec!["guard".to_owned()]));
+    let other = hook_rewrite_call(&turns, "a_2");
+    assert_eq!(other.arguments, json!({"command": "cargo test"}));
+    assert_eq!(other.changed_by, None);
+}
+
+#[test]
+fn hook_rewrite_applied_twice_is_not_doubled_and_the_last_line_wins() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    let judged = json!({"decision": "allow", "decided_by": "reviewer",
+        "reviewer": {"model": "m", "stage": 1}, "effects": ["executes"], "reversible": false,
+        "arguments": {"command": "cargo test --quiet"}, "changed_by": ["guard"]});
+    hook_rewrite_line(&mut turns, &mut fold, "permission_resolved", "a_1", judged);
+    let payload = hook_rewrite_started(
+        Some(json!({"command": "cargo test --quiet"})),
+        Some(json!(["guard"])),
+    );
+    hook_rewrite_line(&mut turns, &mut fold, "tool_call_started", "a_1", payload);
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "cargo test --quiet"}));
+    assert_eq!(call.changed_by, Some(vec!["guard".to_owned()]));
+    let later = hook_rewrite_started(
+        Some(json!({"command": "cargo test -q"})),
+        Some(json!(["audit"])),
+    );
+    hook_rewrite_line(&mut turns, &mut fold, "tool_call_started", "a_1", later);
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "cargo test -q"}));
+    assert_eq!(call.changed_by, Some(vec!["audit".to_owned()]));
+}
+
+#[test]
+fn hook_rewrite_a_started_line_that_does_not_decode_still_starts_the_call() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    assert!(hook_rewrite_line(
+        &mut turns,
+        &mut fold,
+        "tool_call_started",
+        "a_1",
+        json!({"arguments": 3})
+    ));
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert!(call.has_started());
+    assert_eq!(call.arguments, json!({"command": "cargo test"}));
+    assert_eq!(call.changed_by, None);
+}
+
+#[test]
+fn hook_rewrite_a_line_naming_no_call_changes_no_card() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    let rewrite = json!({"decision": "deny", "decided_by": "reviewer", "reason": "no",
+        "reviewer": {"model": "m", "stage": 1}, "effects": ["executes"], "reversible": false,
+        "arguments": {"command": "cargo test --quiet"}, "changed_by": ["guard"]});
+    let started = hook_rewrite_started(
+        Some(json!({"command": "cargo test --quiet"})),
+        Some(json!(["guard"])),
+    );
+    let asked = json!({"request_id": "r_1", "effects": ["executes"], "reversible": false,
+        "step": "standing_ask"});
+    let completed = json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]});
+    for (kind, payload) in [
+        ("tool_call_started", started),
+        ("permission_requested", asked),
+        ("permission_resolved", rewrite),
+        ("tool_call_completed", completed),
+    ] {
+        assert!(
+            !hook_rewrite_line(&mut turns, &mut fold, kind, "a_9", payload),
+            "{kind}"
+        );
+    }
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "cargo test"}));
+    assert_eq!(call.changed_by, None);
+}

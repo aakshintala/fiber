@@ -14,7 +14,9 @@ use crate::ext::{
     CallState, GroupLine, Input, LedgerResult, LedgerRow, PromptImage, RowError, TurnCall,
     TurnCallResult, TurnFailed, TurnGroup, TurnGroupState, TurnSection, TurnStreaming, TurnThought,
 };
-use crate::format::{Kind, Kinds, count, dim, heading, kind, label, oneline, opened, summary};
+use crate::format::{
+    Kind, Kinds, count, dim, heading, kind, label, oneline, opened, summary, via,
+};
 use crate::rows::{RowText, Rows};
 use crate::theme::{Role, style};
 
@@ -66,6 +68,10 @@ pub(crate) struct Call {
     /// `session_message`, as the terminal held it when the call folded;
     /// `None` when it held none or the call is no message call.
     pub(crate) recipient: Option<String>,
+    /// The extensions whose `before_tool` hooks rewrote `arguments`, in
+    /// the order they ran; `Some` only with a non-empty list, and only
+    /// once `arguments` holds a rewrite.
+    pub(crate) changed_by: Option<Vec<String>>,
     /// The outer call this call ran inside, from `ran_by`'s
     /// `outer_action_id`; `None` on the model's own calls and on
     /// `command_id`-anchored inners, which never nest.
@@ -913,6 +919,7 @@ impl Group {
         TurnCall {
             name: row.name,
             arguments: row.arguments,
+            changed_by: row.changed_by,
             state,
             answer: row.answer,
             recipient: row.recipient,
@@ -1066,6 +1073,7 @@ impl Group {
         LedgerRow {
             name: &call.name,
             arguments: &call.arguments,
+            changed_by: call.changed_by.as_deref(),
             state,
             answer,
             recipient: call.recipient.as_deref(),
@@ -1090,7 +1098,12 @@ impl Group {
             CallState::Unknown => ("?", style(Role::Attention)),
             CallState::Pending | CallState::Running => ("○", style(Role::Attention)),
         };
-        let result = self.builtin_result(row);
+        let mut result = self.builtin_result(row);
+        // A rewritten call names who rewrote it after its result, so the
+        // target is cut before the mark is.
+        if let Some(mark) = row.changed_by.and_then(via) {
+            result.push(dim_span(format!(" · {mark}")));
+        }
         // Past the gutter, the glyph, one space and nine of
         // kind leave the target and the result `after_gutter - 13`
         // cells. The target is cut with "…" to what the result leaves;
