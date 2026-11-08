@@ -43,10 +43,10 @@ fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<std::process:
 }
 
 /// The providers due a background refresh: a credential and a cached list
-/// older than `max_age` (`docs/model-routing.md`, "Model discovery"). A
-/// list exactly `max_age` old is not stale, and one with no cached copy is
-/// not due: it already ran when the lists were read. Runs no command and
-/// loads nothing: the shared switched-on presence gate decides.
+/// older than `max_age` or newer extension source (`docs/model-routing.md`,
+/// "Model discovery"). A list exactly `max_age` old is not stale, and one
+/// with no cached copy is not due: it already ran when the lists were read.
+/// Runs no command and loads nothing: the shared switched-on presence gate decides.
 fn stale_lists(
     home: &Path,
     providers: &Providers,
@@ -59,9 +59,11 @@ fn stale_lists(
         let Some(_lua) = providers.lua(name) else {
             continue;
         };
-        if let Ok(Some(age)) = config::model_cache_age(home, name, now)
-            && age > max_age
-        {
+        let age_stale = matches!(
+            config::model_cache_age(home, name, now),
+            Ok(Some(age)) if age > max_age
+        );
+        if age_stale || providers.source_is_newer(name) {
             stale.push(name.to_owned());
         }
     }
@@ -451,4 +453,4 @@ pub fn refresh_model_lists(
 
 #[cfg(test)]
 #[path = "models_tests.rs"]
-mod tests;
+pub(crate) mod tests;

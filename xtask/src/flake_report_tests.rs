@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::{
-    Listed, Run, classify, decide_with, entry_is_file, event_requests, failing_file, flake_titles,
-    runner_lists, tested_line,
+    Listed, MAIN_TEST_AREAS, Run, classify, decide_with, entry_is_file, event_requests,
+    failing_file, flake_title, flake_titles, runner_lists, tested_line,
 };
 
 const TITLE: &str = "Flaky tests: main::probe";
@@ -741,17 +741,17 @@ fn a_unit_test_binary_id_without_colons() {
 
 #[test]
 fn two_modules_of_main_make_two_records() {
-    // The aggregate `main` binary is keyed by its first test-module
-    // segment, so two modules file two titles.
-    let text = "main reviewer_setup::the_setup_saves\tfirst detail\n\
-                main reload_tests::some_test\tsecond detail\n";
+    // An area binary is keyed by its first test-module segment, so two
+    // files file two titles, even from different area binaries.
+    let text = "main::extension_host reviewer_setup::the_setup_saves\tfirst detail\n\
+                main::session_turns reload_tests::some_test\tsecond detail\n";
     let out = classified(&[("linux", text)], &push_run());
     // docs/testing/running.md, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
     // docs/ci.md, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "the aggregate `main`
-    // integration binary names its first test-module segment".
+    // docs/testing/running.md, "Flaky tests": "an area binary names its first
+    // test-module segment, the file".
     assert_eq!(out.len(), 2);
     let reviewer = titled(&out, "main::reviewer_setup");
     assert_eq!(
@@ -760,7 +760,7 @@ fn two_modules_of_main_make_two_records() {
     );
     assert_eq!(
         field(reviewer, "name"),
-        Some("main reviewer_setup::the_setup_saves")
+        Some("main::extension_host reviewer_setup::the_setup_saves")
     );
     assert_eq!(field(reviewer, "detail"), Some("first detail"));
     let reload = titled(&out, "main::reload_tests");
@@ -768,15 +768,19 @@ fn two_modules_of_main_make_two_records() {
         field(reload, "title"),
         Some("Flaky tests: main::reload_tests")
     );
-    assert_eq!(field(reload, "name"), Some("main reload_tests::some_test"));
+    assert_eq!(
+        field(reload, "name"),
+        Some("main::session_turns reload_tests::some_test")
+    );
     assert_eq!(field(reload, "detail"), Some("second detail"));
 }
 
 #[test]
-fn a_root_level_main_test_falls_back_to_main() {
-    // A `main` test with no module segment falls back to the binary id
-    // and dedupes with the bare id.
-    let text = "main root_level_test\tfirst detail\nmain\tsecond detail\n";
+fn a_root_level_area_test_falls_back_to_its_binary() {
+    // A test with no module segment in an area binary falls back to the
+    // binary id and dedupes with the bare id.
+    let text =
+        "main::extension_host root_level_test\tfirst detail\nmain::extension_host\tsecond detail\n";
     let out = classified(&[("linux", text)], &push_run());
     // docs/testing/running.md, "Flaky tests": "Within one report job a file's
     // title files or comments once; a repeat is skipped".
@@ -784,33 +788,39 @@ fn a_root_level_main_test_falls_back_to_main() {
     // runner and detail from its first occurrence in file-name byte order".
     // docs/ci.md, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "A root-level `main` test
-    // falls back to `Flaky tests: main`".
+    // docs/testing/running.md, "Flaky tests": "A root-level test in an area
+    // binary falls back to its binary title".
     assert_eq!(out.len(), 1);
-    let record = titled(&out, "main");
-    assert_eq!(field(record, "title"), Some("Flaky tests: main"));
-    assert_eq!(field(record, "name"), Some("main root_level_test"));
+    let record = titled(&out, "main::extension_host");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: main::extension_host")
+    );
+    assert_eq!(
+        field(record, "name"),
+        Some("main::extension_host root_level_test")
+    );
     assert_eq!(field(record, "detail"), Some("first detail"));
 }
 
 #[test]
 fn a_single_file_integration_binary_keeps_its_title() {
     // A single-file integration binary whose id contains `::` keeps its title.
-    let text = "main::hub_exit_window helper_tests::case\tsome detail\n";
+    let text = "main::hub_service helper_tests::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
     // docs/ci.md, "On every pull request that changes code": "writes one
     // classification line per unique title".
     // docs/testing/running.md, "Flaky tests": "A single-file integration
-    // binary such as `main::hub_exit_window` keeps its binary title".
+    // binary such as `main::hub_service` keeps its binary title".
     assert_eq!(out.len(), 1);
-    let record = titled(&out, "main::hub_exit_window");
+    let record = titled(&out, "main::hub_service");
     assert_eq!(
         field(record, "title"),
-        Some("Flaky tests: main::hub_exit_window")
+        Some("Flaky tests: main::hub_service")
     );
     assert_eq!(
         field(record, "name"),
-        Some("main::hub_exit_window helper_tests::case")
+        Some("main::hub_service helper_tests::case")
     );
     assert_eq!(field(record, "detail"), Some("some detail"));
 }
@@ -819,12 +829,12 @@ fn a_single_file_integration_binary_keeps_its_title() {
 fn only_the_first_module_segment_names_the_main_key() {
     // Only the first `::` segment counts: a later one never renames the
     // file.
-    let text = "main reviewer_setup::inner::case\tsome detail\n";
+    let text = "main::extension_host reviewer_setup::inner::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
     // docs/ci.md, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "the aggregate `main`
-    // integration binary names its first test-module segment".
+    // docs/testing/running.md, "Flaky tests": "an area binary names its first
+    // test-module segment, the file".
     assert_eq!(out.len(), 1);
     let record = titled(&out, "main::reviewer_setup");
     assert_eq!(
@@ -834,19 +844,22 @@ fn only_the_first_module_segment_names_the_main_key() {
 }
 
 #[test]
-fn an_empty_first_segment_falls_back_to_main() {
+fn an_empty_first_segment_falls_back_to_the_binary() {
     // A test name starting with `::` names no module, so the line keeps
-    // the `main` title.
-    let text = "main ::case\tsome detail\n";
+    // its binary title.
+    let text = "main::extension_host ::case\tsome detail\n";
     let out = classified(&[("linux", text)], &push_run());
     // docs/ci.md, "On every pull request that changes code": "writes one
     // classification line per unique title".
-    // docs/testing/running.md, "Flaky tests": "A root-level `main` test
-    // falls back to `Flaky tests: main`".
+    // docs/testing/running.md, "Flaky tests": "A root-level test in an area
+    // binary falls back to its binary title".
     assert_eq!(out.len(), 1);
-    let record = titled(&out, "main");
-    assert_eq!(field(record, "title"), Some("Flaky tests: main"));
-    assert_eq!(field(record, "name"), Some("main ::case"));
+    let record = titled(&out, "main::extension_host");
+    assert_eq!(
+        field(record, "title"),
+        Some("Flaky tests: main::extension_host")
+    );
+    assert_eq!(field(record, "name"), Some("main::extension_host ::case"));
 }
 
 #[test]
@@ -1147,10 +1160,60 @@ fn unreadable_entry_type_is_an_error() {
 }
 
 #[test]
+fn flake_title_keys_area_binaries_by_file_and_leaves_the_rest() {
+    // docs/ci.md, "The one-week trial": "An area binary in
+    // `crates/main/tests/<area>/` is keyed by its first test-module segment".
+    for (binary, test, title) in [
+        (
+            "main::extension_host",
+            "reviewer_setup::the_setup_saves",
+            "Flaky tests: main::reviewer_setup",
+        ),
+        (
+            "main::extension_host",
+            "reviewer_setup::inner::case",
+            "Flaky tests: main::reviewer_setup",
+        ),
+        (
+            "main::extension_host",
+            "root_level_test",
+            "Flaky tests: main::extension_host",
+        ),
+        (
+            "main::hub_service",
+            "helper_tests::case",
+            "Flaky tests: main::hub_service",
+        ),
+    ] {
+        assert_eq!(flake_title(binary, test), title, "{binary} {test}");
+    }
+}
+
+#[test]
+fn main_test_areas_are_the_directories_with_a_main_rs() {
+    // A new area binary joins `MAIN_TEST_AREAS`, or its flakes would file
+    // under the binary title instead of the file.
+    let tests = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/main/tests");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&tests)
+        .expect("crates/main/tests reads")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().join("main.rs").is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    on_disk.sort();
+    let mut listed: Vec<String> = MAIN_TEST_AREAS
+        .iter()
+        .map(|&area| area.to_owned())
+        .collect();
+    listed.sort();
+    assert_eq!(on_disk, listed);
+}
+
+#[test]
 fn flake_titles_dedupes_files_in_first_seen_order() {
     // The Rust side is the sole titles parser: one deduped title per
     // line, in first-seen order across the files and then the lines.
-    // Covers the three file-key examples, `main`, a binary id
+    // Covers the three file-key examples, an area binary, a binary id
     // containing `::`, and a bare id.
     let dir = std::env::temp_dir().join(format!("flake-titles-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a scratch dir");
@@ -1159,8 +1222,8 @@ fn flake_titles_dedupes_files_in_first_seen_order() {
     std::fs::write(
         &first,
         "extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\tsome detail\n\
-         main reviewer_setup::the_setup_saves\tsome detail\n\
-         main::hub_exit_window helper_tests::case\tsome detail\n\
+         main::extension_host reviewer_setup::the_setup_saves\tsome detail\n\
+         main::hub_service helper_tests::case\tsome detail\n\
          extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\trepeat detail\n",
     )
     .expect("a first list");
@@ -1182,7 +1245,7 @@ fn flake_titles_dedupes_files_in_first_seen_order() {
         vec![
             "Flaky tests: extensions::host::exec".to_owned(),
             "Flaky tests: main::reviewer_setup".to_owned(),
-            "Flaky tests: main::hub_exit_window".to_owned(),
+            "Flaky tests: main::hub_service".to_owned(),
             "Flaky tests: extensions::host::tool_tests".to_owned(),
             "Flaky tests: extensions".to_owned(),
             "Flaky tests: fakes::process_group_tests".to_owned(),

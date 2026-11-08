@@ -1009,6 +1009,7 @@ fn named_strokes() -> Vec<(&'static str, Option<Event>)> {
         ("alt+8", key(Key::AltDigit(8))),
         ("alt+9", key(Key::AltDigit(9))),
         ("alt+0", None),
+        ("alt+i", None),
         ("ctrl+n", None),
         ("ctrl+s", None),
     ]

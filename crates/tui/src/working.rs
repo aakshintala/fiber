@@ -43,8 +43,21 @@ const SPINNER_AT: usize = 2;
 /// Lays `working` out in `width` columns at wall time `now_ms`, with
 /// `spinner` in its cell: the full line, or the detail shed first, then
 /// the time, with the word cut last. The interrupt target goes with its
-/// text.
+/// text. The hint is the conversation's "Esc to interrupt".
 pub(crate) fn lay(working: &Working, now_ms: Option<u64>, spinner: &str, width: u16) -> Laid {
+    lay_with_hint(working, now_ms, spinner, width, "Esc to interrupt")
+}
+
+/// [`lay`] with `hint` as the closing text after " · ", the hint a
+/// delegate's view names its own interrupt with. The target covers only
+/// the hint's cells and sheds with them.
+pub(crate) fn lay_with_hint(
+    working: &Working,
+    now_ms: Option<u64>,
+    spinner: &str,
+    width: u16,
+    hint: &str,
+) -> Laid {
     if let Some(retry) = &working.retry {
         return retry_laid(retry, now_ms, width);
     }
@@ -56,7 +69,8 @@ pub(crate) fn lay(working: &Working, now_ms: Option<u64>, spinner: &str, width: 
         Some(time) => format!("{INDENT}{spinner} {WORD} {time}"),
         None => format!("{INDENT}{spinner} {WORD}"),
     };
-    let tail = " · Esc to interrupt";
+    let tail = format!(" · {hint}");
+    let tail = tail.as_str();
     let room = usize::from(width);
     let (text, interrupt) = if format::width(&head) + format::width(tail) <= room {
         let start = u16::try_from(format::width(&head) + format::width(" · ")).unwrap_or(u16::MAX);

@@ -151,11 +151,18 @@ fn draw_delegate_card(
         return;
     }
     // The stop label always starts inside the row: the message is cut to
-    // fit it, so the stop target covers the label's drawn cells.
+    // fit it, so the stop target covers the label's drawn cells. While the
+    // delegate's turn runs, "⏸ interrupt" comes before it.
     let stop = format!("■ stop {}", view.session_label.as_deref().unwrap_or("—"));
+    let interrupt = view.interruptible.then_some("⏸ interrupt");
+    let sep = " · ";
+    let lead = interrupt.map_or(0, |label| format::width(label) + format::width(sep));
     let head = match &view.message {
         Some(message) => {
-            let cut = format::cut(message, wide.saturating_sub(format::width(&stop) + 3));
+            let cut = format::cut(
+                message,
+                wide.saturating_sub(format::width(&stop) + lead + 3),
+            );
             if cut.is_empty() {
                 String::new()
             } else {
@@ -164,25 +171,32 @@ fn draw_delegate_card(
         }
         None => String::new(),
     };
-    let start = u16::try_from(format::width(&head)).unwrap_or(u16::MAX);
-    let stop_at = area.x.saturating_add(start);
-    let stop_width = u16::try_from(format::width(&stop)).unwrap_or(u16::MAX);
-    card_row(
-        buf,
-        area.x,
-        y,
-        wide,
-        &[
-            (&head, style(Role::Text).bg(Role::Surface.color())),
-            (&stop, style(Role::Error).bg(Role::Surface.color())),
-        ],
-    );
+    let cell = |chars: usize| u16::try_from(chars).unwrap_or(u16::MAX);
+    let interrupt_at = area.x.saturating_add(cell(format::width(&head)));
+    let stop_at = interrupt_at.saturating_add(cell(lead));
+    let mut parts = vec![(head.as_str(), style(Role::Text).bg(Role::Surface.color()))];
+    if let Some(label) = interrupt {
+        parts.push((label, style(Role::Attention).bg(Role::Surface.color())));
+        parts.push((sep, style(Role::Muted).bg(Role::Surface.color())));
+    }
+    parts.push((&stop, style(Role::Error).bg(Role::Surface.color())));
+    card_row(buf, area.x, y, wide, &parts);
+    if let Some(label) = interrupt {
+        let room = area.right().saturating_sub(interrupt_at);
+        // The message cut keeps the label inside the row, so `room` is
+        // never 0 here; like the stop target, a zero-width row would
+        // leave an empty rect, which hits nothing.
+        targets.push(Target {
+            id: TargetId::Interrupt,
+            rect: Rect::new(interrupt_at, y, cell(format::width(label)).min(room), 1),
+        });
+    }
     targets.push(Target {
         id: TargetId::Item(Spot::Stop),
         rect: Rect::new(
             stop_at,
             y,
-            stop_width.min(area.right().saturating_sub(stop_at)),
+            cell(format::width(&stop)).min(area.right().saturating_sub(stop_at)),
             1,
         ),
     });

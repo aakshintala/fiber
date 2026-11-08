@@ -1269,7 +1269,7 @@ fn the_key_map_scrolls_by_binding_and_searches() {
     // one row further down.
     app.on_key(Key::PageDown, now());
     let map = app.keymap().expect("open");
-    assert_eq!((map.focus(), map.top()), (2, 2));
+    assert_eq!((map.focus(), map.top()), (2, 1));
     app.on_key(Key::PageUp, now());
     let map = app.keymap().expect("open");
     assert_eq!((map.focus(), map.top()), (1, 1));

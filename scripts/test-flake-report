@@ -348,7 +348,7 @@ pr_tested="tested $sha = main $base + head $head"
 plain="The test \`$name\` passed after a retry on linux: $url."
 see_pr="$plain (see #12)"
 belongs="The test \`$name\` passed after a retry on linux, but its failing file \`crates/main/tests/flaky_probe.rs\` belongs to #12 rather than main: $url."
-mainmod_name='main reviewer_setup::the_setup_saves'
+mainmod_name='main::extension_host reviewer_setup::the_setup_saves'
 mainmod_title='Flaky tests: main::reviewer_setup'
 mainmod_detail='thread the_setup_saves panicked at crates/main/tests/reviewer_setup.rs:10:9\nfirst attempt'
 mainmod_decide='{"action": "file-new", "title": "'"$mainmod_title"'"}'
@@ -534,8 +534,8 @@ code=$(run_step "$tmp/push-create-mainmod" push "" "$empty_open" "" decisions.js
 expect_exit push-create-mainmod "$code" 0
 # docs/ci.md, "On every pull request that changes code": "writes one
 # classification line per unique title": one title writes once.
-# docs/testing/running.md, "Flaky tests": "the aggregate `main`
-# integration binary names its first test-module segment".
+# docs/testing/running.md, "Flaky tests": "an area binary names its first
+# test-module segment, the file".
 expect_writes "$tmp/push-create-mainmod" 1
 mainmod_plain="The test \`$mainmod_name\` passed after a retry on linux: $url."
 expect_write "$tmp/push-create-mainmod" 0 "$(printf 'create %s\n%s\nlabel=test-only' "$mainmod_title" "$(detail="$mainmod_detail" body "$mainmod_plain" "$push_tested")")"
@@ -1077,9 +1077,9 @@ expect_flakes "$collate_two" 'has_flakes=true'
 collate_key=$tmp/collate-key
 mkdir -p "$collate_key/flaky"
 {
-  printf 'main reviewer_setup::the_setup_saves\td1\nmain reload_tests::some_test\td2\n'
-  printf 'main root_level_test\td3\nmain\td4\nmain ::empty_segment\td8\n'
-  printf 'main::hub_exit_window helper_tests::case\td5\n'
+  printf 'main::extension_host reviewer_setup::the_setup_saves\td1\nmain::session_turns reload_tests::some_test\td2\n'
+  printf 'main::extension_host root_level_test\td3\nmain::extension_host\td4\nmain::extension_host ::empty_segment\td8\n'
+  printf 'main::hub_service helper_tests::case\td5\n'
   printf 'fakes process_group_tests::reaps_children\td6\nfakes\td7\n'
   printf 'extensions host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run\td9\n'
   printf 'extensions host::tool_tests::a_denied_call_has_no_artifact\td10\n'
