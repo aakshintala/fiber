@@ -3,10 +3,11 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier, Style};
 
 use super::{
-    Frame, Ink, List, Spot, about, compact, render, rows_height, wheel_targets_window, wheel_window,
+    Chrome, Frame, Ink, Inline, List, Spot, about, compact, render, rows_height,
+    wheel_targets_window, wheel_window,
 };
 use crate::keys::Key;
 use crate::mouse::TargetId;
@@ -1072,4 +1073,160 @@ fn clamp_moves_a_list_only_when_it_is_past_the_last_row() {
     let mut none = list;
     none.clamp(0);
     assert_eq!((none.selected(), none.top()), (0, 0));
+}
+
+// What `Chrome` adds: fixed rows under the title, a field drawn in a row
+// and a footer with styled keys.
+
+/// `frame(rows)` with `top` fixed rows, each the text `top N` in bold.
+fn chromed(rows: usize, top: usize) -> Frame {
+    let mut shown = frame(rows);
+    shown.list = List::gutter();
+    shown.chrome = Some(Chrome {
+        top: (0..top)
+            .map(|at| {
+                vec![(
+                    format!("top {at}"),
+                    Style::new().add_modifier(Modifier::BOLD),
+                )]
+            })
+            .collect(),
+        draft: None,
+        footer: Vec::new(),
+    });
+    shown
+}
+
+#[test]
+fn fixed_rows_take_height_from_the_body_one_for_one() {
+    // 6 rows high: the title, the footer and one line below leave 3.
+    for (top, body) in [(0, 3), (1, 2), (2, 1), (3, 0), (9, 0)] {
+        assert_eq!(rows_height(&chromed(8, top), 6), body, "{top} fixed rows");
+    }
+}
+
+#[test]
+fn fixed_rows_draw_under_the_title_before_the_body_in_their_style() {
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    render(&chromed(5, 2), area, &mut buf, &mut targets);
+    assert_eq!(text(&buf, 1), "top 0");
+    assert_eq!(text(&buf, 2), "top 1");
+    assert_eq!(text(&buf, 3), "› row 0");
+    assert!(buf[(0, 1)].modifier.contains(Modifier::BOLD));
+    assert!(!buf[(2, 3)].modifier.contains(Modifier::BOLD));
+    // A body row's target sits on the row it is drawn on.
+    let row_0 = targets
+        .iter()
+        .find(|target| target.id == TargetId::View(Spot::Row(0)))
+        .map(|target| target.rect.y);
+    assert_eq!(row_0, Some(3));
+}
+
+#[test]
+fn fixed_rows_never_reach_the_footer_row() {
+    let area = Rect::new(0, 0, 40, 4);
+    let mut buf = Buffer::empty(area);
+    render(&chromed(5, 9), area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 1), "top 0");
+    // The line below is drawn over a fixed row that has no room; the
+    // footer is whole.
+    assert_eq!(text(&buf, 2), "below");
+    assert_eq!(text(&buf, 3), "keys");
+}
+
+/// `chromed(rows, 0)` with a field in `row` at `column`.
+fn drafting(rows: usize, row: usize, column: usize, text: &str, caret: usize) -> Frame {
+    let mut shown = chromed(rows, 0);
+    if let Some(chrome) = &mut shown.chrome {
+        chrome.draft = Some(Inline {
+            row,
+            column,
+            text: text.to_owned(),
+            caret,
+        });
+    }
+    shown
+}
+
+#[test]
+fn an_inline_field_draws_in_its_row_at_its_column_with_the_caret_reversed() {
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    // The gutter is two columns; the field starts six further in, just
+    // past the row's own text.
+    render(
+        &drafting(5, 1, 6, "abc", 3),
+        area,
+        &mut buf,
+        &mut Vec::new(),
+    );
+    assert_eq!(text(&buf, 2), "  row 1 abc");
+    assert!(buf[(11, 2)].modifier.contains(Modifier::REVERSED));
+    assert!(!buf[(10, 2)].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn an_inline_field_in_a_row_scrolled_away_or_past_the_shown_rows_is_not_drawn() {
+    let area = Rect::new(0, 0, 40, 6);
+    // Three body rows fit. The field's row 2 is the last shown, row 3 the
+    // first hidden.
+    for (row, drawn) in [(2, true), (3, false)] {
+        let mut buf = Buffer::empty(area);
+        render(
+            &drafting(8, row, 6, "zz", 0),
+            area,
+            &mut buf,
+            &mut Vec::new(),
+        );
+        let any = (0..6).any(|y| text(&buf, y).contains("zz"));
+        assert_eq!(any, drawn, "row {row}");
+    }
+    // Scrolled so the list starts at row 3, a field in row 2 is above it
+    // and one in row 3 is the first shown.
+    for (row, drawn) in [(2, false), (3, true)] {
+        let mut scrolled = drafting(8, row, 6, "zz", 0);
+        scrolled.list.select(5, 8, 3);
+        assert_eq!(scrolled.list.top(), 3);
+        let mut buf = Buffer::empty(area);
+        render(&scrolled, area, &mut buf, &mut Vec::new());
+        let any = (0..6).any(|y| text(&buf, y).contains("zz"));
+        assert_eq!(any, drawn, "scrolled, row {row}");
+    }
+}
+
+#[test]
+fn a_long_inline_field_scrolls_to_keep_the_caret_in_view() {
+    let area = Rect::new(0, 0, 12, 6);
+    let mut buf = Buffer::empty(area);
+    // Column 2 + 6 leaves 4 cells: the caret at the end of 20 characters.
+    render(
+        &drafting(2, 0, 6, "abcdefghijklmnopqrst", 20),
+        area,
+        &mut buf,
+        &mut Vec::new(),
+    );
+    assert_eq!(text(&buf, 1), "› row 0 rst");
+}
+
+#[test]
+fn a_styled_footer_replaces_the_plain_one_and_an_empty_one_leaves_it() {
+    let area = Rect::new(0, 0, 40, 6);
+    let key = Style::new().fg(Color::Red);
+    let mut styled = chromed(2, 0);
+    if let Some(chrome) = &mut styled.chrome {
+        chrome.footer = vec![
+            ("Enter".to_owned(), key),
+            (" save".to_owned(), Style::new()),
+        ];
+    }
+    let mut buf = Buffer::empty(area);
+    render(&styled, area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 5), "Enter save");
+    assert_eq!(buf[(0, 5)].fg, Color::Red);
+    assert_ne!(buf[(6, 5)].fg, Color::Red);
+    let mut buf = Buffer::empty(area);
+    render(&chromed(2, 0), area, &mut buf, &mut Vec::new());
+    assert_eq!(text(&buf, 5), "keys");
 }
