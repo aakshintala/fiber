@@ -1326,7 +1326,6 @@ fn set_cache_mtime(home: &std::path::Path, provider: &str, mtime: std::time::Sys
 }
 
 /// Sets every file and directory under an extension to one mtime.
-
 fn wrote(home: &std::path::Path, provider: &str, ids: &[&str]) {
     let models: Vec<serde_json::Value> = ids
         .iter()
