@@ -22,6 +22,7 @@ mod handoff;
 mod hub_command;
 mod keeper;
 mod keeper_child;
+mod keeper_restore;
 mod late_emit;
 mod launch;
 mod mcp_servers;

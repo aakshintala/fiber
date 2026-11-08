@@ -1974,3 +1974,225 @@ fn a_failed_delegate_with_an_error_over_16_kib_names_the_file_inside_the_first_1
         "the retained prefix keeps the path line"
     );
 }
+
+// `restore`: a job a keeper handed over, recorded under the `job_started` the
+// log already holds.
+
+fn started(id: &str, description: &str) -> contract::events::JobStarted {
+    contract::events::JobStarted {
+        job_id: JobId(id.into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: description.into(),
+        output_path: format!("artifacts/{id}.log"),
+    }
+}
+
+fn stop_counter() -> (Stop, Arc<std::sync::atomic::AtomicUsize>) {
+    let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let stops = Arc::clone(&count);
+    (
+        Stop(Box::new(move || {
+            stops.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        })),
+        count,
+    )
+}
+
+#[test]
+fn restore_appends_to_the_keepers_bytes_and_keeps_the_ids() {
+    let (dir, registry) = world();
+    let file = dir.path().join("artifacts/j_kept.log");
+    std::fs::write(&file, b"before the crash\n").unwrap();
+    let (stop, _) = stop_counter();
+    let mut opened = registry
+        .restore(started("j_kept", "make"), stop, None, false)
+        .unwrap();
+    assert_eq!(opened.started, started("j_kept", "make"));
+    assert_eq!(opened.path, file);
+    assert!(opened.lines.is_none());
+    opened.file.write_all(b"after the handover\n").unwrap();
+    // The keeper's bytes stay and the session adds after them.
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        b"before the crash\nafter the handover\n"
+    );
+    let text = registry.list_text();
+    assert!(text.contains("j_kept"), "{text}");
+    assert!(text.contains("make"), "{text}");
+    drop(opened.end);
+}
+
+#[test]
+fn restore_writes_no_job_started_and_mints_nothing() {
+    let dir = TempDir::new("fiber-jobs-restore-quiet");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    std::fs::write(artifacts.join("j_kept.log"), b"").unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let recorder = Arc::new(Recorder::default());
+    let registry = Registry::new(artifacts, clock, Arc::clone(&recorder) as _);
+    let (stop, _) = stop_counter();
+    let opened = registry
+        .restore(started("j_kept", "make"), stop, None, false)
+        .unwrap();
+    assert!(recorder.events().is_empty(), "restore writes no line");
+    assert_eq!(Jobs::running(&*registry), vec![JobId("j_kept".into())]);
+    drop(opened.end);
+}
+
+#[test]
+fn restore_stops_once_and_types_only_where_the_keeper_holds_a_terminal() {
+    let (dir, registry) = world();
+    std::fs::write(dir.path().join("artifacts/j_plain.log"), b"").unwrap();
+    std::fs::write(dir.path().join("artifacts/j_tty.log"), b"").unwrap();
+    let (stop, stops) = stop_counter();
+    let plain = registry
+        .restore(started("j_plain", "plain"), stop, None, false)
+        .unwrap();
+    let typed: Typed = Arc::default();
+    let record = Arc::clone(&typed);
+    let tty = registry
+        .restore(
+            started("j_tty", "python3"),
+            Stop(Box::new(|| {})),
+            Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
+                record.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }))),
+            false,
+        )
+        .unwrap();
+    assert!(matches!(
+        registry.write("j_plain", "x", 0, &CancelToken::new()),
+        Err(super::WriteError::NotTty)
+    ));
+    registry
+        .write("j_tty", "1+1\n", 0, &CancelToken::new())
+        .unwrap();
+    assert_eq!(&*typed.lock().unwrap(), b"1+1\n");
+    // A second stop does not send the closure again.
+    assert!(Jobs::stop(&*registry, &JobId("j_plain".into())));
+    assert!(Jobs::stop(&*registry, &JobId("j_plain".into())));
+    assert_eq!(stops.load(std::sync::atomic::Ordering::SeqCst), 1);
+    drop((plain.end, tty.end));
+}
+
+#[test]
+fn restore_delivers_monitor_lines_before_the_end() {
+    let (dir, registry) = world();
+    std::fs::write(dir.path().join("artifacts/j_mon.log"), b"").unwrap();
+    let (inbox, deliveries) = mpsc::channel();
+    Jobs::deliver_to(&*registry, inbox);
+    let (stop, _) = stop_counter();
+    let opened = registry
+        .restore(started("j_mon", "tail"), stop, None, true)
+        .unwrap();
+    let lines = opened.lines.expect("a monitor restores with its feed");
+    (lines.0)(contract::events::JobLine {
+        job_id: JobId("j_mon".into()),
+        lines: "ready".into(),
+        suppressed: None,
+        changed_by: None,
+    });
+    (opened.end.0)(ended_ok("j_mon"));
+    let dl = Deadline::after(Duration::from_secs(10));
+    assert!(
+        matches!(dl.recv_or_fail(&deliveries, "the monitor's batch"), Delivery::JobLine(line) if line.lines == "ready")
+    );
+    assert!(
+        matches!(dl.recv_or_fail(&deliveries, "the monitor's end"), Delivery::Job(end) if end.completed.job_id.0 == "j_mon")
+    );
+}
+
+#[test]
+fn restore_with_the_inbox_attached_after_it_still_delivers_the_end() {
+    // A restored job ends after the inbox exists: the end reaches the loop
+    // the way any job's does.
+    let (dir, registry) = world();
+    std::fs::write(dir.path().join("artifacts/j_late.log"), b"").unwrap();
+    let (stop, _) = stop_counter();
+    let opened = registry
+        .restore(started("j_late", "make"), stop, None, false)
+        .unwrap();
+    let (inbox, deliveries) = mpsc::channel();
+    Jobs::deliver_to(&*registry, inbox);
+    (opened.end.0)(ended_ok("j_late"));
+    let delivered = Deadline::after(Duration::from_secs(10)).recv_or_fail(&deliveries, "the end");
+    assert!(matches!(delivered, Delivery::Job(end) if end.completed.job_id.0 == "j_late"));
+    assert!(deliveries.try_recv().is_err(), "delivered once");
+}
+
+#[test]
+fn restore_failures_record_nothing_and_leave_the_id_free() {
+    let (dir, registry) = world();
+    let artifacts = dir.path().join("artifacts");
+    let fail = |started: contract::events::JobStarted, kind: Option<std::io::ErrorKind>| {
+        let (stop, _) = stop_counter();
+        let Err(error) = registry.restore(started, stop, None, false) else {
+            panic!("a restore that cannot hold recorded a job");
+        };
+        if let Some(kind) = kind {
+            assert_eq!(error.source.kind(), kind, "{error}");
+        }
+        assert_eq!(registry.list_text(), "No jobs.\n");
+    };
+    // The keeper's file is gone.
+    fail(
+        started("j_missing", "x"),
+        Some(std::io::ErrorKind::NotFound),
+    );
+    // Cannot be opened for appending: a directory stands where the file is.
+    std::fs::create_dir(artifacts.join("j_dir.log")).unwrap();
+    fail(started("j_dir", "x"), None);
+    // Paths outside artifacts/<file> are never opened.
+    std::fs::write(dir.path().join("outside.log"), b"").unwrap();
+    for bad in [
+        "../outside.log",
+        "artifacts/../outside.log",
+        "artifacts/sub/j.log",
+        "/etc/passwd",
+        "artifacts",
+        "j_kept.log",
+        "",
+    ] {
+        let mut bad_started = started("j_bad", "x");
+        bad_started.output_path = bad.into();
+        fail(bad_started, Some(std::io::ErrorKind::InvalidInput));
+    }
+    // The failures left the id free: a good file restores.
+    std::fs::write(artifacts.join("j_missing.log"), b"").unwrap();
+    let (stop, _) = stop_counter();
+    let ok = registry
+        .restore(started("j_missing", "x"), stop, None, false)
+        .unwrap();
+    drop(ok.end);
+}
+
+#[test]
+fn restore_refuses_a_job_already_recorded() {
+    let (dir, registry) = world();
+    std::fs::write(dir.path().join("artifacts/j_dup.log"), b"keep").unwrap();
+    let (stop, _) = stop_counter();
+    let first = registry
+        .restore(started("j_dup", "one"), stop, None, false)
+        .unwrap();
+    let (stop, _) = stop_counter();
+    let Err(error) = registry.restore(started("j_dup", "two"), stop, None, false) else {
+        panic!("the same job restored twice");
+    };
+    assert_eq!(error.source.kind(), std::io::ErrorKind::AlreadyExists);
+    assert_eq!(Jobs::running(&*registry), vec![JobId("j_dup".into())]);
+    assert_eq!(
+        std::fs::read(dir.path().join("artifacts/j_dup.log")).unwrap(),
+        b"keep"
+    );
+    // A job a normal open recorded is as taken as a restored one.
+    let opened = registry.open(opening("make")).unwrap();
+    let mut clash = started("j_x", "x");
+    clash.job_id = opened.started.job_id.clone();
+    clash.output_path = opened.started.output_path.clone();
+    let (stop, _) = stop_counter();
+    assert!(registry.restore(clash, stop, None, false).is_err());
+    drop((first.end, opened.end));
+}

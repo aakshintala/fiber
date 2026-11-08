@@ -670,6 +670,27 @@ fn negotiate(stream: UnixStream, id: &SessionId, clock: &Arc<dyn Clock>) -> io::
     }
 }
 
+/// A host with no keeper to spawn, and a handover over `stream` as a keeper
+/// that answered would leave it, for tests of what restores from one.
+#[cfg(test)]
+pub(crate) fn host_without_keeper(clock: Arc<dyn Clock>) -> Arc<Host> {
+    Host::new(
+        Arc::new(|| Err(io::Error::other("no keeper to spawn"))),
+        clock,
+    )
+}
+
+/// A negotiated handover over `stream`, whose other end plays the keeper.
+#[cfg(test)]
+pub(crate) fn handover_over(stream: UnixStream, running: Vec<KeptJob>) -> io::Result<Handover> {
+    Ok(Handover {
+        pid: support::peer::peer_pid(&stream).map_err(io::Error::other)?,
+        reader: BufReader::new(stream.try_clone()?),
+        stream,
+        running,
+    })
+}
+
 /// A handed-over job's control, on the connection of the keeper that runs it.
 #[derive(Clone)]
 pub(crate) struct Owner(Arc<Client>);

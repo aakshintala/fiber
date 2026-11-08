@@ -170,6 +170,15 @@ impl Resumed {
     pub fn seen_files(&self) -> &BTreeMap<PathBuf, u64> {
         &self.seen_files
     }
+
+    /// Takes the jobs a keeper handed over out of the jobs this resume would
+    /// mark `orphaned`: they run again, so their ends are the session's to
+    /// deliver (`docs/events.md`, "Resume"). Only the named jobs leave the
+    /// list; the replay, the delegate sessions, the usage ledger and the
+    /// window are not touched, and a job not in the list is ignored.
+    pub fn keep_jobs(&mut self, ids: &[JobId]) {
+        self.orphans.retain(|orphan| !ids.contains(&orphan.job_id));
+    }
 }
 
 /// Folds the log in the session directory `dir` over its chain, root
@@ -1110,6 +1119,10 @@ fn hook_failure(completed: &TurnCompleted) -> bool {
         Some(contract::ErrorCode::HookFailed) | Some(contract::ErrorCode::BudgetExceeded)
     )
 }
+
+#[cfg(test)]
+#[path = "resume_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod started_arguments_tests {
