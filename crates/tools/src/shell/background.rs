@@ -733,8 +733,7 @@ pub(super) fn to_completed_reported(
         job_id,
         status,
         output_tail: match status {
-            Outcome::Failed => output_tail(path),
-            Outcome::Completed | Outcome::Cancelled => None,
+            Outcome::Failed | Outcome::Completed | Outcome::Cancelled => output_tail(path),
         },
         error: output.error,
         process: output.process,

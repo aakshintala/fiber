@@ -86,7 +86,6 @@ fn completed(id: &str, status: Outcome) -> JobCompleted {
         error: None,
         process: None,
         output_tail: None,
-
         notice: None,
         changed_by: None,
         protected_paths: None,
@@ -828,6 +827,41 @@ fn a_zero_timeout_on_a_running_job_returns_at_once() {
     );
     assert!(text_of(&listed).contains("running"), "{}", text_of(&listed));
     drop(opened.end);
+}
+
+#[test]
+fn a_completed_wait_returns_its_stored_tail() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let opened = open(&registry, "printf 'l1\nl2\nl3\n'", idle_stop());
+    let id = opened.started.job_id.0.clone();
+    opened.end.0(JobCompleted {
+        job_id: JobId(id.clone()),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: Some("l1\nl2\nl3\n".into()),
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    });
+    let output = run(
+        &tool,
+        json!({"action": "wait", "job_id": id, "timeout_ms": 0}),
+        &CancelToken::new(),
+    );
+    assert!(output.error.is_none());
+    let text = text_of(&output);
+    assert!(
+        text.contains(&format!("Output: {}", opened.path.display())),
+        "{text}"
+    );
+    assert!(text.contains("Last output:\nl1\nl2\nl3\n"), "{text}");
+    assert!(matches!(
+        &settled(&output)[..],
+        [Taken { record: JobRecord::Completed(done), .. }]
+            if done.output_tail.as_deref() == Some("l1\nl2\nl3\n")
+    ));
 }
 
 #[test]

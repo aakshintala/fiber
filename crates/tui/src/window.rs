@@ -20,6 +20,7 @@ use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
+use crate::turn::opened::OPENED_LINES;
 use crate::turn::{DrawSummary, Entry, Fold, Row, Turn, target_id};
 
 mod images;
@@ -284,8 +285,9 @@ pub(crate) struct Pages {
     generations: BTreeMap<GenerationId, usize>,
     /// The ledger default, the last Ctrl+O.
     fold: Fold,
-    /// Shell output, placed after the number of turns in the page where it ran.
-    shells: Vec<(usize, usize, String)>,
+    /// Shell output, placed after the number of turns in the page where it ran,
+    /// and whether the run shows the output past its cap.
+    shells: Vec<(usize, usize, String, bool)>,
     /// Where each page and turn-after keeps its shells, in insertion
     /// order: drawing a turn slot looks up its own bucket instead of
     /// walking every shell the session ever ran.
@@ -1018,10 +1020,46 @@ impl Pages {
             }
         }
         let Some((at, open)) = found else {
-            return false;
+            return self.toggle_shell(target);
         };
         self.record(target, open, at);
         true
+    }
+
+    /// The slot of the run whose more row `target` names.
+    fn shell_slot(&self, target: &Target) -> Option<usize> {
+        let Target::Shell(slot) = target else {
+            return None;
+        };
+        (*slot < self.shells.len()).then_some(*slot)
+    }
+
+    /// Opens a run's output past the cap, or closes it. The state lives
+    /// with the run, never in the overrides: a dropped page loads it
+    /// again as the run holds it. False when no run is named.
+    fn toggle_shell(&mut self, target: &Target) -> bool {
+        let Some(slot) = self.shell_slot(target) else {
+            return false;
+        };
+        let Some((_, _, _, open)) = self.shells.get(slot) else {
+            return false;
+        };
+        let open = !*open;
+        self.set_shell(slot, open);
+        true
+    }
+
+    /// Sets run `slot` open or closed, and recounts the page it drew on.
+    fn set_shell(&mut self, slot: usize, open: bool) {
+        let Some((page, _, _, state)) = self.shells.get_mut(slot) else {
+            return;
+        };
+        *state = open;
+        let page = *page;
+        // The run's more row reads differently open, so the page's search
+        // text changed with it.
+        self.index.invalidate(page);
+        self.count(page);
     }
 
     /// Opens what `target` names on resident pages and the pending parts,
@@ -1044,6 +1082,15 @@ impl Pages {
                 self.record(target, true, at);
                 changed = true;
             }
+        }
+        if !changed && let Some(slot) = self.shell_slot(target) {
+            // A run's state lives with the run, so a dropped page loads
+            // it open without an override.
+            let closed = self.shells.get(slot).is_some_and(|(_, _, _, open)| !open);
+            if closed {
+                self.set_shell(slot, true);
+            }
+            return closed;
         }
         if !changed {
             // Nothing resident holds it, but a dropped page may: the
@@ -1137,9 +1184,30 @@ impl Pages {
                         .copied()
                 })
                 .map(Target::Image),
+            Target::Shell(slot) => self.find_shell(slot, fold).map(Target::Shell),
             Target::Login => Some(Target::Login),
             Target::Note(_) | Target::Orphans(_) => None,
         }
+    }
+
+    /// The slot the fold gives run `slot`: the run with the same page,
+    /// turn-after and text, counting equal runs in order. A slot moves
+    /// when `carry_chain` prepends runs, so the number is no identity.
+    fn find_shell(&self, slot: usize, fold: &Pages) -> Option<usize> {
+        let key = |run: &(usize, usize, String, bool)| (run.0, run.1, run.2.clone());
+        let run = key(self.shells.get(slot)?);
+        let nth = self
+            .shells
+            .iter()
+            .take(slot)
+            .filter(|other| key(other) == run)
+            .count();
+        fold.shells
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| key(other) == run)
+            .nth(nth)
+            .map(|(at, _)| at)
     }
 
     /// Carries the preview's closed ancestor-segment runs into the fold
@@ -1207,21 +1275,22 @@ impl Pages {
                 fold.generations.entry(generation.clone()).or_insert(*id);
             }
         }
-        let mut shells: Vec<(usize, usize, String)> = self
+        let mut shells: Vec<(usize, usize, String, bool)> = self
             .shells
             .iter()
-            .filter(|(page, _, _)| *page < len)
+            .filter(|(page, _, _, _)| *page < len)
             .cloned()
             .collect();
-        shells.extend(fold.shells.iter().map(|(page, after, text)| {
+        shells.extend(fold.shells.iter().map(|(page, after, text, open)| {
             (
                 page.saturating_add(len),
                 after.saturating_add(summaries),
                 text.clone(),
+                *open,
             )
         }));
         fold.shell_index.clear();
-        for (slot, (page, after, _)) in shells.iter().enumerate() {
+        for (slot, (page, after, _, _)) in shells.iter().enumerate() {
             fold.shell_index
                 .entry((*page, *after))
                 .or_default()
@@ -1767,7 +1836,7 @@ impl Pages {
             .entry((page, after))
             .or_default()
             .push(self.shells.len());
-        self.shells.push((page, after, item));
+        self.shells.push((page, after, item, false));
         // Shell output draws on the page, so its search text changed.
         self.index.invalidate(page);
         self.count(page);
@@ -1875,11 +1944,8 @@ impl Pages {
             if let Some(bucket) = self.shell_index.get(&(page, after)) {
                 crate::work::add(|work| work.shell_visits += bucket.len());
                 for slot in bucket {
-                    if let Some((_, _, text)) = self.shells.get(*slot) {
-                        out.extend(
-                            text.split('\n')
-                                .map(|line| (Line::raw(line.to_owned()), None)),
-                        );
+                    if let Some((_, _, text, open)) = self.shells.get(*slot) {
+                        shell_rows(text, *open, *slot, &mut out);
                     }
                 }
             }
@@ -2033,6 +2099,58 @@ impl Pages {
             *items = focus;
         }
     }
+}
+
+/// What clicking run `slot`'s more row opens.
+fn shell_target(slot: usize) -> Target {
+    Target::Shell(slot)
+}
+
+/// The note line of a `!` or `!!` run's row (`crate::shell::row`).
+const SHELL_NOTES: [&str; 2] = ["sent with your next prompt", "only you see this"];
+
+/// Whether `line` is how a run ended: `exit N` or `signal S`.
+fn shell_ending(line: &str) -> bool {
+    if let Some(code) = line.strip_prefix("exit ") {
+        let digits = code.strip_prefix('-').unwrap_or(code);
+        return !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit());
+    }
+    line.strip_prefix("signal ")
+        .is_some_and(|signal| !signal.is_empty() && !signal.contains(char::is_whitespace))
+}
+
+/// One run's lines. A run's row (head, kind note, output, ending) shows
+/// at most [`OPENED_LINES`] logical lines of output, then a dim more row
+/// that opens the rest in place and, open, reads "show less". Anything
+/// else, such as a cannot-start error row, draws whole.
+fn shell_rows(text: &str, open: bool, slot: usize, out: &mut Rows) {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let plain = |line: &&str| ((*line).to_owned(), None);
+    let row = |(line, target): (String, Option<Target>)| (Line::raw(line), target);
+    if !lines.get(1).is_some_and(|note| SHELL_NOTES.contains(note)) {
+        out.extend(lines.iter().map(plain).map(row));
+        return;
+    }
+    let (head, rest) = lines.split_at(2);
+    let ending = usize::from(rest.last().is_some_and(|line| shell_ending(line)));
+    let (output, tail) = rest.split_at(rest.len().saturating_sub(ending));
+    let (shown, past) = output.split_at(output.len().min(OPENED_LINES));
+    out.extend(head.iter().chain(shown).map(plain).map(row));
+    if !past.is_empty() {
+        let target = shell_target(slot);
+        if out.open_scope(target, open) {
+            out.extend(past.iter().map(plain).map(row));
+        }
+        out.end_scope();
+        let more = if open {
+            "show less".to_owned()
+        } else {
+            let left = u64::try_from(past.len()).unwrap_or(u64::MAX);
+            format::count(left, "more line", "more lines")
+        };
+        out.push((format::dim(more), Some(target)));
+    }
+    out.extend(tail.iter().map(plain).map(row));
 }
 
 /// Whether `part`'s replies hold a Markdown table, and how many reply

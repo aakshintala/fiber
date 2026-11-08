@@ -1126,7 +1126,7 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
         ended.process.as_ref().and_then(|process| process.exit_code),
         Some(0)
     );
-    assert!(ended.output_tail.is_none());
+    assert_eq!(ended.output_tail.as_deref(), Some("a\nb\n"));
     assert_eq!(job_output(dir.path(), &job), "a\nb\n");
     assert_eq!(running.recorder.text(), streamed);
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
@@ -1662,7 +1662,7 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
         .expect("the stop to finish the job");
     assert_eq!(ended.status, Outcome::Cancelled);
     assert!(ended.error.is_none());
-    assert!(ended.output_tail.is_none());
+    assert_eq!(ended.output_tail.as_deref(), Some("a\n"));
     assert!(!group_alive(pgid));
     watchdog.stand_down(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }

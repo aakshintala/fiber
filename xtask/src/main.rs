@@ -103,6 +103,9 @@
 //!   nightly-ref parses over supplied lines (`docs/ci.md`, "Releases")
 //! - `nightly-fixture --repo <dir> --keep <bare-version>...`: prunes the
 //!   clone to the bare keeps only (`docs/ci.md`, "Releases")
+//! - `shellcheck-files [DIR]`: the bash files under DIR (default `scripts`) that
+//!   `scripts/check` shellchecks, one per line (`docs/ci.md`, "On every pull
+//!   request that changes code")
 //! - `threads <cpus> <load>`: the nextest `--test-threads` count for the
 //!   host's load, printed as one integer
 //! - `budget-bounds --base REV`: whether any line changed against the merge
@@ -154,6 +157,7 @@ mod nightly_pair;
 mod rules;
 mod screen_ratchet;
 mod select;
+mod shellcheck_files;
 mod site;
 mod stale_wait_ratchet;
 mod stress;
@@ -483,6 +487,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         ),
         "nightly-pair" => nightly_pair::run(rest),
         "nightly-fixture" => nightly_fixture::run(rest),
+        "shellcheck-files" => shellcheck_files::run(rest),
         "threads" => {
             let (cpus, load) = match rest {
                 [cpus, load] => (cpus, load),

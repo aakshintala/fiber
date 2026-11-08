@@ -28,7 +28,7 @@ use contract::hook::{
     AfterToolAnswer, AfterToolCall, AfterToolOutcome, HookFailure, Hooks, JobDelivery, StateLine,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message, SessionMessage};
-use contract::jobs::{JobRecord, Jobs, OpenError, Taken};
+use contract::jobs::{JobRecord, Jobs, OpenError, Opening, Stop, Taken};
 use contract::provider::{
     Delta, Input, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition,
 };
@@ -6557,6 +6557,69 @@ fn the_output_pass_runs_before_the_completion_hook_and_the_file_is_already_repla
     assert_eq!(output_bytes(&world, OUT), b"redacted\n");
     // The completion itself passed through: the raw tail is logged.
     assert_notice(&world.turn_lines()[2], JOB);
+}
+
+#[test]
+fn a_completed_wait_on_a_real_registry_returns_the_stored_tail() {
+    let clock = fakes::clock::FakeClock::new();
+    let dir = fakes::TempDir::new("fiber-wait-tail");
+    let registry = jobs::Registry::new(
+        dir.path().to_path_buf(),
+        Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        Arc::new(fakes::Recorder::default()),
+    );
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "three lines".into(),
+            stop: Stop(Box::new(|| {})),
+            lines: false,
+            input: None,
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    let printed = fakes::wait_output(
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("printf 'one\\ntwo\\nthree\\n'")
+            .stdout(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+        "three-line wait-tail process",
+    );
+    assert!(printed.status.success());
+    let tail = String::from_utf8(printed.stdout).unwrap();
+    (opened.end.0)(JobCompleted {
+        job_id: JobId(id.clone()),
+        status: Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: Some(tail),
+        notice: None,
+        changed_by: None,
+        protected_paths: None,
+    });
+    let tool = jobs::JobsTool::new(Arc::clone(&registry));
+    let arguments = fakes::tool_args(json!({"action": "wait", "job_id": id, "timeout_ms": 0}));
+    let output = tool.run(
+        &arguments,
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+    );
+    assert!(output.error.is_none());
+    let text = match output.content.first() {
+        Some(ContentPart::Text { text }) => text,
+        other => panic!("expected text, got {other:?}"),
+    };
+    assert!(
+        text.contains(&format!("Output: {}", opened.path.display())),
+        "{text}"
+    );
+    assert!(text.contains("Last output:\none\ntwo\nthree\n"), "{text}");
 }
 
 // A Fiber delegate's final message file: written once, after the hooks, from

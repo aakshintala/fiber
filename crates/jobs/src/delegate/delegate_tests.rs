@@ -48,6 +48,7 @@ fn resolve() -> Resolve {
         lookup: Arc::new(|model: &str| match model {
             "fiber:fake/m" => Ok("fake/m".to_owned()),
             "deep" => Ok("fake/m:high".to_owned()),
+            "fiber:fake/m:low" => Err(LEVEL_REASON.to_owned()),
             _ => Err(format!("Unknown delegate model {model:?}.")),
         }),
         catalogue: Arc::from(CATALOGUE),
@@ -91,6 +92,17 @@ const CATALOGUE: &str = "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m
 
 /// The roles line the stub's refusals carry: the one configured role.
 const ROLES_LINE: &str = "Roles: deep";
+
+/// The reason for a level the model does not take, in the shape
+/// `extensions::thinking_refusal` builds; `main`'s
+/// `a_bad_level_on_a_valid_model_names_its_levels_before_the_roles_and_references`
+/// pins the real one.
+const LEVEL_REASON: &str =
+    "The thinking level `low` is not one model `fake/m` takes: it takes `high`.";
+
+/// The most bytes a model refusal holds apart from the names it echoes
+/// (the roles line, the value as typed, suggested model ids).
+const REFUSAL_BOUND: usize = 2048;
 
 /// The pointer every model refusal ends with.
 const POINTER_LINE: &str = "Call delegate_models for every reference.";
@@ -337,17 +349,15 @@ fn an_unknown_model_lists_roles_closest_and_pointer() {
     );
 }
 
-/// A level the model does not take fails in the same shape: the roles
-/// line, up to 3 closest references and the pointer, with no reference
-/// beyond the closest 3. The message names `fiber:` exactly 4 times: once
-/// for the typed model in the reason, 3 times for the closest.
+/// A level the model does not take names that model's levels first, then
+/// the roles line, up to 3 closest references and the pointer, with no
+/// reference beyond the closest 3. The whole-message equality pins all of it.
 #[test]
-fn a_bad_thinking_level_holds_no_reference_beyond_the_closest_three() {
+fn a_bad_thinking_level_names_its_levels_before_the_roles_and_closest() {
     let rig = rig();
     let spawned = tool(&rig);
-    let model = "fiber:fake/m:low";
     let output = spawned.run(
-        &arguments(model),
+        &arguments("fiber:fake/m:low"),
         &fakes::CancelToken::new(),
         &Recorder::default(),
     );
@@ -355,18 +365,7 @@ fn a_bad_thinking_level_holds_no_reference_beyond_the_closest_three() {
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
     assert_eq!(
         error.message,
-        format!("Unknown delegate model {model:?}.\n{ROLES_LINE}\n{CLOSEST_LINE}\n{POINTER_LINE}")
-    );
-    assert!(
-        !error.message.contains("fiber:fake/other"),
-        "{}",
-        error.message
-    );
-    assert_eq!(
-        error.message.matches("fiber:").count(),
-        4,
-        "{}",
-        error.message
+        format!("{LEVEL_REASON}\n{ROLES_LINE}\n{CLOSEST_LINE}\n{POINTER_LINE}")
     );
     // The model reads the failure in the content, not the error.
     let text = output.content.iter().map(text_of).collect::<String>();
@@ -377,6 +376,71 @@ fn a_bad_thinking_level_holds_no_reference_beyond_the_closest_three() {
         0,
         "no process starts"
     );
+}
+
+/// Each model refusal, built from the stub's default roles and catalogue
+/// and a short argument, stays within `REFUSAL_BOUND` bytes and carries the
+/// roles line whole as its second line.
+#[test]
+fn every_model_refusal_stays_within_2_kb_with_the_roles_line_whole() {
+    let cases: [(&str, Option<serde_json::Value>); 4] = [
+        ("model missing", None),
+        ("model not a string", Some(serde_json::json!(5))),
+        ("unknown model", Some(serde_json::json!("fiber:fake/nope"))),
+        ("bad level", Some(serde_json::json!("fiber:fake/m:low"))),
+    ];
+    for (name, model) in cases {
+        let rig = rig();
+        let spawned = tool(&rig);
+        let mut call = arguments("fiber:fake/m");
+        match model {
+            Some(value) => call.insert("model".to_owned(), value),
+            None => call.remove("model"),
+        };
+        let output = spawned.run(&call, &fakes::CancelToken::new(), &Recorder::default());
+        let error = output.error.expect("a bad model fails");
+        assert_eq!(error.code, contract::ErrorCode::InvalidArguments, "{name}");
+        assert!(
+            error.message.len() <= REFUSAL_BOUND,
+            "{name}: {} bytes: {}",
+            error.message.len(),
+            error.message
+        );
+        assert_eq!(
+            error.message.lines().nth(1),
+            Some(ROLES_LINE),
+            "{name}: {}",
+            error.message
+        );
+        assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0, "{name}");
+    }
+}
+
+/// The value the caller typed is echoed whole, however long: it is exempt
+/// from the bound, so the refusal passes it.
+#[test]
+fn a_long_model_value_is_echoed_in_full() {
+    let rig = rig();
+    let spawned = tool(&rig);
+    let model = format!("fiber:fake/{}", "x".repeat(3000));
+    let output = spawned.run(
+        &arguments(&model),
+        &fakes::CancelToken::new(),
+        &Recorder::default(),
+    );
+    let error = output.error.expect("an unknown model fails");
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert_eq!(
+        error.message.lines().next(),
+        Some(format!("Unknown delegate model {model:?}.").as_str())
+    );
+    assert_eq!(error.message.lines().nth(1), Some(ROLES_LINE));
+    assert!(
+        error.message.len() > REFUSAL_BOUND,
+        "{} bytes",
+        error.message.len()
+    );
+    assert_eq!(rig.launch_count.load(Ordering::SeqCst), 0);
 }
 
 #[test]
