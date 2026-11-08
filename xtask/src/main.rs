@@ -103,6 +103,9 @@
 //!   nightly-ref parses over supplied lines (`docs/ci.md`, "Releases")
 //! - `nightly-fixture --repo <dir> --keep <bare-version>...`: prunes the
 //!   clone to the bare keeps only (`docs/ci.md`, "Releases")
+//! - `shellcheck-files [DIR]`: the bash files under DIR (default `scripts`) that
+//!   `scripts/check` shellchecks, one per line (`docs/ci.md`, "On every pull
+//!   request that changes code")
 //! - `threads <cpus> <load>`: the nextest `--test-threads` count for the
 //!   host's load, printed as one integer
 //! - `budget-bounds --base REV`: whether any line changed against the merge
