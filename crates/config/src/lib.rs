@@ -101,10 +101,8 @@ pub use write::{
     validate_read_only_entry, version, write_atomic,
 };
 
-pub use keys::{
-    KEYS as SETTINGS_SCHEMA, Key as SettingsKey, WriteScope, diagnostics_debug, parse_duration,
-    refresh_after,
-};
+pub use keys::{KEYS as SETTINGS_SCHEMA, Key as SettingsKey};
+pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
 
 use home::{parse, plain, read, read_bytes};
 
