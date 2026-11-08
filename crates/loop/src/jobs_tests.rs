@@ -6592,8 +6592,6 @@ fn a_completed_wait_on_a_real_registry_returns_the_stored_tail() {
         "three-line wait-tail process",
     );
     assert!(printed.status.success());
-    let output_path = dir.path().join(&opened.path);
-    std::fs::write(&output_path, &printed.stdout).unwrap();
     let tail = String::from_utf8(printed.stdout).unwrap();
     (opened.end.0)(JobCompleted {
         job_id: JobId(id.clone()),

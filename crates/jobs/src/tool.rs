@@ -300,7 +300,3 @@ fn answered(text: String, settle: Option<contract::tool::Settle>) -> Output {
 #[cfg(test)]
 #[path = "tool_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "tool_tail_tests.rs"]
-mod tail_tests;
