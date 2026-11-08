@@ -23,7 +23,6 @@ use super::{App, Effect, Kind, mint};
 use crate::context_view::Handoff;
 use crate::input::Draft;
 use crate::shell;
-use crate::view::panel::delegates::DELEGATES_SHOWN;
 use serde_json::Value;
 
 /// A panel item that does something when clicked (`docs/tui.md`, "The panel", "Git").
@@ -51,6 +50,8 @@ pub(crate) enum Spot {
     Quota,
     /// A Changed files card row, by its rank in `changed_files_view::ranked`.
     File(usize),
+    /// The Delegates card's finished fold row.
+    DelegateFold,
     /// A Delegates card row, by its job's serial: a press and a release
     /// on the same serial opens that delegate, never the row's position.
     Delegate(u64),
@@ -111,6 +112,14 @@ enum ThinkingState {
     Closed,
 }
 
+/// The last readable figures retained when a delegate finishes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FinishedFigures {
+    pub(crate) calls: u64,
+    pub(crate) started: u64,
+    pub(crate) spend: Option<(Option<f64>, f64)>,
+}
+
 /// The attached session's folded panel data.
 #[derive(Debug, Default)]
 pub(crate) struct PanelState {
@@ -150,7 +159,7 @@ pub(crate) struct PanelState {
     /// the card keeps showing it as done (`docs/tui.md`, "The panel").
     finished: BTreeMap<JobId, Outcome>,
     ended: BTreeMap<JobId, u64>,
-    last: BTreeMap<JobId, (u64, u64, Option<(Option<f64>, f64)>)>,
+    last: BTreeMap<JobId, FinishedFigures>,
     jobs_open: bool,
     due: bool,
     asked: Option<String>,
@@ -159,6 +168,7 @@ pub(crate) struct PanelState {
     branch: Option<Branch>,
     scroll: usize,
     delegate_scroll: usize,
+    delegates_open: bool,
     /// The delegate sessions this attachment already tried to subscribe,
     /// so a refused subscribe goes out once per attachment
     /// (`docs/invocation.md`, `subscribe`).
@@ -575,19 +585,26 @@ impl PanelState {
         started: u64,
         spend: Option<(Option<f64>, f64)>,
     ) {
-        self.last.insert(job, (calls, started, spend));
+        self.last.insert(
+            job,
+            FinishedFigures {
+                calls,
+                started,
+                spend,
+            },
+        );
     }
 
     /// The finished delegate's calls and elapsed milliseconds, when known.
     pub(crate) fn finished_figures(&self, job: &JobId) -> Option<(u64, u64)> {
-        let (calls, started, _) = self.last.get(job)?;
+        let last = self.last.get(job)?;
         let ended = self.ended.get(job)?;
-        Some((*calls, ended.saturating_sub(*started)))
+        Some((last.calls, ended.saturating_sub(last.started)))
     }
 
     /// The finished delegate's last reported billed and subscription totals.
     pub(crate) fn finished_cost(&self, job: &JobId) -> Option<(Option<f64>, f64)> {
-        self.last.get(job)?.2
+        self.last.get(job)?.spend
     }
 
     /// Finished delegates in job start order, each with its job's
@@ -638,6 +655,8 @@ impl PanelState {
         self.trigger_at = None;
         // A new attachment has no running call, so no streamed thinking.
         self.thinking_state = ThinkingState::Idle;
+        self.delegate_scroll = 0;
+        self.delegates_open = false;
     }
 
     /// The branch the last query answered, if any.
@@ -650,9 +669,20 @@ impl PanelState {
         self.scroll
     }
 
-    /// How many delegates the Delegates card has scrolled.
+    /// How many entries the Delegates card has scrolled.
     pub(crate) fn delegate_scroll(&self) -> usize {
         self.delegate_scroll
+    }
+
+    /// Whether the finished delegates are expanded.
+    pub(crate) fn delegates_open(&self) -> bool {
+        self.delegates_open
+    }
+
+    /// Toggles the finished delegates, preserving and clamping the offset.
+    pub(super) fn toggle_delegates(&mut self) {
+        self.delegates_open = !self.delegates_open;
+        self.clamp_delegate_scroll();
     }
 
     /// Records `session` as tried on this attachment; true the first time.
@@ -662,22 +692,38 @@ impl PanelState {
         self.tried.insert(session.clone())
     }
 
-    /// Clamps the Delegates card's offset to the held delegates less
-    /// [`DELEGATES_SHOWN`], then moves it one delegate: down to the clamp,
-    /// up saturating at 0 (`docs/tui.md`, "The panel"). Running delegates
-    /// come first, then finished ones, so the clamp counts both.
+    /// Moves one whole delegate or fold entry in the six-row window.
     pub(super) fn scroll_delegates(&mut self, up: bool) {
-        let max = self
-            .running_delegates()
-            .len()
-            .saturating_add(self.finished_delegates().len())
-            .saturating_sub(DELEGATES_SHOWN);
-        let clamped = self.delegate_scroll.min(max);
+        self.clamp_delegate_scroll();
+        let max = self.delegate_scroll_max();
         self.delegate_scroll = if up {
-            clamped.saturating_sub(1)
+            self.delegate_scroll.saturating_sub(1)
         } else {
-            clamped.saturating_add(1).min(max)
+            self.delegate_scroll.saturating_add(1).min(max)
         };
+    }
+
+    pub(super) fn clamp_delegate_scroll(&mut self) {
+        self.delegate_scroll = self.delegate_scroll.min(self.delegate_scroll_max());
+    }
+
+    fn delegate_scroll_max(&self) -> usize {
+        let finished = self.finished_delegates().len();
+        let entries = self.running_delegates().len()
+            + usize::from(finished > 0)
+            + if self.delegates_open { finished } else { 0 };
+        let weight = |at: usize| {
+            usize::from(at != self.running_delegates().len()) * 2
+                + usize::from(at == self.running_delegates().len())
+        };
+        let mut total = 0;
+        for at in (0..entries).rev() {
+            total += weight(at);
+            if total > 6 {
+                return at + 1;
+            }
+        }
+        0
     }
 
     /// Folds the branch query's answer: the first line trimmed is the
@@ -1015,6 +1061,10 @@ impl App {
             Spot::Quota => self.quota_view(),
             Spot::Tools => self.open_config_view(super::ConfigView::Tools),
             Spot::File(rank) => self.open_changed_file(rank),
+            Spot::DelegateFold => {
+                self.panel_state.toggle_delegates();
+                Effect::None
+            }
             Spot::Delegate(serial) => self.open_serial(serial),
             Spot::Job(serial) => self.open_serial(serial),
             Spot::DelegateList => self.open_session_view(super::SessionView::Delegates),

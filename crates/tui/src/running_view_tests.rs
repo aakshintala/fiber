@@ -314,7 +314,7 @@ fn the_delegates_frame_matches_the_doc() {
         frame.rows[2],
         [
             (
-                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42 ".to_owned(),
+                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42".to_owned(),
                 Some(Spot::Item(serial)),
                 Ink::Muted
             ),
@@ -369,7 +369,7 @@ fn a_delegate_without_a_level_status_or_context_leaves_them_out() {
     ));
     assert_eq!(
         text(&delegates_frame(&app, List::default()).rows[2]),
-        "  test/model · 0 calls · s_dddddddddddddddd · $0.00 "
+        "  test/model · 0 calls · s_dddddddddddddddd · $0.00"
     );
 }
 
@@ -388,7 +388,7 @@ fn a_context_with_a_window_of_zero_draws_no_bar() {
     assert_eq!(frame.rows[2].len(), 1);
     assert_eq!(
         text(&frame.rows[2]),
-        "  test/model · 0 calls · s_dddddddddddddddd · $0.00 "
+        "  test/model · 0 calls · s_dddddddddddddddd · $0.00"
     );
 }
 
@@ -613,7 +613,7 @@ fn the_all_delegates_frame_matches_the_card_under_the_fake_clock() {
         frame.rows[1],
         [
             (
-                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42 ".to_owned(),
+                "  test/model · high · 3 calls · s_dddddddddddddddd · $0.42".to_owned(),
                 Some(Spot::Item(running)),
                 Ink::Muted
             ),
@@ -640,7 +640,7 @@ fn the_all_delegates_frame_matches_the_card_under_the_fake_clock() {
     assert_eq!(
         frame.rows[3],
         [(
-            "  6 calls · 6s · done".to_owned(),
+            "  6 calls · 6s · $0.00 · done".to_owned(),
             Some(Spot::Item(done)),
             Ink::Muted
         )]

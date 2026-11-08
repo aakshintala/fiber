@@ -93,11 +93,16 @@ fn finished_delegate_rows(
     };
     let spot = app.serial_of_job(&started.job_id).map(Spot::Item);
     let second = match app.panel_state().finished_figures(&started.job_id) {
-        Some((calls, elapsed)) => format!(
-            "  {} · {} · {word}",
-            crate::format::count(calls, "call", "calls"),
-            crate::format::duration(elapsed)
-        ),
+        Some((calls, elapsed)) => {
+            let mut line = format!(
+                "  {} · {}",
+                crate::format::count(calls, "call", "calls"),
+                crate::format::duration(elapsed)
+            );
+            append_cost(&mut line, app.panel_state().finished_cost(&started.job_id));
+            line.push_str(&format!(" · {word}"));
+            line
+        }
         None => format!("  {word}"),
     };
     [
@@ -130,6 +135,21 @@ pub(crate) fn jobs_frame(app: &App, list: List) -> Frame {
     )
 }
 
+fn append_cost(line: &mut String, cost: Option<(Option<f64>, f64)>) {
+    let Some((billed, subscription)) = cost else {
+        return;
+    };
+    if let Some(billed) = billed.filter(|amount| *amount > 0.0) {
+        line.push_str(&format!(" · {}", crate::format::money(billed)));
+    }
+    if subscription > 0.0 {
+        line.push_str(&format!(" · {} sub", crate::format::money(subscription)));
+    }
+    if billed == Some(0.0) && subscription == 0.0 {
+        line.push_str(" · $0.00");
+    }
+}
+
 fn elapsed(app: &App, job: &contract::JobId) -> String {
     app.started_of_job(job)
         .map(|started| {
@@ -153,12 +173,12 @@ fn delegate_detail(app: &App, started: &DelegateStarted, spot: Option<Spot>) -> 
         .map(|level| format!(" · {level}"))
         .unwrap_or_default();
     let calls = crate::format::count(status.calls, "call", "calls");
-    let spend = crate::format::money(row.spend);
-    let mut cells = vec![(
-        format!("  {}{level} · {calls} · {session} · {spend} ", status.model),
-        spot,
-        Ink::Muted,
-    )];
+    let mut detail = format!("  {}{level} · {calls} · {session}", status.model);
+    append_cost(
+        &mut detail,
+        Some((status.spend.cost, status.spend.subscription_cost)),
+    );
+    let mut cells = vec![(detail, spot, Ink::Muted)];
     if let Some(context) = status.context.as_ref().filter(|context| context.window > 0) {
         let (filled, role, pct) = bar(context.tokens, context.window);
         cells.push(("▆".repeat(filled), spot, Ink::Role(role)));

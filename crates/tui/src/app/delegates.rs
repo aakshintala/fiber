@@ -89,6 +89,7 @@ impl App {
                         );
                     }
                     self.delegate_rows.remove(&session);
+                    self.panel_state.clamp_delegate_scroll();
                 }
             }
             return Vec::new();

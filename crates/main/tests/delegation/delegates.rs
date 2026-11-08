@@ -8418,7 +8418,12 @@ fn a_finished_delegate_opens_its_replayed_view_from_a_click_and_from_enter() {
     let mut run = Run::spawn(&setup, 160, 48, &[], &env);
     run.ready();
     run.write(b"scan the tree\r");
-    // The delegate runs to completion: the card keeps its finished row.
+    // The delegate runs to completion; finished rows start folded.
+    let grid = run.wait_screen("the finished delegates fold", |grid| {
+        grid.contents.contains("1 finished ▸")
+    });
+    let fold = row_with(&grid, "1 finished ▸");
+    click(&mut run, col_at(&grid, fold, "1 finished ▸"), fold);
     let grid = run.wait_screen("the finished delegate row", |grid| {
         grid.contents.contains(FINISHED_ROW)
     });

@@ -1,6 +1,6 @@
 ---
 source: crates/tui/src/view/panel/delegates_tests.rs
-assertion_line: 838
+assertion_line: 839
 expression: "crate::view::text(&buf)"
 ---
 
@@ -24,7 +24,7 @@ expression: "crate::view::text(&buf)"
  ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
    Delegates            3 running
    ● task 1
-     0 calls · 0s
+     0 calls · 0s · $0.00
    ● write the docs
      claude · sonnet
    ● task 3

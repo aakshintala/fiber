@@ -201,6 +201,8 @@ pub struct Delegate<'a> {
     pub outcome: Option<Outcome>,
     /// When it ended, as `ts`; none while it runs.
     pub ended: Option<u64>,
+    /// Billed and subscription totals, absent until spend is reported.
+    pub cost: Option<(Option<f64>, f64)>,
 }
 
 /// The Delegates card: its running and finished delegates.
@@ -537,6 +539,17 @@ impl Delegate<'_> {
             hash_outcome(outcome, key);
         }
         self.ended.hash(key);
+        match self.cost {
+            Some((billed, subscription)) => {
+                true.hash(key);
+                billed.is_some().hash(key);
+                if let Some(billed) = billed {
+                    hash_float(billed, key);
+                }
+                hash_float(subscription, key);
+            }
+            None => false.hash(key),
+        }
     }
 }
 

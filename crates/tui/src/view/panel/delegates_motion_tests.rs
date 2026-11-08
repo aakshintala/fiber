@@ -135,7 +135,7 @@ fn progress_an_idle_delegate_asks_for_the_next_elapsed_second() {
     subscribe(&mut app, "j_1", json!({"state": "idle", "started": 1500}));
     app.set_now(clock.origin(), 10_750);
     app.motion().clear_wake();
-    assert_eq!(lines(&app, 97)[1], "  0 calls · 9s");
+    assert_eq!(lines(&app, 97)[1], "  0 calls · 9s · $0.00");
     assert_eq!(
         app.take_wake(),
         Some(clock.origin() + std::time::Duration::from_millis(750))
@@ -337,9 +337,9 @@ fn a_still_delegate_keeps_its_dot_while_a_working_one_spins() {
         lines(&app, 97),
         vec![
             format!("{} alpha", SPINNER[1]),
-            "  0 calls · 0s".to_owned(),
+            "  0 calls · 0s · $0.00".to_owned(),
             "● beta".to_owned(),
-            "  0 calls · 0s".to_owned(),
+            "  0 calls · 0s · $0.00".to_owned(),
         ]
     );
 }

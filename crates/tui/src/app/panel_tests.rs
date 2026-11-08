@@ -1,9 +1,10 @@
 //! Tests for the panel's folded state: widgets and going home.
 
 use super::super::{App, Effect};
+use super::Spot;
 use crate::home::{Launch, Spot as HomeSpot};
 use crate::link::Line;
-use contract::{HubEventKind, events::EventKind};
+use contract::{HubEventKind, clock::Clock, events::EventKind};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -571,6 +572,30 @@ fn a_completed_delegate_stays_on_the_card_as_done() {
     assert_eq!(app.panel_state().jobs().len(), 1);
 }
 
+#[test]
+fn enter_toggles_the_finished_delegate_fold_without_a_driver_effect() {
+    let mut app = attached();
+    app.on_line(started_line("j_1", "review the diff"));
+    app.on_line(delegated_line("j_1"));
+    app.on_line(completed_line("j_1", "completed"));
+    app.focus = Some(crate::mouse::TargetId::Panel(Spot::DelegateFold));
+    assert_eq!(
+        app.on_key(
+            crate::keys::Key::Enter,
+            fakes::clock::FakeClock::new().now()
+        ),
+        Effect::None
+    );
+    assert!(app.panel_state().delegates_open());
+    assert_eq!(
+        app.focus,
+        Some(crate::mouse::TargetId::Panel(Spot::DelegateFold))
+    );
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    assert!(!app.panel_state().delegates_open());
+    assert_eq!(app.panel_state().delegate_scroll(), 0);
+}
+
 /// A resume is a new run of the same job: it runs again, once, last in
 /// start order (`docs/delegates.md`, "Identity and resume").
 #[test]
@@ -634,11 +659,13 @@ fn delegate_scroll_clamps_over_running_and_finished() {
     app.on_line(completed_line("j_5", "completed"));
     assert_eq!(app.panel_state().running_delegates().len(), 3);
     assert_eq!(app.panel_state().finished_delegates().len(), 2);
-    // Five held, three shown: down clamps at two.
+    // The fold and two finished entries are in the weighted window:
+    // the last full window starts at the first finished entry.
+    app.panel_state.toggle_delegates();
     for _ in 0..9 {
         app.panel_state.scroll_delegates(false);
     }
-    assert_eq!(app.panel_state.delegate_scroll(), 2);
+    assert_eq!(app.panel_state.delegate_scroll(), 3);
     // Up saturates at the top.
     for _ in 0..9 {
         app.panel_state.scroll_delegates(true);

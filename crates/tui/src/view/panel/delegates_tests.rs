@@ -1,6 +1,5 @@
 //! Tests for the Delegates card: which delegates it lists and their rows.
 
-use super::DELEGATES_SHOWN;
 use crate::app::App;
 use crate::home::Launch;
 use crate::link::Line;
@@ -179,9 +178,17 @@ fn a_running_delegate_shows_its_description_with_its_state_below() {
     // done.
     finish(&mut app, "j_1");
     assert!(card_texts(&app).is_empty());
+    assert_eq!(done_texts(&app), vec!["1 finished ▸".to_owned()]);
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
     assert_eq!(
         done_texts(&app),
-        vec!["\u{2713} review the parser".to_owned(), "  done".to_owned()]
+        vec![
+            "1 finished ▾".to_owned(),
+            "\u{2713} review the parser".to_owned(),
+            "  done".to_owned(),
+        ]
     );
 }
 
@@ -221,7 +228,6 @@ fn without_a_status_the_rows_show_the_description_with_harness_and_model_below()
 
 #[test]
 fn three_delegates_show_and_a_fourth_does_not() {
-    assert_eq!(DELEGATES_SHOWN, 3);
     let mut app = attached(160, 40);
     fold_delegates(&mut app, 3);
     let three = card_texts(&app);
@@ -396,6 +402,52 @@ fn scroll_card(app: &mut App, steps: usize) {
 }
 
 #[test]
+fn finished_fold_keeps_running_first_and_exposes_every_finished_entry_by_scrolling() {
+    let mut app = attached_with(160, 40, &["delegates"]);
+    for k in 1..=7 {
+        fold_fiber(&mut app, k);
+    }
+    for k in 1..=5 {
+        finish(&mut app, &format!("j_{k}"));
+    }
+    assert_eq!(
+        done_texts(&app),
+        vec![
+            "● task 6",
+            "  fiber · test/model",
+            "● task 7",
+            "  fiber · test/model",
+            "5 finished ▸"
+        ]
+    );
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
+    let mut seen = Vec::new();
+    for _ in 0..8 {
+        let rows = done_texts(&app);
+        let finished: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.starts_with("✓ task "))
+            .collect();
+        assert!(
+            finished
+                .iter()
+                .all(|(at, _)| rows.get(at + 1) == Some(&"  done".to_owned()))
+        );
+        for (_, row) in finished {
+            let identity = row.split_whitespace().nth(2).unwrap_or_default().to_owned();
+            if !seen.contains(&identity) {
+                seen.push(identity);
+            }
+        }
+        scroll_card(&mut app, 1);
+    }
+    assert_eq!(seen, ["1", "2", "3", "4", "5"]);
+}
+
+#[test]
 fn the_card_shows_from_its_scroll_offset() {
     let mut app = attached_with(160, 40, &["delegates"]);
     fold_delegates(&mut app, 5);
@@ -417,6 +469,8 @@ fn the_card_shows_from_its_scroll_offset() {
     assert_eq!(
         card_texts(&app),
         vec![
+            "\u{25cf} task 2".to_owned(),
+            "  fiber \u{00b7} test/model".to_owned(),
             "\u{25cf} task 3".to_owned(),
             "  fiber \u{00b7} test/model".to_owned()
         ]
@@ -424,12 +478,36 @@ fn the_card_shows_from_its_scroll_offset() {
     assert_eq!(
         done_texts(&app),
         vec![
+            "\u{25cf} task 2".to_owned(),
+            "  fiber \u{00b7} test/model".to_owned(),
             "\u{25cf} task 3".to_owned(),
             "  fiber \u{00b7} test/model".to_owned(),
-            "\u{2713} task 4".to_owned(),
-            "  done".to_owned(),
-            "\u{2713} task 5".to_owned(),
-            "  done".to_owned(),
+            "2 finished ▸".to_owned(),
+        ]
+    );
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
+    assert_eq!(
+        done_texts(&app),
+        vec![
+            "● task 2",
+            "  fiber · test/model",
+            "● task 3",
+            "  fiber · test/model",
+            "2 finished ▾"
+        ]
+    );
+    scroll_card(&mut app, 1);
+    assert_eq!(app.panel_state().delegate_scroll(), 2);
+    assert_eq!(
+        done_texts(&app),
+        vec![
+            "● task 3",
+            "  fiber · test/model",
+            "2 finished ▾",
+            "✓ task 4",
+            "  done"
         ]
     );
 }
@@ -538,25 +616,74 @@ fn session_line_at(kind: &str, ts: u64, payload: serde_json::Value) -> Line {
 }
 
 #[test]
+fn running_cost_shows_billed_and_dim_subscription_totals() {
+    let mut app = attached_with(160, 40, &["delegates"]);
+    fold_fiber(&mut app, 1);
+    delegate_status(
+        &mut app,
+        "j_1",
+        serde_json::json!({
+            "state": "idle", "calls": 14, "started": 0,
+            "spend": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                "cost": 0.42, "subscription_cost": 1.10},
+            "step": "read app.rs"
+        }),
+    );
+    let rows = super::rows(&app, 100);
+    assert_eq!(
+        rows[1].line.to_string(),
+        "  14 calls · 0s · $0.42 · $1.10 sub · read app.rs"
+    );
+    let subscription = rows[1]
+        .line
+        .spans
+        .iter()
+        .find(|span| span.content.contains("$1.10 sub"))
+        .unwrap_or_else(|| panic!("subscription amount span"));
+    assert!(
+        subscription
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+}
+
+#[test]
+fn unknown_billed_cost_with_no_subscription_has_no_cost_segment() {
+    let mut app = attached_with(160, 40, &["delegates"]);
+    fold_fiber(&mut app, 1);
+    delegate_status(
+        &mut app,
+        "j_1",
+        serde_json::json!({
+            "state": "idle", "calls": 1, "started": 0,
+            "spend": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0},
+                "cost": null, "subscription_cost": 0.0}
+        }),
+    );
+    assert_eq!(super::rows(&app, 100)[1].line.to_string(), "  1 call · 0s");
+}
+
+#[test]
 fn progress_running_rows_show_calls_elapsed_and_the_optional_step() {
     let clock = fakes::clock::FakeClock::new();
     const WALL: u64 = 1_700_000_000_000;
     for (fields, expected) in [
         (
             serde_json::json!({"calls": 14, "started": WALL-130_000, "step": "read app.rs"}),
-            "  14 calls · 2m 10s · read app.rs",
+            "  14 calls · 2m 10s · $0.00 · read app.rs",
         ),
         (
             serde_json::json!({"calls": 1, "started": WALL-130_000}),
-            "  1 call · 2m 10s",
+            "  1 call · 2m 10s · $0.00",
         ),
         (
             serde_json::json!({"calls": 0, "started": WALL-3_000}),
-            "  0 calls · 3s",
+            "  0 calls · 3s · $0.00",
         ),
         (
             serde_json::json!({"calls": 2, "started": WALL+1}),
-            "  2 calls · 0s",
+            "  2 calls · 0s · $0.00",
         ),
     ] {
         let mut app = attached(160, 40);
@@ -611,9 +738,12 @@ fn progress_finished_rows_freeze_the_last_status_at_the_first_end() {
             60_000,
             serde_json::json!({"job_id": "j_1", "status": outcome}),
         ));
+        app.on_click(crate::mouse::TargetId::Panel(
+            crate::app::panel::Spot::DelegateFold,
+        ));
         assert_eq!(
-            super::rows_with_done(&app, 100)[1].line.to_string(),
-            format!("  6 calls · {elapsed} · {word}")
+            super::rows_with_done(&app, 100)[2].line.to_string(),
+            format!("  6 calls · {elapsed} · $0.00 · {word}")
         );
         assert!(
             app.delegate_row(&contract::SessionId(format!("s_{:0>16}", "j_1")))
@@ -627,7 +757,7 @@ fn progress_finished_rows_freeze_the_last_status_at_the_first_end() {
             serde_json::json!({"job_id": "j_1", "status": "completed"}),
         ));
         assert_eq!(
-            super::rows_with_done(&app, 100)[1].line.to_string(),
+            super::rows_with_done(&app, 100)[2].line.to_string(),
             "  done"
         );
     }
@@ -650,9 +780,12 @@ fn a_delegate_completion_ignores_a_protected_paths_report() {
         serde_json::json!({"job_id": "j_1", "status": "completed",
             "protected_paths": {"restored": [".fiber"], "failed": []}}),
     ));
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
     assert_eq!(
-        super::rows_with_done(&app, 100)[1].line.to_string(),
-        "  6 calls · 58s · done"
+        super::rows_with_done(&app, 100)[2].line.to_string(),
+        "  6 calls · 58s · $0.00 · done"
     );
 }
 
@@ -685,7 +818,7 @@ fn with_a_status_the_second_row_shows_its_progress() {
         assert_eq!(glyph.content, "\u{25cf}");
         assert_eq!(glyph.style, crate::theme::style(Role::Attention));
         let second = &drawn[1];
-        assert_eq!(second.line.to_string(), "  0 calls · 0s");
+        assert_eq!(second.line.to_string(), "  0 calls · 0s · $0.00");
         assert_eq!(
             second.line.spans.first().map(|span| span.style),
             Some(crate::theme::style(Role::Muted))
@@ -718,7 +851,7 @@ fn the_progress_row_does_not_show_the_model() {
     let drawn = super::rows(&app, text_width(&app));
     // The description remains above the progress, regardless of model.
     assert_eq!(drawn[0].line.to_string(), "\u{25cf} review the parser");
-    assert_eq!(drawn[1].line.to_string(), "  0 calls · 0s");
+    assert_eq!(drawn[1].line.to_string(), "  0 calls · 0s · $0.00");
 }
 
 /// A delegate's end draws from its outcome: the glyph, the description
@@ -737,9 +870,12 @@ fn finished_delegates_show_how_they_ended() {
             "job_completed",
             serde_json::json!({"job_id": "j_1", "status": status}),
         ));
+        app.on_click(crate::mouse::TargetId::Panel(
+            crate::app::panel::Spot::DelegateFold,
+        ));
         let drawn = super::rows_with_done(&app, text_width(&app));
-        assert_eq!(drawn.len(), 2, "{status}");
-        let first = &drawn[0];
+        assert_eq!(drawn.len(), 3, "{status}");
+        let first = &drawn[1];
         assert_eq!(
             first.line.to_string(),
             format!("{glyph} task 1"),
@@ -752,7 +888,7 @@ fn finished_delegates_show_how_they_ended() {
             .unwrap_or_else(|| panic!("a glyph span"));
         assert_eq!(mark.content, glyph, "{status}");
         assert_eq!(mark.style, crate::theme::style(tone), "{status}");
-        let second = &drawn[1];
+        let second = &drawn[2];
         assert_eq!(second.line.to_string(), format!("  {word}"), "{status}");
         assert_eq!(
             second.line.spans.first().map(|span| span.style),
@@ -779,7 +915,7 @@ fn the_title_counts_only_running() {
     fold_fiber(&mut app, 2);
     finish(&mut app, "j_1");
     let drawn = texts(&app);
-    assert_eq!(drawn.len(), 7);
+    assert_eq!(drawn.len(), 6);
     let title = drawn.get(1).expect("a title row");
     assert!(title.ends_with("1 running"), "{title}");
     let rows = crate::view::panel::rows(&app, panel_width(&app));
@@ -792,9 +928,13 @@ fn the_title_counts_only_running() {
     fold_fiber(&mut app, 1);
     finish(&mut app, "j_1");
     let drawn = texts(&app);
-    assert_eq!(drawn.len(), 5);
+    assert_eq!(drawn.len(), 4);
     assert!(drawn[1].ends_with("0 running"), "{drawn:?}");
-    assert_eq!(done_texts(&app), vec!["\u{2713} task 1", "  done"]);
+    assert_eq!(done_texts(&app), vec!["1 finished ▸"]);
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
+    assert_eq!(done_texts(&app), vec!["1 finished ▾", "✓ task 1", "  done"]);
     let rows = crate::view::panel::rows(&app, panel_width(&app));
     assert_eq!(
         rows[1].line.spans.last().map(|span| span.style),
@@ -815,9 +955,15 @@ fn a_new_running_delegate_shows_before_finished_ones() {
         vec![
             "\u{25cf} task 2".to_owned(),
             "  fiber \u{00b7} test/model".to_owned(),
-            "\u{2713} task 1".to_owned(),
-            "  done".to_owned(),
+            "1 finished ▸".to_owned(),
         ]
+    );
+    app.on_click(crate::mouse::TargetId::Panel(
+        crate::app::panel::Spot::DelegateFold,
+    ));
+    assert_eq!(
+        done_texts(&app)[2..],
+        ["1 finished ▾", "✓ task 1", "  done"]
     );
     assert_eq!(
         card_texts(&app),

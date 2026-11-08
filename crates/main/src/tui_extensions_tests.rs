@@ -2884,7 +2884,34 @@ fn delegate(
         started: Some(1720000000000),
         outcome,
         ended,
+        cost: None,
     }
+}
+
+#[test]
+fn delegates_widget_cost_preserves_absent_null_and_both_totals() {
+    let absent = delegate("1", None, None);
+    let mut unknown_billed = delegate("2", Some(contract::events::Outcome::Completed), Some(2));
+    unknown_billed.cost = Some((None, 0.42));
+    let mut both = delegate("3", Some(contract::events::Outcome::Failed), Some(3));
+    both.cost = Some((Some(0.42), 1.10));
+    let card = tui::ext::DelegatesCard {
+        delegates: vec![absent, unknown_billed, both],
+        flat: false,
+    };
+    let value = super::delegates_value(&card);
+    let delegates = value["delegates"]
+        .as_array()
+        .unwrap_or_else(|| panic!("delegate array"));
+    assert!(delegates[0].get("cost").is_none());
+    assert_eq!(
+        delegates[1]["cost"],
+        serde_json::json!({"billed": null, "subscription": 0.42})
+    );
+    assert_eq!(
+        delegates[2]["cost"],
+        serde_json::json!({"billed": 0.42, "subscription": 1.10})
+    );
 }
 
 #[test]
@@ -2895,18 +2922,26 @@ fn a_delegates_card_renderer_reads_running_then_finished() {
         "a",
         None,
         Some(
-            "fiber.slot('card:delegates',{timeout=100,render=function(input) local running = input.delegates[1] local done = input.delegates[2] return {{{text=running.job_id .. '|' .. running.description .. '|' .. running.harness .. '|' .. running.model .. '|' .. running.calls .. '|' .. running.step .. '|' .. running.started .. '|' .. tostring(running.outcome) .. '|' .. tostring(running.ended) .. '|' .. done.job_id .. '|' .. done.outcome .. '|' .. done.ended}}} end})",
+            "fiber.slot('card:delegates',{timeout=100,render=function(input) local running = input.delegates[1] local done = input.delegates[2] return {{{text=running.job_id .. '|' .. tostring(running.cost.billed) .. '|' .. running.cost.subscription .. '|' .. done.job_id .. '|' .. done.cost.billed .. '|' .. done.cost.subscription}}} end})",
         ),
     );
     let (renderer, _) = loader.load();
     let card = Input::Card(tui::ext::Card::Delegates(tui::ext::DelegatesCard {
         delegates: vec![
-            delegate("3", None, None),
-            delegate(
-                "4",
-                Some(contract::events::Outcome::Completed),
-                Some(1720000001000),
-            ),
+            {
+                let mut value = delegate("3", None, None);
+                value.cost = Some((None, 0.42));
+                value
+            },
+            {
+                let mut value = delegate(
+                    "4",
+                    Some(contract::events::Outcome::Completed),
+                    Some(1720000001000),
+                );
+                value.cost = Some((Some(0.42), 1.10));
+                value
+            },
         ],
         flat: false,
     }));
@@ -2915,10 +2950,7 @@ fn a_delegates_card_renderer_reads_running_then_finished() {
         panic!("a delegates card draws")
     };
     // `docs/tui.md`, "The slots": running in start order first, then finished in start order.
-    assert_eq!(
-        lines[0][0].text,
-        "3|review the diff|fiber|m|14|read app.rs|1720000000000|nil|nil|4|completed|1720000001000"
-    ); // `docs/tui.md`, "The slots".
+    assert_eq!(lines[0][0].text, "3|nil|0.42|4|0.42|1.1"); // `docs/tui.md`, "The slots".
 }
 
 #[test]

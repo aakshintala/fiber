@@ -320,19 +320,29 @@ fn delegate_progress(grid: &Grid, tail: &str, finished: bool) -> bool {
         };
         let text = next[start..].trim_end();
         let parts: Vec<_> = text.split(" · ").collect();
-        if parts.len() != 3 || parts[0] != "2 calls" || !delegate_duration(parts[1]) {
+        if !matches!(parts.len(), 3 | 4)
+            || parts[0] != "2 calls"
+            || !delegate_duration(parts[1])
+            || (parts.len() == 4 && parts[2] != "$0.00")
+        {
             return false;
         }
+        let subject = parts[parts.len() - 1];
         let Some((x, progress_y)) = grid.text_at(text) else {
             return false;
         };
         if usize::from(progress_y) != y + 1 {
             return false;
         }
-        let prefix_width = Span::raw(format!("2 calls · {} · ", parts[1])).width();
+        let prefix = if parts.len() == 4 {
+            format!("2 calls · {} · $0.00 · ", parts[1])
+        } else {
+            format!("2 calls · {} · ", parts[1])
+        };
+        let prefix_width = Span::raw(prefix).width();
         let subject_x = usize::from(x) + prefix_width;
         let content_end = usize::from(grid.size().0.saturating_sub(1));
-        if !delegate_subject_matches(parts[2], tail, content_end.saturating_sub(subject_x)) {
+        if !delegate_subject_matches(subject, tail, content_end.saturating_sub(subject_x)) {
             return false;
         }
         let y = progress_y;
@@ -416,8 +426,14 @@ fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
         delegate_progress(grid, &subject, false)
     });
     std::io::Write::write_all(hold.release(), b"done\n").unwrap();
+    run.click_where("the finished delegates fold", |grid| {
+        grid.rows.iter().enumerate().find_map(|(y, row)| {
+            (row.contains("1 finished ▸") && row.find("1 finished ▸").is_some_and(|x| x >= 100))
+                .then(|| (row.find("1 finished ▸").unwrap_or(0) as u16 + 1, y as u16))
+        })
+    });
     run.wait_screen(
-        "the finished delegate's calls, elapsed and done, dim",
+        "the finished delegate's calls, elapsed, known-zero cost and done, dim",
         |grid| delegate_progress(grid, "done", true),
     );
     hold.stand_down(setup.deadline.cleanup_phase());
