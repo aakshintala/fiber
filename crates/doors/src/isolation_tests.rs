@@ -32,6 +32,10 @@ use worktree::project;
 /// "Waits and timeouts").
 const BUDGET: Duration = Duration::from_secs(40);
 
+/// The lock-transfer test's bound: the file's one budget under the name the
+/// bounds check reads as short.
+const DEADLINE: Duration = BUDGET;
+
 /// A re-run child's own bound: it fires before the parent's wait, so the
 /// two no longer contradict.
 const CHILD_BUDGET: Duration = Duration::from_secs(20);
@@ -179,7 +183,7 @@ fn warn_line(home: &Path, id: &str) -> serde_json::Value {
 
 #[test]
 fn delegate_creation_holds_before_add_and_child_adoption_overlaps() {
-    fakes::within("delegate lock transfer", Deadline::after(BUDGET), || {
+    fakes::within("delegate lock transfer", Deadline::after(DEADLINE), || {
         let home = fakes::TempDir::new("delegate-transfer-home");
         let repo = repo("delegate-transfer-repo");
         let id = SessionId("s_0123456789abcdef".into());

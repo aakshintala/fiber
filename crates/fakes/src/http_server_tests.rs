@@ -1372,16 +1372,17 @@ fn transfer_keeps_bytes_after_the_connect_head() {
         client
             .write_all(b"CONNECT 127.0.0.1:80 HTTP/1.1\r\nHost: 127.0.0.1:80\r\n\r\nPING")
             .expect("the CONNECT writes");
-        let (stream, ahead) = match Deadline::after(OP).recv_or_fail(&rx, "the transfer") {
-            Ok(transfer) => transfer,
-            Err(payload) => panic!(
-                "the transfer failed: {}",
-                payload
-                    .downcast_ref::<String>()
-                    .cloned()
-                    .unwrap_or_else(|| "a non-string panic".to_owned())
-            ),
-        };
+        let (stream, ahead) =
+            match Deadline::after(crate::MUST_SUCCEED_WITHIN).recv_or_fail(&rx, "the transfer") {
+                Ok(transfer) => transfer,
+                Err(payload) => panic!(
+                    "the transfer failed: {}",
+                    payload
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .unwrap_or_else(|| "a non-string panic".to_owned())
+                ),
+            };
         assert_eq!(ahead, b"PING", "bytes past the head survive the transfer");
         drop(stream);
     });

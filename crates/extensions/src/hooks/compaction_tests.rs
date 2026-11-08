@@ -755,7 +755,7 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
     );
     cancel.fired.store(true, Ordering::SeqCst);
     server.release();
-    let answer: BeforeCompactionAnswer = Deadline::after(GATE_WAIT)
+    let answer: BeforeCompactionAnswer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("waited for the chain");
     assert_eq!(answer.outcome, BeforeCompactionOutcome::NoNote);
@@ -781,7 +781,7 @@ fn a_cancel_between_two_hooks_runs_no_later_hook() {
         server.await_requests(2, Deadline::after(GATE_WAIT)),
         "waited for the second hook to reach its gate"
     );
-    let answer: BeforeCompactionAnswer = Deadline::after(GATE_WAIT)
+    let answer: BeforeCompactionAnswer = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
         .recv(&done_rx)
         .expect("waited for the chain");
     assert_eq!(note(&answer), Some(("first:0+second", "fiber.test/gate")));
