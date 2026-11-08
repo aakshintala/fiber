@@ -1040,6 +1040,11 @@ The kinds are `docs/events.md`.
   answer still reports the final state, without the delegate's final message.
   Its `delegate_finished` and `job_completed` are written with no turn, after
   the `after_tool` hooks (`docs/extensions.md`, "Host calls").
+- A `jobs wait` that returns a job's final state carries the same `output_tail`
+  as the completion notice, with the output path in the wait answer. A wait
+  that ends at its deadline with the job still running reports `still_running`
+  with no tail; a finished job whose output file is empty or missing carries
+  no tail either.
 - A monitor is a job running a watch command. The model starts one with a
   `shell` call that sets `monitor: true`, so the command goes through the
   shell's classifier, permissions and `workdir` like any other. Lines on its standard output
