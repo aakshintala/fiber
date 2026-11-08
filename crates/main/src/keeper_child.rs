@@ -120,6 +120,9 @@ struct Hooks {
     /// Runs after a candidate registered and before it contends for the log,
     /// so a test lands the last job's exit in that window.
     registered: Option<Box<dyn Fn() + Send + Sync>>,
+    /// Runs once a candidate holds the log, before it decides, so a test
+    /// reads what had happened by then.
+    acquired: Option<Box<dyn Fn() + Send + Sync>>,
     /// Runs as a bound watcher ends, with its generation.
     watcher_done: Option<Box<dyn Fn(u64) + Send + Sync>>,
 }
@@ -785,6 +788,10 @@ impl Runtime {
         }
         let kept = {
             let mut log = lock(&self.log);
+            #[cfg(test)]
+            if let Some(acquired) = &self.hooks.acquired {
+                acquired();
+            }
             {
                 let mut candidate = lock(&self.candidate);
                 if candidate.as_ref().map(|waiting| waiting.ticket) != Some(ticket) {

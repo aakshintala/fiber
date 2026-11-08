@@ -1,5 +1,6 @@
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
@@ -659,23 +660,6 @@ fn hear(peer: &Peer, what: &str) -> Option<FromKeeper> {
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&peer.frames, what)
 }
 
-/// Whether a keeper stays silent for a bounded receive while the test holds
-/// the condition it waits on false with a real signal, such as the log mutex
-/// (`docs/testing.md`, "Waits and timeouts": a test that proves a wait has
-/// not answered yet). Never a stand-in for a wait on code the test does not hold.
-fn hearing_nothing(peer: &Peer) -> bool {
-    peer.frames.recv_timeout_for_test().is_none()
-}
-
-trait RecvForTest<T> {
-    fn recv_timeout_for_test(&self) -> Option<T>;
-}
-impl<T> RecvForTest<T> for mpsc::Receiver<T> {
-    fn recv_timeout_for_test(&self) -> Option<T> {
-        Deadline::after(Duration::from_millis(200)).recv(self).ok()
-    }
-}
-
 fn ready_signal() -> (Box<dyn Fn() + Send + Sync>, mpsc::Receiver<()>) {
     let (send, received) = mpsc::channel();
     (
@@ -880,9 +864,22 @@ fn release_waits_behind_a_held_log_mutex() {
     let clock = fakes::clock::FakeClock::new();
     let (held, held_rx) = ready_signal();
     let (registered, registered_rx) = ready_signal();
+    // The append ends when `freed` is set; the candidate reports what it
+    // read of it on taking the log.
+    let freed = Arc::new(AtomicBool::new(false));
+    let (acquired_at, acquired_rx) = mpsc::channel();
+    let acquired = {
+        let freed = Arc::clone(&freed);
+        Box::new(
+            move || match acquired_at.send(freed.load(Ordering::SeqCst)) {
+                Ok(()) | Err(_) => {}
+            },
+        )
+    };
     let hooks = super::Hooks {
         held: Some(held),
         registered: Some(registered),
+        acquired: Some(acquired),
         ..super::Hooks::default()
     };
     let (mut keeper, runtime) = serve_keeper_with(
@@ -904,17 +901,19 @@ fn release_waits_behind_a_held_log_mutex() {
     let append = super::lock(&runtime.log);
     say(&mut peer, &ToKeeper::Handover(true));
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&registered_rx, "the candidate");
-    assert!(
-        hearing_nothing(&peer),
-        "the keeper answered before it was free"
-    );
     // `docs/events.md`, "Writing": a second Fiber process cannot open the
     // session while the keeper still holds it.
     assert!(matches!(
         log::Log::open(&keeper.sessions, id.clone(), fakes::clock::FakeClock::new()),
         Err(log::Error::Held { .. })
     ));
+    freed.store(true, Ordering::SeqCst);
     drop(append);
+    assert!(
+        Deadline::after(Duration::from_secs(10))
+            .recv_or_fail(&acquired_rx, "the candidate to take the log"),
+        "the candidate took the log while an append held it"
+    );
     assert!(matches!(
         hear(&peer, "the acknowledgement"),
         Some(FromKeeper::Handover { running }) if running.len() == 1
@@ -1418,14 +1417,13 @@ fn a_bound_that_expires_first_leaves_nothing_to_take() {
 }
 
 struct Barrier {
-    armed: Arc<std::sync::atomic::AtomicBool>,
+    armed: Arc<AtomicBool>,
     arrived: mpsc::Receiver<()>,
     go: mpsc::Sender<()>,
 }
 
 /// A recovery stops before it opens the log, once armed, until released.
 fn barrier() -> (Box<dyn Fn() + Send + Sync>, Barrier) {
-    use std::sync::atomic::{AtomicBool, Ordering};
     let armed = Arc::new(AtomicBool::new(false));
     let (arrive, arrived) = mpsc::channel();
     let (go, released) = mpsc::channel::<()>();
@@ -1449,7 +1447,6 @@ fn barrier() -> (Box<dyn Fn() + Send + Sync>, Barrier) {
 /// The resumed session crashes while it holds a handed-over job and a fresh
 /// keeper holds another: both keepers recover, one wins the lock.
 fn lock_race(old_wins: bool) {
-    use std::sync::atomic::Ordering;
     let clock = fakes::clock::FakeClock::new();
     let id = SessionId("s_0123456789abcdef".into());
     let deadline = || Deadline::after(Duration::from_secs(10));
