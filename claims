@@ -186,3 +186,18 @@ crates/jobs/src/delegate.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-
 crates/jobs/src/delegate/message/resume.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
 crates/jobs/src/delegate/run_tests.rs	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
 docs/state.md	fiber-4312	plan	2026-11-08T22:59:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4375
+crates/tui/src/running_view.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/running_view_tests.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/session_views_tests.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/status_rows_tests.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/ext/input/chrome.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/ext/cache_tests.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/tui_extensions.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/tui_extensions_tests.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/delegation/delegates.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/screen_looks/panel_look.rs	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/panel/snapshots/tui__view__panel__delegates__tests__delegates_card_with_statuses.snap	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/panel/snapshots/tui__view__panel__delegates__motion_tests__delegates_card_spinner.snap	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/snapshots/tui__view__working_line__tests__working_line_narrow_above_the_delegates_rows.snap	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/snapshots/tui__view__item__tests__running_delegate_header_with_held_status.snap	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/snapshots/tui__app__session_views__tests__all_delegates_list.snap	fiber-4182	plan	2026-11-08T23:04:47Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
