@@ -111,6 +111,7 @@ case "$#" in
   *) echo "usage: scripts/bug-red [--report] BASE [HEAD]" >&2; exit 2 ;;
 esac
 cd "$(git rev-parse --show-toplevel)"
+top=$PWD
 
 base=$1
 # Resolve to a SHA once: the one-commit check below compares SHAs.
@@ -145,8 +146,32 @@ if [ -z "$red" ] || [ "$red" = "$prhead" ]; then
   echo "bug-red: the pull request has one commit; push the reproducing test and the fix as separate commits, the test first"
   exit 1
 fi
+tree=$(mktemp -d)
+list=$(mktemp)
+git worktree add --quiet --detach "$tree" "$red"
+trap 'git worktree remove --force "$tree"; rm -f "$list"' EXIT
+
+# Build the red commit into the checkout's persistent target/bug-red dir:
+# reusing one target keeps the compiled dependencies across runs while
+# keeping red-tree artifacts out of the checkout's target/.
+target_dir=$(git rev-parse --show-toplevel)/target/bug-red
+mkdir -p "$target_dir"
+# A restored target/debug seeds target/bug-red once, so the dependencies it
+# already built are not rebuilt. The copy is never a hard link: a link would
+# let the red build rewrite the restored cache's files. Workspace crates
+# still compile from the red tree in $tree.
+if [ ! -e "$target_dir/debug" ] && [ -e "$top/target/debug" ]; then
+  seed_start=$(date +%s)
+  if [ "$(uname -s)" = Darwin ]; then
+    cp -c -R "$top/target/debug" "$target_dir"
+  else
+    cp -R "$top/target/debug" "$target_dir"
+  fi
+  echo "bug-red: seed copy $(($(date +%s) - seed_start))s" >&2
+fi
+# bug-filter is built from this checkout, but discovers tests from the red tree.
 # shellcheck disable=SC2046
-plan=$(cargo xtask bug-filter $(git diff --name-only --diff-filter=AM "$red^" "$red"))
+plan=$(cd "$tree" && CARGO_TARGET_DIR="$target_dir" cargo run --quiet --manifest-path "$top/Cargo.toml" --package xtask -- bug-filter $(git diff --name-only --diff-filter=AM "$red^" "$red"))
 filter=$(sed -n 's/^filter\t//p' <<<"$plan")
 if [ -z "$filter" ] && [ -n "$(sed -n 's/^unrun\t//p' <<<"$plan")" ]; then
   echo "bug-red: ok, $journey_only"
@@ -157,11 +182,6 @@ if [ -z "$filter" ]; then
   echo "bug-red: the red commit changes no test file, so no test shows the bug"
   exit 1
 fi
-
-tree=$(mktemp -d)
-list=$(mktemp)
-git worktree add --quiet --detach "$tree" "$red"
-trap 'git worktree remove --force "$tree"; rm -f "$list"' EXIT
 
 package_args=()
 while IFS=$'\t' read -r -a fields; do
@@ -176,24 +196,6 @@ while IFS=$'\t' read -r -a fields; do
   fi
 done <<<"$plan"
 
-# Build the red commit into the checkout's persistent target/bug-red dir:
-# reusing one target keeps the compiled dependencies across runs while
-# keeping red-tree artifacts out of the checkout's target/.
-target_dir=$(git rev-parse --show-toplevel)/target/bug-red
-mkdir -p "$target_dir"
-# A restored target/debug seeds target/bug-red once, so the dependencies it
-# already built are not rebuilt. The copy is never a hard link: a link would
-# let the red build rewrite the restored cache's files. Workspace crates
-# still compile from the red tree in $tree.
-if [ ! -e "$target_dir/debug" ] && [ -e target/debug ]; then
-  seed_start=$(date +%s)
-  if [ "$(uname -s)" = Darwin ]; then
-    cp -c -R target/debug "$target_dir"
-  else
-    cp -R target/debug "$target_dir"
-  fi
-  echo "bug-red: seed copy $(($(date +%s) - seed_start))s" >&2
-fi
 # The red commit is what this leg compiles. Listing there, with the same
 # packages and filter, names the tests this platform built. A planned test
 # missing from that list is compiled out: say so, drop it from the filter,

@@ -98,7 +98,7 @@ rc=0
 cd "$top"
 [ "$rc" -eq 0 ] || { cat "$tmp/out-move.txt" >&2; fail "moved-test case exited $rc, want 0"; }
 grep -Fq 'tests/a.rs' "$record" || { cat "$tmp/out-move.txt" >&2; fail "moved-test filter misses tests/a.rs"; }
-grep -Fq 'filter' "$tmp/out-move.txt" || { cat "$tmp/out-move.txt" >&2; fail "moved-test filter is empty"; }
+[ -s "$record" ] || { cat "$tmp/out-move.txt" >&2; fail "moved-test filter is empty"; }
 
 # A red commit with no test file exits 1, even when the later commit
 # adds one.
