@@ -1419,7 +1419,7 @@ impl App {
         range: &RangeInclusive<Seq>,
         message: &str,
     ) {
-        self.screen.pages_mut().fail(session, *range.start());
+        self.screen.pages_mut().fail_range(session, range);
         if !self.pass_open() {
             self.screen.pages_mut().clear_anchor();
         }
