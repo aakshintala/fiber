@@ -689,3 +689,4 @@ crates/tui/src/app/interrupt_tests.rs	fiber-4188	plan	2026-11-08T16:09:09Z	round
 crates/tui/src/view/snapshots/tui__view__key_map__tests__key_map_*.snap	fiber-4188	plan	2026-11-08T16:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	0
 crates/tui/src/view/snapshots/tui__view__item__tests__*.snap	fiber-4188	plan	2026-11-08T16:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	0
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__*.snap	fiber-4188	plan	2026-11-08T16:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	0
+crates/main/tests/release_pack.rs	fiber-3556	plan	2026-11-08T16:13:02Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/3556-release-pack-flake	
