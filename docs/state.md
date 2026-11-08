@@ -462,10 +462,12 @@ What is recorded:
   spawn or registration failure, and a call cancelled before its job
   starts write none, and the job's later life adds nothing. Its `data`
   holds only `op` and `ms`. Also installed for jobs are `jobs.receive`
-  and `jobs.deliver`: one line each per delegate exit, when the parent's
-  job watcher receives it and when the runner delivers it to the loop.
-  The two pair by `job`, the job id, with the receive preceding the
-  delivery for one job id. Their `data` holds `op`, `ms` and `job`.
+  and `jobs.deliver`: a receive line when the parent's job watcher receives
+  an exit, and a deliver line when the runner delivers it to the loop.
+  Watcher-received exits form ordered pairs by `job`, the job id, with
+  receive preceding delivery. A deliver without a receive records a missed
+  watcher exit (including exits found by the stdout fallback or a reap that
+  wins the race). Their `data` holds `op`, `ms` and `job`.
   Installed for worktrees is `worktree.create`
   and `worktree.remove`. `worktree.create` covers the one `git worktree
   add` a new or resumed session runs to make its worktree, stamped before

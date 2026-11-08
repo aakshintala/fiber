@@ -1770,6 +1770,31 @@ fn a_child_that_exits_before_any_connect_uses_stdout() {
 }
 
 #[test]
+fn stdout_fallback_delivers_without_a_receive_trace() {
+    let line = json_line(1, "Fallback.");
+    let mut rig = rig(vec![]);
+    let watchdog = Watchdog::matching("fiber-delegate-fallback-trace");
+    let (trace_tx, trace_rx) = mpsc::channel();
+    rig.timing = Some(probe_timing(trace_tx));
+    rig.start(
+        &format!(": fiber-delegate-fallback-trace; printf '%s\\n' '{line}'; exit 0"),
+        BOUND,
+        1024,
+    );
+    let trace = Deadline::after(MUST_SUCCEED_WITHIN)
+        .recv_or_fail(&trace_rx, "stdout fallback delivery trace");
+    assert_eq!(trace.0, Op::JobsDeliver);
+    assert_eq!(trace.1, Some(OwnedName::Job(rig.job.clone())));
+    assert!(
+        trace_rx.try_recv().is_err(),
+        "fallback has no receive trace"
+    );
+    let notice = reported(&rig);
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    watchdog.stand_down(Deadline::after(MUST_SUCCEED_WITHIN));
+}
+
+#[test]
 fn a_delayed_drain_still_feeds_the_fold() {
     let dir = TempDir::new("fiber-delegate-delayed");
     let release = fifo(dir.path(), "release");
