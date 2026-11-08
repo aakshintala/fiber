@@ -1605,7 +1605,7 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             // where it was.
             run.write(b"/settings\r");
             let pre = run.wait_screen("the open settings", |grid| {
-                shows(grid, "Settings") && shows(grid, "Appearance") && shows(grid, "Key bindings")
+                shows(grid, "Settings") && shows(grid, "Appearance") && shows(grid, "Hover")
             });
             let focused = |grid: &Grid| {
                 grid.rows

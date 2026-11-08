@@ -546,12 +546,28 @@ fn bare_fiber_on_a_listed_hub_opens_the_hubs_home() {
         shows(screen, "only-on-a.txt") && !shows(screen, "blocal")
     });
     run.write(&[0x7f; 6]);
-    // `/settings` shows the hub machine's configuration, never the
-    // client's: the model row names the hub's model in quotes, which the
-    // chip's brackets never match.
+    // `/settings` splits the two owners: the client's own `tui.*` keys
+    // read the client's config (hover is off there, on by default on the
+    // hub), and every other key reads the hub machine's, never the
+    // client's.
     run.write(b"/settings\r");
+    run.wait_screen("the client's appearance", |screen| {
+        shows(screen, "Settings")
+            && shows(screen, "Hover")
+            && screen
+                .rows
+                .iter()
+                .any(|row| row.contains("Hover") && row.contains("[ ] Off"))
+    });
+    for _ in 0..2 {
+        run.write(b"\x1b[C");
+    }
     run.wait_screen("the hub settings", |screen| {
-        shows(screen, "Settings") && shows(screen, "fake/m") && !shows(screen, "client/other")
+        screen
+            .rows
+            .iter()
+            .any(|row| row.contains("Default model") && row.contains("fake/m ›"))
+            && !shows(screen, "client/other")
     });
     run.write(b"\x1b[27u");
     run.wait_screen("the closed settings", |screen| !shows(screen, "Settings"));
