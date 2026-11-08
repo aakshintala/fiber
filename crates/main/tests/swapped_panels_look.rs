@@ -369,17 +369,13 @@ fn rules_row(text: &str) -> bool {
     !age.is_empty() && age.chars().all(|ch| ch.is_ascii_digit()) && rest.starts_with("s_aaa · ✕")
 }
 
-/// The key the "› " gutter marks in the settings table, if one does: the
-/// first word after the gutter on the row whose gutter column holds it.
-fn selected_key(grid: &Grid, x0: u16, header: u16) -> Option<String> {
-    (header + 1..47).find_map(|y| {
-        if grid.cell(x0, y).symbol != "›" {
-            return None;
-        }
-        let text: String = (x0 + 2..160)
-            .map(|x| grid.cell(x, y).symbol.clone())
-            .collect();
-        text.split_whitespace().next().map(str::to_owned)
+/// The label the "› " gutter marks in the settings view, if one does: the
+/// text after the gutter up to the first double space. The conversation
+/// panel to the right never starts a row with the mark.
+fn focused_label(grid: &Grid) -> Option<String> {
+    grid.rows.iter().find_map(|row| {
+        let rest = row.trim_start().strip_prefix("› ")?;
+        Some(rest.split("  ").next().unwrap_or(rest).trim().to_owned())
     })
 }
 
@@ -388,63 +384,77 @@ fn the_settings_view_matches_the_doc() {
     let setup = tools_setup(json!({}));
     let mut run = turned(&setup);
     run.write(b"/settings\r");
-    let mut grid = run.wait_screen("the settings table", |grid| {
-        find_row(grid, "key").is_some()
-            && find_row(grid, "Ctrl+G opens the file").is_some()
-            && find_row(grid, "layer").is_some()
+    let mut grid = run.wait_screen("the settings tabs", |grid| {
+        find_row(grid, "Appearance").is_some()
+            && find_row(grid, "Changes save automatically").is_some()
+            && find_row(grid, "Delete reset").is_some()
     });
-    let header = row_with(&grid, "layer");
-    let key_x = col_at(&grid, header, "key");
-    let x0 = key_x - 2;
-    // Move the selection to `handoff.tokens`, a key that applies on
-    // reload; each press waits for the gutter to move.
-    for _ in 0..200 {
-        let on = selected_key(&grid, x0, header);
-        if on.as_deref() == Some("handoff.tokens") {
+    // Under the name row: the dim note, then the tab bar with the open
+    // tab bold.
+    let note = row_with(&grid, "Changes save automatically");
+    assert!(is_dim(&grid, note, "Changes save automatically"));
+    let bar = row_with(&grid, "Appearance");
+    assert_eq!(bar, note + 2, "{}", grid.contents);
+    assert!(is_bold(&grid, bar, "Appearance"));
+    assert!(!is_bold(&grid, bar, "Models"));
+    // The footer names its keys, the keys bold.
+    let footer = row_with(&grid, "Delete reset");
+    assert_eq!(
+        grid.rows[usize::from(footer)].trim(),
+        "←→ tab · / search · Enter change · Tab layer · Delete reset"
+    );
+    assert!(is_bold(&grid, footer, "Enter"));
+    assert!(!is_bold(&grid, footer, "change"));
+    // Two tabs right: the model's value draws unquoted, ending in " ›".
+    for _ in 0..2 {
+        run.write(b"\x1b[C");
+    }
+    grid = run.wait_screen("the Models tab", |grid| {
+        find_row(grid, "Default model").is_some()
+    });
+    let model = row_with(&grid, "Default model");
+    let text = grid.rows[usize::from(model)].trim_end().to_owned();
+    assert!(text.contains("scripted/s.json ›"), "{text}");
+    assert!(!text.contains("\"scripted/s.json\""), "unquoted: {text}");
+    assert!(is_bold(&grid, find_row(&grid, "Models").unwrap(), "Models"));
+    // Two more reach Sessions; walk the focus to `handoff.tokens`, each
+    // press waiting for the gutter to move.
+    for _ in 0..2 {
+        run.write(b"\x1b[C");
+    }
+    grid = run.wait_screen("the Sessions tab", |grid| {
+        find_row(grid, "Handoff tokens").is_some()
+    });
+    for _ in 0..40 {
+        let on = focused_label(&grid);
+        if on.as_deref() == Some("Handoff tokens") {
             break;
         }
         run.write(b"\x1b[B");
-        grid = run.wait_screen("the gutter moved", |next| {
-            selected_key(next, x0, header) != on
-        });
+        grid = run.wait_screen("the gutter moved", |next| focused_label(next) != on);
     }
-    assert_eq!(
-        selected_key(&grid, x0, header).as_deref(),
-        Some("handoff.tokens")
-    );
-    // The header is dim and names the three columns.
-    for word in ["key", "value", "layer"] {
-        assert!(is_dim(&grid, header, word), "{word} is dim");
-    }
-    let layer_x = col_at(&grid, header, "layer");
-    let value_x = col_at(&grid, header, "value");
-    // The model's value draws unquoted, in the value column, with its
-    // layer in the layer column.
-    let model = (header + 1..47)
-        .find(|y| {
-            grid.rows[usize::from(*y)]
-                .trim_start_matches(['›', ' '])
-                .starts_with("model ")
-        })
-        .unwrap_or_else(|| panic!("the model row in\n{}", grid.contents));
-    assert_eq!(col_at(&grid, model, "scripted/s.json"), value_x);
+    assert_eq!(focused_label(&grid).as_deref(), Some("Handoff tokens"));
+    let handoff = row_with(&grid, "Handoff tokens");
     assert!(
-        !grid.rows[usize::from(model)].contains("\"scripted/s.json\""),
-        "the model's value is unquoted"
+        grid.rows[usize::from(handoff)].contains("400000"),
+        "{}",
+        grid.contents
     );
-    assert_eq!(col_at(&grid, model, "global"), layer_x);
-    // Every row's layer starts where the header's does.
-    let handoff = row_with(&grid, "handoff.tokens");
-    assert_eq!(col_at(&grid, handoff, "default"), layer_x);
-    assert_eq!(col_at(&grid, handoff, "400000"), value_x);
-    assert!(is_plain_of_reverse(&grid, handoff, "handoff.tokens"));
-    // The reload line and the file hint are the view's last two rows, dim.
-    let hint = row_with(&grid, "Ctrl+G opens the file");
-    assert!(is_dim(&grid, hint, "Ctrl+G opens the file"));
-    let reload = "changing handoff.tokens needs a reload (~84k tokens)";
-    assert_eq!(find_row(&grid, reload), Some(hint - 1), "{}", grid.contents);
-    assert!(is_dim(&grid, hint - 1, reload));
-    assert!(!grid.contents.contains("↑↓ move"), "{}", grid.contents);
+    assert!(is_plain_of_reverse(&grid, handoff, "Handoff tokens"));
+    // Under the list: the description, then the key's path, where it is
+    // set and what a change costs, dim, ahead of the footer.
+    let reload =
+        "handoff.tokens · using the default · changing handoff.tokens needs a reload (~84k tokens)";
+    let detail = row_with(&grid, "handoff.tokens ·");
+    assert_eq!(
+        grid.rows[usize::from(detail)].trim(),
+        reload,
+        "{}",
+        grid.contents
+    );
+    assert!(is_dim(&grid, detail, reload));
+    assert_eq!(detail + 1, footer, "{}", grid.contents);
+    assert!(!grid.contents.contains("Ctrl+G opens the file"));
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
 }
