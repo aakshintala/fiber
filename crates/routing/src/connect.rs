@@ -54,7 +54,7 @@ const REQUEST_TAGS_HEADER: &str = "Databricks-Ai-Gateway-Request-Tags";
 /// among `tags` never replaces `fiber`. JSON escapes every quote, backslash
 /// and control character in a tag.
 fn with_request_tags(
-    headers: Vec<(String, String)>,
+    mut headers: Vec<(String, String)>,
     tags: &BTreeMap<String, String>,
 ) -> Result<Vec<(String, String)>, Failure> {
     let mut object = tags.clone();
@@ -65,10 +65,7 @@ fn with_request_tags(
             format!("`providers.databricks.request_tags` cannot be sent: {e}"),
         )
     })?;
-    let mut headers: Vec<(String, String)> = headers
-        .into_iter()
-        .filter(|(name, _)| !name.eq_ignore_ascii_case(REQUEST_TAGS_HEADER))
-        .collect();
+    headers.retain(|(name, _)| !name.eq_ignore_ascii_case(REQUEST_TAGS_HEADER));
     headers.push((REQUEST_TAGS_HEADER.into(), value));
     Ok(headers)
 }

@@ -74,7 +74,7 @@ fn request_tags_accept_native_objects_and_merge_layers() {
     // (kept as an ordinary entry here; routing pins it) and Unicode.
     let config = setup
         .load(&[&format!(
-            r#"{KEY}={{"run":"r1","work-unit":"w \"1\"\\ \n","source":"other","név":"é🙂"}}"#
+            r#"{KEY}={{"run":"r1","work-unit":"w \"1\"\\ \n","source":"other","név":"é𝔘"}}"#
         )])
         .unwrap();
     assert_eq!(
@@ -83,7 +83,7 @@ fn request_tags_accept_native_objects_and_merge_layers() {
             ("run", "r1"),
             ("work-unit", "w \"1\"\\ \n"),
             ("source", "other"),
-            ("név", "é🙂"),
+            ("név", "é𝔘"),
         ]))
     );
     assert!(config.notices().is_empty(), "{:?}", config.notices());

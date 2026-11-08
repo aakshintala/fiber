@@ -267,7 +267,7 @@ impl Config {
             settings_files,
         );
         let merged = merge_layers(&layers, None);
-        let request_tags = match path::get(&merged, &request_tags_path()) {
+        let request_tags = match merged.pointer("/providers/databricks/request_tags") {
             None => None,
             Some(value) => {
                 let tags = string_map(value);
@@ -575,10 +575,6 @@ impl Config {
 }
 
 const REQUEST_TAGS: &str = "providers.databricks.request_tags";
-
-fn request_tags_path() -> Vec<String> {
-    path::parse(REQUEST_TAGS).unwrap_or_default()
-}
 
 /// An object whose values are all strings, as a map; `None` for anything
 /// else.
