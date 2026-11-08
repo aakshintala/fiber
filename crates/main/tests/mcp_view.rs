@@ -1522,3 +1522,9 @@ fn timeout_evidence_names_an_empty_tree_and_still_prints_the_spawns_line() {
          (none)\nspawns: 2 lines"
     );
 }
+
+#[test]
+fn timeout_evidence_tree_includes_a_root_that_leads_no_group() {
+    let ps = " 10 1 5 S 00:01 root\n 11 10 11 S 00:01 child\n 12 1 12 S 00:01 other\n";
+    assert_eq!(tree_pids(&session_tree(ps, 10).unwrap()), vec![10, 11]);
+}
