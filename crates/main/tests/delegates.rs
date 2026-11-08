@@ -1387,6 +1387,18 @@ fn child_wait_summary(line: &Value) -> String {
             format!("{state}/{step}")
         }
         "delegate_started" => "started".to_owned(),
+        "job_completed" | "delegate_finished" => {
+            let field = |name: &str| {
+                payload
+                    .and_then(|payload| payload.get(name))
+                    .and_then(Value::as_str)
+            };
+            let job = field("job_id").unwrap_or("?");
+            match (kind, field("status")) {
+                ("job_completed", status) => format!("{job} {}", status.unwrap_or("?")),
+                _ => job.to_owned(),
+            }
+        }
         "fiber_exited" => payload
             .and_then(|payload| payload.get("exit_code"))
             .map(|code| code.to_string())
@@ -1523,6 +1535,17 @@ fn child_wait_summaries_stay_compact_and_bounded() {
         ring.iter()
             .all(|entry| entry.len() <= CHILD_WAIT_SUMMARY_LEN)
     );
+}
+
+#[test]
+fn child_wait_summary_names_a_job_end() {
+    let completed =
+        json!({"kind": "job_completed", "payload": {"job_id": "j_1", "status": "failed"}});
+    assert_eq!(child_wait_summary(&completed), "job_completed j_1 failed");
+    let finished = json!({"kind": "delegate_finished", "payload": {"job_id": "j_1"}});
+    assert_eq!(child_wait_summary(&finished), "delegate_finished j_1");
+    let bare = json!({"kind": "job_completed", "payload": {}});
+    assert_eq!(child_wait_summary(&bare), "job_completed ? ?");
 }
 
 #[test]
