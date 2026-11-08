@@ -30,7 +30,7 @@ use support::{
 /// `session_status`, which an observer thread writes), its raw stdout and
 /// its stderr.
 impl StdoutRun {
-    fn extension_tools_payload(&self, kind: &str) -> &Value {
+    pub(super) fn extension_tools_payload(&self, kind: &str) -> &Value {
         &self
             .lines
             .iter()
@@ -59,7 +59,7 @@ impl StdoutRun {
     }
 
     /// Each notice's code, extension and message.
-    fn extension_tools_notices(&self) -> Vec<(String, Option<String>, String)> {
+    pub(super) fn extension_tools_notices(&self) -> Vec<(String, Option<String>, String)> {
         self.all("notice")
             .iter()
             .map(|line| {
@@ -74,7 +74,7 @@ impl StdoutRun {
     }
 
     /// The session's directory, from its id.
-    fn extension_tools_session_dir(&self, setup: &Setup) -> PathBuf {
+    pub(super) fn extension_tools_session_dir(&self, setup: &Setup) -> PathBuf {
         let workspace = fs::canonicalize(setup.workspace()).unwrap();
         let key = workspace.to_string_lossy().replace('/', "-");
         setup

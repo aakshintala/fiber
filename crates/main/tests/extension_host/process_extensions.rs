@@ -23,19 +23,6 @@ use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{Setup, StdoutRun, function_call, hello_single_delta as hello, outputs_sent, stream};
 
-/// One finished `fiber ask`: its exit code, its stdout lines parsed (less
-/// `session_status`, which an observer thread writes), its raw stdout and
-/// its stderr.
-impl StdoutRun {
-    fn process_extensions_payload(&self, kind: &str) -> &Value {
-        &self
-            .lines
-            .iter()
-            .find(|line| line["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {kind} line"))["payload"]
-    }
-}
-
 /// Runs `fiber` with `args` in the workspace, in its own process group,
 /// waits for it under the test's deadline, and asserts that nothing it
 /// started is left in the group. A watchdog kills the group if this
@@ -230,7 +217,7 @@ fn process_tool_runs_and_its_after_tool_hook_changes_the_outcome() {
         &tool_hook_plan(hello_marker.to_str().unwrap()),
     );
     let run = ask(&setup, "probe the session");
-    let completed = run.process_extensions_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     assert_eq!(
         completed["content"],
@@ -268,7 +255,7 @@ fn process_hook_http_records_the_extension_line() {
         &tool_hook_http_plan(hello_marker.to_str().unwrap(), Some(&http.url())),
     );
     let run = ask(&setup, "probe the session");
-    let completed = run.process_extensions_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     assert_eq!(
         completed["content"],
@@ -479,7 +466,7 @@ fn optional_process_miss_leaves_a_notice_and_starts_without_it() {
             .any(|notice| notice["payload"]["extension"] == json!("fiber.test/silent")),
         "the silent miss is noticed: {notices:?}"
     );
-    let tools = run.process_extensions_payload("preamble_built")["tools"]
+    let tools = run.extension_tools_payload("preamble_built")["tools"]
         .as_array()
         .unwrap();
     assert!(
@@ -809,7 +796,7 @@ fn process_and_mcp_start_in_parallel() {
         &gated_plan(gate.to_str().unwrap(), hello_marker.to_str().unwrap()),
     );
     let run = ask(&setup, "probe the session");
-    let completed = run.process_extensions_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     assert!(fx.join("mcp-started").is_file(), "the MCP wrapper started");
 }
@@ -913,7 +900,7 @@ fn process_watcher_receives_original_session_envelopes() {
         ),
     );
     let run = ask(&setup, "probe the session");
-    let completed = run.process_extensions_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let text =
         std::fs::read_to_string(&watch_marker).expect("the peer records its watcher deliveries");

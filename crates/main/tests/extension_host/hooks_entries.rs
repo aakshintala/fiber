@@ -15,6 +15,7 @@
 )]
 
 use crate::extension_harness;
+use crate::hooks::run_from;
 use crate::support;
 
 use std::fs;
@@ -29,7 +30,7 @@ use extension_harness::{
 };
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{KillGroup, Run, Setup, function_call, hello, is_status, spawn_watched, stream};
+use support::{KillGroup, Run, Setup, function_call, hello, spawn_watched, stream};
 
 /// The first-party package under test.
 const HOOKS_NAME: &str = "github.com/aakshintala/fiber/extensions/hooks";
@@ -117,20 +118,6 @@ impl Setup {
 fn write(file: &Path, text: &str) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, text).unwrap();
-}
-
-fn run_from(output: std::process::Output) -> Run {
-    let lines = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
 }
 
 /// Writes the executable hook script into the workspace's `hooks/`.

@@ -12,17 +12,18 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use crate::hooks::run_from;
 use crate::support;
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
-use support::{KillGroup, Run, Setup, hello_single_delta, is_status, spawn_watched};
+use support::{KillGroup, Run, Setup, hello_single_delta, spawn_watched};
 
 /// The fixture extension's name.
 const FIXTURE: &str = "fiber.test/notes";
@@ -172,20 +173,6 @@ impl Setup {
 fn write(file: &Path, text: &str) {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(file, text).unwrap();
-}
-
-fn run_from(output: Output) -> Run {
-    let lines = String::from_utf8(output.stdout)
-        .unwrap()
-        .lines()
-        .filter(|l| !is_status(l))
-        .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
-        .collect();
-    Run {
-        code: output.status.code(),
-        lines,
-        stderr: String::from_utf8(output.stderr).unwrap(),
-    }
 }
 
 /// The event kinds of a turn answered by [`hello_single_delta`]: one text fragment.

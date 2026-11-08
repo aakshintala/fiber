@@ -26,46 +26,6 @@ use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{Setup, StdoutRun, function_call, hello_single_delta as hello, outputs_sent, stream};
 
-/// One finished `fiber ask`: its exit code, its stdout lines parsed (less
-/// `session_status`, which an observer thread writes), its raw stdout and
-/// its stderr.
-impl StdoutRun {
-    fn extension_tool_keep_payload(&self, kind: &str) -> &Value {
-        &self
-            .lines
-            .iter()
-            .find(|line| line["kind"] == kind)
-            .unwrap_or_else(|| panic!("no {kind} line"))["payload"]
-    }
-
-    /// Each notice's code, extension and message.
-    fn extension_tool_keep_notices(&self) -> Vec<(String, Option<String>, String)> {
-        self.all("notice")
-            .iter()
-            .map(|line| {
-                let payload = &line["payload"];
-                (
-                    payload["code"].as_str().unwrap().to_owned(),
-                    payload["extension"].as_str().map(str::to_owned),
-                    payload["message"].as_str().unwrap().to_owned(),
-                )
-            })
-            .collect()
-    }
-
-    /// The session's directory, from its id.
-    fn extension_tool_keep_session_dir(&self, setup: &Setup) -> PathBuf {
-        let workspace = fs::canonicalize(setup.workspace()).unwrap();
-        let key = workspace.to_string_lossy().replace('/', "-");
-        setup
-            .home()
-            .join("projects")
-            .join(key)
-            .join("sessions")
-            .join(self.lines[0]["session_id"].as_str().unwrap())
-    }
-}
-
 /// Runs `fiber ask <prompt>` in the workspace, in its own process group,
 /// waits for it under the test's deadline, and asserts that nothing it
 /// started is left in the group. A watchdog kills the group if this
@@ -239,7 +199,7 @@ fn artifact_of(run: &StdoutRun, setup: &Setup) -> (String, PathBuf) {
     let action = completed["action_id"].as_str().unwrap();
     let relative = format!("artifacts/{action}.txt");
     assert_eq!(completed["payload"]["artifact"], relative.as_str());
-    let path = run.extension_tool_keep_session_dir(setup).join(&relative);
+    let path = run.extension_tools_session_dir(setup).join(&relative);
     (relative, path)
 }
 
@@ -259,7 +219,7 @@ fn a_larger_declared_cap_sends_a_result_past_the_default_uncut() {
     );
     let run = ask(&setup, "go big");
     assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
-    let completed = run.extension_tool_keep_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     assert_large_eq(completed_text(completed), &full);
     assert_eq!(completed.get("artifact"), None);
@@ -283,7 +243,7 @@ fn a_smaller_declared_cap_cuts_at_it_with_the_artifact() {
     );
     let run = ask(&setup, "go small");
     assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
-    let completed = run.extension_tool_keep_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let (_relative, path) = artifact_of(&run, &setup);
     assert_large_eq(&fs::read_to_string(&path).unwrap(), &full);
@@ -320,7 +280,7 @@ fn a_keep_of_both_ends_sends_the_first_and_last_kib_with_the_notice_between() {
     );
     let run = ask(&setup, "go both");
     assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
-    let completed = run.extension_tool_keep_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let (_relative, path) = artifact_of(&run, &setup);
     assert_large_eq(&fs::read_to_string(&path).unwrap(), &full);
@@ -351,7 +311,7 @@ fn no_keep_cuts_at_the_default_sixteen_kib() {
     );
     let run = ask(&setup, "go plain");
     assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
-    let completed = run.extension_tool_keep_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let (_relative, path) = artifact_of(&run, &setup);
     assert_large_eq(&fs::read_to_string(&path).unwrap(), &full);
@@ -387,7 +347,7 @@ fn a_configured_cap_divides_in_the_declared_start_to_end_proportion() {
     );
     let run = ask(&setup, "go capped");
     assert_eq!(run.kinds(), expected_kinds(&[], 1, &[], RAN));
-    let completed = run.extension_tool_keep_payload("tool_call_completed");
+    let completed = run.extension_tools_payload("tool_call_completed");
     assert_eq!(completed["status"], "completed");
     let (_relative, path) = artifact_of(&run, &setup);
     assert_large_eq(&fs::read_to_string(&path).unwrap(), &full);
@@ -421,7 +381,7 @@ fn a_malformed_keep_leaves_the_tool_out_and_names_it_in_a_notice() {
     let run = ask(&setup, "use the tool");
     assert_eq!(run.kinds(), expected_kinds(&["notice"], 1, &[], RAN));
     assert_eq!(
-        run.extension_tool_keep_notices(),
+        run.extension_tools_notices(),
         [(
             "extension_failed".to_owned(),
             Some("fiber.test/two".to_owned()),

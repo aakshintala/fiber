@@ -142,7 +142,7 @@ fn write(file: &Path, text: &str) {
     fs::write(file, text).unwrap();
 }
 
-fn run_from(output: Output) -> Run {
+pub(super) fn run_from(output: Output) -> Run {
     let lines = String::from_utf8(output.stdout)
         .unwrap()
         .lines()
