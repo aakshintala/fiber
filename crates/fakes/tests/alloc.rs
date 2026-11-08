@@ -24,7 +24,7 @@ const TWO_MIB: usize = 2 << 20;
 const HALF_MIB: usize = 512 << 10;
 
 /// How long a test waits for another thread's block or acknowledgement.
-const HANDOFF: Duration = Duration::from_secs(10);
+const TRANSFER: Duration = Duration::from_secs(10);
 
 fn large() -> Vec<u8> {
     black_box(Vec::with_capacity(TWO_MIB))
@@ -138,7 +138,7 @@ fn a_block_made_before_the_scope_and_grown_inside_is_not_counted() {
 fn a_block_made_on_another_thread_and_freed_here_changes_nothing() {
     let (send, receive) = mpsc::channel();
     thread::spawn(move || send.send(large()).unwrap_or(()));
-    let theirs = Deadline::after(HANDOFF)
+    let theirs = Deadline::after(TRANSFER)
         .recv(&receive)
         .expect("waited for the other thread's block");
     let ((), peak) = large_blocks_during(|| {
@@ -159,7 +159,7 @@ fn a_block_freed_on_another_thread_stays_counted() {
             drop(mine);
             send.send(()).unwrap_or(());
         });
-        Deadline::after(HANDOFF)
+        Deadline::after(TRANSFER)
             .recv(&receive)
             .expect("waited for the other thread to free the block");
         drop(large());

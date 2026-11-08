@@ -179,9 +179,9 @@ fn warn_line(home: &Path, id: &str) -> serde_json::Value {
 
 #[test]
 fn delegate_creation_holds_before_add_and_child_adoption_overlaps() {
-    fakes::within("delegate lock handoff", Deadline::after(BUDGET), || {
-        let home = fakes::TempDir::new("delegate-handoff-home");
-        let repo = repo("delegate-handoff-repo");
+    fakes::within("delegate lock transfer", Deadline::after(BUDGET), || {
+        let home = fakes::TempDir::new("delegate-transfer-home");
+        let repo = repo("delegate-transfer-repo");
         let id = SessionId("s_0123456789abcdef".into());
         let path = worktree_path(home.path(), &key_of(repo.path()), &id.0);
         let (created, parent) =

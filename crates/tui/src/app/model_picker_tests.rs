@@ -1143,7 +1143,7 @@ fn label_only_logged_out_rows_keep_the_picker_open_on_enter_and_click() {
 }
 
 #[test]
-fn a_login_handoff_during_a_remote_install_keeps_the_picker_and_reports_the_guard() {
+fn a_login_transfer_during_a_remote_install_keeps_the_picker_and_reports_the_guard() {
     use crate::app::Link;
     use crate::configure_fake::Fake;
     use crate::remote::{Remote, Router};

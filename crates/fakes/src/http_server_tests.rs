@@ -1342,7 +1342,7 @@ fn blocked_write_expires_on_the_injected_clock() {
 }
 
 #[test]
-fn handoff_keeps_bytes_after_the_connect_head() {
+fn transfer_keeps_bytes_after_the_connect_head() {
     let clock = FakeClock::new();
     let server = HttpServer::bind(clock as Arc<dyn Clock>, ten_seconds()).expect("the core binds");
     let addr = server.addr();
@@ -1362,7 +1362,7 @@ fn handoff_keeps_bytes_after_the_connect_head() {
                     }
                 };
                 assert_eq!(request.method, "CONNECT");
-                conn.into_handoff().expect("the handoff keeps the stream")
+                conn.into_transfer().expect("the transfer keeps the stream")
             }));
             match tx.send(outcome) {
                 Ok(()) | Err(_) => {}
@@ -1372,17 +1372,17 @@ fn handoff_keeps_bytes_after_the_connect_head() {
         client
             .write_all(b"CONNECT 127.0.0.1:80 HTTP/1.1\r\nHost: 127.0.0.1:80\r\n\r\nPING")
             .expect("the CONNECT writes");
-        let (stream, ahead) = match Deadline::after(OP).recv_or_fail(&rx, "the handoff") {
-            Ok(handoff) => handoff,
+        let (stream, ahead) = match Deadline::after(OP).recv_or_fail(&rx, "the transfer") {
+            Ok(transfer) => transfer,
             Err(payload) => panic!(
-                "the handoff failed: {}",
+                "the transfer failed: {}",
                 payload
                     .downcast_ref::<String>()
                     .cloned()
                     .unwrap_or_else(|| "a non-string panic".to_owned())
             ),
         };
-        assert_eq!(ahead, b"PING", "bytes past the head survive the handoff");
+        assert_eq!(ahead, b"PING", "bytes past the head survive the transfer");
         drop(stream);
     });
 }

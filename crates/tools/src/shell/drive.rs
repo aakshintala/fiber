@@ -169,7 +169,7 @@ pub(super) fn pump_inner(
                     // listing that names members or never answers is saved
                     // and the loop re-reads the view, so a timeout or
                     // cancellation that became due during the listing wins
-                    // before any handoff.
+                    // before any transfer.
                     if !matches!(reason, MoveReason::ShellExited { .. }) {
                         return LoopEnd::Move(reason);
                     }
