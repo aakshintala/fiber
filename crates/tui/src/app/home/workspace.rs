@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value, json};
 
-use super::super::{App, Effect, mint};
+use super::super::{App, Effect, Waiting, mint};
 use super::typed::{Resolved, Typed};
 use super::{Home, typed};
 use crate::home::PickerScreen;
@@ -290,6 +290,10 @@ impl App {
     /// picker's root, asking the hub for its listing, with the recents
     /// below.
     pub(super) fn open_picker(&mut self) -> Effect {
+        // A closed picker's asks are not this picker's: their answers
+        // fall through as stale ids.
+        self.outbox
+            .settle_where(|waiting| matches!(waiting, Waiting::Directories(_)));
         let home = &mut self.home;
         let typed = Typed::at(&home.picker_root());
         home.chooser.picker = Some(Picker {
@@ -311,17 +315,14 @@ impl App {
         accepted: bool,
         payload: &Map<String, Value>,
     ) -> Option<Vec<String>> {
-        let consumed = {
-            let home = &mut self.home;
-            let picker = home.chooser.picker.as_mut()?;
-            if accepted {
-                picker.typed.answered(id, payload.get("result"))
-            } else {
-                picker.typed.rejected(id)
-            }
-        };
-        if !consumed {
+        let Some(Waiting::Directories(dir)) = self.outbox.waiting(id) else {
             return None;
+        };
+        let picker = self.home.chooser.picker.as_mut()?;
+        if accepted {
+            picker.typed.answered(&dir, payload.get("result"));
+        } else {
+            picker.typed.rejected(&dir);
         }
         self.outbox.settled(id);
         Some(Vec::new())
@@ -337,6 +338,7 @@ impl App {
             return Vec::new();
         }
         self.read_chips();
+        let out = self.asked_directories();
         let home = &mut self.home;
         let Some(picker) = home.chooser.picker.as_mut() else {
             return Vec::new();
@@ -344,10 +346,11 @@ impl App {
         let outbox = &mut self.outbox;
         picker
             .typed
-            .due(mint)
+            .due(|dir| out.iter().any(|asked| asked == dir))
             .into_iter()
-            .map(|(id, dir)| {
-                outbox.wait(&id, super::super::outbox::Waiting::Directories);
+            .map(|dir| {
+                let id = mint();
+                outbox.wait(&id, Waiting::Directories(dir.clone()));
                 directories_line(&id, &dir)
             })
             .collect()
@@ -454,21 +457,35 @@ impl App {
         std::mem::replace(&mut self.home.chooser.start_pick, false)
     }
 
-    /// Forgets the picker's in-flight `directories` ids: with a typed
-    /// text open their directories queue again, asked once more, while
-    /// with the recents alone open they drop. The cache stays either way.
+    /// The directories with a `directories` ask out, in send order.
+    fn asked_directories(&self) -> Vec<String> {
+        self.outbox
+            .tags()
+            .filter_map(|(_, waiting)| {
+                if let Waiting::Directories(dir) = waiting {
+                    Some(dir.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Forgets the picker's in-flight `directories` tags: with a typed
+    /// text open their directories queue again, asked once more, in the
+    /// order they went out, while with the recents alone open they drop.
+    /// The cache stays either way.
     /// The chips read again on the next pass: the hub and its levels
     /// are gone, so the next link owes a fresh read.
     pub(in crate::app) fn picker_disconnected(&mut self) {
+        let retry = self.asked_directories();
         self.outbox
-            .forget(&super::super::outbox::Waiting::Directories);
+            .settle_where(|waiting| matches!(waiting, Waiting::Directories(_)));
         self.home.chooser.chip_read = ChipRead::Owed;
-        if let Some(picker) = self.home.chooser.picker.as_mut() {
-            if picker.typing() {
-                picker.typed.disconnected();
-            } else {
-                picker.typed.forget();
-            }
+        if let Some(picker) = self.home.chooser.picker.as_mut()
+            && picker.typing()
+        {
+            picker.typed.disconnected(retry);
         }
     }
 
