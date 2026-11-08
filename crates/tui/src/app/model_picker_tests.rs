@@ -3799,10 +3799,13 @@ fn choosing(mut app: App, workspace: &str) -> App {
 fn chip_rows() -> Value {
     json!({"rows": [
         {"key": "model", "shown": "value", "value": "\"hub/m\"",
-         "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-        {"key": "models.hub/m.thinking", "shown": "value", "value": "\"high\"",         "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+         "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
+        {"key": "models.hub/m.thinking", "shown": "value", "value": "\"high\"",         "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
         {"key": "scoped_models", "shown": "value", "value": "[\"hub/m\"]",
-         "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+         "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
     ]})
 }
 
@@ -3877,7 +3880,8 @@ fn chip_settings_scoped(scoped: &str) -> (String, Value, Result<Value, Rejection
         json!({"operation": "settings", "workspace": "/hub"}),
         Ok(json!({"rows": [
             {"key": "scoped_models", "shown": "value", "value": scoped,
-             "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+             "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
         ]})),
     )
 }
@@ -3902,7 +3906,8 @@ fn chip_settings_scoped_at(
         json!({"operation": "settings", "workspace": workspace}),
         Ok(json!({"rows": [
             {"key": "scoped_models", "shown": "value", "value": scoped,
-             "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
+             "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+         "label": "L", "description": "D", "control": {"kind": "text"}},
         ]})),
     )
 }
@@ -4364,10 +4369,11 @@ fn the_chip_answer_keeps_each_toggle() {
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
             Ok(json!({"rows": [
-                {"key": "scoped_models", "shown": "value",
-                 "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
-                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-            ]})),
+                   {"key": "scoped_models", "shown": "value",
+                    "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
+                    "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+            "label": "L", "description": "D", "control": {"kind": "text"}},
+               ]})),
         ),
         set_saved(),
     ]);
@@ -4410,9 +4416,10 @@ fn a_twice_toggled_row_keeps_its_mark_against_an_answer_omitting_it() {
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
             Ok(json!({"rows": [
-                {"key": "scoped_models", "shown": "value", "value": "[\"acme/m1\"]",
-                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-            ]})),
+                   {"key": "scoped_models", "shown": "value", "value": "[\"acme/m1\"]",
+                    "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+            "label": "L", "description": "D", "control": {"kind": "text"}},
+               ]})),
         ),
     ]);
     app.on_models(Ok(three()));
@@ -4527,10 +4534,11 @@ fn a_mark_cell_click_joins_the_toggled_set() {
             "configure".to_owned(),
             json!({"operation": "settings", "workspace": "/hub"}),
             Ok(json!({"rows": [
-                {"key": "scoped_models", "shown": "value",
-                 "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
-                 "layer": "global", "file": "/hub/config.json", "scope": "global_only"},
-            ]})),
+                   {"key": "scoped_models", "shown": "value",
+                    "value": "[\"acme/m1\",\"acme/m2\",\"gone/x\"]",
+                    "layer": "global", "file": "/hub/config.json", "scope": "global_only",
+            "label": "L", "description": "D", "control": {"kind": "text"}},
+               ]})),
         ),
         set_saved(),
     ]);
