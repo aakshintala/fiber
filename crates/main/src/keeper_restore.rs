@@ -19,7 +19,7 @@ use contract::events::{Event, EventKind, JobDelta, JobLine, JobStarted, Progress
 use contract::jobs::{End, Input, Lines, Stop};
 use contract::keeper::{HostEvent, Stream};
 
-use crate::keeper::Adopted;
+use crate::keeper::{Adopted, Attached, Handover, Host};
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -109,6 +109,53 @@ impl Drop for Active {
             let mut sinks = lock(sinks);
             sinks.output = None;
             sinks.errors = None;
+        }
+    }
+}
+
+/// A handover taken from a keeper, restored and waiting to start: the
+/// runners drop before the connection, so every append handle is closed
+/// before the keeper can take the files back.
+pub(crate) struct Handed {
+    restored: Restored,
+    attached: Attached,
+}
+
+/// Retains the keeper's connection, records its jobs in `registry` and takes
+/// them out of `folded`'s orphan candidates, only the ones recorded. A
+/// failure leaves the connection closed and no runner started.
+pub(crate) fn take(
+    keeper: &Arc<Host>,
+    registry: &jobs::Registry,
+    dir: &log::SessionDir,
+    handover: Handover,
+    folded: &mut r#loop::Resumed,
+) -> io::Result<Handed> {
+    let mut attached = keeper.attach_handover(handover)?;
+    let restored = restore(registry, dir, attached.take_jobs())?;
+    folded.keep_jobs(restored.job_ids());
+    Ok(Handed { restored, attached })
+}
+
+impl Handed {
+    /// Starts the runners, tells the keeper the session holds the lock and
+    /// is ready, and waits for it to switch every job to frames. Call it
+    /// once the registry's inbox is wired. A failure closes the append
+    /// handles first and the connection second.
+    pub(crate) fn finish(self) -> io::Result<()> {
+        let Self { restored, attached } = self;
+        let active = restored.activate();
+        match attached.ready() {
+            Ok(()) => {
+                active.keep();
+                attached.keep();
+                Ok(())
+            }
+            Err(error) => {
+                drop(active);
+                drop(attached);
+                Err(error)
+            }
         }
     }
 }

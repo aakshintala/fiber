@@ -450,7 +450,7 @@ fn the_negotiation_deadline_spans_identity_and_acknowledgement() {
     // succeeds, at it the connection ends.
     let origin_for = |clock: &Arc<FakeClock>| clock.now() + KEEPER_START;
     for (late, ok) in [
-        (KEEPER_START - Duration::from_millis(1), true),
+        (KEEPER_START.saturating_sub(Duration::from_millis(1)), true),
         (KEEPER_START, false),
     ] {
         let clock = FakeClock::new();
@@ -556,7 +556,7 @@ fn ready_sends_adopted_once_and_waits_for_the_acknowledgement() {
     clock.advance_when_parked(
         Some(until),
         Some(worker),
-        KEEPER_START - Duration::from_millis(1),
+        KEEPER_START.saturating_sub(Duration::from_millis(1)),
         &deadline_fake(),
     );
     clock

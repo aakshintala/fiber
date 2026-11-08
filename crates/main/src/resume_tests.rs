@@ -44,6 +44,7 @@ fn keeper_acquiring_the_lock_after_precheck_is_refused_without_attach() {
     let (send, result) = mpsc::channel();
     let worker_sessions = sessions.clone();
     let worker_clock = clock.clone();
+    let worker_home = home.path().to_path_buf();
     std::thread::spawn(move || {
         super::before_resume_open(move || {
             observed.send(()).unwrap();
@@ -53,6 +54,7 @@ fn keeper_acquiring_the_lock_after_precheck_is_refused_without_attach() {
         });
         let mut attached = 0;
         let result = super::open_or_attach(
+            &worker_home,
             &worker_sessions,
             SessionId("s_0123456789abcdef".into()),
             worker_clock,
@@ -103,9 +105,11 @@ fn keeper_precheck_allows_pid_attach_and_stale_unlocked_recovery() {
     let held = session_with(&dir, None);
     let (send, result) = std::sync::mpsc::channel();
     let worker_sessions = sessions.clone();
+    let worker_home = home.path().to_path_buf();
     std::thread::spawn(move || {
         let mut attached = 0;
         let result = super::open_or_attach(
+            &worker_home,
             &worker_sessions,
             SessionId("s_0123456789abcdef".into()),
             fakes::clock::FakeClock::new(),
@@ -123,9 +127,11 @@ fn keeper_precheck_allows_pid_attach_and_stale_unlocked_recovery() {
     drop(held);
     std::fs::write(dir.join("session.lock"), "keeper 4242\n").unwrap();
     let (send, result) = std::sync::mpsc::channel();
+    let worker_home = home.path().to_path_buf();
     std::thread::spawn(move || {
         let mut attached = 0;
         let result = super::open_or_attach(
+            &worker_home,
             &sessions,
             SessionId("s_0123456789abcdef".into()),
             fakes::clock::FakeClock::new(),
@@ -274,7 +280,7 @@ fn keeper_schema_version_refusal_names_the_keepers_version() {
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
     let _keeper = Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap();
     let mut attached = 0;
-    let result = super::open_or_attach(&sessions, id.clone(), clock, |_| {
+    let result = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| {
         attached += 1;
         7
     });
@@ -986,4 +992,185 @@ fn a_vanished_following_child_fails_the_seed_as_missing() {
         matches!(error, log::Error::NotFound(_)),
         "a missing following-child header fails as missing: {error:?}"
     );
+}
+
+// ---- the keeper's handover (docs/tools.md, "The keeper": a resume takes the log back) ----
+
+/// How a scripted keeper behaves once the resume contacts it.
+#[derive(Clone, Copy)]
+enum Keeper {
+    /// Answers as the session's keeper and hands its one job over.
+    Hands,
+    /// Answers for another session.
+    Mistaken,
+    /// Hands over, but another writer takes the released lock first.
+    Beaten,
+}
+
+/// A keeper that holds the lock labelled as one, and speaks the handover on
+/// the session's socket; the frames it received come back at the end.
+fn scripted_keeper(
+    home: &Path,
+    sessions: &Path,
+    id: &SessionId,
+    behaviour: Keeper,
+) -> std::thread::JoinHandle<(Vec<String>, Option<Log>)> {
+    use std::io::{BufRead as _, BufReader, Write as _};
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let mut held =
+        Some(Log::open_as(sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap());
+    let (_, listener) = doors::bind(home, &sessions.join(&id.0)).unwrap();
+    let (sessions, id) = (sessions.to_path_buf(), id.clone());
+    std::thread::spawn(move || {
+        let mut seen = Vec::new();
+        let (stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut writer = stream;
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        seen.push(line.trim().to_owned());
+        let answered = if matches!(behaviour, Keeper::Mistaken) {
+            "s_ffffffffffffffff".to_owned()
+        } else {
+            id.0.clone()
+        };
+        writeln!(writer, r#"{{"identity":{{"session_id":"{answered}"}}}}"#).unwrap();
+        line.clear();
+        if reader.read_line(&mut line).unwrap() > 0 {
+            seen.push(line.trim().to_owned());
+            // Released before the acknowledgement, as the keeper does.
+            drop(held.take());
+            held = matches!(behaviour, Keeper::Beaten)
+                .then(|| Log::open_as(&sessions, id.clone(), clock, "other 1").unwrap());
+            writeln!(
+                writer,
+                r#"{{"handover":{{"running":[{{"id":"call_0","job_id":"j_one","output_path":"/x","errors_path":null,"tty":false,"lines":false}}]}}}}"#
+            )
+            .unwrap();
+            // The connection ends when the resume is done with it.
+            line.clear();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                seen.push(line.trim().to_owned());
+                line.clear();
+            }
+        }
+        // Returned so the lock outlives the join: the test reads who holds it.
+        (seen, held)
+    })
+}
+
+fn resume_fixture(name: &str) -> (fakes::TempDir, PathBuf, SessionId, PathBuf) {
+    let home = fakes::TempDir::under(Path::new("/tmp"), name);
+    let sessions = home.path().join("sessions");
+    let id = SessionId("s_0123456789abcdef".into());
+    let dir = sessions.join(&id.0);
+    drop(session_with(&dir, None));
+    (home, sessions, id, dir)
+}
+
+#[test]
+fn a_readable_keeper_hands_over_instead_of_refusing() {
+    let (home, sessions, id, dir) = resume_fixture("main-resume-handover");
+    let keeper = scripted_keeper(home.path(), &sessions, &id, Keeper::Hands);
+    let mut attached = 0;
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let opened = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| {
+        attached += 1;
+        7
+    });
+    let Ok((log, Some(handover))) = opened else {
+        panic!("a keeper that answers as the session hands the log over")
+    };
+    assert_eq!(attached, 0, "a keeper is not a live session to attach to");
+    // The session holds the lock now, and the keeper's job comes with it.
+    assert!(!log::lock_label(&dir).is_some_and(|label| label.starts_with("keeper ")));
+    assert_eq!(handover.running().len(), 1);
+    assert_eq!(handover.running()[0].job_id, JobId("j_one".into()));
+    // The kernel names the keeper's process: here, the scripted one in-process.
+    assert_eq!(handover.pid(), support::peer::Pid(std::process::id()));
+    drop((log, handover));
+    let (seen, _held) = keeper.join().unwrap();
+    assert_eq!(
+        seen,
+        [
+            r#"{"identify":"s_0123456789abcdef"}"#,
+            r#"{"handover":true}"#
+        ]
+    );
+}
+
+#[test]
+fn a_keeper_that_answers_for_another_session_is_refused_and_keeps_the_lock() {
+    let (home, sessions, id, dir) = resume_fixture("main-resume-mistaken");
+    let keeper = scripted_keeper(home.path(), &sessions, &id, Keeper::Mistaken);
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let before = log::read(&dir).unwrap().len();
+    let mut attached = 0;
+    let result = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| {
+        attached += 1;
+        7
+    });
+    assert_eq!(result.err(), Some(1));
+    assert_eq!(attached, 0);
+    // Only the identity was asked for: no handover was requested, so the
+    // keeper released nothing and still holds the log.
+    let (seen, _held) = keeper.join().unwrap();
+    assert_eq!(seen, [r#"{"identify":"s_0123456789abcdef"}"#]);
+    assert_eq!(log::lock_label(&dir).as_deref(), Some("keeper 4242"));
+    assert_eq!(log::read(&dir).unwrap().len(), before, "nothing appended");
+}
+
+#[test]
+fn a_lock_another_writer_takes_first_is_refused_held_and_the_connection_ends() {
+    let (home, sessions, id, dir) = resume_fixture("main-resume-beaten");
+    let keeper = scripted_keeper(home.path(), &sessions, &id, Keeper::Beaten);
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let before = log::read(&dir).unwrap().len();
+    let mut attached = 0;
+    let result = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| {
+        attached += 1;
+        7
+    });
+    assert_eq!(result.err(), Some(1));
+    assert_eq!(attached, 0, "no attach to a lock only a keeper released");
+    // The keeper saw both requests and then the end of the connection.
+    let (seen, _held) = keeper.join().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert_eq!(log::lock_label(&dir).as_deref(), Some("other 1"));
+    assert_eq!(log::read(&dir).unwrap().len(), before, "nothing appended");
+}
+
+#[test]
+fn an_unreadable_keeper_version_is_declined_without_contacting_the_keeper() {
+    let (home, sessions, id, dir) = resume_fixture("main-resume-unreadable");
+    let next = u64::from(contract::SCHEMA_VERSION) + 1;
+    forge_fiber_started_version(
+        &dir,
+        1,
+        &contract::SCHEMA_VERSION.to_string(),
+        &next.to_string(),
+    );
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let _held = Log::open_as(&sessions, id.clone(), Arc::clone(&clock), "keeper 4242").unwrap();
+    let (_, listener) = doors::bind(home.path(), &dir).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let result = super::open_or_attach(home.path(), &sessions, id.clone(), clock, |_| 7);
+    assert_eq!(result.err(), Some(1));
+    // Nobody connected: the keeper was not asked to release anything.
+    assert_eq!(
+        listener.accept().err().map(|error| error.kind()),
+        Some(std::io::ErrorKind::WouldBlock)
+    );
+}
+
+#[test]
+fn a_resume_start_carries_a_handover_without_changing_its_construction() {
+    let (_home, sessions, id, dir) = resume_fixture("main-resume-start");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let log = Arc::new(Log::open(&sessions, id.clone(), clock).unwrap());
+    let folded = r#loop::resumed(&dir).unwrap();
+    let start = ResumeStart::new(log::SessionDir::new(&sessions, &id), log, folded, None)
+        .unwrap()
+        .with_handover(None);
+    assert!(start.handover.is_none());
 }

@@ -38,7 +38,6 @@ struct World {
     registry: Arc<jobs::Registry>,
     recorder: Arc<fakes::Recorder>,
     host: Arc<Host>,
-    clock: Arc<FakeClock>,
     keeper: UnixStream,
     session_end: Option<UnixStream>,
 }
@@ -61,7 +60,6 @@ fn world() -> World {
         log,
         registry,
         recorder,
-        clock,
         keeper,
         session_end: Some(session_end),
     }
@@ -164,10 +162,13 @@ fn monitor_lines_without_errors_path_restored() {
     let dl = deadline();
     let mut text = Vec::new();
     let completed = loop {
-        match dl.recv_or_fail(&deliveries, "a line or the ending") {
-            Delivery::JobLine(line) => text.push(line.lines),
-            Delivery::Job(notice) => break notice.completed,
-            other => panic!("unexpected delivery {other:?}"),
+        let delivery = dl.recv_or_fail(&deliveries, "a line or the ending");
+        if let Delivery::JobLine(line) = delivery {
+            text.push(line.lines);
+        } else if let Delivery::Job(notice) = delivery {
+            break notice.completed;
+        } else {
+            panic!("unexpected delivery {delivery:?}");
         }
     };
     assert_eq!(text.join("\n"), "hello\nworld");
@@ -176,6 +177,21 @@ fn monitor_lines_without_errors_path_restored() {
     assert!(ready.try_recv().is_err(), "the acknowledgement is withheld");
     // The keeper's bytes stay, the session's follow.
     assert_eq!(world.output("j_mon"), b"from the keeper\nhello\nworld\n");
+    // Progress for clients carries what the session appended, not the
+    // keeper's earlier bytes, and is ephemeral output of the same job.
+    let shown: String = world
+        .recorder
+        .events()
+        .into_iter()
+        .filter_map(|event| {
+            if let Event::JobDelta(delta) = event {
+                delta.progress.text
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(shown, "hello\nworld\n");
     world.send(serde_json::json!({"adopt_done": true}));
     assert!(dl.recv_or_fail(&ready, "the acknowledgement").is_ok());
     waiter.join().unwrap();
@@ -282,7 +298,7 @@ fn the_stop_and_the_terminal_of_a_running_restored_job_reach_its_keeper() {
     std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
     assert_eq!(line.trim(), r#"{"stop":"call_0"}"#);
     world.send(exit_frame("call_0", 0));
-    let _ = deadline().recv(&answer);
+    drop(deadline().recv(&answer));
     active.keep();
 }
 
@@ -378,7 +394,10 @@ impl Writers {
         let mut byte = [0; 1];
         match self.0.read(&mut byte) {
             Err(error) => error.kind() == std::io::ErrorKind::WouldBlock,
-            Ok(_) => false,
+            Ok(read) => {
+                assert_eq!(read, 0, "nobody writes into the observer's FIFO");
+                false
+            }
         }
     }
 }
@@ -507,4 +526,46 @@ fn newest_keeps_the_tail_on_a_character_boundary() {
     assert!(kept.len() <= 64 << 10);
     assert!(kept.starts_with('€'));
     assert_eq!(super::newest("short"), "short");
+}
+
+#[test]
+fn a_finish_that_fails_closes_the_writers_before_the_connection_ends() {
+    let mut world = world();
+    let (job, mut writers) = watched_job(&world, "j_job", "call_0");
+    let mut attached = world.attach(vec![job]);
+    let deliveries = inbox(&world);
+    let restored = restored(&world, &mut attached);
+    let handed = super::Handed { restored, attached };
+    // The keeper goes away before it acknowledges: its recovery reads the
+    // end of the connection, and must find no session handle on the file.
+    world.keeper.shutdown(std::net::Shutdown::Both).unwrap();
+    let error = handed.finish().unwrap_err();
+    assert!(
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::TimedOut
+        ),
+        "{error}"
+    );
+    assert!(
+        !writers.open(),
+        "every append handle closed with the failure"
+    );
+    assert!(deliveries.recv_timeout_for_test().is_none());
+}
+
+#[test]
+fn a_finish_the_keeper_acknowledges_keeps_the_writers() {
+    let mut world = world();
+    let (job, mut writers) = watched_job(&world, "j_job", "call_0");
+    let mut attached = world.attach(vec![job]);
+    let _deliveries = inbox(&world);
+    let restored = restored(&world, &mut attached);
+    let handed = super::Handed { restored, attached };
+    world.send(serde_json::json!({"adopt_done": true}));
+    handed.finish().unwrap();
+    assert!(
+        writers.open(),
+        "the session owns the file after the handover"
+    );
 }
