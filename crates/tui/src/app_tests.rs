@@ -2614,3 +2614,18 @@ fn first_block_notice_session_with_no_row_shows_nothing() {
     ));
     assert_eq!(app.notice(), None);
 }
+
+#[test]
+fn first_run_import_offer_waits_until_login_and_model_picker_close() {
+    let mut app = home_app();
+    app.set_import_offer(true);
+    app.open_first_run_login();
+    assert!(shell_screen(&app).contains("Log in"));
+    app.on_key(Key::Esc, std::time::Instant::now());
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(app.model_picker_open());
+    app.on_key(Key::Esc, std::time::Instant::now());
+    assert!(!app.model_picker_open());
+    let screen = shell_screen(&app);
+    assert!(screen.contains("Import"), "{screen}");
+}

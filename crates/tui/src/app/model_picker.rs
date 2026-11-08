@@ -42,10 +42,16 @@ impl App {
                 self.push_notice(ErrorCode::IoFailed, error.clone());
             }
         }
-        let first_run = std::mem::take(&mut self.first_run_pending);
+        let first_run = self.first_run_pending && result.is_ok();
+        if first_run {
+            self.first_run_pending = false;
+        }
         let has_credential = result
             .as_ref()
             .is_ok_and(|catalogue| catalogue.logged_out.is_empty());
+        if first_run {
+            self.first_run_no_credential = !has_credential;
+        }
         self.model_picker.store(result);
         self.keep_model_picker_top(false);
         if first_run {
