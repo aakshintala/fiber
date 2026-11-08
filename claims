@@ -113,3 +113,6 @@ crates/tui/src/turn/group_tests.rs	fiber-4389	plan	2026-11-08T03:17:18Z	Amoghs-M
 docs/tui.md	fiber-4389	plan	2026-11-08T03:17:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/hooks.rs	fiber-4389	plan	2026-11-08T03:17:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/paging_tests.rs	fiber-4389	plan	2026-11-08T03:17:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/event_loop_catalogue_tests.rs	fiber-3961	grant	2026-11-08T03:17:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/3961-picker-stuck-reading	
+crates/main/src/model_list_stall_tests.rs	fiber-3961	grant	2026-11-08T03:17:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/3961-picker-stuck-reading	
+crates/cli/src/model_lists_stall_tests.rs	fiber-3961	grant	2026-11-08T03:17:50Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/3961-picker-stuck-reading	
