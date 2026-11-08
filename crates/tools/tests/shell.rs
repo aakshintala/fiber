@@ -1467,6 +1467,53 @@ fn leaves_sleepers(ready: &Path, gate: &Path, count: u32, after: &str) -> String
     )
 }
 
+#[test]
+fn leaves_sleepers_exits_97_naming_the_sleepers_when_ps_never_lists_them() {
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::os::unix::process::CommandExt as _;
+    let dir = fakes::TempDir::new("fiber-leaves-sleepers-unlisted");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    // A `ps` that lists nothing, and a `date` whose second reading is past
+    // the bound, so the readiness timeout fires without waiting for it.
+    for (name, body) in [
+        ("ps", "exit 0\n"),
+        (
+            "date",
+            "if [ -e \"$0.seen\" ]; then echo 9999999999; else : > \"$0.seen\"; echo 0; fi\n",
+        ),
+    ] {
+        let tool = bin.join(name);
+        std::fs::write(&tool, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let ready = dir.path().join("ready");
+    let gate = dir.path().join("gate");
+    let stderr = dir.path().join("stderr");
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(leaves_sleepers(&ready, &gate, 1, "exit 0"))
+        .env("PATH", path)
+        .stderr(std::fs::File::create(&stderr).unwrap())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pgid = child.id();
+    let status = child.wait().unwrap();
+    assert!(kill_group(pgid, "KILL").unwrap());
+    assert_eq!(status.code(), Some(97));
+    let message = std::fs::read_to_string(&stderr).unwrap();
+    assert!(
+        message.contains("leaves_sleepers: 1 sleepers not listed by ps within 20 s"),
+        "{message}"
+    );
+}
+
 /// Lets the shell blocked on the `gate` FIFO go on. The open waits for the
 /// shell's reading end, so it runs off the test's thread.
 fn release_gate(gate: &Path) {
@@ -1700,6 +1747,157 @@ fn leftover_output_after_the_shell_exited_lands_in_the_named_artifact() {
         pgid,
         Deadline::after(fakes::MUST_SUCCEED_WITHIN)
     ));
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+/// The artifact path the closing line names.
+fn artifact_named(body: &str, artifacts: &Path) -> PathBuf {
+    let path = body
+        .rsplit("is in ")
+        .next()
+        .and_then(|rest| rest.split(".txt").next())
+        .map(|stem| PathBuf::from(format!("{stem}.txt")))
+        .expect(body);
+    assert!(path.starts_with(artifacts), "{body}");
+    path
+}
+
+/// Whether this process holds `path` open. `None` when `lsof` cannot run.
+fn holds_open(path: &Path) -> Option<bool> {
+    let listed = std::process::Command::new("lsof")
+        .args(["-t", "--"])
+        .arg(path)
+        .output()
+        .ok()?;
+    let me = std::process::id().to_string();
+    Some(
+        String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .any(|pid| pid == me),
+    )
+}
+
+/// After the inline return, with the leftovers gone: the steward has unlisted
+/// the group and closed the artifact file.
+fn assert_steward_finished(pgid: u32, artifact: &Path) {
+    fakes::wait_until(
+        "the steward to unlist the emptied group",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || !support::group::live().contains(pgid),
+    );
+    if holds_open(artifact).is_some() {
+        let artifact = artifact.to_path_buf();
+        fakes::wait_until(
+            "the steward to close the artifact file",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || holds_open(&artifact) == Some(false),
+        );
+    }
+}
+
+#[test]
+fn the_steward_keeps_a_live_group_listed_then_unlists_it_and_closes_the_artifact() {
+    let dir = fakes::TempDir::new("fiber-shell-steward-live");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let block = block_of(ready.path());
+    let gate = dir.path().join("exit_gate");
+    fakes::fifo(&gate);
+    let command = format!(
+        "mkfifo {block}; ( read -r _ < {block}; echo LATE; sleep 1000 ) & echo $$ > {ready}; echo done; read -r _ < {gate}",
+        block = quote(&block),
+        ready = quote(ready.path()),
+        gate = quote(&gate),
+    );
+    let run = start_with(
+        dir.path().to_path_buf(),
+        Some(artifacts.clone()),
+        command,
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
+    let watchdog = Watchdog::group(pgid);
+    release_after_done(&run, &gate);
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&run.output)
+        .expect("the shell's own result");
+    let path = artifact_named(&text(&output), &artifacts);
+    release_block(ready.path());
+    let seen = path.clone();
+    fakes::wait_until(
+        "the leftover's late output in the artifact",
+        Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+        move || std::fs::read_to_string(&seen).is_ok_and(|text| text == "LATE\n"),
+    );
+    // The leftover is alive: the steward has had the late chunk and still
+    // lists the group, with the file open.
+    assert!(group_alive(pgid));
+    assert!(
+        support::group::live().contains(pgid),
+        "unlisted while alive"
+    );
+    assert!(kill_group(pgid, "KILL").unwrap());
+    assert_steward_finished(pgid, &path);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "LATE\n");
+    watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
+}
+
+#[test]
+fn the_steward_unlists_a_group_that_empties_after_the_pipe_closed() {
+    let dir = fakes::TempDir::new("fiber-shell-steward-eof");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let gate = dir.path().join("exit_gate");
+    fakes::fifo(&gate);
+    // The leftover lets go of the pipe, so the reader reaches the end while
+    // the group is still alive.
+    let command = format!(
+        "sleep 1000 >/dev/null 2>&1 & echo $$ > {ready}; echo done; read -r _ < {gate}",
+        ready = quote(ready.path()),
+        gate = quote(&gate),
+    );
+    let run = start_with(
+        dir.path().to_path_buf(),
+        Some(artifacts.clone()),
+        command,
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
+    let watchdog = Watchdog::group(pgid);
+    release_after_done(&run, &gate);
+    let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
+        .recv(&run.output)
+        .expect("the shell's own result");
+    let body = text(&output);
+    assert!(body.contains("left running"), "{body}");
+    let path = artifact_named(&body, &artifacts);
+    // The pipe is at its end and the steward has closed the file, while the
+    // leftover still lives: the group stays listed.
+    if holds_open(&path).is_some() {
+        let closing = path.clone();
+        fakes::wait_until(
+            "the steward to close the artifact file at the end of the pipe",
+            Deadline::after(fakes::MUST_SUCCEED_WITHIN),
+            move || holds_open(&closing) == Some(false),
+        );
+    }
+    assert!(group_alive(pgid));
+    assert!(
+        support::group::live().contains(pgid),
+        "unlisted while alive"
+    );
+    assert!(kill_group(pgid, "KILL").unwrap());
+    assert_steward_finished(pgid, &path);
     watchdog.stand_down(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
 }
 
