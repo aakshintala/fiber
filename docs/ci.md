@@ -741,7 +741,12 @@ the pull request waiting out GitHub's 6-hour default.
 
 A bound is about twice the job's median duration over its last 20 runs, rounded
 up to a round number, and never under 5 minutes, because runner start-up
-varies. A job with too little history gets a generous bound. The one exception
+varies. A job with too little history gets a generous bound. There are two
+exceptions. The `bug_red` legs are bounded at about twice their slowest recent
+red commit, not their median, because a red commit that changes a signature
+rebuilds every package that depends on it. Run 42403359939's red commit touched
+ten packages: its Linux leg took 10m48s and its macOS leg was cancelled at the
+old 17-minute bound, so both legs get 30 minutes. The other exception
 is a mutants shard: a shard of `crates/main` mutants, whose tests drive the
 binary, takes about 20 minutes (run 38420177975), so its bound is twice that
 slow group, not twice the median. A shard of up to 15 mutants gets 40 minutes.
