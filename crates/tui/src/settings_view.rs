@@ -407,7 +407,7 @@ impl Settings {
     /// Reads the rows again, keeping the selection where it was; a failed
     /// read says why.
     pub(crate) fn reread(&mut self, ctx: &Ctx<'_>) {
-        match ctx.seam.settings(ctx.workspace) {
+        match ctx.seam.settings(ctx.workspace, &[]) {
             Ok(rows) => self.rows = rows,
             Err(error) => {
                 self.rows = Vec::new();

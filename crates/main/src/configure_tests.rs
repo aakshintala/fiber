@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use contract::settings::{SettingControl, SettingsTab};
 use tui::{Configure, Layer, Shown, WriteScope};
 
 use super::Seam;
@@ -54,7 +55,13 @@ pub(in crate::configure) fn write(file: &Path, text: &str) {
 
 /// The row for `key` in `seam`'s rows for `workspace`.
 fn row(seam: &Seam, workspace: &Path, key: &str) -> tui::SettingRow {
-    seam.settings(workspace)
+    row_with(seam, workspace, &[], key)
+}
+
+/// The same with the run's `-c` overrides.
+fn row_with(seam: &Seam, workspace: &Path, overrides: &[&str], key: &str) -> tui::SettingRow {
+    let overrides: Vec<String> = overrides.iter().map(|arg| (*arg).to_owned()).collect();
+    seam.settings(workspace, &overrides)
         .unwrap_or_else(|e| panic!("settings: {e}"))
         .into_iter()
         .find(|row| row.key == key)
@@ -76,6 +83,122 @@ fn settings_reads_the_session_workspaces_project_layer() {
     let second = row(&seam, &two, "handoff.tokens");
     assert_eq!(second.value, Shown::Value("2".to_owned()));
     assert_eq!(second.scope, WriteScope::Any { repo: true });
+}
+
+#[test]
+fn settings_carry_the_schemas_presentation_and_control() {
+    let dirs = Dirs::new();
+    let seam = Seam::new(dirs.home());
+    let one = dirs.workspace("one");
+    let thinking = row(&seam, &one, "thinking");
+    assert_eq!(thinking.presentation.tab, Some(SettingsTab::Models));
+    assert_eq!(thinking.presentation.label, "Thinking level");
+    assert!(!thinking.presentation.description.is_empty());
+    assert_eq!(
+        thinking.control,
+        SettingControl::Fixed(
+            contract::ThinkingLevel::NAMES
+                .iter()
+                .map(|name| (*name).to_owned())
+                .collect()
+        )
+    );
+    assert_eq!(
+        row(&seam, &one, "reviewer.model").control,
+        SettingControl::Model
+    );
+    assert_eq!(row(&seam, &one, "tui.theme").control, SettingControl::Theme);
+    assert_eq!(
+        row(&seam, &one, "repository_extensions").control,
+        SettingControl::RepositoryExtensions
+    );
+}
+
+#[test]
+fn settings_read_the_runs_overrides_in_order() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    write(
+        &dirs.home().join("config.json"),
+        r#"{"thinking": "minimal"}"#,
+    );
+    let seam = Seam::new(dirs.home());
+    // Without overrides the global file shows; with them the last wins and
+    // names `-c`, which has no file.
+    assert_eq!(row(&seam, &one, "thinking").layer, "global");
+    let low = row_with(&seam, &one, &["thinking=high", "thinking=low"], "thinking");
+    assert_eq!(
+        (low.value, low.layer.as_str(), low.file),
+        (Shown::Value("\"low\"".to_owned()), "-c", None)
+    );
+    // A named-model override first and a `-c` for another key after it.
+    let model = row_with(
+        &seam,
+        &one,
+        &["model=a/b", "thinking=medium", "model=c/d"],
+        "model",
+    );
+    assert_eq!(model.value, Shown::Value("\"c/d\"".to_owned()));
+    assert_eq!(model.layer, "-c");
+    // A later read without them is back to the file: nothing is cached.
+    assert_eq!(row(&seam, &one, "thinking").layer, "global");
+}
+
+#[test]
+fn reset_removes_one_layers_override_and_reports_stale_and_absent() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    let global = dirs.home().join("config.json");
+    write(&global, r#"{"thinking": "low", "model": "a/b"}"#);
+    let seam = Seam::new(dirs.home());
+    // A changed value is stale and writes nothing.
+    let stale = seam
+        .reset(&one, Layer::Global, "thinking", "\"high\"")
+        .unwrap_err();
+    assert_eq!(stale.code, contract::ErrorCode::StaleRequest);
+    assert!(fs::read_to_string(&global).unwrap().contains("low"));
+    // A matching value is removed; the other key stays.
+    let saved = seam
+        .reset(&one, Layer::Global, "thinking", "\"low\"")
+        .unwrap();
+    assert_eq!(saved.file, global);
+    let text = fs::read_to_string(&global).unwrap();
+    assert!(!text.contains("thinking") && text.contains("a/b"), "{text}");
+    // An absent override is a no-write success and creates no project file.
+    let project = dirs.project_file(&one);
+    let saved = seam
+        .reset(&one, Layer::Project, "thinking", "\"low\"")
+        .unwrap();
+    assert_eq!(saved.file, project);
+    assert!(!project.exists());
+    // Expected text that is not JSON, and a key the layer may not hold.
+    assert_eq!(
+        seam.reset(&one, Layer::Global, "thinking", "low")
+            .unwrap_err()
+            .code,
+        contract::ErrorCode::InvalidArguments
+    );
+    assert!(
+        seam.reset(&one, Layer::Repository, "diagnostics.level", "\"debug\"")
+            .is_err()
+    );
+}
+
+#[test]
+fn reset_resolves_the_project_afresh() {
+    let dirs = Dirs::new();
+    let one = dirs.workspace("one");
+    let seam = Seam::new(dirs.home());
+    // Prime the cached key, then make the workspace a repository: a set
+    // and a reset both use the key it has now.
+    drop(row(&seam, &one, "thinking"));
+    fakes::git::git(&one, &["init", "-q"]);
+    seam.set(&one, Layer::Project, "thinking", "low").unwrap();
+    let fresh = dirs.project_file(&one);
+    assert!(fresh.exists());
+    seam.reset(&one, Layer::Project, "thinking", "\"low\"")
+        .unwrap();
+    assert!(!fs::read_to_string(&fresh).unwrap().contains("thinking"));
 }
 
 #[test]

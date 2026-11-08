@@ -3,10 +3,11 @@
 use crate::configure::{
     ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, Layer, LoginKind, LoginTarget,
     LogoutRow, NotesFile, NotesSaved, ReviewerModels, ReviewerNotes, Revoked, RuleRow,
-    RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, ToolGroup, ToolLists,
-    ToolSwitches, WriteScope,
+    RulesSection, Saved, SettingControl, SettingPresentation, SettingRow, Shown, SkillsDisabled,
+    Stored, ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
 use contract::HubEventKind;
+use contract::settings::SettingsTab;
 use contract::{ErrorCode, HubLine};
 use serde_json::Value;
 use std::path::PathBuf;
@@ -115,9 +116,49 @@ pub(super) fn settings(value: &Value) -> Option<Vec<SettingRow>> {
                 file: optional!(row, "file")?,
                 value,
                 scope,
+                presentation: SettingPresentation {
+                    tab: optional!(row, "tab")?
+                        .map(|tag: String| SettingsTab::from_tag(&tag))
+                        .map(|tab| tab.ok_or(()))
+                        .transpose()
+                        .ok()?,
+                    label: read!(row, "label")?,
+                    description: read!(row, "description")?,
+                },
+                control: control(row.get("control")?)?,
             })
         })
         .collect()
+}
+
+/// A row's control: a known `kind`, with ordered `choices` for `fixed`
+/// and for no other kind. Anything else fails the whole reply.
+fn control(value: &Value) -> Option<SettingControl> {
+    let object = value.as_object()?;
+    let kind = object.get("kind")?.as_str()?;
+    let choices = object.get("choices");
+    let allowed = if kind == "fixed" { 2 } else { 1 };
+    if object.len() != allowed || (kind != "fixed" && choices.is_some()) {
+        return None;
+    }
+    Some(match kind {
+        "boolean" => SettingControl::Boolean,
+        "number" => SettingControl::Number,
+        "text" => SettingControl::Text,
+        "model" => SettingControl::Model,
+        "theme" => SettingControl::Theme,
+        "string_list" => SettingControl::StringList,
+        "repository_extensions" => SettingControl::RepositoryExtensions,
+        "json" => SettingControl::Json,
+        "fixed" => {
+            let choices: Vec<String> = serde_json::from_value(choices?.clone()).ok()?;
+            if choices.is_empty() {
+                return None;
+            }
+            SettingControl::Fixed(choices)
+        }
+        _ => return None,
+    })
 }
 
 fn section(value: &Value) -> Option<RulesSection> {

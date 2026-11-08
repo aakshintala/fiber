@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use config::{Imported, LeftBehind};
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::settings::SettingControl;
 use contract::shapes::Failure;
 use serde_json::{Map, Value, json};
 use tui::{
@@ -37,6 +38,15 @@ fn invalid() -> Failure {
 
 fn from_view(error: ConfigureError) -> Failure {
     failure(error.code, error.message)
+}
+
+/// The request's optional ordered `-c` overrides: absent is none, and an
+/// explicit null or anything but an array of strings is refused.
+fn overrides(args: &Map<String, Value>) -> Result<Vec<String>, Failure> {
+    args.get("overrides")
+        .map(|value| serde_json::from_value::<Vec<String>>(value.clone()).map_err(|_| invalid()))
+        .transpose()
+        .map(Option::unwrap_or_default)
 }
 
 fn client_key(key: &str) -> bool {
@@ -74,6 +84,14 @@ impl<'a> Args<'a> {
             return Err(invalid());
         }
         Ok(path)
+    }
+    fn layer(&self) -> Result<Layer, Failure> {
+        match self.string("layer")? {
+            "global" => Ok(Layer::Global),
+            "project" => Ok(Layer::Project),
+            "repository" => Ok(Layer::Repository),
+            _ => Err(invalid()),
+        }
     }
     fn scope(&self) -> Result<SwitchScope, Failure> {
         match self.string("scope")? {
@@ -213,6 +231,19 @@ fn setting(row: tui::SettingRow) -> Value {
             ));
         }
     }
+    drop(value.insert("label".to_owned(), json!(row.presentation.label)));
+    drop(value.insert(
+        "description".to_owned(),
+        json!(row.presentation.description),
+    ));
+    if let Some(tab) = row.presentation.tab {
+        drop(value.insert("tab".to_owned(), json!(tab.tag())));
+    }
+    let mut control = Map::from_iter([("kind".to_owned(), json!(row.control.tag()))]);
+    if let SettingControl::Fixed(choices) = &row.control {
+        drop(control.insert("choices".to_owned(), json!(choices)));
+    }
+    drop(value.insert("control".to_owned(), Value::Object(control)));
     match row.scope {
         WriteScope::Any { repo } => {
             drop(value.insert("scope".to_owned(), json!("any")));
@@ -398,24 +429,32 @@ impl hub::Machine for Seam {
         let a = Args(args);
         let result = match operation {
             "settings" => {
-                a.shape(&["workspace"], &[])?;
-                let rows = self.settings(a.workspace()?).map_err(from_view)?;
+                a.shape(&["workspace"], &["overrides"])?;
+                let overrides = overrides(args)?;
+                let rows = self
+                    .settings(a.workspace()?, &overrides)
+                    .map_err(from_view)?;
                 json!({"rows":rows.into_iter().filter(|row|!client_key(&row.key)).map(setting).collect::<Vec<_>>()})
             }
             "set" => {
                 a.shape(&["workspace", "layer", "key", "text"], &[])?;
-                let layer = match a.string("layer")? {
-                    "global" => Layer::Global,
-                    "project" => Layer::Project,
-                    "repository" => Layer::Repository,
-                    _ => return Err(invalid()),
-                };
                 let key = a.string("key")?;
                 if client_key(key) {
                     return Err(invalid());
                 }
                 let saved = self
-                    .set(a.workspace()?, layer, key, a.string("text")?)
+                    .set(a.workspace()?, a.layer()?, key, a.string("text")?)
+                    .map_err(from_view)?;
+                json!({"file":saved.file,"warnings":saved.warnings})
+            }
+            "reset" => {
+                a.shape(&["workspace", "layer", "key", "expected"], &[])?;
+                let key = a.string("key")?;
+                if client_key(key) {
+                    return Err(invalid());
+                }
+                let saved = self
+                    .reset(a.workspace()?, a.layer()?, key, a.string("expected")?)
                     .map_err(from_view)?;
                 json!({"file":saved.file,"warnings":saved.warnings})
             }
@@ -520,13 +559,7 @@ impl hub::Machine for Seam {
             "blocking_hooks" => {
                 a.shape(&["workspace"], &["overrides"])?;
                 let workspace = a.workspace()?;
-                let overrides = args
-                    .get("overrides")
-                    .map(|value| {
-                        serde_json::from_value::<Vec<String>>(value.clone()).map_err(|_| invalid())
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
+                let overrides = overrides(args)?;
                 let names = self
                     .blocking_hooks(workspace, &overrides)
                     .map_err(from_view)?;
