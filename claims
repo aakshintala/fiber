@@ -699,3 +699,14 @@ crates/main/tests/delegates.rs	fiber-3323	plan	2026-11-08T16:52:24Z	Amoghs-MacBo
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__*.snap	fiber-4188	plan	2026-11-08T16:57:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
 crates/tui/src/view/snapshots/tui__view__item__tests__*.snap	fiber-4188	plan	2026-11-08T16:57:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
 crates/tui/src/view/snapshots/tui__view__key_map__tests__key_map_*.snap	fiber-4188	plan	2026-11-08T16:57:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/keys_tests.rs	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/app/keyboard_tests.rs	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/app/keyboard_screen_tests.rs	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/rebind_view_tests.rs	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/snapshots/tui__rebind__view_tests__keys_attached_80x24.snap	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/snapshots/tui__rebind__view_tests__keys_capture_80x24.snap	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/snapshots/tui__rebind__view_tests__keys_clash_80x24.snap	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/snapshots/tui__rebind__view_tests__keys_failed_save_80x24.snap	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/snapshots/tui__rebind__view_tests__keys_on_home_80x24.snap	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/snapshots/tui__view__tests__key_map_80x24.snap	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
+crates/tui/src/app/snapshots/tui__app__overlay__tests__stacked__report_over_keys_screen_on_home.snap	fiber-4188	plan	2026-11-08T16:57:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
