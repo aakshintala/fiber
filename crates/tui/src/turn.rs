@@ -471,19 +471,17 @@ impl Turn {
     /// extensions that took attribution (`docs/events.md`, "`changed_by`"):
     /// the call's arguments become the rewrite, so every reader of them
     /// agrees. An empty list names no one. Timing and `asking` stay;
-    /// false when the call is not in this turn.
+    /// nothing changes when the call is not in this turn.
     pub(crate) fn rewritten(
         &mut self,
         action: &str,
         arguments: serde_json::Map<String, Value>,
         changed_by: Option<Vec<String>>,
-    ) -> bool {
-        let Some(call) = self.groups_mut().find_map(|group| group.call(action)) else {
-            return false;
-        };
-        call.arguments = Value::Object(arguments);
-        call.changed_by = changed_by.filter(|names| !names.is_empty());
-        true
+    ) {
+        if let Some(call) = self.groups_mut().find_map(|group| group.call(action)) {
+            call.arguments = Value::Object(arguments);
+            call.changed_by = changed_by.filter(|names| !names.is_empty());
+        }
     }
 
     /// `tool_call_completed`; false when the call is not in this turn.

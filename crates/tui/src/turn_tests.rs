@@ -2790,3 +2790,32 @@ fn hook_rewrite_a_started_line_that_does_not_decode_still_starts_the_call() {
     assert_eq!(call.arguments, json!({"command": "cargo test"}));
     assert_eq!(call.changed_by, None);
 }
+
+#[test]
+fn hook_rewrite_a_line_naming_no_call_changes_no_card() {
+    let (mut turns, mut fold) = hook_rewrite_turns(&[&["a_1"]]);
+    let rewrite = json!({"decision": "deny", "decided_by": "reviewer", "reason": "no",
+        "reviewer": {"model": "m", "stage": 1}, "effects": ["executes"], "reversible": false,
+        "arguments": {"command": "cargo test --quiet"}, "changed_by": ["guard"]});
+    let started = hook_rewrite_started(
+        Some(json!({"command": "cargo test --quiet"})),
+        Some(json!(["guard"])),
+    );
+    let asked = json!({"request_id": "r_1", "effects": ["executes"], "reversible": false,
+        "step": "standing_ask"});
+    let completed = json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]});
+    for (kind, payload) in [
+        ("tool_call_started", started),
+        ("permission_requested", asked),
+        ("permission_resolved", rewrite),
+        ("tool_call_completed", completed),
+    ] {
+        assert!(
+            !hook_rewrite_line(&mut turns, &mut fold, kind, "a_9", payload),
+            "{kind}"
+        );
+    }
+    let call = hook_rewrite_call(&turns, "a_1");
+    assert_eq!(call.arguments, json!({"command": "cargo test"}));
+    assert_eq!(call.changed_by, None);
+}

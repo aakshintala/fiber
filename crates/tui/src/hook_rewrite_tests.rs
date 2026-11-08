@@ -112,15 +112,6 @@ fn row(shown: &str) -> String {
 }
 
 #[test]
-fn a_hook_rewrite_shows_the_arguments_that_ran() {
-    let mut app = turn(vec![started(&["guard"])], "completed");
-    let shown = screen(&mut app);
-    let row = row(&shown);
-    assert!(row.contains("cargo test --quiet"), "{shown}");
-    assert!(!row.contains("cargo test  "), "{shown}");
-}
-
-#[test]
 fn a_hook_rewrite_ledger_matches_its_snapshot() {
     let mut app = turn(vec![started(&["guard"])], "completed");
     let shown = screen(&mut app);

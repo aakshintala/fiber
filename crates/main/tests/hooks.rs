@@ -626,13 +626,20 @@ fn a_hook_rewrite_shows_in_the_ledger_row() {
 
     // Ctrl+O opens the ledger. The check mark draws once the call
     // completes, and a frame draws a whole row, so its result is drawn too.
+    // The wait checks every cell the asserts below read: the rewritten
+    // path, the requested path's absence and the mark ending the row.
     run.write(b"\x0f");
     let screen = run.wait_screen("the read's ledger row", |screen| {
-        screen.rows.iter().any(|row| row.contains("\u{2713} read"))
+        screen.rows.iter().any(|row| {
+            row.contains("\u{2713} read")
+                && row.contains("b.txt")
+                && !row.contains("a.txt")
+                && row.trim_end().ends_with("\u{b7} via fiber.test/guard")
+        })
     });
-    // settled: the wait checked this row's text.
-    let rows = &screen.rows;
-    let row = rows
+    // settled: the wait checked this row's path and mark.
+    let row = screen
+        .rows
         .iter()
         .find(|row| row.contains("\u{2713} read"))
         .unwrap();
