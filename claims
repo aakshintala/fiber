@@ -640,3 +640,5 @@ crates/main/tests/screens/terminal.rs	fiber-4443	plan	2026-11-08T21:43:56Z	Amogh
 crates/main/tests/support/pty.rs	fiber-4443	plan	2026-11-08T21:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop_tests.rs	fiber-4443	plan	2026-11-08T21:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/remote_run_tests.rs	fiber-4443	plan	2026-11-08T21:43:56Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/doors/tests/connect_jig.rs	fiber-4443	plan	2026-11-08T21:45:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
+crates/tui/src/configure_fake.rs	fiber-4443	plan	2026-11-08T21:45:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
