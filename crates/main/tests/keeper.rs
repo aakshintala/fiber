@@ -36,6 +36,23 @@ fn configured() -> Setup {
     );
     setup
 }
+fn record_connect_error(slot: &Mutex<Option<String>>, error: std::io::Error) {
+    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error.to_string());
+}
+
+fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf) -> String {
+    let connect_error = last_error.unwrap_or_else(|| "no connect error was observed".to_owned());
+    let socket_state = match fs::metadata(path) {
+        Ok(metadata) => format!("present (file type: {:?})", metadata.file_type()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
+        Err(error) => format!("metadata error: {error}"),
+    };
+    format!(
+        "last connect error: {connect_error}; socket path {}: {socket_state}",
+        path.display()
+    )
+}
+
 fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
     let last_error = Arc::new(Mutex::new(None));
     let error_slot = Arc::clone(&last_error);
@@ -45,29 +62,21 @@ fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
             match UnixStream::connect(&target) {
                 Ok(_) => true,
                 Err(error) => {
-                    *error_slot
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error.to_string());
+                    record_connect_error(&error_slot, error);
                     false
                 }
             }
         });
     }));
     if result.is_err() {
-        let connect_error = last_error
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-            .unwrap_or_else(|| "no connect error was observed".to_owned());
-        let socket_state = match fs::metadata(&path) {
-            Ok(metadata) => format!("present (file type: {:?})", metadata.file_type()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
-            Err(error) => format!("metadata error: {error}"),
-        };
-        panic!(
-            "waited until the deadline for keeper refuse-only socket to accept; last connect error: {connect_error}; socket path {}: {socket_state}",
-            path.display()
+        let diagnostic = timeout_diagnostic(
+            last_error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+            &path,
         );
+        panic!("waited until the deadline for keeper refuse-only socket to accept; {diagnostic}");
     }
 }
 
@@ -357,7 +366,7 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
     let setup = Setup::new();
     let path = setup.workspace().join("missing-socket");
     let result = std::panic::catch_unwind(|| {
-        wait_for_refuse_only_socket(Deadline::after(std::time::Duration::ZERO), path);
+        wait_for_refuse_only_socket(Deadline::after(std::time::Duration::ZERO), path.clone());
     });
     let panic = result.expect_err("an expired socket wait fails");
     let message = panic
@@ -365,12 +374,24 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
         .map(String::as_str)
         .or_else(|| panic.downcast_ref::<&str>().copied())
         .unwrap_or("non-string panic");
-    assert!(
-        message.contains("last connect error: no connect error was observed"),
-        "{message}"
-    );
     assert!(message.contains("socket path "), "{message}");
     assert!(message.contains(": absent"), "{message}");
+
+    let recorded = Mutex::new(None);
+    record_connect_error(
+        &recorded,
+        std::io::Error::new(std::io::ErrorKind::NotFound, "probe failure"),
+    );
+    let diagnostic = timeout_diagnostic(recorded.into_inner().unwrap(), &path);
+    assert!(
+        diagnostic.contains("last connect error: probe failure"),
+        "{diagnostic}"
+    );
+    let no_observation = timeout_diagnostic(None, &path);
+    assert!(
+        no_observation.contains("last connect error: no connect error was observed"),
+        "{no_observation}"
+    );
 }
 
 #[test]
