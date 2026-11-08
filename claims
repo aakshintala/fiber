@@ -628,7 +628,6 @@ crates/tui/src/turn_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aa
 crates/tui/src/view_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 docs/tui.md	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 crates/tui/src/rebind_tests.rs	fiber-4188	plan	2026-11-08T16:45:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/delegates.rs	fiber-3323	plan	2026-11-08T16:52:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__*.snap	fiber-4188	plan	2026-11-08T16:57:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
 crates/tui/src/view/snapshots/tui__view__item__tests__*.snap	fiber-4188	plan	2026-11-08T16:57:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
 crates/tui/src/view/snapshots/tui__view__key_map__tests__key_map_*.snap	fiber-4188	plan	2026-11-08T16:57:04Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	
