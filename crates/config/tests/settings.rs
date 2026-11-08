@@ -8,6 +8,7 @@ mod common;
 
 use common::Setup;
 use config::{Layer, SettingInfo, SettingValue, Source, WriteScope};
+use contract::settings::SettingControl;
 use serde_json::json;
 
 /// The row for `key`.
@@ -200,5 +201,73 @@ fn an_mcp_server_named_credentials_shows_its_env_names() {
     assert_eq!(
         row(&rows, "mcp.servers.credentials.env").value,
         SettingValue::Redacted("names TOKEN".to_owned(), Source::Global(setup.global()))
+    );
+}
+
+#[test]
+fn every_row_carries_the_schemas_presentation_and_control() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"roles": {"fast": "a/b"}}"#);
+    let rows = setup.load(&[]).unwrap().settings();
+    for row in &rows {
+        let schema = config::SETTINGS_SCHEMA
+            .iter()
+            .find(|key| {
+                key.path.split('.').count() == row.key.split('.').count()
+                    && key
+                        .path
+                        .split('.')
+                        .zip(row.key.split('.'))
+                        .all(|(pattern, name)| pattern == "*" || pattern == name)
+            })
+            .unwrap_or_else(|| panic!("no schema key for {}", row.key));
+        assert_eq!(row.presentation.label, schema.metadata.label, "{}", row.key);
+        assert_eq!(
+            row.presentation.description, schema.metadata.description,
+            "{}",
+            row.key
+        );
+        assert_eq!(row.presentation.tab, schema.metadata.tab, "{}", row.key);
+    }
+    assert_eq!(row(&rows, "tui.theme").control, SettingControl::Theme);
+    assert_eq!(row(&rows, "reviewer.model").control, SettingControl::Model);
+    assert_eq!(row(&rows, "model").control, SettingControl::Model);
+    assert_eq!(
+        row(&rows, "sandbox.enabled").control,
+        SettingControl::Boolean
+    );
+    assert_eq!(
+        row(&rows, "repository_extensions").control,
+        SettingControl::RepositoryExtensions
+    );
+    assert_eq!(row(&rows, "roles.fast").control, SettingControl::Json);
+    assert_eq!(row(&rows, "roles.fast").presentation.tab, None);
+}
+
+#[test]
+fn the_last_run_override_wins_and_has_no_file() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"thinking": "minimal"}"#);
+    let rows = setup
+        .load(&["thinking=high", "thinking=low"])
+        .unwrap()
+        .settings();
+    assert_eq!(
+        row(&rows, "thinking").value,
+        SettingValue::Value(json!("low"), Source::Run)
+    );
+    // A named-model override first, then `-c` on another key: each is
+    // `-c`, and a later one for the same key replaces the earlier.
+    let rows = setup
+        .load(&["model=a/b", "model=c/d", "thinking=medium"])
+        .unwrap()
+        .settings();
+    assert_eq!(
+        row(&rows, "model").value,
+        SettingValue::Value(json!("c/d"), Source::Run)
+    );
+    assert_eq!(
+        row(&rows, "thinking").value,
+        SettingValue::Value(json!("medium"), Source::Run)
     );
 }
