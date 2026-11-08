@@ -659,3 +659,6 @@ crates/jobs/src/registry.rs	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-
 crates/jobs/src/registry_tests.rs	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/keeper.rs	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/keeper_restore.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
+crates/main/src/keeper_restore_tests.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
+crates/loop/src/resume_tests.rs	fiber-4054	grant	2026-11-08T15:58:13Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/shell/4054-keeper-handover	
