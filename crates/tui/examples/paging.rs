@@ -107,7 +107,7 @@ fn main() -> ExitCode {
 
 fn ticket_args(args: &[String]) -> (bool, &[String]) {
     if args.first().is_some_and(|arg| arg == "--ticket") {
-        (true, &args[1..])
+        (true, args.get(1..).unwrap_or_default())
     } else {
         (false, args)
     }
