@@ -55,6 +55,11 @@ fn feed(cards: &mut Cards, kind: &str, action: Option<&str>, payload: Value) {
         &mut cards.turns,
         &mut cards.fold,
         &envelope(kind, action, 0, payload),
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
+        },
     );
 }
 

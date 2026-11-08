@@ -10,9 +10,10 @@ use std::ops::RangeInclusive;
 use contract::{Envelope, Seq, SessionId};
 
 use super::pins::Pins;
-use super::{Part, Seed, fold, restore_spans, set};
+use super::{Delegates, Part, Resolve, Seed, fold, restore_spans, set};
 use crate::app::Target;
 use crate::pages::Index;
+use crate::turn::Recipients;
 
 /// The closed pages' cards and what the dropped ones wait on: every
 /// kept page's cards, the set holding them, the dropped pages owed a
@@ -137,7 +138,8 @@ impl Residency {
     }
 
     /// Folds one already-grouped closed page from its borrowed lines and
-    /// keeps it: true when a page was kept. The caller notes each
+    /// keeps it: the page's delegate starts that came after the held ones
+    /// when a page was kept, else none. The caller notes each
     /// line's images, resolves its page and groups its lines first, and
     /// counts the kept page after.
     pub(crate) fn load(
@@ -146,15 +148,12 @@ impl Residency {
         lines: &[&Envelope],
         seeds: &[Seed],
         overrides: &BTreeMap<Target, bool>,
-    ) -> bool {
-        let Some(mut part) = self.begin(at, seeds) else {
-            return false;
-        };
-        for line in lines {
-            fold(&mut part, line);
-        }
+        resolve: &Resolve<'_>,
+    ) -> Option<Delegates> {
+        let mut part = self.begin(at, seeds)?;
+        let overlay = fold_page(&mut part, lines.iter().copied(), resolve);
         self.keep(at, part, seeds, overrides);
-        true
+        Some(overlay)
     }
 
     /// Closed page `at` folded from its seed, kept nowhere: what the
@@ -166,11 +165,10 @@ impl Residency {
         lines: &[Envelope],
         seeds: &[Seed],
         overrides: &BTreeMap<Target, bool>,
+        resolve: &Resolve<'_>,
     ) -> Option<Part> {
         let mut part = self.begin(at, seeds)?;
-        for line in lines {
-            fold(&mut part, line);
-        }
+        fold_page(&mut part, lines.iter(), resolve);
         self.finish(at, &mut part, seeds, overrides);
         Some(part)
     }
@@ -413,4 +411,29 @@ impl Residency {
             *part = None;
         }
     }
+}
+
+/// Folds `lines` into `part`, noting each line's delegate start into a
+/// page-local overlay just before the line folds, so a message resolves
+/// to the latest start before it. The overlay is bounded by the page's own
+/// `job_started` lines: the held map is borrowed, never copied.
+fn fold_page<'a>(
+    part: &mut Part,
+    lines: impl Iterator<Item = &'a Envelope>,
+    resolve: &Resolve<'_>,
+) -> Delegates {
+    let mut overlay = Delegates::default();
+    for line in lines {
+        overlay.note_page(line, resolve.held);
+        fold(
+            part,
+            line,
+            &Recipients {
+                sessions: resolve.sessions,
+                delegates: resolve.held,
+                page: Some(&overlay),
+            },
+        );
+    }
+    overlay
 }

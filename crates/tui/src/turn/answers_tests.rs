@@ -301,7 +301,18 @@ fn folded(lines: &[contract::Envelope]) -> (Vec<Turn>, Vec<bool>) {
     let mut fold = Fold::default();
     let changed = lines
         .iter()
-        .map(|line| fold_line(&mut turns, &mut fold, line))
+        .map(|line| {
+            fold_line(
+                &mut turns,
+                &mut fold,
+                line,
+                &crate::turn::Recipients {
+                    sessions: &Default::default(),
+                    delegates: &Default::default(),
+                    page: None,
+                },
+            )
+        })
         .collect();
     (turns, changed)
 }
