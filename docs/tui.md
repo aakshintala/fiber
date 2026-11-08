@@ -1405,7 +1405,9 @@ call's `details` (`docs/tools.md`, "What a result carries"); a call whose
   call's arguments (`id` and `message`, or `id` and `text`), not its
   `details`, so a running or failed call shows them too; a failed call's
   "<code>: <message>" still comes first. A part that is absent, not text or
-  empty draws no row. The ledger row's target is the id. When the result has
+  empty draws no row. The ledger row's target is the recipient's description, for a delegate, or its
+  name, for a session, else the id. The row shows the name held when it was
+  folded, and a page loaded again is folded again. When the result has
   an artifact, the swapped view draws these rows before the paged output.
 - **An MCP call, an extension's tool, or any tool whose `details` the
   terminal does not recognise** shows `content` as plain text. Text that is
@@ -2935,7 +2937,8 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   ends. Scrolling, recounting at a new width, search and copy wait.
   The one exception: rows that depend on turns before the held pages (an
   orphaned job's completion, an automatic handoff's trigger, a ledger
-  toggled earlier: only rows of these kinds) may change in the frame where
+  toggled earlier, a message call to a delegate started or named before the
+  held pages: only rows of these kinds) may change in the frame where
   the pass ends. An opening that fills only after crossing `seq 0` draws
   through the chain root, so the landing rewrites nothing across the seam.
   If the own segment fills first, the count phase adds ancestors above the
@@ -3089,7 +3092,9 @@ I/O failure. Chrome slots may also read outside the stream: the branch comes
 from `git status`, the cards follow the panel's configuration, and `spend`
 falls back to the attached spend when the session reports none. A ledger row, for example, receives the call's name,
 arguments, status, exit code, duration, line count, `changes` and error, folded
-from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
+from its `tool_call_*` events, and a message call's `recipient`: the
+recipient's description or name as the terminal held it when the call folded,
+absent when it held none. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
 
 Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style. Timestamps come as source values, never as elapsed strings. The person's own interaction state (selection, open or closed) is included only where the built-in draws it. An optional key is absent when it does not apply, never `null`. The terminal's internals stay out: no layout, width fit, cache, spinner glyph or motion clock.
 

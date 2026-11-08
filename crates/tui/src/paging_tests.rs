@@ -5878,3 +5878,52 @@ fn a_loaded_page_start_is_held_for_a_later_live_recipient_call() {
     let rows = ledger_rows(&mut pages);
     assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
 }
+
+/// A `session_status` line naming `session` `name`.
+fn status_line(session: &str, name: &str) -> Line {
+    let mut line = envelope(
+        "session_status",
+        None,
+        json!({"name": name, "named": true, "workspace": "/w", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 0, "cache_read": 0,
+                "cache_write": {}, "output": 0},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0}),
+    );
+    line.session_id = SessionId(session.to_owned());
+    Line::Session(line)
+}
+
+/// The row a rename never redraws on a resident page, folded again when
+/// its page is dropped and loaded again (`docs/tui.md`, "Tool groups and
+/// the ledger").
+#[test]
+fn a_dropped_page_folds_its_recipient_row_again_with_the_name_held_then() {
+    let mut stream = Stream::new(false);
+    message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+    for turn in 0..6 {
+        stream.turn(turn, 30);
+    }
+    let lines = stream.lines;
+    let mut app = app(80, 20);
+    app.on_key(Key::CtrlO, now());
+    app.on_line(status_line("s_other", "worker"));
+    open(&mut app, &lines);
+    app.jump(0);
+    frame(&mut app, &lines);
+    assert!(has_row(&page_texts(&app, 0), "message  worker"));
+    // A rename redraws the resident page from its stored card.
+    app.on_line(status_line("s_other", "renamed"));
+    let resident = page_texts(&app, 0);
+    assert!(has_row(&resident, "message  worker"), "{resident:?}");
+    assert!(!has_row(&resident, "renamed"), "{resident:?}");
+    // Dropped, then loaded again: folded again with the name held now.
+    app.on_key(Key::End, now());
+    frame(&mut app, &lines);
+    assert!(app.pages().part(0).is_none(), "page 0 is dropped");
+    app.jump(0);
+    frame(&mut app, &lines);
+    let reloaded = page_texts(&app, 0);
+    assert!(has_row(&reloaded, "message  renamed"), "{reloaded:?}");
+}
