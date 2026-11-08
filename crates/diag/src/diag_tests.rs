@@ -618,7 +618,6 @@ fn at_info_timed_reads_no_clock_and_writes_nothing() {
     assert!(!home.path().join("logs").exists());
 }
 
-// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
     let home = Home::new("ld-timed-drop");
@@ -966,9 +965,15 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, &'static str)> {
     cases
 }
 
+/// The `data` keys an `alloc-stats` build adds when a timer ends on the thread
+/// that started it. The one list every key-set check reads.
+#[cfg(feature = "alloc-stats")]
+const ALLOC_KEYS: [&str; 3] = ["alloc_bytes", "allocs", "live_delta_bytes"];
+
 /// Asserts the closed `data` key set on one parsed `op_timing` line: `op`
-/// and `ms`, plus `tool` exactly when the guard carried one. Every new
-/// timing test passes its lines through here.
+/// and `ms`, plus `tool` exactly when the guard carried one, plus
+/// `ALLOC_KEYS` in an `alloc-stats` build. Every new timing test passes its
+/// lines through here.
 fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
     assert_eq!(line["code"], "op_timing");
     let data = line["data"].as_object().expect("data is an object");
@@ -978,16 +983,24 @@ fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>) {
     if tool.is_some() {
         want.push("tool");
     }
+    #[cfg(feature = "alloc-stats")]
+    want.extend(ALLOC_KEYS);
+    want.sort_unstable();
     assert_eq!(keys, want, "closed data keys: {line}");
     assert_eq!(data["op"], op);
     assert!(data["ms"].is_u64(), "{line}");
+    #[cfg(feature = "alloc-stats")]
+    {
+        assert!(data["alloc_bytes"].is_u64(), "{line}");
+        assert!(data["allocs"].is_u64(), "{line}");
+        assert!(data["live_delta_bytes"].is_i64(), "{line}");
+    }
     match tool {
         Some(tool) => assert_eq!(data["tool"], tool),
         None => assert!(data.get("tool").is_none(), "{line}"),
     }
 }
 
-// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn op_timing_data_holds_only_op_ms_and_tool() {
     let home = Home::new("ld-timed-data");
@@ -1014,7 +1027,6 @@ fn op_timing_data_holds_only_op_ms_and_tool() {
     }
 }
 
-// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn every_process_shape_writes_the_closed_data_keys() {
     for (process, kind) in [
