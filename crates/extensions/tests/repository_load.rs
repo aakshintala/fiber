@@ -2431,6 +2431,25 @@ fn load_pinned_keeps_the_first_declared_copy_of_one_name_silently() {
     assert!(notices.is_empty(), "{notices:?}");
 }
 
+/// Backdates each source file and directory so age-only cache checks do not
+/// mistake the package installation time for a source change.
+fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
+    for entry in fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            set_source_mtime(&entry.path(), mtime);
+        } else {
+            File::options()
+                .write(true)
+                .open(entry.path())
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+    }
+    File::open(dir).unwrap().set_modified(mtime).unwrap();
+}
+
 /// Installs `fiber.test/mixed` with `init`: static `acme` data with
 /// `static_id`, a `providers/acme.lua` discovering `found_id`, and
 /// manifest-declared providers. `lazy` adds a manifest-declared lazy
@@ -2490,6 +2509,13 @@ fn a_disabled_mixed_package_keeps_provider_models_without_init_commands_or_hooks
     let setup = Setup::new();
     install_mixed(&setup, &mixed_init(), false, "static-model", "found-model");
     seed_acme(&setup);
+    set_source_mtime(
+        &setup
+            .home()
+            .join("extensions")
+            .join(dir_name("fiber.test/mixed")),
+        FakeClock::new().wall() - Duration::from_secs(1),
+    );
     let overrides = disabled_mixed();
     let set = RepositorySet::default();
     // The static data resolves with no session at all.

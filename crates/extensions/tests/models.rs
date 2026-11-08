@@ -199,6 +199,15 @@ fn fresh_cache_is_used_before_loading_or_refreshing_provider_lua() {
     let (mut providers, notices) = Providers::load(&setup.home()).unwrap();
     assert!(notices.is_empty());
     write_model_cache(&setup.home(), "p", &provider("p", &["cached"])["models"]).unwrap();
+    let wall = fakes::clock::FakeClock::new().wall();
+    set_cache_mtime(&setup.home(), "p", wall);
+    set_source_mtime(
+        &setup
+            .home()
+            .join("extensions")
+            .join(config::dir_name("fiber.test/lazy")),
+        wall - std::time::Duration::from_secs(1),
+    );
     let configuration = config(&setup, &[]);
     let session = extensions::SessionExtensions::load(
         &setup.home(),
@@ -1548,6 +1557,9 @@ fn two_providers_over_one_stale_list_refresh_it_once() {
     // Two extensions, two VMs, one home: the second sees the first's lock.
     let first = lua_named(&setup, "one", "acme", &lua_list(&["new"]));
     let second = lua_named(&setup, "two", "acme", &lua_list(&["new"]));
+    let source_mtime = clock.wall() - std::time::Duration::from_secs(1);
+    set_source_mtime(&home.join("one"), source_mtime);
+    set_source_mtime(&home.join("two"), source_mtime);
     let a = first.refresh(Some(DAY), ModelsArg::default());
     let b = second.refresh(Some(DAY), ModelsArg::default());
     assert!(a.is_some(), "the first refresh starts");
