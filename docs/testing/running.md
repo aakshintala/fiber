@@ -85,15 +85,21 @@ developer machine.
 
 
 A failed binary-level test retries once. The binary-level tests are the test
-binaries in `crates/main/tests/`; no other test retries, including the unit
-tests in `crates/main/src/`. A pass on retry does not block the
+binaries in `crates/main/tests/`: one per area directory,
+`crates/main/tests/<area>/main.rs`, which declares each of the area's files as
+a module so a test's name is `<file>::<test>`, and the single-file binaries a
+CI step or script runs by name (`hub_service`, `leak_probe`, `look_diff`, and
+`main_journeys`, which runs after merge). A new binary-level test file joins an
+area: it goes in the area's directory and is declared in its `main.rs`. No
+other test retries, including the unit tests in `crates/main/src/`. A pass on retry does not block the
 merge, unless the pull request added or changed that test, in which case
 the test job fails (`docs/ci.md`). Flakes are tracked per test file. CI opens one flake issue for the file,
 naming the test and its failure, or comments on the file's open issue. The
-issue's title is `Flaky tests: ` followed by the file's key: the aggregate
-`main` integration binary names its first test-module segment, so `main
-reviewer_setup::the_setup_saves` files `Flaky tests: main::reviewer_setup`.
-A root-level `main` test falls back to `Flaky tests: main`. A unit-test id
+issue's title is `Flaky tests: ` followed by the file's key: an area
+binary names its first test-module segment, the file, so
+`main::extension_host reviewer_setup::the_setup_saves` files
+`Flaky tests: main::reviewer_setup`. A root-level test in an area binary falls
+back to its binary title, as in `Flaky tests: main::extension_host`. A unit-test id
 is its module path without the test name or a trailing `tests` module,
 because inline `mod tests` lives in its parent's file. Its key appends that
 path to the binary: `extensions
@@ -102,7 +108,7 @@ host::exec::tests::an_escaped_stdin_holder_does_not_hang_the_run` gives
 host::tool_tests::a_denied_call_has_no_artifact` gives
 `Flaky tests: extensions::host::tool_tests`, and a crate-root test such as
 `extensions tests::x` or `extensions x` gives `Flaky tests: extensions`. A
-single-file integration binary such as `main::hub_exit_window` keeps its
+single-file integration binary such as `main::hub_service` keeps its
 binary title. Each body the report writes (the issue, a
 sighting comment, a pull request comment) names the tested commit on its own
 line: `tested <sha> = main <base> + head <head>` on a pull request run, where

@@ -7,9 +7,20 @@
 mod common;
 
 use common::Setup;
-use config::{read_model_cache, write_model_cache};
+use config::{model_cache_file, read_model_cache, write_model_cache};
 use contract::clock::Clock;
 use serde_json::json;
+
+#[test]
+fn model_cache_file_names_the_file_written_by_the_cache() {
+    let setup = Setup::new();
+    let home = setup.home();
+
+    assert_eq!(
+        model_cache_file(&home, "acme").unwrap(),
+        home.join("cache/models/acme.json")
+    );
+}
 
 #[test]
 fn a_written_list_is_read_back_from_its_file() {

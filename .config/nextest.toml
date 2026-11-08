@@ -5,7 +5,7 @@ slow-timeout = { period = "30s", terminate-after = 4 }
 # The delegate listing regression has a nested fake-server completion deadline
 # of 90 s; 270 s leaves room for setup and bounded cleanup.
 [[profile.default.overrides]]
-filter = 'package(main) & test(=delegate_models_omits_logged_out_provider_references)'
+filter = 'package(main) & test(=delegates::delegate_models_omits_logged_out_provider_references)'
 slow-timeout = { period = "30s", terminate-after = 9 }
 
 # cargo-mutants' profile (.cargo/mutants.toml): the first failure stops every
@@ -24,8 +24,10 @@ test-threads = "num-cpus"
 
 # docs/ci.md, "On every pull request that changes code": the test job runs
 # nextest under this profile, so a failed binary-level test retries once.
-# kind(test) is the integration-test binaries (crates/main/tests/*); the
-# unit tests in crates/main/src/ are kind(bin) and never retry.
+# kind(test) is the integration-test binaries: the single-file ones
+# (crates/main/tests/*.rs) and the area ones (crates/main/tests/<area>/main.rs,
+# which cargo discovers as one test target each); the unit tests in
+# crates/main/src/ are kind(bin) and never retry.
 [profile.ci]
 inherits = "default"
 
@@ -49,11 +51,12 @@ success-output = "immediate"
 filter = 'package(main) & binary(=main_journeys)'
 slow-timeout = { period = "30s", terminate-after = 9 }
 
-# docs/testing.md, "Waits and timeouts": the frame-locked click proofs'
-# kill bound is twice the longest single deadline plus run time; the proofs
-# carry only slow-timeout, so a hang fails under this override instead of
-# the default profile. Longest deadline 80 s, proofs ~ms local run:
-# 2×80 + ms rounds to 9 periods (270 s).
+# docs/testing.md, "Waits and timeouts": the four frame-locked click proofs
+# that wait on an 80 s deadline get a kill bound of twice that deadline plus
+# run time; they carry only slow-timeout, so a hang fails under this
+# override instead of the default profile. The other support_helpers tests
+# have no such deadline and keep the default kill. Longest deadline 80 s,
+# proofs ~ms local run: 2×80 + ms rounds to 9 periods (270 s).
 [[profile.default.overrides]]
-filter = 'package(main) & test(/^support::pty::tests::/)'
+filter = 'package(main) & (test(=support_helpers::a_click_found_before_a_row_is_inserted_lands_on_the_target_row) | test(=support_helpers::an_absent_target_panics_naming_the_wait_and_the_last_grid) | test(=support_helpers::a_held_writer_sends_nothing_even_after_it_is_released) | test(=support_helpers::an_open_synchronized_frame_waits_for_its_close_then_refinds))'
 slow-timeout = { period = "30s", terminate-after = 9 }
