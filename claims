@@ -142,3 +142,9 @@ crates/jobs/src/delegate/models_tests.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Am
 crates/jobs/src/delegate.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
 crates/jobs/src/delegate/delegate_tests.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
 docs/delegates.md	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+xtask/src/shellcheck_files.rs	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+xtask/src/shellcheck_files_tests.rs	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+scripts/check	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+docs/ci.md	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+xtask/src/main.rs	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+xtask/tests/cli.rs	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
