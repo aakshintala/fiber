@@ -1101,12 +1101,7 @@ impl App {
         if let Some(effect) = self.built_in() {
             return effect;
         }
-        if self.first_run_no_credential
-            && self
-                .home
-                .as_ref()
-                .is_some_and(|home| home.launch.model.is_none())
-        {
+        if self.first_run_no_credential && self.on_home() {
             return self.open_first_run_login();
         }
         // In an item view Enter steers the open delegate; a `/`

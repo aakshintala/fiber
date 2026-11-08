@@ -3266,7 +3266,7 @@ fn first_run_login_escape_restores_blocker_and_key_only_click_reopens_login() {
         ))
     })));
     app.open_first_run_login();
-    app.on_key(Key::Esc, std::time::Instant::now());
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
     assert_eq!(
         blockers(&app),
         ["No provider key. Run `fiber login` to fix it."]
@@ -3286,7 +3286,7 @@ fn first_run_login_escape_restores_blocker_and_key_only_click_reopens_login() {
         ))
     })));
     no_model.open_first_run_login();
-    no_model.on_key(Key::Esc, std::time::Instant::now());
+    no_model.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
     assert_eq!(
         blockers(&no_model),
         ["No model was chosen. Set `model` in configuration."]

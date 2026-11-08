@@ -56,8 +56,10 @@ impl App {
         self.keep_model_picker_top(false);
         if first_run {
             if has_credential {
-                self.start_model_pick();
-                self.model_picker.unselect_for_first_run();
+                if self.home_model().is_none() {
+                    self.open_model_picker(Mode::Choose);
+                    self.model_picker.unselect_for_first_run();
+                }
             } else {
                 self.open_first_run_login();
             }

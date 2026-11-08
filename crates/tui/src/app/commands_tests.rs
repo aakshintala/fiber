@@ -14,14 +14,31 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 #[test]
-fn first_run_enter_opens_login_and_preserves_the_draft() {
+fn first_run_enter_without_model_opens_login_and_preserves_the_draft() {
+    first_run_enter_login(None);
+}
+
+#[test]
+fn first_run_enter_with_model_opens_login_and_preserves_the_draft() {
+    first_run_enter_login(Some("acme/m1".to_owned()));
+}
+
+fn first_run_enter_login(model: Option<String>) {
+    use std::sync::Arc;
+    let seam = Arc::new(crate::configure_fake::Fake::new(Vec::new()));
+    *seam.targets.lock().unwrap() = Ok(vec![crate::configure::LoginTarget {
+        name: "acme".to_owned(),
+        kind: crate::configure::LoginKind::Key,
+    }]);
     let mut app = connected();
+    app.set_configure(seam.clone());
     app.set_home(crate::home::Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
             git: false,
         },
+        model: model.clone(),
         ..Default::default()
     });
     app.defer_first_run();
@@ -39,6 +56,72 @@ fn first_run_enter_opens_login_and_preserves_the_draft() {
     assert_eq!(app.on_enter(), Effect::None);
     assert!(app.config_view_open());
     assert_eq!(app.draft(), "send after login");
+    assert!(!app.model_picker_open());
+    assert!(!matches!(app.phase, crate::app::Phase::Pending { .. }));
+    assert!(
+        super::commands_testkit::painted(&mut app, 80, 24)
+            .0
+            .contains("Log in")
+    );
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    for ch in "test-key".chars() {
+        app.on_key(Key::Char(ch), now());
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    let start = app
+        .take_login_start()
+        .expect("reviewer read after saving key");
+    app.on_login(
+        start.ticket,
+        crate::login_worker::LoginStep::Reviewer(Ok(crate::configure::ReviewerModels {
+            models: vec!["m1".to_owned()],
+            selected: Some("m1".to_owned()),
+            notices: Vec::new(),
+        })),
+    );
+    assert!(app.config_view_open());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.config_view_open());
+    assert!(!app.first_run_no_credential);
+    assert_eq!(app.draft(), "send after login");
+    assert_eq!(app.model_picker_open(), model.is_none());
+    if model.is_none() {
+        assert!(app.model_picker.choice(false).is_none());
+    } else {
+        let lines = sent(app.on_enter());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0]["command"], "start");
+    }
+}
+
+#[test]
+fn first_run_usable_credential_keeps_normal_enter_behavior() {
+    for model in [None, Some("acme/m1".to_owned())] {
+        let mut app = connected();
+        app.set_home(crate::home::Launch {
+            location: crate::LaunchLocation::Local {
+                workspace: PathBuf::from("/w"),
+                project: "-w".to_owned(),
+                git: false,
+            },
+            model: model.clone(),
+            ..Default::default()
+        });
+        app.defer_first_run();
+        app.on_models(Ok(crate::catalogue::Catalogue::default()));
+        app.on_key(Key::Esc, now());
+        type_text(&mut app, "normal draft");
+        let lines = sent(app.on_enter());
+        assert!(!app.config_view_open());
+        if model.is_some() {
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0]["command"], "start");
+        } else {
+            assert!(lines.is_empty());
+            assert_eq!(app.draft(), "normal draft");
+            assert!(app.model_picker_open());
+        }
+    }
 }
 
 #[test]

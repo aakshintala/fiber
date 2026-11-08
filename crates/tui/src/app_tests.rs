@@ -2621,10 +2621,10 @@ fn first_run_import_offer_waits_until_login_and_model_picker_close() {
     app.set_import_offer(true);
     app.open_first_run_login();
     assert!(shell_screen(&app).contains("Log in"));
-    app.on_key(Key::Esc, std::time::Instant::now());
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
     app.open_model_picker(crate::model_picker::Mode::Choose);
     assert!(app.model_picker_open());
-    app.on_key(Key::Esc, std::time::Instant::now());
+    app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
     assert!(!app.model_picker_open());
     let screen = shell_screen(&app);
     assert!(screen.contains("Import"), "{screen}");

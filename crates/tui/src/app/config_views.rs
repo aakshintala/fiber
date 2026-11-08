@@ -766,13 +766,15 @@ impl App {
                     && self.login_view().is_some_and(Login::ended_successfully);
                 if finished {
                     self.config_views.automatic_login = false;
+                    self.first_run_no_credential = false;
                     self.config_views.open = None;
                     if self
                         .home
                         .as_ref()
                         .is_some_and(|home| home.launch.model.is_none())
                     {
-                        self.start_model_pick();
+                        self.open_model_picker(crate::model_picker::Mode::Choose);
+                        self.model_picker.unselect_for_first_run();
                     }
                 }
                 Effect::None
