@@ -531,10 +531,25 @@ impl App {
                         // The cause ended for this session: its notice goes.
                         self.notices.clear_code(ErrorCode::StreamClosed, &session.0);
                         self.passes.retain(|(held, _)| held != &session);
-                        if let Some(last) = line.payload.get("last_seq").and_then(Value::as_u64) {
+                        let last = line.payload.get("last_seq").and_then(Value::as_u64);
+                        if let Some(last) = last {
                             self.passes.push((session.clone(), Pass::Until(Seq(last))));
                         }
                         match std::mem::replace(&mut self.overlay, Overlay::None) {
+                            // The replay reaches the attached session with no
+                            // preview: it folds into a second `Pages` and
+                            // lands at `last_seq`, never into the live pages.
+                            // The landing re-anchors the reader's row, and
+                            // its busy comes from the replay.
+                            Overlay::None if last.is_some() && self.session() == Some(&session) => {
+                                self.overlay = Overlay::Folding {
+                                    session,
+                                    fold: self.fresh_fold(),
+                                    busy: None,
+                                    held: true,
+                                    landing: false,
+                                };
+                            }
                             Overlay::Folding {
                                 session: folding,
                                 busy,
