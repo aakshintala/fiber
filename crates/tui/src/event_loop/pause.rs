@@ -11,10 +11,13 @@ use std::sync::mpsc::{Receiver, Sender};
 use crate::Input;
 use crate::app::App;
 
+/// The bytes that arm a page-0 read and where its rows go.
+type PageZeroRead = (Vec<u8>, Sender<Vec<String>>);
+
 thread_local! {
     static PAUSE: RefCell<Option<(Sender<()>, Receiver<()>)>> = const { RefCell::new(None) };
     static ENDS: RefCell<Option<(Sender<usize>, Receiver<()>)>> = const { RefCell::new(None) };
-    static PAGE_ZERO: RefCell<Option<(Vec<u8>, Sender<Vec<String>>)>> = const { RefCell::new(None) };
+    static PAGE_ZERO: RefCell<Option<PageZeroRead>> = const { RefCell::new(None) };
 }
 
 /// Holds the loop at its next fold on this thread: each [`before_fold`]
