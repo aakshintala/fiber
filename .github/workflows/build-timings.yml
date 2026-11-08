@@ -27,7 +27,6 @@ defaults:
 
 jobs:
   timings:
-    if: false
     strategy:
       fail-fast: false
       matrix:
@@ -91,105 +90,4 @@ jobs:
         with:
           name: build-timings-${{ matrix.runner }}
           path: ${{ runner.temp }}/build-timings/
-          if-no-files-found: error
-
-  # Temporary (#2465): the cold build and the support/mod.rs rebuild of
-  # `cargo build -p main --tests`, on the merge-base tree and on this branch's
-  # tree, three interleaved pairs (base, head, base, head, base, head) on one
-  # runner. Removed again once the numbers are in the pull request body.
-  main_tests:
-    runs-on: ubuntu-24.04
-    # Six cold builds, each under the 16m27s cold full-suite figure above,
-    # plus six rebuilds: 6 x 17 min and the rebuilds round up to 240 min
-    # (docs/ci.md, "Job time limits").
-    timeout-minutes: 240
-    steps:
-      - name: Check out
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Reclaim runner disk
-        run: |
-          df -h
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/share/swift /opt/az /usr/share/miniconda
-          df -h
-
-      - name: Install the toolchain
-        run: rustup toolchain install
-
-      - name: Time the main test build, base against head
-        run: |
-          set -euo pipefail
-          out="$RUNNER_TEMP/main-test-timings"
-          mkdir -p "$out"
-          head_dir="$PWD"
-          head_sha=$(git rev-parse HEAD)
-          base_sha=$(git merge-base HEAD origin/main)
-          base_dir="$RUNNER_TEMP/before"
-          git worktree add "$base_dir" "$base_sha"
-          (cd "$base_dir" && cargo fetch --locked)
-          cargo fetch --locked
-
-          # One sample: a cold build in a fresh target directory, then the
-          # rebuild after touching the shared support module in that same
-          # directory. Seconds go to samples.txt as `<tree> <kind> <i> <s>`.
-          sample() {
-            local tree=$1 dir=$2 i=$3
-            local target="$RUNNER_TEMP/target-$tree-$i"
-            local start end
-            cd "$dir"
-            start=$(date +%s)
-            CARGO_TARGET_DIR="$target" cargo build -p main --tests --timings
-            end=$(date +%s)
-            echo "$tree cold $i $((end - start))" >>"$out/samples.txt"
-            cp "$target/cargo-timings/cargo-timing.html" "$out/$tree-cold-$i.html"
-            touch crates/main/tests/support/mod.rs
-            start=$(date +%s)
-            CARGO_TARGET_DIR="$target" cargo build -p main --tests --timings
-            end=$(date +%s)
-            echo "$tree rebuild $i $((end - start))" >>"$out/samples.txt"
-            cp "$target/cargo-timings/cargo-timing.html" "$out/$tree-rebuild-$i.html"
-            rm -rf "$target"
-            cd "$head_dir"
-          }
-          for i in 1 2 3; do
-            sample base "$base_dir" "$i"
-            sample head "$head_dir" "$i"
-          done
-
-          # The median of the three seconds for a tree and a kind.
-          median() {
-            awk -v tree="$1" -v kind="$2" '$1 == tree && $2 == kind { print $4 }' "$out/samples.txt" | sort -n | sed -n 2p
-          }
-          {
-            echo "### main test build, base against head"
-            echo
-            echo "Runner: ubuntu-24.04. Base \`$base_sha\`, head \`$head_sha\`."
-            echo
-            echo "| tree | kind | sample | seconds |"
-            echo "|---|---|---|---|"
-            awk '{ printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4 }' "$out/samples.txt"
-            echo
-            echo "| kind | base median | head median | gap | verdict |"
-            echo "|---|---|---|---|---|"
-            for kind in cold rebuild; do
-              base=$(median base "$kind")
-              head=$(median head "$kind")
-              awk -v kind="$kind" -v base="$base" -v head="$head" 'BEGIN {
-                verdict = "tie"
-                if ((head - base) * 100 > 5 * base) verdict = "loss"
-                else if ((base - head) * 100 >= 5 * base) verdict = "win"
-                printf "| %s | %d | %d | %+.1f%% | %s |\n", kind, base, head, (head - base) * 100 / base, verdict
-              }'
-            done
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload the timing reports
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: main-test-timings
-          path: ${{ runner.temp }}/main-test-timings/
           if-no-files-found: error
