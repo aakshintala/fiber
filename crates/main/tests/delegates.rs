@@ -10626,6 +10626,11 @@ fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
     .unwrap();
     let child = ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
     child.hold();
+    // The message call (the parent's third request, after the spawn and its
+    // verdict) is held until the delegate's first model call is in flight:
+    // a steer queued before the delegate's first step drains with that
+    // step's request, and the delegate would make no second call.
+    parent.hold_from(3, fakes::deadline::BUDGET);
     providers(&setup, &parent, &child);
     standing_allow(&setup);
     // The hub exits a second after its last client leaves, so the run's
@@ -10647,6 +10652,11 @@ fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
         child.await_requests(1, setup.deadline),
         "the delegate's first step is in flight"
     );
+    assert!(
+        parent.await_requests(3, setup.deadline),
+        "the parent's message call is requested"
+    );
+    parent.release();
     // The parent's turn ends once the message call is answered, and the
     // answer comes after the steer is queued in the delegate's inbox.
     run.wait_screen("the finished parent turn", |grid| {
