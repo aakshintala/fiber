@@ -777,6 +777,12 @@ fn macos_samples_parse_to_bytes() {
 /// The version the binaries under test were built as.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// The most the fixture's target archive may hold: the stub is a few
+/// hundred bytes, the built binary tens of megabytes, so a pack of the
+/// built binary fails far outside the bound and block-size differences
+/// between `tar` implementations cannot reach it.
+const TARGET_ARCHIVE_LIMIT: u64 = 64 * 1024;
+
 /// The release target `scripts/install.sh` picks on this host.
 fn host_target() -> &'static str {
     match (std::env::consts::OS, std::env::consts::ARCH) {
@@ -922,6 +928,15 @@ impl Release {
             let run = release.run(&script(), &args, &[]);
             assert_eq!(run.code, Some(0), "{args:?}: {}", run.stderr);
         }
+        let target_size =
+            fs::metadata(release.root(&format!("out/fiber-{}.tar.gz", host_target())))
+                .unwrap()
+                .len();
+        assert!(
+            target_size < TARGET_ARCHIVE_LIMIT,
+            "the target archive is {target_size} bytes, over {TARGET_ARCHIVE_LIMIT}: \
+             the fixture packs a stub, not the built binary"
+        );
         let mut files = std::collections::HashMap::new();
         for name in [
             format!("fiber-{}.tar.gz", host_target()),
