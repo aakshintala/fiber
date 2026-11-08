@@ -413,8 +413,8 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
             | Delivery::ExtensionUsage(_)
             | Delivery::DelegateUsage { .. }
             | Delivery::Close(_)
-            | Delivery::Shell(..)
-            | Delivery::ShellStarted(..) => panic!("the prompt arrives as a prompt"),
+            | Delivery::ShellStarted(..)
+            | Delivery::Shell(..) => panic!("the prompt arrives as a prompt"),
         }
         Ok(())
     });

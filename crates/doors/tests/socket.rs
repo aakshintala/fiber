@@ -237,9 +237,8 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
                 contract::commands::RewindArgs::AtEnd => "rewind at_end".to_owned(),
             }
         }
-        Delivery::Cancelled | Delivery::Shell(..) | Delivery::ShellStarted(..) => {
-            panic!("a wake arrives as a delivery")
-        }
+        Delivery::Cancelled | Delivery::Shell(..) => panic!("a wake arrives as a delivery"),
+        Delivery::ShellStarted(..) => panic!("a wake arrives as a delivery"),
         Delivery::Job(_)
         | Delivery::JobLine(_)
         | Delivery::Interaction(_)
@@ -6338,7 +6337,8 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
                 | Delivery::Model(..)
-                | Delivery::Shell(..) | Delivery::ShellStarted(..)
+                | Delivery::Shell(..)
+                | Delivery::ShellStarted(..)
                 | Delivery::Cancelled => panic!("propose_notes arrives as itself"),
             }
             let accepted = response(&client, "c_1");
@@ -6394,7 +6394,8 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
                 | Delivery::Model(..)
-                | Delivery::Shell(..) | Delivery::ShellStarted(..)
+                | Delivery::Shell(..)
+                | Delivery::ShellStarted(..)
                 | Delivery::Cancelled => panic!("propose_notes arrives as itself"),
             }
             let accepted = response(&client, "c_2");
@@ -6624,8 +6625,8 @@ fn ro_evidence(socket: &Path, inbox: &Receiver<Delivery>) -> Vec<contract::notes
         | Delivery::ExtensionUsage(_)
         | Delivery::DelegateUsage { .. }
         | Delivery::Cancelled
-        | Delivery::Shell(..)
-        | Delivery::ShellStarted(..) => panic!("propose_notes arrives as itself"),
+        | Delivery::ShellStarted(..)
+        | Delivery::Shell(..) => panic!("propose_notes arrives as itself"),
     };
     let accepted = response(&client, "c_1");
     assert_eq!(kind(&accepted), "command_accepted");
