@@ -1,0 +1,13 @@
+[
+  {
+    "number": 4021,
+    "body": "Break-glass: #4101 blocks #4090, CI infrastructure defect",
+    "merged_at": "2026-11-06T20:00:01Z",
+    "base": {
+      "ref": "main"
+    },
+    "head": {
+      "sha": "1111111111111111111111111111111111111111"
+    }
+  }
+]

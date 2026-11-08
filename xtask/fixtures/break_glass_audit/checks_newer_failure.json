@@ -1,0 +1,19 @@
+{
+  "total_count": 2,
+  "check_runs": [
+    {
+      "name": "CI",
+      "status": "completed",
+      "conclusion": "failure",
+      "completed_at": "2026-11-06T19:30:00Z",
+      "id": 20
+    },
+    {
+      "name": "CI",
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-06T19:30:00Z",
+      "id": 10
+    }
+  ]
+}

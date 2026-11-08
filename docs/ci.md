@@ -543,6 +543,44 @@ comments on the open one, when an advisory applies. A pull request that does
 not change `Cargo.lock` is not failed by an advisory published after it was
 opened.
 
+## The break-glass audit
+
+A break-glass merge (`docs/workflow.md`, "Break-glass merge") lands without a
+green `CI`. The `break-glass audit` job in `scheduled.yml` is the detection
+half: it finds merges to `main` that did so and checks that each one declared
+it. It runs daily at 06:53Z and on `workflow_dispatch`.
+
+The job fetches with `gh api` and hands the responses to
+`cargo xtask break-glass-audit`, which makes every decision. It audits each
+commit on `main` from the last 48 hours. The window is twice the cadence, so
+one skipped or failed run leaves no gap; the overlap lists a merge twice,
+which is harmless. Each commit maps to the merged pull request that carries
+it, and that pull request's head must have a completed `CI` check run with
+conclusion `success`. Only the exact name `CI` counts: a `CI (draft)` run does
+not. When a head has several `CI` runs, the newest decides.
+
+A merge with no green `CI` is listed on one line:
+`merge <sha> head <sha> PR #<n> ticket <#n|-> <declared|undeclared>`. The
+pull request body decides which: it declares break-glass only when it starts
+with exactly `Break-glass:`, and the ticket is the first `#<number>` in it.
+The job fails on an undeclared merge, and on a direct push to `main`, which
+has no pull request and prints as `PR none`. A declared merge is listed and
+passes. The last line counts what the run read:
+`audited <n> merges, <k> without green CI, <u> undeclared`.
+
+A result the job cannot read fails it: a `gh` error, a response that is not
+JSON or lacks an expected field, or a check-run list shorter than its
+`total_count`. A green run therefore means every merge in the window was read.
+The declaration is the pull request body as it is at audit time and is
+self-attested.
+
+The job reads with the workflow token, `contents`, `pull-requests` and
+`checks` at `read`, and uses no secret. It never reads the `main` ruleset, so
+the owner's `bypass_actors` check after each break-glass merge
+(`docs/workflow.md`, "Break-glass merge") is the other control, and nothing in
+CI covers it. A red audit pauses no merges and is not part of any release
+gate.
+
 ## The backstop on `main`
 
 Each push to `main` queues a backstop run. It runs the lint, test_linux, test,

@@ -79,6 +79,14 @@
 //!   it probes ancestry itself with `git merge-base --is-ancestor`, but
 //!   only for each title's latest closed event's non-null commit; without
 //!   it every fix probes unknown
+//! - `break-glass-audit [--since] [--now EPOCH]`: reads one JSON object on
+//!   stdin carrying the lookups of the last 48 hours of `main` commits, each
+//!   commit's pull requests and each pull request head's `CI` check runs,
+//!   and prints one line per merge whose head had no green `CI`, then the
+//!   counts; it fails on any such merge whose pull request body does not
+//!   start with `Break-glass:` and on a commit with no pull request, and an
+//!   unreadable lookup is an error. `--since` prints the window's cutoff and
+//!   reads no stdin (`docs/ci.md`, "The break-glass audit")
 //! - `flake-classify --flaky-dir DIR --event NAME --tested-commit SHA
 //!   [--base SHA] [--head SHA] [--compare-files FILE] [--pr-files FILE]`:
 //!   reads the `flaky-tests-<runner>.txt` files under DIR and prints one
@@ -130,6 +138,7 @@
 )]
 
 mod bench;
+mod break_glass_audit;
 mod budget_bounds;
 mod census_ratchet;
 mod ci_needs;
@@ -666,6 +675,38 @@ fn run(args: &[String]) -> Result<bool, String> {
             }
             Ok(true)
         }
+        "break-glass-audit" => {
+            let args = break_glass_audit::parse_args(rest)?;
+            let now = match args.now {
+                Some(now) => now,
+                None => epoch_now()?,
+            };
+            if args.since {
+                println!("{}", break_glass_audit::window_since(now));
+                return Ok(true);
+            }
+            let annotate = std::env::var_os("GITHUB_ACTIONS").is_some();
+            let mut body = String::new();
+            std::io::stdin()
+                .read_to_string(&mut body)
+                .map_err(|e| format!("stdin: {e}"))?;
+            let report = break_glass_audit::parse_input(&body)
+                .and_then(|input| break_glass_audit::audit(&input, now))
+                .inspect_err(|message| {
+                    if annotate {
+                        println!("::error::{message}");
+                    }
+                })?;
+            for line in report.render() {
+                println!("{line}");
+            }
+            if annotate {
+                for line in report.failing() {
+                    println!("::error::{line}");
+                }
+            }
+            Ok(report.passed())
+        }
         "flake-classify" => {
             let dir = flag(rest, "--flaky-dir")?;
             let event = flag(rest, "--event")?;
@@ -802,6 +843,24 @@ fn report(name: &str, failures: &[String], ok: &str) -> Result<bool, String> {
         println!("{name}: {ok}");
     }
     Ok(failures.is_empty())
+}
+
+/// The system clock in whole seconds since the epoch: `break-glass-audit`
+/// reads it only as the CLI default when `--now` is omitted; the scheduled job
+/// always passes `--now`.
+// Exempt: the only caller is the CLI default when `--now` is omitted, which
+// `scheduled.yml` never does; a test would read the real clock, which
+// docs/testing.md forbids, so no test can tell `Ok(0)` or `Ok(1)` apart.
+#[cfg_attr(false, mutants::skip)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the audit window is relative to the real day the job runs; tests pass --now"
+)]
+fn epoch_now() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .map_err(|e| format!("clock: {e}"))
 }
 
 fn flag(args: &[String], name: &str) -> Result<String, String> {

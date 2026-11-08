@@ -1,10 +1,11 @@
 name: Scheduled
 
-# docs/ci.md, "Advisories" and "Toolchain".
+# docs/ci.md, "Advisories", "Toolchain" and "The break-glass audit".
 on:
   schedule:
     - cron: "17 6 * * *" # advisories, daily
     - cron: "41 6 * * 1" # toolchain bump, weekly
+    - cron: "53 6 * * *" # break-glass audit, daily
   workflow_dispatch: {}
 
 permissions:
@@ -95,3 +96,49 @@ jobs:
           git push origin "$branch"
           gh pr create --head "$branch" --title "Bump the Rust toolchain to $latest" \
             --body "Pins Rust $latest, the newest stable release, in rust-toolchain.toml and docs/ci.md (docs/ci.md, \"Toolchain\")."
+
+  break-glass-audit:
+    name: break-glass audit
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '53 6 * * *'
+    runs-on: ubuntu-24.04
+    # No history; a gh API walk of 48 h of commits; generous bound.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the toolchain
+        run: rustup toolchain install
+      # The step only fetches: every decision is in
+      # `cargo xtask break-glass-audit` (xtask/src/break_glass_audit.rs).
+      # A lookup that `gh` or `jq` could not complete is passed on as
+      # {"ok": false}, which the audit treats as an error.
+      - name: List merges with no green CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          now=$(date +%s)
+          since=$(cargo xtask break-glass-audit --since --now "$now")
+          dir=$(mktemp -d)
+          lookup() {
+            local body
+            if body=$(gh api "$@") && printf '%s\n' "$body" | jq -c '{ok: true, body: .}'; then
+              return 0
+            fi
+            echo '{"ok":false}'
+          }
+          lookup --paginate --slurp "repos/$GITHUB_REPOSITORY/commits?sha=main&since=$since&per_page=100" >"$dir/commits.json"
+          for sha in $(jq -r '(.body // [])[] | .[] | .sha' "$dir/commits.json"); do
+            lookup --paginate "repos/$GITHUB_REPOSITORY/commits/$sha/pulls" | jq -c --arg k "$sha" '{key: $k, value: .}'
+          done | jq -s -c 'from_entries' >"$dir/pulls.json"
+          for head in $(jq -r '[.[] | (.body // [])[]? | .head.sha? // empty] | unique[]' "$dir/pulls.json"); do
+            lookup "repos/$GITHUB_REPOSITORY/commits/$head/check-runs?check_name=CI&filter=latest&per_page=100" | jq -c --arg k "$head" '{key: $k, value: .}'
+          done | jq -s -c 'from_entries' >"$dir/checks.json"
+          jq -n -c --slurpfile commits "$dir/commits.json" --slurpfile pulls "$dir/pulls.json" --slurpfile checks "$dir/checks.json" \
+            '{commits: $commits[0], pulls: $pulls[0], checks: $checks[0]}' |
+            cargo xtask break-glass-audit --now "$now"
