@@ -554,17 +554,6 @@ crates/tui/src/bubble.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro
 crates/tui/src/bubble_tests.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/markdown.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/markdown_tests.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/Cargo.toml	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-Cargo.lock	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-scripts/check	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/code-quality.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/code-quality/lints.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/dependencies.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/main.rs	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/ci.md	fiber-4143	plan	2026-11-08T16:38:52Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-xtask/src/narrating_comments.rs	fiber-4143	plan	2026-11-08T16:40:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-xtask/src/narrating_comments_tests.rs	fiber-4143	plan	2026-11-08T16:40:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
-xtask/tests/narrating_comments.rs	fiber-4143	plan	2026-11-08T16:40:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/tui/src/turn/images.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 crates/tui/src/turn/images_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 crates/tui/src/turn/card.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
