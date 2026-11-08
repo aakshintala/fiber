@@ -310,13 +310,3 @@ crates/tui/src/paging_tests.rs	fiber-4383	plan	2026-11-08T06:20:01Z	Amoghs-MacBo
 crates/tui/src/view_tests.rs	fiber-4383	plan	2026-11-08T06:20:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/overlay_tests.rs	fiber-4383	plan	2026-11-08T06:20:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4383	plan	2026-11-08T06:20:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop/hub.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/window.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/window/residency.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/attach_fold.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/screen_tests.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/event_loop/attach_tests.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/main_journeys.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/support/mod.rs	fiber-4192	plan	2026-11-08T06:28:03Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
