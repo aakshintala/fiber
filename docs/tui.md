@@ -1336,7 +1336,12 @@ cancelled, ✗ dim otherwise. Then the call's kind in `info`, padded to nine
 columns, its target cut with "…", and its result: "N lines" for a read, "N
 matches" for a search, "N paths" for a listing, "+N −N" for an edit, "exit N
 · N lines" for a command, otherwise the first line of its output, all dim
-but the edit's counts. A running call reads "running" in `attention`, and an
+but the edit's counts. A call whose arguments a `before_tool` hook rewrote
+draws the arguments that ran: `tool_call_started`'s `arguments`, or
+`permission_resolved`'s on a reviewed call's decision that has no request
+(`docs/events.md`, "`changed_by`"). Its result is then followed by " · via
+<names>", dim, the `changed_by` extensions joined by ", "; a rewrite with no
+`changed_by` draws no mark. A running call reads "running" in `attention`, and an
 ask waiting on the person "waiting on you"; "cancelled", "denied" and a
 failure's "<code>: <message>" are dim. A thinking row is "○ Thinking:
 <heading>" or "+ Thought: <heading> · 22s", dim and italic.
@@ -3088,8 +3093,8 @@ keys set, and notices the terminal raises itself, such as a configuration or
 I/O failure. Chrome slots may also read outside the stream: the branch comes
 from `git status`, the cards follow the panel's configuration, and `spend`
 falls back to the attached spend when the session reports none. A ledger row, for example, receives the call's name,
-arguments, status, exit code, duration, line count, `changes` and error, folded
-from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
+arguments, `changed_by`, status, exit code, duration, line count, `changes` and
+error, folded from its `tool_call_*` and `permission_resolved` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
 
 Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style. Timestamps come as source values, never as elapsed strings. The person's own interaction state (selection, open or closed) is included only where the built-in draws it. An optional key is absent when it does not apply, never `null`. The terminal's internals stay out: no layout, width fit, cache, spinner glyph or motion clock.
 
