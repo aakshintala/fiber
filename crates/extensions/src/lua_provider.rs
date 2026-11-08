@@ -396,10 +396,9 @@ impl LuaProvider {
         }))
     }
 
-    /// Whether an age-checked refresh has nothing to do: `max_age` names
-    /// one and the cached list is no older than it, or no cached copy
-    /// exists (`models()` runs when the list is first needed). A list whose
-    /// age reads exactly `max_age` is not stale.
+    /// Whether an age-checked refresh has nothing to do: the cached list
+    /// is within `max_age` and its source is no newer than the cache. A list
+    /// whose age reads exactly `max_age` is not stale.
     pub(crate) fn fresh(&self, max_age: Option<Duration>) -> bool {
         let Some(max) = max_age else {
             return false;
@@ -409,9 +408,28 @@ impl LuaProvider {
             &self.name,
             self.extension.clock().wall(),
         ) {
-            Ok(Some(age)) => age <= max,
+            Ok(Some(age)) => age <= max && !self.source_is_newer(),
             Ok(None) => true,
             Err(_) => false,
+        }
+    }
+
+    /// Whether the provider source is newer than its cached model list.
+    /// No cache is not stale: discovery on first use already supplied it.
+    pub(crate) fn source_is_newer(&self) -> bool {
+        let now = self.extension.clock().wall();
+        let Ok(Some(_)) = config::model_cache_age(self.extension.home(), &self.name, now) else {
+            return false;
+        };
+        let Ok(Some(age)) = config::model_cache_age(self.extension.home(), &self.name, now) else {
+            return false;
+        };
+        let Some(cached_at) = now.checked_sub(age) else {
+            return false;
+        };
+        match source_newest_mtime(self.dir()) {
+            Ok(source) => source > now || source > cached_at,
+            Err(_) => true,
         }
     }
 
