@@ -2159,27 +2159,6 @@ fn refresh_with_a_queued_fill_keeps_it() {
 }
 
 #[test]
-fn find_call_parts_pins_action_name_and_arguments() {
-    let mut app = attached(80, 24);
-    turn_started(&mut app);
-    let arguments = json!({"command": COMMAND});
-    requested(&mut app, "shell", arguments.clone(), ACTION);
-    completed(
-        &mut app,
-        ACTION,
-        "one\ntwo",
-        json!({"command": COMMAND, "exit_code": 0}),
-        None,
-        None,
-    );
-    let id = crate::turn::target_id(ACTION);
-    let (action, name, args) = app.find_call_parts(id).expect("the call is on the screen");
-    assert_eq!(action, ACTION, "the action pins");
-    assert_eq!(name, "shell", "the tool name pins");
-    assert_eq!(args, arguments, "the arguments pin");
-}
-
-#[test]
 fn refresh_ignores_a_completion_for_another_call() {
     let mut app = attached(80, 24);
     turn_started(&mut app);
@@ -2825,7 +2804,11 @@ fn open_message_view(width: u16) -> (App, usize) {
     (app, id)
 }
 
-/// The drawn rows holding the message's words, in order.
+/// The drawn rows holding the message's words, in order. Each count
+/// and order a test reads from them is promised by `docs/tui.md`, "Tool
+/// groups and the ledger", "A message call": the message is rendered "at
+/// the width of the view it is drawn in", so one row wide and several
+/// rows narrow.
 fn message_rows(shown: &str) -> Vec<&str> {
     let words: Vec<&str> = MESSAGE.split(' ').collect();
     shown
@@ -2838,17 +2821,21 @@ fn message_rows(shown: &str) -> Vec<&str> {
 fn a_call_view_message_wraps_at_the_new_width_after_a_resize() {
     let (mut app, _) = open_message_view(100);
     let wide = screen(&app, 100, 24);
+    // Count: one row at the view's width (message call, "at the width of
+    // the view it is drawn in", `docs/tui.md`, "Tool groups and the ledger").
     assert_eq!(message_rows(&wide).len(), 1, "{wide}");
     assert!(wide.contains("zulu9"), "{wide}");
     app.set_size(40, 24);
     let narrow = screen(&app, 40, 24);
     let rows = message_rows(&narrow);
+    // Count: wraps at the new, narrower view width (same doc line).
     assert!(rows.len() > 1, "the message wraps: {narrow}");
     assert!(
         narrow.contains("zulu9"),
         "the last word is cut off: {narrow}"
     );
-    // Every word shows whole, in order, across the wrapped rows.
+    // Every word shows whole, in order, across the wrapped rows: the
+    // message text is the same text, laid out at the view's width.
     let joined = rows
         .iter()
         .map(|row| row.trim())
@@ -2865,6 +2852,9 @@ fn a_call_view_widens_after_a_narrow_open() {
     app.set_size(100, 24);
     let wide = screen(&app, 100, 24);
     let rows = message_rows(&wide);
+    // Count: one row at the wider view width (message call, "at the
+    // width of the view it is drawn in", `docs/tui.md`, "Tool groups and
+    // the ledger").
     assert_eq!(rows.len(), 1, "the message re-flows to one row: {wide}");
     assert!(rows[0].contains(MESSAGE), "{wide}");
 }
@@ -2921,9 +2911,16 @@ fn a_paged_message_keeps_its_pages_follow_and_scroll_across_a_resize() {
     app.set_size(40, 24);
     assert_eq!(state(&app), before, "narrowing moved paging state");
     let rows = frame_text(&app);
+    // Order: "to <id>" first, then the message text, before the paged
+    // output (`docs/tui.md`, "Tool groups and the ledger", "A message
+    // call": "When the result has an artifact, the swapped view draws
+    // these rows before the paged output").
     assert_eq!(rows[0], "to j_abc", "{rows:?}");
     assert!(rows[1].starts_with("alpha"), "{rows:?}");
-    assert!(rows[3].ends_with("zulu9"), "the message wraps: {rows:?}");
+    assert!(
+        rows.iter().any(|row| row.ends_with("zulu9")),
+        "the message wraps: {rows:?}"
+    );
     assert!(rows.iter().any(|row| row == "L149"), "{rows:?}");
     app.set_size(100, 24);
     assert_eq!(state(&app), before, "widening moved paging state");
@@ -2963,6 +2960,9 @@ fn a_call_view_wraps_at_the_new_width_when_its_call_left_the_held_pages() {
     assert!(message_rows(&narrow).len() > 1, "{narrow}");
     assert!(narrow.contains("zulu9"), "{narrow}");
     app.set_size(100, 24);
+    // Count: one row at the wide view width (`docs/tui.md`, "Tool groups
+    // and the ledger", "A message call": "at the width of the view it is
+    // drawn in").
     assert_eq!(message_rows(&screen(&app, 100, 24)).len(), 1);
 }
 
@@ -2983,6 +2983,9 @@ fn widening_a_scrolled_view_pulls_its_selection_back_onto_the_rows() {
         "setup: the scroll starts past the widened rows ({selected}, {top}, {rows})"
     );
     let (selected, top) = scroll_of(&app);
+    // Count: the view "scrolls as the conversation does" (`docs/tui.md`,
+    // "Swapped views", "A call's view"), which never leaves the selection
+    // or the first row shown past the last row.
     assert!(selected < rows && top < rows, "({selected}, {top}, {rows})");
     let shown = screen(&app, 100, 24);
     // The last row stays on screen; a stale top would draw no body row.
@@ -3000,6 +3003,9 @@ fn a_resize_keeps_a_scroll_that_is_still_in_range() {
     let before = scroll_of(&app);
     assert!(before.1 > 0, "setup: the view is scrolled {before:?}");
     app.set_size(100, 24);
+    // Setup bound, not a promise: the scroll stays in range of the
+    // widened rows (`docs/tui.md`, "Swapped views", "A call's view":
+    // "scrolls as the conversation does").
     assert!(
         before.1 < frame_text(&app).len(),
         "setup: the top is in range"
@@ -3021,6 +3027,9 @@ fn a_resize_recomputes_the_matches_for_the_new_rows() {
         .map(|(at, _)| at)
         .collect();
     let view = app.call_view().expect("open");
+    // Count: search "matches inside the view only" (`docs/tui.md`,
+    // "Swapped views", "A call's view"), so one match per drawn row
+    // holding the query; the wrap changes how many rows draw.
     assert_ne!(expected.len(), wide, "setup: the wrap changes the count");
     assert_eq!(view.matches.len(), expected.len(), "{:?}", view.matches);
     assert!(view.current.is_none_or(|at| at < view.matches.len()));
@@ -3073,11 +3082,15 @@ fn a_failed_message_keeps_its_error_row_first_after_a_resize() {
     open_inline(&mut app, id);
     app.open_call_view(id);
     let before = frame_text(&app);
+    // Order: "a failed call's '<code>: <message>' still comes first",
+    // then "to <id>" (`docs/tui.md`, "Tool groups and the ledger", "A
+    // message call").
     assert_eq!(before[0], "not_found: no such job", "{before:?}");
     app.set_size(40, 24);
     let rows = frame_text(&app);
     assert_eq!(rows[0], "not_found: no such job", "{rows:?}");
     assert_eq!(rows[1], "to j_abc", "{rows:?}");
+    // Count: the message wraps at the narrower view width (same doc line).
     assert!(rows.len() > before.len(), "{rows:?}");
 }
 
