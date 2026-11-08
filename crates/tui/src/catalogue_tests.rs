@@ -23,6 +23,7 @@ fn models_diagnostic_records_read_completion_and_queued_start() {
     let (tx, rx) = mpsc::channel();
     reader.ask(Refresh::Cached, &tx);
     reader.ask(Refresh::Stale, &tx);
+    reader.ask(Refresh::Every, &tx);
     assert!(matches!(
         next(&rx, &Deadline::after(DEADLINE)),
         Input::Models(Ok(_))
