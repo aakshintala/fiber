@@ -5410,3 +5410,25 @@ fn closing_a_settings_picker_writes_nothing_and_leaves_no_target_behind() {
         Some("acme/m1".to_owned())
     );
 }
+
+#[test]
+fn a_name_click_in_a_settings_picker_saves_the_reference_to_the_row() {
+    let seam = model_rows_seam();
+    let mut app = attached();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 1);
+    // Layout rows: 0 the filter, 1 the buttons, 2 the `acme` heading,
+    // 3 `acme/m1`.
+    assert_eq!(
+        app.on_click(crate::mouse::TargetId::View(crate::swapped::Spot::Cell(
+            3, 0,
+        ))),
+        Effect::None
+    );
+    assert_eq!(
+        saved(&seam),
+        [("reviewer.model".to_owned(), "\"acme/m1\"".to_owned())]
+    );
+    assert!(!app.model_picker_open());
+    assert!(app.config_view_open());
+}
