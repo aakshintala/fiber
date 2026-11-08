@@ -164,10 +164,12 @@ fn missing_base_and_invalid_revision_are_errors() {
 }
 
 fn diagnostics(output: &str) -> Vec<&str> {
-    output
+    let mut lines = output
         .lines()
         .filter(|line| line.contains("comment narrates history"))
-        .collect()
+        .collect::<Vec<_>>();
+    lines.sort_unstable();
+    lines
 }
 
 #[test]
@@ -195,13 +197,56 @@ fn ruled_phrases_and_boundaries_are_reported_exactly() {
     assert_eq!(
         diagnostics(&output),
         [
+            "narrating-comments: src/phrases.rs:11: comment narrates history",
+            "narrating-comments: src/phrases.rs:12: comment narrates history",
             "narrating-comments: src/phrases.rs:1: comment narrates history",
             "narrating-comments: src/phrases.rs:2: comment narrates history",
             "narrating-comments: src/phrases.rs:3: comment narrates history",
             "narrating-comments: src/phrases.rs:4: comment narrates history",
             "narrating-comments: src/phrases.rs:5: comment narrates history",
-            "narrating-comments: src/phrases.rs:11: comment narrates history",
-            "narrating-comments: src/phrases.rs:12: comment narrates history",
+        ]
+    );
+}
+
+#[test]
+fn added_hunks_keep_new_side_coordinates_and_ignore_deletions() {
+    let dir = setup();
+    dir.write(
+        "src/lib.rs",
+        concat!(
+            "/",
+            "/ previously old\n",
+            "fn one() {}\n",
+            "fn two() {}\n",
+            "fn three() {}\n",
+            "fn four() {}\n",
+            "fn five() {}\n",
+        ),
+    );
+    git(&dir, &["add", "src/lib.rs"]);
+    dir.write(
+        "src/lib.rs",
+        concat!(
+            "/",
+            "/ previously old\n",
+            "fn one() {}\n",
+            "fn two() {}\n",
+            "fn three() {}\n",
+            "/",
+            "/ now uses cache\n",
+            "fn four() {}\n",
+            "fn five() {}\n",
+            "/",
+            "/ changed from old\n",
+        ),
+    );
+    let (code, output) = run(&dir, &["narrating-comments", "--base", "HEAD"]);
+    assert_eq!(code, Some(1), "{output}");
+    assert_eq!(
+        diagnostics(&output),
+        [
+            "narrating-comments: src/lib.rs:5: comment narrates history",
+            "narrating-comments: src/lib.rs:8: comment narrates history",
         ]
     );
 }
@@ -236,7 +281,7 @@ fn stateless_comment_forms_and_hash_language_scope_are_reported() {
             concat!(
                 "echo x#previously\n",
                 "echo ok # previously\n",
-                "printf '%s' '# now uses cache'\n",
+                "printf '%s' ' # now uses cache'\n",
                 "cat <<'END'\n",
                 "# changed from old\n",
                 "END\n",
@@ -244,23 +289,40 @@ fn stateless_comment_forms_and_hash_language_scope_are_reported() {
                 "echo x#ignored # now uses cache\n"
             ),
         ),
-        ("src/data.py", "value = '# previously'\n"),
-        ("config/app.toml", "value = \"# now uses cache\"\n"),
-        ("config/app.yaml", "value: '# changed from old'\n"),
+        ("data.py", "value = ' # previously'\n"),
+        ("settings.toml", "value = \" # now uses cache\"\n"),
+        ("manifest.yaml", "value: ' # changed from old'\n"),
         (
-            "config/app.yml",
-            "value: \"# fixed the bug where it failed\"\n",
+            "manifest.yml",
+            "value: \" # fixed the bug where it failed\"\n",
         ),
         ("notes.txt", concat!("/", "/ previously\n")),
     ];
     for (path, text) in fixtures {
         dir.write(path, text);
     }
+    git(
+        &dir,
+        &[
+            "add",
+            "src/forms.rs",
+            "tools/check.sh",
+            "data.py",
+            "settings.toml",
+            "manifest.yaml",
+            "manifest.yml",
+            "notes.txt",
+        ],
+    );
     let (code, output) = run(&dir, &["narrating-comments", "--base", "HEAD"]);
     assert_eq!(code, Some(1), "{output}");
     assert_eq!(
         diagnostics(&output),
         [
+            "narrating-comments: data.py:1: comment narrates history",
+            "narrating-comments: manifest.yaml:1: comment narrates history",
+            "narrating-comments: manifest.yml:1: comment narrates history",
+            "narrating-comments: settings.toml:1: comment narrates history",
             "narrating-comments: src/forms.rs:1: comment narrates history",
             "narrating-comments: src/forms.rs:2: comment narrates history",
             "narrating-comments: src/forms.rs:3: comment narrates history",
@@ -271,10 +333,6 @@ fn stateless_comment_forms_and_hash_language_scope_are_reported() {
             "narrating-comments: tools/check.sh:3: comment narrates history",
             "narrating-comments: tools/check.sh:5: comment narrates history",
             "narrating-comments: tools/check.sh:8: comment narrates history",
-            "narrating-comments: src/data.py:1: comment narrates history",
-            "narrating-comments: config/app.toml:1: comment narrates history",
-            "narrating-comments: config/app.yaml:1: comment narrates history",
-            "narrating-comments: config/app.yml:1: comment narrates history",
         ]
     );
 }
