@@ -290,3 +290,4 @@ docs/code-quality.md	fiber-4144	plan	2026-11-08T06:02:29Z	Amoghs-MacBook-Pro:/Us
 xtask/tests/cli.rs	fiber-4144	plan	2026-11-08T06:02:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/ci.md	fiber-4144	plan	2026-11-08T06:02:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/code-quality/lints.md	fiber-4144	plan	2026-11-08T06:02:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/cli/src/doctor/startup.rs	fiber-4402	plan	2026-11-08T06:03:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/4402-first-run-setup	
