@@ -773,12 +773,12 @@ impl Settings {
                 .skip(from)
                 .map(|(_, (name, _))| text::width(name) + 1)
                 .sum();
-            used < width
+            used <= width.saturating_add(1)
         };
         while !fits(start) && spans.get(start).is_some_and(|(tab, _)| *tab != self.tab) {
             start += 1;
         }
-        let mut bar = vec![(" ".to_owned(), Style::new())];
+        let mut bar = Vec::new();
         for (at, (_, span)) in spans.into_iter().enumerate().skip(start) {
             if at > start {
                 bar.push((" ".to_owned(), Style::new()));

@@ -154,6 +154,9 @@ pub(crate) struct Fake {
     pub(crate) resets: Mutex<Vec<Write>>,
     /// The refusal the next resets get; `None` resets them.
     pub(crate) refuse_reset: Mutex<Option<String>>,
+    /// What `settings` answers from the next saved write or reset on:
+    /// the file the write would have changed.
+    pub(crate) rows_after: Mutex<Option<Vec<SettingRow>>>,
     /// Every write asked for, in order.
     pub(crate) writes: Mutex<Vec<Write>>,
     /// The refusal the next writes get; `None` saves them.
@@ -258,6 +261,18 @@ pub(crate) struct Fake {
 }
 
 impl Fake {
+    /// Swaps in the rows a saved write leaves, once.
+    fn apply_rows_after(&self) {
+        let after = self
+            .rows_after
+            .lock()
+            .ok()
+            .and_then(|mut after| after.take());
+        if let (Some(after), Ok(mut rows)) = (after, self.rows.lock()) {
+            *rows = Ok(after);
+        }
+    }
+
     /// A seam answering `rows`, saving every write.
     pub(crate) fn new(rows: Vec<SettingRow>) -> Self {
         Self {
@@ -272,6 +287,7 @@ impl Fake {
             settings_queries: Mutex::new(Vec::new()),
             resets: Mutex::new(Vec::new()),
             refuse_reset: Mutex::new(None),
+            rows_after: Mutex::new(None),
             writes: Mutex::new(Vec::new()),
             refuse: Mutex::new(None),
             warnings: Mutex::new(Vec::new()),
@@ -688,10 +704,13 @@ impl Configure for Fake {
                 code: ErrorCode::Usage,
                 message,
             }),
-            None => Ok(Saved {
-                file: file(layer),
-                warnings: self.warnings.lock().map(|w| w.clone()).unwrap_or_default(),
-            }),
+            None => {
+                self.apply_rows_after();
+                Ok(Saved {
+                    file: file(layer),
+                    warnings: self.warnings.lock().map(|w| w.clone()).unwrap_or_default(),
+                })
+            }
         }
     }
 
@@ -720,10 +739,13 @@ impl Configure for Fake {
                 code: ErrorCode::StaleRequest,
                 message,
             }),
-            None => Ok(Saved {
-                file: file(layer),
-                warnings: Vec::new(),
-            }),
+            None => {
+                self.apply_rows_after();
+                Ok(Saved {
+                    file: file(layer),
+                    warnings: Vec::new(),
+                })
+            }
         }
     }
 
