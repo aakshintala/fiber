@@ -265,6 +265,52 @@ fn a_level_the_model_does_not_take_fails_with_the_thinking_message() {
     );
 }
 
+/// A level the model does not take refuses with the model's own levels on
+/// the first line, then the roles line, then the closest references, then
+/// the pointer: the order `ModelUnresolved` prints. The closest list is
+/// pinned by count and prefix only; its ranking is `suggest_tests.rs`'s.
+#[test]
+fn a_bad_level_on_a_valid_model_names_its_levels_before_the_roles_and_references() {
+    let (root, providers, _) = stored_rig(json!({"deep": "fiber:fake/m:high"}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
+    let resolve = resolver(&providers, &config, "fake/m");
+    let typed = "fiber:fake/m:medium";
+    let Err(reason) = (resolve.lookup)(typed) else {
+        panic!("a level the model does not take resolves");
+    };
+    let levels =
+        "The thinking level `medium` is not one model `fake/m` takes: it takes `low`, `high`.";
+    assert_eq!(reason, levels);
+    let closest = (resolve.closest)(typed);
+    assert_eq!(closest.len(), 3, "{closest:?}");
+    assert!(
+        closest.iter().all(|entry| entry.starts_with("fiber:fake/")),
+        "{closest:?}"
+    );
+    let message = jobs::JobsError::ModelUnresolved {
+        reason,
+        roles: resolve.roles.to_string(),
+        closest: closest.clone(),
+    }
+    .to_string();
+    let lines: Vec<&str> = message.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            levels,
+            "Roles: deep",
+            &format!("Closest references: {}", closest.join(", ")),
+            "Call delegate_models for every reference.",
+        ],
+        "{message}"
+    );
+}
+
 #[test]
 fn an_unknown_model_lists_the_valid_references() {
     let (providers, config) = rig(json!({}));
