@@ -351,9 +351,9 @@ impl LuaProvider {
     /// the cache holds.
     /// Across the processes sharing a Fiber home a provider refreshes once:
     /// an exclusive lock on its lock file is held for the whole refresh,
-    /// and a provider already refreshing is not started again. The age is
-    /// re-read under the lock, so a refresh that finished between the
-    /// first check and the lock is skipped too. A failing `models()` keeps
+    /// and a provider already refreshing is not started again. The cache
+    /// age and source mtimes are re-read under the lock, so a refresh or
+    /// source update between the first check and the lock is observed there. A failing `models()` keeps
     /// the old cache (`docs/model-routing.md`, "Model discovery"). `arg`
     /// moves into the thread: what `models()` receives.
     pub fn refresh(
@@ -418,19 +418,37 @@ impl LuaProvider {
     /// No cache is not stale: discovery on first use already supplied it.
     pub(crate) fn source_is_newer(&self) -> bool {
         let now = self.extension.clock().wall();
-        let Ok(Some(_)) = config::model_cache_age(self.extension.home(), &self.name, now) else {
-            return false;
-        };
         let Ok(Some(age)) = config::model_cache_age(self.extension.home(), &self.name, now) else {
             return false;
         };
         let Some(cached_at) = now.checked_sub(age) else {
             return false;
         };
-        match source_newest_mtime(self.dir()) {
+        match Self::source_newest_mtime(self.dir()) {
             Ok(source) => source > now || source > cached_at,
             Err(_) => true,
         }
+    }
+
+    /// The newest modification time under `dir`; walking reaches files
+    /// because an in-place rewrite does not change the directory's time.
+    fn source_newest_mtime(dir: &Path) -> std::io::Result<SystemTime> {
+        let mut newest = std::fs::metadata(dir)?.modified()?;
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir)? {
+                let entry = entry?;
+                let metadata = entry.metadata()?;
+                let modified = metadata.modified()?;
+                if modified > newest {
+                    newest = modified;
+                }
+                if metadata.is_dir() {
+                    stack.push(entry.path());
+                }
+            }
+        }
+        Ok(newest)
     }
 
     /// Calls `models()` and parses what it returned, without writing the

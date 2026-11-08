@@ -1135,6 +1135,14 @@ impl Providers {
         self.lua.get(name)
     }
 
+    /// Whether `provider` has a cached model list whose extension source is
+    /// newer. A provider without a cache or a loaded Lua provider is not stale.
+    pub fn source_is_newer(&self, provider: &str) -> bool {
+        self.lua
+            .get(provider)
+            .is_some_and(|provider| provider.source_is_newer())
+    }
+
     /// Drops every Lua provider handle and keeps the models, placeholders
     /// and addenda they supplied: a registry that names every installed
     /// model and holds no extension's VM.
@@ -1326,7 +1334,7 @@ pub type StartedRefresh = (String, JoinHandle<Result<Vec<ModelData>, crate::Erro
 /// Refreshes one provider, or all providers that have a credential, with
 /// or without the age check: every provider in `lua` that registered
 /// `models` and has a credential, whose cached list `max_age` lets through
-/// (`None` runs whatever the cache holds). One entry per provider started,
+/// (age or newer extension source; `None` runs whatever the cache holds). One entry per provider started,
 /// in `lua` order. A refresh
 /// writes only the cache file and the provider's in-memory list, never this
 /// `Providers`: a running session's tool definitions never change, and

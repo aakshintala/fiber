@@ -1315,6 +1315,27 @@ fn set_cache_mtime(home: &std::path::Path, provider: &str, mtime: std::time::Sys
         .unwrap();
 }
 
+/// Sets every file and directory under an extension to one mtime.
+fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            set_source_mtime(&entry.path(), mtime);
+        } else {
+            std::fs::File::options()
+                .write(true)
+                .open(entry.path())
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+    }
+    std::fs::File::open(dir)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
 fn wrote(home: &std::path::Path, provider: &str, ids: &[&str]) {
     let models: Vec<serde_json::Value> = ids
         .iter()
@@ -1344,8 +1365,96 @@ fn a_fresh_list_is_not_refreshed_and_lua_never_runs() {
     wrote(&home, "acme", &["old"]);
     set_cache_mtime(&home, "acme", clock.wall());
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    set_source_mtime(
+        &home.join("ext"),
+        clock.wall() - std::time::Duration::from_secs(1),
+    );
     assert!(lua.refresh(Some(DAY), ModelsArg::default()).is_none());
     assert_eq!(cached_ids(&home, "acme"), ["old"]);
+}
+
+#[test]
+fn source_newer_than_cache_triggers_discovery_and_equal_or_older_does_not() {
+    for (offset, expected) in [(-1_i64, false), (0, false), (1, true)] {
+        let setup = Setup::new();
+        let home = setup.home();
+        let clock = fakes::clock::FakeClock::new();
+        wrote(&home, "acme", &["old"]);
+        let cache_mtime = clock.wall() - std::time::Duration::from_secs(2);
+        set_cache_mtime(&home, "acme", cache_mtime);
+        let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
+        let source_mtime = if offset < 0 {
+            cache_mtime - std::time::Duration::from_secs(1)
+        } else if offset == 0 {
+            cache_mtime
+        } else {
+            cache_mtime + std::time::Duration::from_secs(1)
+        };
+        set_source_mtime(&home.join("ext"), source_mtime);
+        let started = lua.refresh(Some(DAY), ModelsArg::default());
+        assert_eq!(started.is_some(), expected, "source offset {offset}");
+        if let Some(handle) = started {
+            fakes::within(
+                "source-newer model refresh",
+                Deadline::after(MUST_SUCCEED_WITHIN),
+                move || handle.join().unwrap().unwrap(),
+            );
+            assert_eq!(cached_ids(&home, "acme"), ["new"]);
+        } else {
+            assert_eq!(cached_ids(&home, "acme"), ["old"]);
+        }
+    }
+}
+
+#[test]
+fn refresh_lists_discovers_for_a_young_cache_with_newer_source() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "acme", &["old"]);
+    set_cache_mtime(
+        &home,
+        "acme",
+        clock.wall() - std::time::Duration::from_secs(2),
+    );
+    config::store_credential(&home, "acme", "default", &Secret::new("test".into())).unwrap();
+    let lua = lua_named(&setup, "one", "acme", &lua_list(&["new"]));
+    set_source_mtime(
+        &home.join("one"),
+        clock.wall() - std::time::Duration::from_secs(1),
+    );
+    let providers = Providers::default();
+    let config = config(&setup, &[]);
+    let started = extensions::refresh_lists(
+        &[lua],
+        &providers,
+        &config,
+        Some(DAY),
+        &fakes::children::grouped_output,
+        &|_| None,
+    );
+    assert_eq!(started.len(), 1);
+    let (name, handle) = started.into_iter().next().unwrap();
+    assert_eq!(name, "acme");
+    fakes::within(
+        "refresh_lists source-newer join",
+        Deadline::after(MUST_SUCCEED_WITHIN),
+        move || handle.join().unwrap().unwrap(),
+    );
+    assert_eq!(cached_ids(&home, "acme"), ["new"]);
+}
+
+#[test]
+fn an_unreadable_source_is_stale_after_provider_registration() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "acme", &["old"]);
+    set_cache_mtime(&home, "acme", clock.wall());
+    let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
+    assert!(lua.registers("models").unwrap());
+    std::fs::remove_dir_all(home.join("ext")).unwrap();
+    assert!(lua.refresh(Some(DAY), ModelsArg::default()).is_some());
 }
 
 #[test]
@@ -1365,6 +1474,10 @@ fn a_list_exactly_as_old_as_the_maximum_is_not_stale() {
     wrote(&home, "acme", &["old"]);
     set_cache_mtime(&home, "acme", clock.wall() - DAY);
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    set_source_mtime(
+        &home.join("ext"),
+        clock.wall() - DAY - std::time::Duration::from_secs(1),
+    );
     assert!(lua.refresh(Some(DAY), ModelsArg::default()).is_none());
     assert_eq!(cached_ids(&home, "acme"), ["old"]);
 }
@@ -1501,6 +1614,10 @@ fn refresh_lists_starts_only_the_stale_provider_with_a_credential() {
             .unwrap();
     }
     let fresh = lua_named(&setup, "one", "fresh", &lua_list(&["new-fresh"]));
+    set_source_mtime(
+        &home.join("one"),
+        clock.wall() - std::time::Duration::from_secs(1),
+    );
     let stale = lua_named(&setup, "two", "stale", &lua_list(&["new-stale"]));
     let nocred = lua_bare(&setup, "three", "nocred", "error(\"must not run\")");
     let lua = [
