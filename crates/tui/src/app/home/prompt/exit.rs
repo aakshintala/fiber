@@ -358,7 +358,7 @@ impl App {
         let mut lines = Vec::new();
         let mut pairs = Vec::new();
         for session in sessions {
-            if self.home.subs.expected(session).is_none() {
+            if self.subscribed_level(session).is_none() {
                 lines.push(self.subscribe(session, Level::Summary));
             }
             let id = mint();
@@ -382,6 +382,9 @@ impl App {
                     .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             })
             .collect();
+        // The running command's stop tags are read before the loop below
+        // settles the unsent closes' tags.
+        let stops = self.delete_waiting_close_ids().unwrap_or_default();
         let mut dropped = Vec::new();
         self.home.questions.closing.retain(|(_, close)| {
             let keep = !ids.contains(close);
@@ -393,7 +396,7 @@ impl App {
         for id in dropped {
             self.outbox.settled(&id);
         }
-        self.delete_command_unsent(&ids);
+        self.delete_command_unsent(&ids, &stops);
     }
 
     /// The sessions working now, in list order, the attached one last

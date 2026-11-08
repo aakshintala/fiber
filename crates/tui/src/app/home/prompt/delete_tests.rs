@@ -1837,8 +1837,12 @@ fn a_discovery_answer_for_another_command_id_changes_nothing() {
     assert!(!frame(&app).contains("Delete "));
     assert!(matches!(
         app.home.questions.delete_command.state,
-        State::Discovering { command: ref waiting, .. } if *waiting == command
+        State::Discovering { .. }
     ));
+    assert_eq!(
+        app.outbox.waiting(&command),
+        Some(crate::app::Waiting::DeleteDiscovery(generation(&app)))
+    );
     assert!(answer_discovery(&mut app, &command, &[A], &[]).is_empty());
     assert!(open(&app));
 }
@@ -2127,12 +2131,20 @@ fn refusal_without_usable_held_keeps_the_name_captured_at_the_question() {
     );
 }
 
+/// The generation of the current `/delete` command.
+fn generation(app: &App) -> u64 {
+    app.home.questions.delete_command.generation
+}
+
 #[test]
 fn discovery_answers_register_a_tag_and_settle_it() {
     use crate::app::Waiting;
     let mut app = attached();
     let command = discovery(&mut app);
-    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    assert_eq!(
+        app.outbox.waiting(&command),
+        Some(Waiting::DeleteDiscovery(generation(&app)))
+    );
     answer_discovery(&mut app, &command, &[A], &[]);
     assert_eq!(app.outbox.waiting(&command), None);
     assert!(open(&app));
@@ -2143,7 +2155,10 @@ fn a_refused_discovery_settles_its_tag() {
     use crate::app::Waiting;
     let mut app = attached();
     let command = discovery(&mut app);
-    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    assert_eq!(
+        app.outbox.waiting(&command),
+        Some(Waiting::DeleteDiscovery(generation(&app)))
+    );
     app.on_line(rejected(&command, "stale_request", "Stale."));
     assert_eq!(app.outbox.waiting(&command), None);
     assert!(matches!(
@@ -2158,7 +2173,10 @@ fn a_delete_discovery_answer_after_the_target_left_finishes_without_a_question()
     use crate::app::Waiting;
     let mut app = attached();
     let command = discovery(&mut app);
-    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    assert_eq!(
+        app.outbox.waiting(&command),
+        Some(Waiting::DeleteDiscovery(generation(&app)))
+    );
     app.on_line(left(A, "exited"));
     app.go_home();
     answer_discovery(&mut app, &command, &[A], &[]);
@@ -2186,7 +2204,13 @@ fn delete_stop_answers_settle_their_tags() {
     let close = closes(&parsed);
     assert_eq!(close.len(), 1);
     let close_id = close[0]["id"].as_str().unwrap_or_default().to_owned();
-    assert_eq!(app.outbox.waiting(&close_id), Some(Waiting::DeleteStop));
+    assert_eq!(
+        app.outbox.waiting(&close_id),
+        Some(Waiting::DeleteStop {
+            generation: generation(&app),
+            session: SessionId(A.to_owned()),
+        })
+    );
     assert!(app.on_line(accepted(&close_id, json!({}))).is_empty());
     assert_eq!(app.outbox.waiting(&close_id), None);
     // The stop still waits on the feed's `session_left`; the delete
@@ -2194,7 +2218,10 @@ fn delete_stop_answers_settle_their_tags() {
     let deletion = deletes(&fold_lines(&mut app, left(A, "exited")));
     assert_eq!(deletion.len(), 1);
     let delete_id = deletion[0]["id"].as_str().unwrap_or_default().to_owned();
-    assert_eq!(app.outbox.waiting(&delete_id), Some(Waiting::DeleteFinal));
+    assert_eq!(
+        app.outbox.waiting(&delete_id),
+        Some(Waiting::DeleteFinal(generation(&app)))
+    );
 }
 
 #[test]
@@ -2204,7 +2231,10 @@ fn delete_final_answer_settles_its_tag() {
     let raw = asked(&mut app, &[A], &[]);
     let deletion: Value = serde_json::from_str(&raw[0]).unwrap_or_else(|err| panic!("{err}"));
     let id = deletion["id"].as_str().unwrap_or_default().to_owned();
-    assert_eq!(app.outbox.waiting(&id), Some(Waiting::DeleteFinal));
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(Waiting::DeleteFinal(generation(&app)))
+    );
     let refresh = fold_lines(&mut app, accepted(&id, json!({})));
     assert_eq!(app.outbox.waiting(&id), None);
     assert!(refresh.iter().any(|line| line["command"] == "recent"));
@@ -2212,4 +2242,282 @@ fn delete_final_answer_settles_its_tag() {
         app.home.questions.delete_command.state,
         State::Idle
     ));
+}
+
+/// The delete tags out, as `(id, tag)` in send order.
+fn delete_tags(app: &App) -> Vec<(String, crate::app::Waiting)> {
+    use crate::app::Waiting;
+    app.outbox
+        .tags()
+        .filter(|(_, tag)| {
+            matches!(
+                tag,
+                Waiting::DeleteDiscovery(_) | Waiting::DeleteStop { .. } | Waiting::DeleteFinal(_)
+            )
+        })
+        .map(|(id, tag)| (id.to_owned(), tag.clone()))
+        .collect()
+}
+
+#[test]
+fn the_delete_tags_are_the_only_record() {
+    use crate::app::Waiting;
+    // Discovery: the tag is the one record, and settling it out of band
+    // makes the answer fall through.
+    let mut app = attached();
+    let command = discovery(&mut app);
+    assert_eq!(
+        delete_tags(&app),
+        [(command.clone(), Waiting::DeleteDiscovery(generation(&app)))]
+    );
+    app.outbox.settled(&command);
+    assert!(answer_discovery(&mut app, &command, &[A], &[]).is_empty());
+    assert!(!open(&app));
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Discovering { .. }
+    ));
+
+    // Stops: one tag per close, naming its session.
+    let mut app = attached();
+    let raw = asked(&mut app, &[A], &[A]);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let close_id = closes(&lines)[0]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(
+        delete_tags(&app),
+        [(
+            close_id.clone(),
+            Waiting::DeleteStop {
+                generation: generation(&app),
+                session: SessionId(A.to_owned()),
+            }
+        )]
+    );
+    app.outbox.settled(&close_id);
+    let notice = app.notice().map(str::to_owned);
+    app.on_line(rejected(&close_id, "io_failed", "late"));
+    assert_eq!(app.notice(), notice.as_deref());
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Stopping { .. }
+    ));
+
+    // The delete: the tag is the one record.
+    let mut app = attached();
+    let raw = asked(&mut app, &[A], &[]);
+    let deletion: Value = serde_json::from_str(&raw[0]).unwrap_or_else(|err| panic!("{err}"));
+    let id = deletion["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(
+        delete_tags(&app),
+        [(id.clone(), Waiting::DeleteFinal(generation(&app)))]
+    );
+    app.outbox.settled(&id);
+    fold_lines(&mut app, accepted(&id, json!({})));
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Deleting { .. }
+    ));
+}
+
+#[test]
+fn a_late_discovery_answer_after_cancel_and_a_new_delete_changes_nothing() {
+    let mut app = attached();
+    let first = discovery(&mut app);
+    app.delete_command_cancel();
+    let second = discovery(&mut app);
+    assert_ne!(first, second);
+    assert!(answer_discovery(&mut app, &first, &[A], &[]).is_empty());
+    assert!(!open(&app));
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Discovering { .. }
+    ));
+    // The running command's own answer still opens its question.
+    assert!(answer_discovery(&mut app, &second, &[A], &[]).is_empty());
+    assert!(open(&app));
+}
+
+#[test]
+fn a_late_stop_answer_from_an_earlier_command_is_ignored() {
+    let mut app = attached();
+    app.on_line(live(B, "forked"));
+    let raw = asked(&mut app, &[A, B], &[A, B]);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let stops: Vec<(String, String)> = closes(&lines)
+        .iter()
+        .map(|close| {
+            (
+                close["id"].as_str().unwrap_or_default().to_owned(),
+                close["session_id"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(stops.len(), 2);
+    // One stop is refused: the first command ends, its other stop's tag
+    // stays.
+    app.on_line(rejected(&stops[1].0, "io_failed", "No."));
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Idle
+    ));
+    // A second command reaches its own stops.
+    app.attach(SessionId(A.to_owned()));
+    let second = discovery(&mut app);
+    assert!(answer_discovery(&mut app, &second, &[A, B], &[A, B]).is_empty());
+    confirm(&mut app);
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Stopping { .. }
+    ));
+    // The first command's other stop answers late: it changes nothing of
+    // the second.
+    let notice = app.notice().map(str::to_owned);
+    app.on_line(rejected(&stops[0].0, "io_failed", "Late."));
+    assert_eq!(app.notice(), notice.as_deref());
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Stopping { .. }
+    ));
+}
+
+#[test]
+fn an_unsent_delete_settles_the_tagged_command() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let raw = asked(&mut app, &[A], &[]);
+    let deletion: Value = serde_json::from_str(&raw[0]).unwrap_or_else(|err| panic!("{err}"));
+    let id = deletion["id"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(Waiting::DeleteFinal(generation(&app)))
+    );
+    app.home_unsent(&[raw[0].clone()]);
+    assert_eq!(app.notice(), Some("Delete status unknown"));
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Idle
+    ));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn a_link_loss_forgets_the_stop_tags() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    asked(&mut app, &[A], &[A]);
+    assert!(
+        delete_tags(&app)
+            .iter()
+            .any(|(_, tag)| matches!(tag, Waiting::DeleteStop { .. }))
+    );
+    app.disconnected();
+    assert!(delete_tags(&app).is_empty());
+    assert_eq!(
+        app.notice(),
+        Some("Not deleted: the hub link dropped before old work stopped. Nothing was deleted.")
+    );
+}
+
+#[test]
+fn a_final_answer_tagged_for_another_generation_is_ignored() {
+    use crate::app::Waiting;
+    let mut app = attached();
+    let raw = asked(&mut app, &[A], &[]);
+    assert_eq!(raw.len(), 1);
+    // An earlier command's delete tag answers while this one deletes.
+    let earlier = generation(&app).wrapping_sub(1);
+    app.outbox.wait("c_earlier", Waiting::DeleteFinal(earlier));
+    fold_lines(&mut app, accepted("c_earlier", json!({})));
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Deleting { .. }
+    ));
+    assert!(app.home.sessions.row(&SessionId(A.to_owned())).is_some());
+}
+
+/// An app whose next `/delete` is the second command: the first was
+/// cancelled, so the running generation is 2 and no tag reads 1 by luck.
+fn attached_second_command() -> App {
+    let mut app = attached();
+    discovery(&mut app);
+    app.delete_command_cancel();
+    app
+}
+
+#[test]
+fn a_reset_during_discovery_settles_the_running_commands_discovery_tag() {
+    let mut app = attached_second_command();
+    let command = discovery(&mut app);
+    assert_eq!(generation(&app), 2);
+    app.home_reset();
+    assert_eq!(app.outbox.waiting(&command), None);
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Idle
+    ));
+}
+
+#[test]
+fn a_reset_leaves_an_open_delete_question_alone() {
+    let mut app = attached();
+    let command = discovery(&mut app);
+    answer_discovery(&mut app, &command, &[A], &[]);
+    assert!(open(&app));
+    app.home_reset();
+    assert!(open(&app));
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Asked { .. }
+    ));
+}
+
+#[test]
+fn an_unsent_delete_of_the_second_command_settles_it() {
+    let mut app = attached_second_command();
+    let raw = asked(&mut app, &[A], &[]);
+    assert_eq!(generation(&app), 2);
+    app.home_unsent(&[raw[0].clone()]);
+    assert_eq!(app.notice(), Some("Delete status unknown"));
+    assert!(matches!(
+        app.home.questions.delete_command.state,
+        State::Idle
+    ));
+}
+
+#[test]
+fn a_reset_during_the_second_commands_delete_takes_its_ask() {
+    let mut app = attached_second_command();
+    let raw = asked(&mut app, &[A], &[]);
+    let deletion: Value = serde_json::from_str(&raw[0]).unwrap_or_else(|err| panic!("{err}"));
+    let id = deletion["id"].as_str().unwrap_or_default().to_owned();
+    assert!(app.home.questions.asks.contains_key(&id));
+    app.home_reset();
+    assert_eq!(app.notice(), Some("Delete status unknown"));
+    assert!(!app.home.questions.asks.contains_key(&id));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn the_second_commands_close_ids_are_its_stop_tags() {
+    let mut app = attached_second_command();
+    let raw = asked(&mut app, &[A], &[A]);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let close_id = closes(&lines)[0]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(generation(&app), 2);
+    assert_eq!(app.delete_waiting_close_ids(), Some(vec![close_id]));
 }

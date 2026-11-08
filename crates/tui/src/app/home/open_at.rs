@@ -45,9 +45,13 @@ impl App {
         let mut credential = credential.as_deref();
         for level in levels {
             let (id, line) = subscribe_line(&session, *level, credential.take());
-            self.home.subs.sent(id.clone(), session.clone(), *level);
-            self.outbox
-                .wait(&id, super::super::outbox::Waiting::Subscribe);
+            self.outbox.wait(
+                &id,
+                super::super::outbox::Waiting::Subscribe {
+                    session: session.clone(),
+                    level: *level,
+                },
+            );
             ack = Some(id);
             lines.push(line);
         }
@@ -56,6 +60,7 @@ impl App {
         if ack.is_none() && !self.subscribe_pending(&session) {
             lines.push(self.ask_commands(&session));
         }
+        let ack = ack.or_else(|| self.home.subs.pending_summary(&self.outbox, &session));
         self.home.subs.gate(session, ack, held);
         lines
     }

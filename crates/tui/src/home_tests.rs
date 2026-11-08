@@ -901,48 +901,21 @@ fn session() -> SessionId {
 }
 
 #[test]
-fn expected_is_the_last_in_flight_level_then_the_accepted_one() {
+fn accept_holds_the_level_for_its_session_only() {
     let mut subs = Subs::default();
-    assert_eq!(subs.expected(&session()), None);
-    assert!(!subs.pending(&session()));
-    subs.sent("c_1".to_owned(), session(), Level::Full);
-    assert_eq!(subs.expected(&session()), Some(Level::Full));
-    assert!(subs.pending(&session()));
-    subs.sent("c_2".to_owned(), session(), Level::Summary);
-    assert_eq!(subs.expected(&session()), Some(Level::Summary));
-    subs.answered("c_2", true);
-    assert_eq!(subs.expected(&session()), Some(Level::Full));
+    let other = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
+    assert_eq!(subs.accepted_level(&session()), None);
     assert!(!subs.full(&session()));
-    subs.answered("c_1", true);
-    assert_eq!(subs.expected(&session()), Some(Level::Full));
+    subs.accept(session(), Level::Summary);
+    assert_eq!(subs.accepted_level(&session()), Some(Level::Summary));
+    assert!(!subs.full(&session()));
+    subs.accept(session(), Level::Full);
+    assert_eq!(subs.accepted_level(&session()), Some(Level::Full));
     assert!(subs.full(&session()));
-    assert!(!subs.pending(&session()));
-}
-
-#[test]
-fn a_rejection_leaves_the_accepted_level() {
-    let mut subs = Subs::default();
-    subs.sent("c_1".to_owned(), session(), Level::Full);
-    subs.answered("c_1", true);
-    subs.sent("c_2".to_owned(), session(), Level::Summary);
-    subs.answered("c_2", false);
-    assert_eq!(subs.expected(&session()), Some(Level::Full));
-    assert!(subs.full(&session()));
-    assert!(!subs.pending(&session()));
-}
-
-#[test]
-fn an_id_not_in_flight_is_not_ours() {
-    let mut subs = Subs::default();
-    assert_eq!(subs.answered("c_deadbeefdeadbeef", true), None);
-    assert_eq!(subs.answered("c_deadbeefdeadbeef", false), None);
-    subs.sent("c_1".to_owned(), session(), Level::Full);
-    assert_eq!(
-        subs.answered("c_1", true),
-        Some(session()),
-        "an answered id names its session",
-    );
-    assert_eq!(subs.answered("c_1", true), None);
+    assert_eq!(subs.accepted_level(&other), None);
+    assert!(!subs.full(&other));
+    subs.accept(session(), Level::Summary);
+    assert!(!subs.full(&session()));
 }
 
 #[test]

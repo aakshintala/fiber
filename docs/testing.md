@@ -306,11 +306,7 @@ a seam and needs no change to the code under test. The test keeps its end open
 until the child has read the release: closing the last writer before the
 child opens the FIFO discards the line, and the child never returns.
 
-A test that needs an inbox command admitted mid-turn holds the turn where the
-loop reads its inbox, on a pending approval, and waits for that command's own
-line, such as `steering_queue` for a `steer` (`docs/loop.md`, "One step"). A
-held provider stream is not such a point: the loop reads nothing while it
-streams, so no line can follow the send.
+A test that needs an inbox command admitted mid-turn holds the turn where the loop reads its inbox, on a pending approval, and waits for that command's own line (`docs/loop.md`, "One step"). A held provider stream is not such a point: the loop reads nothing while it streams. A `steer` and a `steer_drop` are the exception: the thread reading the connection takes them at any point in the turn, so a held provider stream keeps a `steer` queued and its `steering_queue` still follows the send.
 
 A test does not execute a file it wrote in the same run. On macOS, the first
 run of a newly written executable can stall for seconds under load. The test
