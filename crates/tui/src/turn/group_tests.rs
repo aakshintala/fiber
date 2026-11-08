@@ -3327,6 +3327,39 @@ fn entry_of(group: &Group, running: bool) -> crate::ext::TurnGroup<'_> {
     group.turn_entry(running)
 }
 
+/// A message call's card fields carry the recipient its ledger row
+/// does; a call that holds none carries none.
+#[test]
+fn a_card_call_carries_the_ledger_rows_recipient() {
+    let call = |recipient: Option<&str>| Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "delegate_message".to_owned(),
+        arguments: json!({"id": "j_abc", "message": "hi"}),
+        recipient: recipient.map(str::to_owned),
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    for (held, want) in [
+        (Some("Fix the parser"), Some("Fix the parser")),
+        (None, None),
+    ] {
+        let group = Group {
+            sections: vec![Section {
+                step: 1,
+                calls: vec![call(held)],
+                ..Section::default()
+            }],
+            ..Group::default()
+        };
+        let entry = entry_of(&group, false);
+        let calls = &entry.sections[0].calls;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].recipient, want);
+    }
+}
+
 /// A cut group is cut however the caller names running: `Cut` wins
 /// over the running flag, and only an uncut open group runs.
 #[test]

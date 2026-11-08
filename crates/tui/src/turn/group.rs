@@ -914,6 +914,7 @@ impl Group {
             arguments: row.arguments,
             state,
             answer: row.answer,
+            recipient: row.recipient,
             open: call.open,
             asking: call.asking,
         }

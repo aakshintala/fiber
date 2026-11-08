@@ -773,6 +773,7 @@ fn the_turn_card_group_entry_lists_sections_streaming_and_failed() {
                     arguments: &json!({"path": "a.rs"}),
                     state: CallState::Running,
                     answer: None,
+                    recipient: None,
                     open: true,
                     asking: false,
                 }],
@@ -1040,6 +1041,7 @@ fn every_call_state_projects_its_documented_shape() {
                 error: RowError { code, message },
             },
             answer: None,
+            recipient: None,
             open: false,
             asking: false,
         };
@@ -1103,10 +1105,88 @@ fn every_call_state_projects_its_documented_shape() {
             detail: "not allowed",
         },
         answer: None,
+        recipient: None,
         open: false,
         asking: false,
     };
     assert_eq!(denied.headline(), "not allowed");
+}
+
+/// A card call's `recipient` rides its input, in a card's group entry and
+/// in a group line, only when the terminal held one: absent, never `null`.
+#[test]
+fn a_card_call_input_holds_recipient_only_when_held() {
+    let args = json!({"id": "j_abc", "message": "hi"});
+    let call = |recipient| tui::ext::TurnCall {
+        name: "delegate_message",
+        arguments: &args,
+        state: CallState::Pending,
+        answer: None,
+        recipient,
+        open: false,
+        asking: false,
+    };
+    let line = |recipient| {
+        input_value(&Input::GroupLine(tui::ext::GroupLine {
+            running: false,
+            calls: vec![call(recipient)],
+            streaming: Vec::new(),
+            thoughts: Vec::new(),
+            failed: Vec::new(),
+            first: 1,
+            last: 2,
+            open: false,
+            flat: false,
+        }))["calls"][0]
+            .take()
+    };
+    assert_eq!(line(Some("Fix the parser"))["recipient"], "Fix the parser");
+    assert!(
+        !line(None)
+            .as_object()
+            .expect("a table")
+            .contains_key("recipient")
+    );
+    let card = |recipient| {
+        input_value(&Input::TurnCard(tui::ext::TurnCard {
+            prompts: Vec::new(),
+            entries: vec![tui::ext::TurnEntry::Group(tui::ext::TurnGroup {
+                first: 1,
+                last: 2,
+                state: TurnGroupState::Finished,
+                open: false,
+                sections: vec![tui::ext::TurnSection {
+                    step: 1,
+                    thoughts: Vec::new(),
+                    calls: vec![call(recipient)],
+                    failed: Vec::new(),
+                }],
+                streaming: Vec::new(),
+            })],
+            started: 0,
+            calls: 0,
+            usage: contract::shapes::Usage {
+                tokens: contract::shapes::Tokens {
+                    input: 0,
+                    cache_read: 0,
+                    cache_write: Default::default(),
+                    output: 0,
+                },
+                cost: None,
+                subscription_cost: 0.0,
+            },
+            state: TurnCardState::Running,
+            flat: false,
+        }))["entries"][0]["sections"][0]["calls"][0]
+            .take()
+    };
+    assert_eq!(card(Some("Fix the parser"))["recipient"], "Fix the parser");
+    assert!(
+        !card(None)
+            .as_object()
+            .expect("a table")
+            .contains_key("recipient")
+    );
 }
 
 /// A running card and an ended card project the documented `running`

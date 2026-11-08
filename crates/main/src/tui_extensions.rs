@@ -1395,7 +1395,7 @@ fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
             images_value(&result.images),
         ),
     };
-    json!({
+    let mut value = json!({
         "name": call.name,
         "arguments": call.arguments,
         "status": status,
@@ -1411,7 +1411,9 @@ fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
         "images": images,
         "open": call.open,
         "asking": call.asking,
-    })
+    });
+    with_recipient(&mut value, call.recipient);
+    value
 }
 
 fn aside_value(aside: &tui::ext::TurnAside<'_>) -> Value {

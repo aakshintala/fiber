@@ -137,6 +137,10 @@ pub struct TurnCall<'a> {
     pub state: CallState<'a, TurnCallResult<'a>, &'a str>,
     /// The suffix a form's answer replaces the status with.
     pub answer: Option<&'a str>,
+    /// The recipient's description, for a `delegate_message`, or name, for a
+    /// `session_message`, as the terminal held it when the call folded; `None`
+    /// when it held none or the call is no message call.
+    pub recipient: Option<&'a str>,
     /// Whether the call is open.
     pub open: bool,
     /// Whether a `permission_requested` for it is open.
@@ -534,6 +538,7 @@ impl<'a> TurnCall<'a> {
             key,
         );
         self.answer.hash(key);
+        self.recipient.hash(key);
         self.open.hash(key);
         self.asking.hash(key);
     }

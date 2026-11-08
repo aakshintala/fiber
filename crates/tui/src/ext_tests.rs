@@ -1095,6 +1095,7 @@ fn card() -> TurnCard<'static> {
                             images: Vec::new(),
                         }),
                         answer: None,
+                        recipient: None,
                         open: false,
                         asking: false,
                     }],
@@ -1779,9 +1780,25 @@ fn group_call(name: &'static str) -> super::TurnCall<'static> {
             images: Vec::new(),
         }),
         answer: None,
+        recipient: None,
         open: false,
         asking: false,
     }
+}
+
+#[test]
+fn a_group_calls_recipient_is_in_the_key() {
+    let with = |recipient| super::GroupLine {
+        calls: vec![super::TurnCall {
+            recipient,
+            ..group_call("delegate_message")
+        }],
+        ..group_line(false)
+    };
+    let held = with(Some("Fix the parser")).key("group_line");
+    assert_ne!(with(None).key("group_line"), held);
+    assert_ne!(with(Some("Review the fix")).key("group_line"), held);
+    assert_eq!(with(Some("Fix the parser")).key("group_line"), held);
 }
 
 #[test]
