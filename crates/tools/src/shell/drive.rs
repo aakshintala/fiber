@@ -341,7 +341,7 @@ pub(super) fn finish(
     clippy::too_many_arguments,
     reason = "the end of a run reads its pipes, its stop, its emitter and its paced stream"
 )]
-pub(super) fn finish_paced(
+fn finish_paced(
     shared: &Shared,
     stop: Option<StopKind>,
     sent_signal: bool,
