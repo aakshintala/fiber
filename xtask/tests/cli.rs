@@ -2973,8 +2973,12 @@ fn shellcheck_files_lists_a_new_broken_script() {
     );
     let (code, out) = xtask(&dir, &["shellcheck-files"], &[], "");
     assert_eq!(code, 0, "{out}");
+    // `docs/ci.md` leaves the order open: compare as a set.
+    let mut listed: Vec<&str> = out.lines().collect();
+    listed.sort_unstable();
     assert_eq!(
-        out, "scripts/broken\nscripts/lib/release.sh\nscripts/ok\n",
+        listed,
+        ["scripts/broken", "scripts/lib/release.sh", "scripts/ok"],
         "{out}"
     );
 
