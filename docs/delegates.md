@@ -120,8 +120,9 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 - The model is fixed when the delegate starts and never changes.
 - A reload refreshes the parent's lookup and catalogue, so later spawns
   see the reloaded models; a running delegate keeps the model it
-  started with. Start-time, background, and reload refresh all measure one
-  staleness: age past `model_cache_age`, or source newer than the cache.
+  started with. Start-time and background refresh use the configured
+  `model_lists.refresh_after` age and the provider-source mtime; reload refreshes
+  only when the source is newer than the cached copy, with no maximum age.
 
 ## Talking to a delegate
 

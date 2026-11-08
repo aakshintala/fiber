@@ -1633,7 +1633,9 @@ only for providers with credential presence (`docs/model-routing.md`,
 "Credentials"). Providers without presence never run discovery. A cached list
 is stale when its age is past `model_cache_age` or its provider's extension
 source is newer than the cache; equal source and cache mtimes read fresh, and
-an unreadable source reads stale. Provider data
+an unreadable source reads stale. The cache-side time is reconstructed as the
+current time minus the cached age (`cached_at`); a source newer than `cached_at`
+is stale, regardless of whether it is future-dated relative to now. Provider data
 and credentialed discovery ignore `extensions."<name>".enabled`; in a disabled
 mixed package, init, commands and hooks still stay off, even when its provider
 Lua starts later.

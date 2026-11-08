@@ -425,7 +425,7 @@ impl LuaProvider {
             return false;
         };
         match Self::source_newest_mtime(self.dir()) {
-            Ok(source) => source > now || source > cached_at,
+            Ok(source) => source > cached_at,
             Err(_) => true,
         }
     }
