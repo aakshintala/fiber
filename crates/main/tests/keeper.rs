@@ -11,9 +11,10 @@ mod support;
 
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use fakes::Watchdog;
@@ -35,6 +36,46 @@ fn configured() -> Setup {
     );
     setup
 }
+fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
+    let last_error = Arc::new(Mutex::new(None));
+    let error_slot = Arc::clone(&last_error);
+    let target = path.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fakes::wait_until("keeper refuse-only socket to accept", deadline, move || {
+            match UnixStream::connect(&target) {
+                Ok(_) => true,
+                Err(error) => {
+                    *error_slot
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error.to_string());
+                    false
+                }
+            }
+        });
+    }));
+    if result.is_err() {
+        let connect_error = last_error
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+            .or_else(|| {
+                UnixStream::connect(&path)
+                    .err()
+                    .map(|error| error.to_string())
+            })
+            .unwrap_or_else(|| "no connect error was observed".to_owned());
+        let socket_state = match fs::metadata(&path) {
+            Ok(metadata) => format!("present (file type: {:?})", metadata.file_type()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
+            Err(error) => format!("metadata error: {error}"),
+        };
+        panic!(
+            "waited until the deadline for keeper refuse-only socket to accept; last connect error: {connect_error}; socket path {}: {socket_state}",
+            path.display()
+        );
+    }
+}
+
 fn run(setup: &Setup, args: &[&str]) -> std::process::Output {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -225,11 +266,7 @@ fn a_crash_leaves_the_job_to_the_keeper_and_the_resume_delivers_it() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    fakes::wait_until(
-        "keeper refuse-only socket to accept",
-        setup.deadline.start_wait(),
-        move || std::os::unix::net::UnixStream::connect(&socket).is_ok(),
-    );
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
     let dir = session_dir(&setup, id);
     let before = fs::read(dir.join("events.jsonl")).unwrap();
     let refused = run(&setup, &["ask", "--resume", id, "go"]);
@@ -321,6 +358,25 @@ fn a_crash_leaves_the_job_to_the_keeper_and_the_resume_delivers_it() {
 }
 
 #[test]
+fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
+    let setup = Setup::new();
+    let path = setup.workspace().join("missing-socket");
+    let result = std::panic::catch_unwind(|| {
+        wait_for_refuse_only_socket(Deadline::after(std::time::Duration::ZERO), path);
+    });
+    let panic = result.expect_err("an expired socket wait fails");
+    let message = panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| panic.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(message.contains("last connect error: "), "{message}");
+    assert!(message.contains("No such file or directory"), "{message}");
+    assert!(message.contains("socket path "), "{message}");
+    assert!(message.contains(": absent"), "{message}");
+}
+
+#[test]
 fn keeper_bound_timeout_resume_delivers_keeper_timeout() {
     let BoundFixture {
         setup,
@@ -365,11 +421,7 @@ fn keeper_bound_timeout_resume_delivers_keeper_timeout() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    fakes::wait_until(
-        "keeper refuse-only socket to accept",
-        setup.deadline.start_wait(),
-        move || std::os::unix::net::UnixStream::connect(&socket).is_ok(),
-    );
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
     let dir = session_dir(&setup, id);
     fakes::wait_until(
         "keeper-timeout job_completed to appear",
@@ -493,11 +545,7 @@ fn keeper_bound_holds_job_in_bound_without_resume() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    fakes::wait_until(
-        "keeper refuse-only socket to accept",
-        setup.deadline.start_wait(),
-        move || std::os::unix::net::UnixStream::connect(&socket).is_ok(),
-    );
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
     // Inside the bound, with no resume: the keeper still runs and still
     // holds its job, and no ending is written yet.
     assert!(
