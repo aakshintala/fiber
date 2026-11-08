@@ -144,7 +144,7 @@ fn delegate_gate_notice_redraw_and_reload_reach_both_screens() {
     let parent_recounts = app.attached_screen().pages().recounts;
     let delegate_recounts = app.screen.pages().recounts;
     let loader = crate::ext::tests::TestLoad::new("RELOADED-DELEGATE");
-    app.home.as_mut().unwrap().launch.extensions = Some(loader.clone());
+    app.home.launch.extensions = Some(loader.clone());
     crate::app::commands::run_reload(&mut app, "");
     assert!(app.attached_screen().pages().recounts > parent_recounts);
     assert!(app.screen.pages().recounts > delegate_recounts);
@@ -186,7 +186,7 @@ fn reload_preserves_delegate_selection_notice_before_parent_recount() {
         json!({"extensions":[]}),
     ));
     assert!(!app.drawn(&[]), "the old renderer queued no notices");
-    app.home.as_mut().unwrap().launch.extensions = Some(std::sync::Arc::new(GatedLoad));
+    app.home.launch.extensions = Some(std::sync::Arc::new(GatedLoad));
     crate::app::commands::run_reload(&mut app, "");
     // docs/tui.md: the incompatible half reports once, and the post-draw
     // drain requests a frame immediately, without another input or render.
@@ -431,11 +431,7 @@ fn a_close_then_items_due_lowers_without_the_card_listed() {
     let mut app = home();
     opened(&mut app);
     tick(&mut app, &clock);
-    app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
-        .launch
-        .panel_cards = vec!["session".to_owned()];
+    app.home.launch.panel_cards = vec!["session".to_owned()];
     start_delegate(&mut app, "j_1", DELEGATE_A);
     let out = open(&mut app, "j_1");
     ack_all(&mut app, &out);

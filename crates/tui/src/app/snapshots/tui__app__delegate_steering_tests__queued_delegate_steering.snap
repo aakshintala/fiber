@@ -1,0 +1,28 @@
+---
+source: crates/tui/src/app/delegate_steering_tests.rs
+expression: shown
+---
+  Delegate  ◆ task j_1                                               Esc returns
+ fix the parser › ◆ task j_1
+ harness fiber · model test/model
+ 0 calls · elapsed 0s · session s_dddddddddddddddd
+ ■ stop s_dddddddddddddddd
+
+
+
+
+
+ ● task j_1
+⋮  fiber · test/model
+⋮▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+⋮▌ Steering                                   1 queued · joins at the next step
+ ▌ ↳ use the parser                                                           ✕
+ ▌ ⌥↑ edit · ⌥↓ next · ⌥X drop · click a row to edit, ✕ to drop
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ › █                                               steering goes to ◆ task j_1
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
+ ▌0 waiting  │  $0.00
+ ▌◆ 1 delegate running
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

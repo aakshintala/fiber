@@ -10,6 +10,72 @@ use crate::Input;
 use fakes::Deadline;
 
 #[test]
+fn models_diagnostic_records_read_completion_and_queued_start() {
+    let home = fakes::TempDir::new("tui-models-diagnostic");
+    let diag = Arc::new(diag::diag::Diag::new(
+        home.path(),
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    let read: ReadModels = Arc::new(|_| Ok(Catalogue::default()));
+    let mut reader = Reader::new(Some(read)).with_diag(diag);
+    let (tx, rx) = mpsc::channel();
+    reader.ask(Refresh::Cached, &tx);
+    reader.ask(Refresh::Stale, &tx);
+    reader.ask(Refresh::Every, &tx);
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
+    reader.done(&tx);
+    assert!(matches!(
+        next(&rx, &Deadline::after(DEADLINE)),
+        Input::Models(Ok(_))
+    ));
+    let text = std::fs::read_to_string(
+        home.path()
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id())),
+    )
+    .unwrap();
+    let lines: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mut codes = lines
+        .iter()
+        .map(|line| line["code"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    codes.sort_unstable();
+    // docs/state.md, “Diagnostic logs”: each completed read emits one
+    // models_read_done, and the queued ask emits models_ask_started only when
+    // it starts. These two controlled reads and one queued start give 2 + 1.
+    assert_eq!(
+        codes,
+        ["models_ask_started", "models_read_done", "models_read_done"]
+    );
+    let data_for = |code: &str, predicate: fn(&serde_json::Value) -> bool| {
+        &lines
+            .iter()
+            .find(|line| line["code"] == code && predicate(&line["data"]))
+            .expect("diagnostic event with expected data")["data"]
+    };
+    assert_eq!(
+        data_for("models_read_done", |data| data["kind"] == "cached"),
+        &serde_json::json!({"kind":"cached","lists":0})
+    );
+    assert_eq!(
+        data_for("models_ask_started", |data| data["kind"] == "stale"),
+        &serde_json::json!({"kind":"stale"})
+    );
+    assert_eq!(
+        data_for("models_read_done", |data| data["kind"] == "stale"),
+        &serde_json::json!({"kind":"stale","lists":0})
+    );
+}
+
+#[test]
 fn a_default_catalogue_has_no_logged_out_providers() {
     assert!(Catalogue::default().logged_out.is_empty());
 }

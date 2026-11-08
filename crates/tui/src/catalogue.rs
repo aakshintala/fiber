@@ -178,6 +178,8 @@ pub(crate) struct Reader {
     running: bool,
     /// The widest refresh asked while one runs.
     queued: Option<Refresh>,
+    diag: Option<Arc<diag::diag::Diag>>,
+    starting_queued: bool,
 }
 
 impl Reader {
@@ -187,7 +189,15 @@ impl Reader {
             read,
             running: false,
             queued: None,
+            diag: None,
+            starting_queued: false,
         }
+    }
+
+    /// Adds the diagnostic writer for model-list lifecycle events.
+    pub(crate) fn with_diag(mut self, diag: Arc<diag::diag::Diag>) -> Self {
+        self.diag = Some(diag);
+        self
     }
 
     /// Asks for a read at `refresh`: it starts at once, unless one runs,
@@ -227,6 +237,8 @@ impl Reader {
         }
         self.running = true;
         let read = Arc::clone(read);
+        let diag = self.diag.clone();
+        let kind = refresh_kind(refresh);
         let out = out.clone();
         let thread_out = out.clone();
         // A read whose send fails finds the loop closed, and ends: the
@@ -234,11 +246,32 @@ impl Reader {
         match spawn(
             crate::sources::builder("tui-models"),
             Box::new(move || {
-                drop(thread_out.send(crate::Input::Models(read(refresh))));
+                let result = read(refresh);
+                if let Some(diag) = diag {
+                    let data = match &result {
+                        Ok(catalogue) => {
+                            serde_json::json!({"kind":kind,"lists":catalogue.lists.len()})
+                        }
+                        Err(_) => serde_json::json!({"kind":kind}),
+                    };
+                    diag.debug_event("models_read_done", "The model-list read returned.", &data);
+                }
+                drop(thread_out.send(crate::Input::Models(result)));
             }),
         ) {
-            Ok(_) => {}
+            Ok(_) => {
+                if std::mem::take(&mut self.starting_queued)
+                    && let Some(diag) = &self.diag
+                {
+                    diag.debug_event(
+                        "models_ask_started",
+                        "A queued model-list ask started.",
+                        &serde_json::json!({"kind":kind}),
+                    );
+                }
+            }
             Err(source) => {
+                self.starting_queued = false;
                 // No thread runs, but the reader stays busy until the
                 // loop consumes these errors: each one answers an owed
                 // read, and freeing now would let a later ask start over
@@ -260,8 +293,16 @@ impl Reader {
     pub(crate) fn done(&mut self, out: &Sender<crate::Input>) {
         self.running = false;
         if let Some(refresh) = self.queued.take() {
+            self.starting_queued = true;
             self.ask(refresh, out);
         }
+    }
+}
+
+fn refresh_kind(refresh: Refresh) -> &'static str {
+    match refresh {
+        Refresh::Cached => "cached",
+        Refresh::Stale | Refresh::Every => "stale",
     }
 }
 

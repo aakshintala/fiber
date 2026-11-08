@@ -306,8 +306,13 @@ fn a_long_summary_wraps_at_40_columns() {
 
 #[test]
 fn a_narrow_view_drops_a_chip_past_its_width() {
-    let app = offered(json!([server("db", false)]), 16, 18);
-    let (_, targets) = draw(&app, 16, 18);
+    let app = offered(json!([server("db", false)]), 40, 18);
+    // The offer drawn into a 16-column area, as a narrow column holds it.
+    let (rows, top) = app.offer_rows(16).expect("the offer is open");
+    let area = Rect::new(0, 0, 16, 18);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::render(&rows, top, area, &mut buf, &mut targets);
     // Approve covers 2..13 and draws whole; skip starts at 16, past
     // the width, and never starts later still.
     let approve = Spot::Choice {
@@ -427,7 +432,8 @@ fn clicking_a_chip_sets_its_decision_and_moves_the_cursor() {
 fn the_send_target_sends_and_the_cross_puts_it_aside() {
     let mut app = offered(json!([server("db", false)]), 80, 24);
     let (_, targets) = draw(&app, 80, 24);
-    assert_eq!(rect_of(&targets, Spot::Close), Some(Rect::new(0, 0, 80, 1)));
+    // The title row spans the conversation column, past the grip.
+    assert_eq!(rect_of(&targets, Spot::Close), Some(Rect::new(1, 0, 79, 1)));
     assert!(rect_of(&targets, Spot::Send).is_some());
     let Effect::Send(lines) = app.on_click(TargetId::Offer(Spot::Send)) else {
         panic!("Send sends");
@@ -449,16 +455,17 @@ fn a_taller_screen_shows_the_whole_offer_after_scrolling() {
     let mut app = offered(
         json!([server("a", false), server("b", false), server("c", false)]),
         80,
-        8,
+        10,
     );
     for _ in 0..5 {
         press(&mut app, Key::PageDown);
     }
-    assert!(!draw(&app, 80, 8).0.starts_with(" Offer"));
+    assert!(!draw(&app, 80, 10).0.trim_start().starts_with("Offer"));
     // The scroll is past the end of a 40-row view, which shows it all.
     app.set_size(80, 40);
+    app.settle();
     let (screen, _) = draw(&app, 80, 40);
-    assert!(screen.starts_with(" Offer"), "{screen}");
+    assert!(screen.trim_start().starts_with("Offer"), "{screen}");
     assert!(screen.contains("Send"), "{screen}");
 }
 
@@ -491,7 +498,10 @@ fn offer_diff_uses_the_changed_files_hunk_look() {
         }),
         "hunk row dim"
     );
-    assert_eq!(buf[(4, hunk)].fg, Role::Muted.color());
+    assert_eq!(
+        buf[(u16::try_from(at).expect("a column"), hunk)].fg,
+        Role::Muted.color()
+    );
     // The pair's differing words draw in reverse video under their colour.
     let added = (0..24)
         .find(|y| row_text(*y).contains("+new()"))

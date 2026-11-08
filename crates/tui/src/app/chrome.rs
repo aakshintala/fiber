@@ -28,11 +28,9 @@ pub(crate) struct Chrome {
     panel_hidden: bool,
     /// ⌥R hid the rail: it stays hidden until shown.
     rail_hidden: bool,
-    /// The session screen's regions; `None` without home state, on home,
-    /// or below the floor.
+    /// The session screen's regions; `None` on home or below the floor.
     layout: Option<Layout>,
-    /// The floor line, while the screen is below the floor with home
-    /// state.
+    /// The floor line, while the screen is below the floor.
     floor: Option<String>,
 }
 
@@ -40,19 +38,18 @@ impl Chrome {
     fn layout_for(
         width: u16,
         height: u16,
-        home: Option<HomeState>,
+        home: HomeState,
         rail_hidden: bool,
         panel_hidden: bool,
     ) -> Option<Layout> {
-        home.filter(|home| !home.on_home && layout::floor_line(width, height).is_none())
-            .map(|home| {
-                let want = Want {
-                    rail: !rail_hidden,
-                    rail_by_count: true,
-                    panel: !panel_hidden,
-                };
-                layout::split(width, height, &home.shares, &want)
-            })
+        (!home.on_home && layout::floor_line(width, height).is_none()).then(|| {
+            let want = Want {
+                rail: !rail_hidden,
+                rail_by_count: true,
+                panel: !panel_hidden,
+            };
+            layout::split(width, height, &home.shares, &want)
+        })
     }
 
     /// Shows or hides the panel.
@@ -75,7 +72,7 @@ impl Chrome {
         &mut self,
         width: u16,
         height: u16,
-        home: Option<HomeState>,
+        home: HomeState,
     ) -> bool {
         self.show_rail();
         Self::layout_for(width, height, home, false, self.panel_hidden)
@@ -85,9 +82,9 @@ impl Chrome {
     /// Lays a `width` by `height` screen out, returning whether the
     /// regions moved. The rail is wanted unless the person hid it; a
     /// rail the width sheds leaves its grip.
-    fn lay_out(&mut self, width: u16, height: u16, home: Option<HomeState>) -> bool {
+    fn lay_out(&mut self, width: u16, height: u16, home: HomeState) -> bool {
         let before = self.layout;
-        self.floor = home.and_then(|_| layout::floor_line(width, height));
+        self.floor = layout::floor_line(width, height);
         self.layout = Self::layout_for(width, height, home, self.rail_hidden, self.panel_hidden);
         self.layout != before
     }
@@ -180,7 +177,7 @@ impl App {
     /// The attached session's feed row.
     pub(super) fn attached_row(&self) -> Option<&crate::home::Row> {
         let session = self.session()?;
-        self.home.as_ref()?.sessions.row(session)
+        self.home.sessions.row(session)
     }
 
     /// The header's text for the attached session: the item view's
@@ -214,13 +211,13 @@ impl App {
     /// frame. Where the panel and the rail are is recorded when they
     /// move.
     pub(super) fn relayout(&mut self) {
-        let home = self.home.as_ref().map(|home| HomeState {
+        let home = HomeState {
             shares: Shares {
-                rail: home.launch.rail_share,
-                panel: home.launch.panel_share,
+                rail: self.home.launch.rail_share,
+                panel: self.home.launch.panel_share,
             },
             on_home: self.on_home(),
-        });
+        };
         let moved = self
             .chrome
             .lay_out(self.screen.width(), self.screen.height(), home);

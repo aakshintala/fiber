@@ -2,6 +2,8 @@
 //! names.
 
 use super::{App, Effect};
+use crate::app::Waiting;
+use crate::app::outbox::RecentAsk;
 use crate::app::testkit::{SENDER, hello, home_with, sender_status};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
@@ -96,7 +98,7 @@ fn remote_home_ignores_the_launch_project_in_sections_and_row_text() {
         })
         .collect();
     assert_eq!(heads, ["a", "b"]);
-    let row = app.home.as_ref().unwrap().sessions.all()[1].key;
+    let row = app.home.sessions.all()[1].key;
     let text = app.home_text(Spot::Entry(row)).unwrap();
     assert!(text.ends_with("  b"), "{text}");
     assert!(!text.contains("sentinel-project"));
@@ -116,7 +118,7 @@ fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
             }
             app.on_line(row);
         }
-        let sessions = &app.home.as_ref().unwrap().sessions;
+        let sessions = &app.home.sessions;
         assert_eq!(sessions.project_of("/remote"), Some(expected));
         assert_eq!(sessions.project_of("/elsewhere"), None);
     }
@@ -133,10 +135,7 @@ fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
         "q",
         json!({"state":"idle"}),
     ));
-    assert_eq!(
-        app.home.as_ref().unwrap().sessions.project_of("/remote"),
-        Some("q")
-    );
+    assert_eq!(app.home.sessions.project_of("/remote"), Some("q"));
     for absent_first in [false, true] {
         let mut sessions = crate::home::Sessions::default();
         let make = |id: &str, project: &str| {
@@ -162,8 +161,10 @@ fn remote_project_of_uses_newest_status_then_first_row_on_ties() {
 }
 
 #[test]
-fn an_app_without_home_draws_the_conversation_screen() {
-    let app = App::new(PathBuf::from("/w"));
+fn a_new_app_with_a_session_draws_the_conversation_screen() {
+    let mut app = App::new(PathBuf::from("/w"));
+    assert!(app.on_home());
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert!(!app.on_home());
     assert!(app.home_screen().is_none());
 }
@@ -537,15 +538,11 @@ fn rows(app: &App) -> Vec<String> {
 /// Every listed row's line, drawn or not: what the feed and `recent` folded.
 fn listed(app: &App) -> Vec<String> {
     app.home
-        .as_ref()
-        .map(|home| {
-            home.sessions
-                .all()
-                .iter()
-                .map(|row| crate::home::line(row, home.launch_project()))
-                .collect()
-        })
-        .unwrap_or_default()
+        .sessions
+        .all()
+        .iter()
+        .map(|row| crate::home::line(row, app.home.launch_project()))
+        .collect()
 }
 
 #[test]
@@ -923,7 +920,7 @@ fn keys(app: &App) -> Vec<u64> {
 /// The drawn `More` row's key for `project`: the first hidden loaded
 /// row when one hides, else the key the total path assigned.
 fn more_key(app: &App, project: &str) -> Option<u64> {
-    let home = app.home.as_ref()?;
+    let home = &app.home;
     app.home_screen()?
         .list
         .into_iter()
@@ -1991,7 +1988,7 @@ fn slash_close_sends_close_now_and_no_subscribe() {
 }
 
 #[test]
-fn home_without_home_state_sends_nothing_on_leave() {
+fn leaving_a_fresh_home_sends_nothing() {
     let mut app = App::new(PathBuf::from("/w"));
     assert_eq!(app.leave(), Effect::None);
 }
@@ -2096,7 +2093,7 @@ fn the_file_listing_follows_an_opened_row_outside_the_launch_workspace() {
 }
 
 #[test]
-fn without_home_the_workspace_is_the_launch_directory() {
+fn a_new_apps_workspace_is_the_launch_directory() {
     let app = App::new(PathBuf::from("/w"));
     assert_eq!(app.workspace(), Some(PathBuf::from("/w")));
 }
@@ -2469,8 +2466,8 @@ fn slash_resume_from_a_session_focuses_the_first_exited_row_after_the_home_frame
         .expect("the exited row follows the live row");
     let row = app
         .home
-        .as_ref()
-        .and_then(|home| home.sessions.by_key(exited))
+        .sessions
+        .by_key(exited)
         .unwrap_or_else(|| panic!("the exited row is present"));
     assert_eq!(row.left, Some(crate::home::Left::Exited));
     assert_eq!(
@@ -3029,7 +3026,7 @@ fn no_page_is_asked_from_a_feed_row() {
         &recent,
         json!({"sessions": [exited("s_aaaaaaaaaaaaaaaa", "fix the parser")]}),
     ));
-    assert!(app.home.as_ref().is_some_and(|home| home.sessions.more()));
+    assert!(app.home.sessions.more());
     focus_last(&mut app);
     let now = fakes::clock::FakeClock::new().now();
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
@@ -3061,7 +3058,7 @@ fn down_from_the_last_row_asks_nothing_after_an_empty_page() {
         ))
         .is_empty()
     );
-    assert!(app.home.as_ref().is_some_and(|home| !home.sessions.more()));
+    assert!(!app.home.sessions.more());
     // ↓ returns nothing with focus on the row's line.
     assert_eq!(app.on_key(Key::Down, now), Effect::None);
     assert_eq!(app.focused(), None);
@@ -3213,7 +3210,7 @@ fn y_on_more_copies_a_positive_count_but_not_zero() {
         Effect::Copy("… 2 more".to_owned())
     );
 
-    app.home.as_mut().unwrap().sessions.expand("-w");
+    app.home.sessions.expand("-w");
     app.focus = Some(crate::mouse::TargetId::Home(Spot::More(key)));
     assert_eq!(app.on_key(Key::Char('y'), now), Effect::None);
 }
@@ -3300,11 +3297,7 @@ fn a_rejected_prompt_sets_none() {
         app.on_line(hub_refused(id, "invalid_arguments", "bad prompt"))
             .is_empty()
     );
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.blockers.is_empty())
-    );
+    assert!(app.home.blockers.is_empty());
 }
 
 #[test]
@@ -4481,11 +4474,7 @@ fn an_accepted_delete_closes_its_question() {
     assert_eq!(rows(&app), ["○  older work"]);
     // Its answer closes the question it asked about: the prompt clears,
     // so the drawn question goes with it.
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.questions.prompt().is_none())
-    );
+    assert!(app.home.questions.prompt().is_none());
     assert!(
         app.home_screen()
             .is_some_and(|screen| screen.question.is_none())
@@ -4678,8 +4667,6 @@ fn a_chosen_workspace_keeps_the_switch_after_its_row_leaves() {
     assert_eq!(chips(&app)[0], "[git-ws]");
     assert!(shows_switch(&app));
     app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
         .sessions
         .remove(&contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert!(rows(&app).is_empty());
@@ -5176,11 +5163,8 @@ fn opening_a_row_then_closing_names_no_back_key() {
     ));
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| {
-            home.sessions
-                .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
-        })
+        .sessions
+        .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
         .map(|row| row.key)
         .expect("row B");
     open(&mut app, key);
@@ -5212,11 +5196,8 @@ fn a_card_switch_then_closing_names_no_back_key() {
     let _ = app.leave();
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| {
-            home.sessions
-                .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
-        })
+        .sessions
+        .row(&contract::SessionId("s_bbbbbbbbbbbbbbbb".to_owned()))
         .map(|row| row.key)
         .expect("row B");
     app.open_entry(key);
@@ -5947,8 +5928,8 @@ fn down_on_the_last_row_pages_the_project_while_it_holds_more() {
 /// The row key of `session` on home.
 fn row_key(app: &App, session: &str) -> u64 {
     app.home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&contract::SessionId(session.to_owned())))
+        .sessions
+        .row(&contract::SessionId(session.to_owned()))
         .map(|row| row.key)
         .unwrap_or_else(|| panic!("row {session}"))
 }
@@ -6342,7 +6323,7 @@ fn an_accepted_offer_answer_opens_the_report_and_closes_the_offer() {
     assert_eq!((report.copied_count(), report.left_count()), (4, 1));
     assert!(app.notices().is_empty());
     assert!(!app.home_screen().unwrap().question_import);
-    assert!(!app.home.as_ref().unwrap().import_offer);
+    assert!(!app.home.import_offer);
     // Esc closes the report and leaves no notices behind.
     let now = fakes::clock::FakeClock::new().now();
     assert!(matches!(app.on_key(Key::Esc, now), Effect::None));
@@ -6574,9 +6555,7 @@ fn line_id(line: &Value) -> &str {
 
 /// The stored scoped total for `project`.
 fn stored(app: &App, project: &str) -> Option<usize> {
-    app.home
-        .as_ref()
-        .and_then(|home| home.sessions.total_for(project))
+    app.home.sessions.total_for(project)
 }
 
 #[test]
@@ -6715,7 +6694,7 @@ fn a_dirty_answer_sends_exactly_one_follow_up() {
     );
     let first = line_id(&lines[0]).to_owned();
     // A trigger arrived while the ask was in flight.
-    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    app.home.sessions.mark_dirty("-w");
     let follow = answer_value(
         &mut app,
         &first,
@@ -6748,7 +6727,7 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
     );
     let first = line_id(&lines[0]).to_owned();
-    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    app.home.sessions.mark_dirty("-w");
     assert!(
         app.on_line(hub_refused(&first, "gone", "no recent"))
             .is_empty()
@@ -6772,7 +6751,7 @@ fn a_scoped_refusal_keeps_the_total_notices_once_and_sends_nothing() {
         line,
         crate::app::NoticeLine::Notice { code, .. } if code.name() == "gone"
     )));
-    assert!(!app.home.as_ref().unwrap().sessions.is_dirty("-w"));
+    assert!(!app.home.sessions.is_dirty("-w"));
 }
 
 #[test]
@@ -6785,7 +6764,7 @@ fn a_scoped_malformed_answer_keeps_the_total_notices_once_and_sends_nothing() {
         json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
     );
     let first = line_id(&lines[0]).to_owned();
-    app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+    app.home.sessions.mark_dirty("-w");
     let follow = answer_value(
         &mut app,
         &first,
@@ -6831,7 +6810,7 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
             json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "old", "/w", "-w")]}),
         );
         let first = line_id(&lines[0]).to_owned();
-        app.home.as_mut().unwrap().sessions.mark_dirty("-w");
+        app.home.sessions.mark_dirty("-w");
         let follow = answer_value(
             &mut app,
             &first,
@@ -6853,10 +6832,7 @@ fn a_scoped_answer_missing_sessions_or_total_notices_once_and_folds_nothing() {
         assert_eq!(stored(&app, "-w"), Some(5), "{label}");
         // `docs/tui.md`, "The session list" (newest first) and `docs/tui.md`, "The session list" (sections order).
         assert_eq!(listed(&app), before, "{label}");
-        assert!(
-            !app.home.as_ref().unwrap().sessions.is_dirty("-w"),
-            "{label}"
-        );
+        assert!(!app.home.sessions.is_dirty("-w"), "{label}");
     }
 }
 
@@ -7047,7 +7023,10 @@ fn feed_and_recent_register_tags_settled_by_their_answers() {
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
     assert_eq!(app.outbox.waiting(feed), Some(Waiting::Feed));
-    assert_eq!(app.outbox.waiting(recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
     app.on_line(accepted(feed, json!({"sessions": []})));
     assert_eq!(app.outbox.waiting(feed), None);
     assert!(rows(&app).is_empty());
@@ -7065,7 +7044,10 @@ fn feed_and_recent_refusals_settle_their_tags() {
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
     assert_eq!(app.outbox.waiting(feed), Some(Waiting::Feed));
-    assert_eq!(app.outbox.waiting(recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
     assert!(app.on_line(refused(feed, "no feed")).is_empty());
     assert_eq!(app.outbox.waiting(feed), None);
     assert!(app.on_line(refused(recent, "no recent")).is_empty());
@@ -7079,7 +7061,10 @@ fn a_second_recent_answer_changes_nothing() {
     use crate::app::Waiting;
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
-    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(&recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
     app.on_line(accepted(
         &recent,
         json!({"sessions": [{
@@ -7117,7 +7102,10 @@ fn a_feed_id_answered_by_a_recent_payload_changes_no_row() {
     ));
     assert_eq!(app.outbox.waiting(&feed), None);
     assert!(rows(&app).is_empty());
-    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(&recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
 }
 
 #[test]
@@ -7125,7 +7113,10 @@ fn an_unscoped_recent_id_answered_by_a_scoped_payload_folds_unscoped() {
     use crate::app::Waiting;
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
-    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(&recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
     // The unscoped total is never stored: even with a total in its
     // payload, the new project still fans out its scoped ask.
     let out = commands(app.on_line(accepted(
@@ -7146,6 +7137,175 @@ fn an_unscoped_recent_id_answered_by_a_scoped_payload_folds_unscoped() {
             .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w"),
         "{out:?}"
     );
+}
+
+/// The tags out, as `(id, tag)` in send order.
+fn tags_out(app: &App) -> Vec<(String, crate::app::Waiting)> {
+    app.outbox
+        .tags()
+        .map(|(id, waiting)| (id.to_owned(), waiting.clone()))
+        .collect()
+}
+
+/// The ids of the scoped `recent` tags out for `project`.
+fn scoped_tag_ids(app: &App, project: &str) -> Vec<String> {
+    tags_out(app)
+        .into_iter()
+        .filter(|(_, tag)| {
+            matches!(tag, crate::app::Waiting::Recent(RecentAsk::Scoped(asked)) if asked == project)
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+#[test]
+fn the_feed_tag_is_the_only_record() {
+    // With its tag live, a refused feed folds as one notice.
+    let mut live = home_with(80, 24, launch());
+    let (feed, _) = linked(&mut live);
+    assert!(live.on_line(refused(&feed, "no feed")).is_empty());
+    assert!(live.notice().is_some());
+    // The tag settles out of band: the same answer changes nothing, with
+    // no row, no notice and no other feed state.
+    let mut gone = home_with(80, 24, launch());
+    let (feed, _) = linked(&mut gone);
+    gone.outbox.settled(&feed);
+    assert!(gone.on_line(refused(&feed, "no feed")).is_empty());
+    assert_eq!(gone.notice(), None);
+    assert!(rows(&gone).is_empty());
+    assert!(
+        gone.on_line(accepted(&feed, json!({"sessions": []})))
+            .is_empty()
+    );
+    assert_eq!(gone.notice(), None);
+}
+
+#[test]
+fn the_recent_tags_are_the_only_record() {
+    let mut app = home_with(80, 24, launch());
+    let (feed, recent) = linked(&mut app);
+    // `Recent` holds no id: the tags are one `Feed` and one first page.
+    assert_eq!(
+        tags_out(&app),
+        [
+            (feed, Waiting::Feed),
+            (recent.clone(), Waiting::Recent(RecentAsk::First)),
+        ]
+    );
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    let Some(Effect::Send(page)) = app.page_recent(key) else {
+        panic!("the last row asks the next page");
+    };
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    let page_id = line_id(&page).to_owned();
+    assert_eq!(
+        app.outbox.waiting(&page_id),
+        Some(Waiting::Recent(RecentAsk::Page))
+    );
+    // A page is out: no second one goes out beside it.
+    assert_eq!(app.page_recent(key), None);
+    // Its tag settles out of band, and the next ask goes out.
+    app.outbox.settled(&page_id);
+    assert!(matches!(app.page_recent(key), Some(Effect::Send(_))));
+}
+
+#[test]
+fn a_page_ask_is_not_a_first_ask() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    let Some(Effect::Send(page)) = app.page_recent(key) else {
+        panic!("the last row asks the next page");
+    };
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    app.on_line(accepted(
+        line_id(&page),
+        json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")]}),
+    ));
+    // An older page appends; a first page would have replaced the rows.
+    assert_eq!(rows(&app), ["○  a", "○  b"]);
+}
+
+#[test]
+fn one_scoped_ask_per_project_comes_from_the_tags() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let ids = scoped_tag_ids(&app, "-w");
+    assert_eq!(ids.len(), 1);
+    // A second ask for the project marks it dirty and sends nothing.
+    assert!(app.scoped_first("-w").is_empty());
+    assert!(app.home.sessions.is_dirty("-w"));
+    assert_eq!(scoped_tag_ids(&app, "-w"), ids);
+    // The tag settles out of band: the project is asked again.
+    app.outbox.settled(&ids[0]);
+    let sent = commands(app.scoped_first("-w"));
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["args"]["project"], "-w");
+    assert_eq!(scoped_tag_ids(&app, "-w").len(), 1);
+}
+
+#[test]
+fn a_reconnect_settles_scoped_tags_and_keeps_the_unscoped_ones() {
+    let mut app = home_with(80, 24, launch());
+    let (feed, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    let Some(Effect::Send(page)) = app.page_recent(key) else {
+        panic!("the last row asks the next page");
+    };
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    let page_id = line_id(&page).to_owned();
+    let old_scoped = scoped_tag_ids(&app, "-w");
+    assert_eq!(old_scoped.len(), 1);
+    app.home_reset();
+    // The old scoped tag is gone, a new one stands in its place, and the
+    // feed's and the page's tags stay.
+    assert_eq!(app.outbox.waiting(&old_scoped[0]), None);
+    let new_scoped = scoped_tag_ids(&app, "-w");
+    assert_eq!(new_scoped.len(), 1);
+    assert_ne!(new_scoped, old_scoped);
+    assert_eq!(app.outbox.waiting(&feed), Some(Waiting::Feed));
+    assert_eq!(
+        app.outbox.waiting(&page_id),
+        Some(Waiting::Recent(RecentAsk::Page))
+    );
+}
+
+#[test]
+fn a_stale_scoped_answer_after_reset_matches_nothing() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let old = scoped_tag_ids(&app, "-w");
+    assert_eq!(old.len(), 1);
+    app.home_reset();
+    let before = rows(&app);
+    // The reconnect's own re-asks ride out on this pass; the stale
+    // answer folds nothing of its own.
+    app.on_line(accepted(
+        &old[0],
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "c", "/w", "-w")], "total": 2}),
+    ));
+    assert_eq!(rows(&app), before);
+    assert_eq!(stored(&app, "-w"), None);
 }
 
 #[test]
@@ -7229,4 +7389,111 @@ fn a_gated_opening_session_still_hands_an_import_answer_to_its_handler() {
     app.go_home();
     let retry = press(&mut app, Key::Char('1'));
     assert_ne!(retry["id"], line["id"]);
+}
+
+/// The `command` field of each line, in order.
+fn command_names(lines: Vec<String>) -> Vec<String> {
+    commands(lines)
+        .iter()
+        .map(|line| line["command"].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
+#[test]
+fn a_new_app_draws_the_home_screen_with_no_guard() {
+    for (workspace, chip_reads_no_workspace) in [(Some(PathBuf::from("/w")), false), (None, true)] {
+        let mut app = App::new(workspace);
+        app.set_size(80, 24);
+        assert!(app.on_home());
+        assert!(app.home_screen().is_some());
+        let area = ratatui::layout::Rect::new(0, 0, 80, 24);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        crate::view::render(&app, area, &mut buf, None);
+        assert_eq!(
+            crate::view::text(&buf).contains("no workspace"),
+            chip_reads_no_workspace
+        );
+    }
+}
+
+#[test]
+fn a_new_app_seeds_the_launch_directory_and_opens_the_picker_only_without_one() {
+    let app = App::new(PathBuf::from("/w"));
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/w")));
+    assert!(!app.home_picker_open());
+    for none in [App::new(None), App::new(PathBuf::new())] {
+        assert_eq!(none.home_workspace(), None);
+        assert!(none.home_picker_open());
+    }
+}
+
+#[test]
+fn hub_hello_sends_homes_startup_reads() {
+    let mut local = App::new(PathBuf::from("/w"));
+    assert_eq!(command_names(local.on_line(hello())), ["feed", "recent"]);
+    let mut bare = App::new(None);
+    let lines = bare.on_line(hello());
+    assert_eq!(
+        command_names(lines.clone()),
+        ["feed", "recent", "directories"]
+    );
+    assert_eq!(commands(lines)[2]["args"]["path"], "~/");
+}
+
+#[test]
+fn only_a_remote_launch_owes_the_hubs_import_offer() {
+    // A local launch ignores the debt through the offer read (a local
+    // terminal has no hub home to read), so the field is the proof.
+    let mut app = App::new(PathBuf::from("/w"));
+    assert!(!app.home.import_owed);
+    app.set_home(Launch {
+        location: crate::LaunchLocation::Remote {
+            hub: "box".to_owned(),
+        },
+        ..Default::default()
+    });
+    assert!(app.home.import_owed);
+    app.set_home(launch());
+    assert!(!app.home.import_owed);
+}
+
+#[test]
+fn set_home_replaces_the_seeded_home() {
+    let mut app = App::new(None);
+    // The seed queues nothing before a hub line arrives.
+    assert!(app.home_outgoing().is_empty());
+    assert!(app.home_picker_open());
+    app.set_home(launch());
+    assert!(!app.home_picker_open());
+    assert_eq!(app.home_workspace(), Some(PathBuf::from("/w")));
+    // The replaced home keys prompt history by its project.
+    app.attach(contract::SessionId(SENDER.to_owned()));
+    app.set_size(160, 40);
+    app.on_line(hello());
+    let asked = match app.on_key(Key::Up, crate::app::testkit::now()) {
+        Effect::Send(lines) => commands(lines),
+        Effect::None
+        | Effect::Quit
+        | Effect::Exit(_)
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_)
+        | Effect::FindPause { .. }
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::OpenFile(_) => Vec::new(),
+    };
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    assert_eq!(asked[0]["command"], "prompt_history");
+    assert_eq!(asked[0]["args"]["project"], "-w");
+    // A launch that saved the rail hidden hides it; one that did not, does not.
+    assert!(app.chrome().layout().expect("a layout").rail.is_some());
+    app.set_home(Launch {
+        rail_hidden: true,
+        ..launch()
+    });
+    app.settle();
+    assert_eq!(app.chrome().layout().expect("a layout").rail, None);
 }

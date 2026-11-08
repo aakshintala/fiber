@@ -165,36 +165,40 @@ fn the_view_matches_the_doc() {
     let mut buf = Buffer::empty(area);
     let targets = crate::view::render(&app, area, &mut buf, None);
     let text = crate::view::text(&buf);
-    let rows: Vec<_> = text.lines().collect();
+    // The rows past the grip's column.
+    let rows: Vec<String> = text
+        .lines()
+        .map(|row| row.chars().skip(1).collect())
+        .collect();
     assert!(rows[0].starts_with(" Search  ⌕ needle"));
     assert!(rows[0].ends_with("Esc returns"));
     assert_eq!(rows[1], "1 of 3 · ⌕ needle");
     assert_eq!(rows[2], "");
-    assert!(buf[(0, 1)].modifier.contains(Modifier::DIM));
+    assert!(buf[(1, 1)].modifier.contains(Modifier::DIM));
     let close: Vec<_> = targets
         .iter()
         .filter(|target| target.id == crate::mouse::TargetId::CloseOverlay)
         .collect();
     assert_eq!(close.len(), 1);
-    assert_eq!(close[0].rect, Rect::new(0, 0, 80, 1));
+    assert_eq!(close[0].rect, Rect::new(1, 0, 79, 1));
     for (at, y) in [(0, 3), (1, 6), (2, 9)] {
         let rows: Vec<_> = targets
             .iter()
             .filter(|target| target.id == crate::mouse::TargetId::FindResult(at))
             .collect();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].rect, Rect::new(0, y, 80, 1));
-        assert_eq!(rows[1].rect, Rect::new(0, y + 1, 80, 1));
+        assert_eq!(rows[0].rect, Rect::new(1, y, 79, 1));
+        assert_eq!(rows[1].rect, Rect::new(1, y + 1, 79, 1));
         assert!(targets.iter().all(|target| {
             !target
                 .rect
-                .contains(ratatui::layout::Position::new(0, y + 2))
+                .contains(ratatui::layout::Position::new(1, y + 2))
         }));
     }
-    assert!(buf[(0, 3)].modifier.contains(Modifier::REVERSED));
-    assert!(buf[(0, 4)].modifier.contains(Modifier::REVERSED));
+    assert!(buf[(1, 3)].modifier.contains(Modifier::REVERSED));
+    assert!(buf[(1, 4)].modifier.contains(Modifier::REVERSED));
     assert_eq!(rows[18], "Enter jumps to the match");
-    assert!(buf[(0, 18)].modifier.contains(Modifier::DIM));
+    assert!(buf[(1, 18)].modifier.contains(Modifier::DIM));
 }
 
 #[test]

@@ -320,7 +320,7 @@ fn attached() -> crate::app::App {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     };
-    assert!(app.on_line(crate::link::Line::Hub(hello)).is_empty());
+    let _ = app.on_line(crate::link::Line::Hub(hello));
     app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app
 }

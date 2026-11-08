@@ -259,11 +259,9 @@ pub(crate) struct App {
     /// only ancestor lines strictly older than it, so already-displayed
     /// preview lines never refold.
     installed_floor: Option<(SessionId, Seq)>,
-    /// The launch directory `start` names: none on a remote home, which
-    /// carries no local workspace.
-    workspace: Option<PathBuf>,
-    /// Home's state, once `run` sets it; `None` is a launch without home.
-    home: Option<home::Home>,
+    /// Home's state: `App::new` seeds it and `set_home` replaces it with
+    /// the launch's.
+    home: home::Home,
     draft: Draft,
     /// The one clipboard image read at a time, and its ticket.
     paste: paste::Paste,
@@ -328,7 +326,9 @@ pub(crate) struct App {
     queue: Queue,
     /// The attached session's offer of its repository's code.
     offer: crate::offer::Offer,
-    /// The attached session's steering queue.
+    /// The steering queue the input box shows: the attached session's, or
+    /// the open fiber delegate's while its view is swapped in, the attached
+    /// session's queue parked in the open item meanwhile.
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
@@ -442,14 +442,21 @@ impl App {
         // An empty launch directory is no workspace: the default launch
         // carries an empty `Local` path, and a remote home carries none.
         let workspace = workspace.into().filter(|path| !path.as_os_str().is_empty());
+        let seed = crate::home::Launch {
+            location: crate::home::LaunchLocation::Local {
+                workspace: workspace.unwrap_or_default(),
+                project: String::new(),
+                git: false,
+            },
+            ..Default::default()
+        };
         let mut app = Self {
             passes: Vec::new(),
             overlay: overlay::Overlay::None,
             preview: None,
             count: None,
             installed_floor: None,
-            workspace,
-            home: None,
+            home: home::Home::new(seed),
             draft: Draft::default(),
             paste: paste::Paste::default(),
             phase: Phase::Starting,
@@ -517,6 +524,7 @@ impl App {
         app.screen
             .pages_mut()
             .set_image_ids(app.images.id_allocator.clone());
+        app.apply_launch();
         app
     }
 
@@ -537,10 +545,8 @@ impl App {
         // A fresh attachment supersedes an exit that arrived after the
         // last one: opening resumes the session, and its live update has
         // yet to land.
-        if let Some(home) = self.home.as_mut()
-            && home.left_after_attach.as_ref() == Some(&session)
-        {
-            home.left_after_attach = None;
+        if self.home.left_after_attach.as_ref() == Some(&session) {
+            self.home.left_after_attach = None;
         }
         self.phase = Phase::Attached {
             session,
@@ -900,8 +906,8 @@ impl App {
     fn reviewer_binding(&self, session: &SessionId) -> Result<PathBuf, &'static str> {
         let row = self
             .home
-            .as_ref()
-            .and_then(|home| home.sessions.row(session))
+            .sessions
+            .row(session)
             .ok_or("the session has not loaded yet")?;
         if row.workspace.is_empty() || row.project.is_empty() {
             return Err("this session has no project");
@@ -1065,6 +1071,11 @@ impl App {
         }
     }
 
+    /// Number of models currently held by the picker catalogue.
+    pub(crate) fn model_catalogue_len(&self) -> usize {
+        self.model_picker.catalogue.models.len()
+    }
+
     /// The terminal's size in columns and rows: what full-screen
     /// overlays clamp against.
     pub(crate) fn screen_size(&self) -> (u16, u16) {
@@ -1187,10 +1198,7 @@ impl App {
     /// on, graphics were detected, and the window is not flat
     /// (`docs/tui.md`, "Images", "Screen readers").
     fn inline_images(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| home.launch.inline_images)
-            && self.graphics
+        self.home.launch.inline_images && self.graphics
     }
 
     /// Resizes the attached and shown screens' images between the
@@ -1204,10 +1212,7 @@ impl App {
         // The converter is available when the launch names the running
         // executable, so a stored JPEG or WebP converts to PNG before
         // Kitty transmission (`docs/tui.md`, "Images").
-        let converts = self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.launch.fiber.is_some());
+        let converts = self.home.launch.fiber.is_some();
         let sizing_of = |flat: bool| {
             if inline && !flat {
                 crate::image::Sizing::Inline { cell, converts }
@@ -1356,11 +1361,7 @@ impl App {
     pub(crate) fn panel(&self) -> Option<Panel> {
         let width = crate::surface::inset(self.column_width());
         self.queue.panel_with(width, &|id| {
-            let name = self
-                .home
-                .as_ref()
-                .and_then(|home| home.sessions.row(id))
-                .map(|row| row.name.clone());
+            let name = self.home.sessions.row(id).map(|row| row.name.clone());
             if name.as_deref().is_some_and(|name| !name.is_empty()) {
                 return name;
             }
@@ -1639,7 +1640,7 @@ impl App {
                             return lines;
                         }
                     }
-                    Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                    Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                         if self.image_answered(id, answer.payload.get("result")) {
                             return Vec::new();
                         }
@@ -1654,16 +1655,16 @@ impl App {
                     Some(Waiting::Sessions) => {}
                     Some(Waiting::Abandoned) => {}
                     Some(
-                        Waiting::Directories
-                        | Waiting::Subscribe
+                        Waiting::Directories(..)
+                        | Waiting::Subscribe { .. }
                         | Waiting::Stop
                         | Waiting::Delete
                         | Waiting::OfferImport
-                        | Waiting::DeleteDiscovery
-                        | Waiting::DeleteStop
-                        | Waiting::DeleteFinal
+                        | Waiting::DeleteDiscovery(..)
+                        | Waiting::DeleteStop { .. }
+                        | Waiting::DeleteFinal(..)
                         | Waiting::Feed
-                        | Waiting::Recent
+                        | Waiting::Recent(..)
                         | Waiting::Close,
                     ) => {}
                     Some(
@@ -1716,7 +1717,7 @@ impl App {
                             }
                         }
                         Some(Waiting::ClearClose) => self.clear_close_settled(id),
-                        Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                        Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                             if self.image_rejected(id, &message) {
                                 return Vec::new();
                             }
@@ -1761,16 +1762,16 @@ impl App {
                             self.outbox.settled(id);
                         }
                         Some(
-                            Waiting::Directories
-                            | Waiting::Subscribe
+                            Waiting::Directories(..)
+                            | Waiting::Subscribe { .. }
                             | Waiting::Stop
                             | Waiting::Delete
                             | Waiting::OfferImport
-                            | Waiting::DeleteDiscovery
-                            | Waiting::DeleteStop
-                            | Waiting::DeleteFinal
+                            | Waiting::DeleteDiscovery(..)
+                            | Waiting::DeleteStop { .. }
+                            | Waiting::DeleteFinal(..)
                             | Waiting::Feed
-                            | Waiting::Recent
+                            | Waiting::Recent(..)
                             | Waiting::Close,
                         ) => {}
                         None => {}
@@ -2025,20 +2026,20 @@ impl App {
             Some(Waiting::RewindSend) => None,
             Some(Waiting::ClearStart) => None,
             Some(Waiting::History) => None,
-            Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => None,
+            Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => None,
             Some(Waiting::Sessions) => None,
             Some(Waiting::Abandoned) => None,
             Some(
-                Waiting::Directories
-                | Waiting::Subscribe
+                Waiting::Directories(..)
+                | Waiting::Subscribe { .. }
                 | Waiting::Stop
                 | Waiting::Delete
                 | Waiting::OfferImport
-                | Waiting::DeleteDiscovery
-                | Waiting::DeleteStop
-                | Waiting::DeleteFinal
+                | Waiting::DeleteDiscovery(..)
+                | Waiting::DeleteStop { .. }
+                | Waiting::DeleteFinal(..)
                 | Waiting::Feed
-                | Waiting::Recent
+                | Waiting::Recent(..)
                 | Waiting::Close,
             ) => None,
             Some(
@@ -2393,7 +2394,7 @@ impl App {
             }
             EventKind::SteeringQueue => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {
-                    self.steering.fold(&queue, &mut self.draft);
+                    self.fold_attached_queue(&queue);
                 }
             }
             EventKind::FiberStarted
@@ -2620,6 +2621,9 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::Unknown(_) => false,
     }
 }
+
+#[cfg(test)]
+mod delegate_steering_tests;
 
 #[cfg(test)]
 #[path = "app_tests.rs"]

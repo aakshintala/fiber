@@ -61,7 +61,7 @@ impl App {
     /// The wait holding `session`, if it waits on one: its title and
     /// kind.
     fn clear_wait(&self, session: &SessionId) -> Option<(String, String)> {
-        let row = self.home.as_ref()?.sessions.row(session)?;
+        let row = self.home.sessions.row(session)?;
         let waiting = row.waiting.as_ref()?;
         let kind = waiting.split(':').next()?.to_owned();
         Some((crate::home::title(row), kind))

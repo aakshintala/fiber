@@ -148,6 +148,9 @@ fn four() -> [(ErrorCode, &'static str); 4] {
 fn overlay_app(width: u16, height: u16, notices: &[(ErrorCode, &str)], all: bool) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
+    // The conversation screen the overlay covers, not the Home screen.
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
+    app.settle();
     for (code, text) in notices {
         app.push_notice(code.clone(), (*text).to_owned());
     }

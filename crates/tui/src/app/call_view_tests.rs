@@ -35,7 +35,7 @@ fn attached(width: u16, height: u16) -> App {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    app.on_line(Line::Hub(hello));
     app.attach(SessionId(SESSION.to_owned()));
     app.set_size(width, height);
     app

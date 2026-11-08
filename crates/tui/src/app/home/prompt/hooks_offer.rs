@@ -95,21 +95,17 @@ impl App {
     /// attached old session: while it is, every key, edit and frame
     /// click reaches it first.
     pub(crate) fn hooks_offer_open(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::HooksOffer(_))))
+        matches!(self.home.questions.prompt(), Some(Prompt::HooksOffer(_)))
     }
 
     /// Whether the open offer committed its install: further keys,
     /// paste, close and outside clicks cannot start, cancel or alter
     /// it, and a duplicate or stale result cannot retry it.
     fn hooks_offer_installing(&self) -> bool {
-        self.home.as_ref().is_some_and(|home| {
-            matches!(
-                home.questions.prompt(),
-                Some(Prompt::HooksOffer(state)) if state.installing()
-            )
-        })
+        matches!(
+            self.home.questions.prompt(),
+            Some(Prompt::HooksOffer(state)) if state.installing()
+        )
     }
 
     /// The offer's names, once the query answered with a nonempty list:
@@ -117,21 +113,19 @@ impl App {
     /// draw sorts and sanitizes for display. The committed install
     /// keeps showing them while it runs.
     pub(crate) fn hooks_offer_names(&self) -> Option<Vec<String>> {
-        self.home
-            .as_ref()
-            .and_then(|home| match home.questions.prompt() {
-                Some(Prompt::HooksOffer(state)) => match &state.stage {
-                    Stage::Querying => None,
-                    Stage::Offered(names) | Stage::Installing(names) => Some(names.clone()),
-                },
-                _ => None,
-            })
+        match self.home.questions.prompt() {
+            Some(Prompt::HooksOffer(state)) => match &state.stage {
+                Stage::Querying => None,
+                Stage::Offered(names) | Stage::Installing(names) => Some(names.clone()),
+            },
+            _ => None,
+        }
     }
 
     /// Takes the offer's state, closing the prompt: settling the
     /// refused start never reopens it. `None` when no offer is open.
     fn take_hooks_offer(&mut self) -> Option<State> {
-        let home = self.home.as_mut()?;
+        let home = &mut self.home;
         match home.questions.prompt.take() {
             Some(Prompt::HooksOffer(state)) => Some(state),
             prompt => {
@@ -144,13 +138,11 @@ impl App {
     /// A ticket no live offer waits on: every worker result carrying
     /// it is stale.
     fn hooks_ticket_live(&self, ticket: u64, installing: bool) -> bool {
-        self.home.as_ref().is_some_and(|home| {
-            matches!(
-                home.questions.prompt(),
-                Some(Prompt::HooksOffer(state))
-                    if state.ticket == ticket && state.installing() == installing
-            )
-        })
+        matches!(
+            self.home.questions.prompt(),
+            Some(Prompt::HooksOffer(state))
+                if state.ticket == ticket && state.installing() == installing
+        )
     }
 
     /// The offer's queued worker job, once: the query the refusal
@@ -181,11 +173,7 @@ impl App {
         }
         // Another question owns the foot: the refusal settles as today
         // rather than clobbering it.
-        if self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.questions.prompt().is_some())
-        {
+        if self.home.questions.prompt().is_some() {
             return false;
         }
         let seam = self.configure_seam();
@@ -230,13 +218,8 @@ impl App {
             message: message.to_owned(),
             args,
         };
-        if let Some(home) = self.home.as_mut() {
-            home.questions.prompt = Some(Prompt::HooksOffer(state));
-            true
-        } else {
-            self.hooks_job = None;
-            false
-        }
+        self.home.questions.prompt = Some(Prompt::HooksOffer(state));
+        true
     }
 
     /// A key for the hooks install offer, once open: Enter installs
@@ -284,7 +267,7 @@ impl App {
         // Enter commits only what the offer shows: while the names are
         // still on the worker there is nothing to install yet, so it
         // holds like every other key.
-        let ticket = match self.home.as_ref().and_then(|home| home.questions.prompt()) {
+        let ticket = match self.home.questions.prompt() {
             Some(Prompt::HooksOffer(state)) if matches!(state.stage, Stage::Offered(_)) => {
                 state.ticket
             }
@@ -301,8 +284,7 @@ impl App {
             self.fail_hooks_install(error);
             return Effect::None;
         }
-        if let Some(home) = self.home.as_mut()
-            && let Some(Prompt::HooksOffer(state)) = home.questions.prompt.as_mut()
+        if let Some(Prompt::HooksOffer(state)) = self.home.questions.prompt.as_mut()
             && state.ticket == ticket
         {
             state.stage = match std::mem::replace(&mut state.stage, Stage::Querying) {
@@ -401,8 +383,7 @@ impl App {
         // The query's answer folds once: a duplicate or late result for
         // the live ticket finds the offer past its query and does
         // nothing.
-        if let Some(home) = self.home.as_mut()
-            && let Some(Prompt::HooksOffer(state)) = home.questions.prompt.as_mut()
+        if let Some(Prompt::HooksOffer(state)) = self.home.questions.prompt.as_mut()
             && state.ticket == ticket
             && matches!(state.stage, Stage::Querying)
         {
