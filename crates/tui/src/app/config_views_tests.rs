@@ -17,14 +17,15 @@ use ratatui::style::Color;
 use super::super::{App, Effect};
 use super::ConfigView;
 use crate::Configure;
-use crate::configure::{Layer, Shown, WriteScope};
-use crate::configure_fake::{Fake, file, row};
+use crate::configure::{Layer, SettingControl, SettingRow, Shown, WriteScope};
+use crate::configure_fake::{Fake, controlled, file, placed};
 use crate::editor::OpenFile;
 use crate::home::Launch;
 use crate::keys::{Edit, Key, Mouse, MouseKind};
 use crate::link::Line;
 use crate::mouse::TargetId;
 use crate::swapped::Spot;
+use contract::settings::SettingsTab;
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -33,21 +34,34 @@ fn now() -> Instant {
     contract::clock::Clock::now(fakes::clock::FakeClock::new().as_ref())
 }
 
-/// A seam over two rows.
+/// `row` on the first tab, labelled with its key.
+fn appearance(row: SettingRow) -> SettingRow {
+    let key = row.key.clone();
+    placed(row, SettingsTab::Appearance, &key)
+}
+
+/// A free-text row on the first tab, labelled with its key.
+fn row(key: &str, value: Shown, layer: &str, scope: WriteScope) -> SettingRow {
+    appearance(crate::configure_fake::row(key, value, layer, scope))
+}
+
+/// A seam over two rows, both on the first tab.
 fn fake() -> Arc<Fake> {
     let mut fake = Fake::new(vec![
-        row(
+        appearance(controlled(
             "handoff.tokens",
             Shown::Value("400000".to_owned()),
             "default",
             WriteScope::Any { repo: true },
-        ),
-        row(
+            SettingControl::Number,
+        )),
+        appearance(controlled(
             "tui.theme",
             Shown::Unset,
             "default",
             WriteScope::Any { repo: false },
-        ),
+            SettingControl::Theme,
+        )),
     ]);
     fake.themes = vec!["solar".to_owned()];
     Arc::new(fake)
@@ -130,6 +144,11 @@ fn slash_settings_opens_the_view_attached_and_on_home() {
         rows.iter().any(|row| row.starts_with("› handoff.tokens")),
         "{rows:?}"
     );
+    assert!(
+        rows.iter()
+            .any(|row| row.trim() == "Changes save automatically"),
+        "{rows:?}"
+    );
     assert_eq!(seam.reads(), [PathBuf::from("/w")]);
 
     let mut app = attached(seam);
@@ -165,7 +184,7 @@ fn the_default_seam_opens_settings_with_no_configure_call() {
     assert!(app.config_view_open());
     assert_eq!(
         app.config_view_screen().map(|frame| frame.footer),
-        Some("Ctrl+G opens the file".to_owned())
+        Some("←→ tab · / search · Enter change · Tab layer · Delete reset".to_owned())
     );
 }
 
@@ -255,15 +274,14 @@ fn opening_a_view_drops_its_unsaved_field() {
     slash_settings(&mut app);
     app.on_key(Key::Enter, now());
     app.on_key(Key::Char('9'), now());
-    assert!(
+    let draft = |app: &App| {
         app.config_view_screen()
-            .is_some_and(|frame| frame.field.is_some())
-    );
+            .and_then(|frame| frame.chrome)
+            .and_then(|chrome| chrome.draft)
+    };
+    assert!(draft(&app).is_some());
     app.open_config_view(ConfigView::Settings);
-    assert!(
-        app.config_view_screen()
-            .is_some_and(|frame| frame.field.is_none())
-    );
+    assert!(draft(&app).is_none());
     assert!(seam.writes().is_empty());
 }
 
@@ -371,10 +389,11 @@ fn a_usage_line_sets_the_reload_cost() {
     slash_settings(&mut app);
     let below = app.config_view_screen().map(|frame| frame.below);
     assert_eq!(
-        below,
-        Some(vec![
-            "changing handoff.tokens needs a reload (~201k tokens)".to_owned()
-        ])
+        below.and_then(|below| below.last().cloned()),
+        Some(
+            "handoff.tokens · using the default · changing handoff.tokens needs a reload (~201k tokens)"
+                .to_owned()
+        )
     );
 }
 
@@ -382,7 +401,8 @@ fn a_usage_line_sets_the_reload_cost() {
 fn a_theme_choice_is_taken_once() {
     let mut app = attached(fake());
     slash_settings(&mut app);
-    for key in [Key::Down, Key::Enter, Key::Up, Key::Up, Key::Enter] {
+    // Down focuses the theme row; Enter steps it to the first theme.
+    for key in [Key::Down, Key::Enter] {
         app.on_key(key, now());
     }
     assert!(matches!(
@@ -442,8 +462,12 @@ fn the_reload_cost_is_the_session_on_screens_only() {
     app.go_home();
     app.open_config_view(ConfigView::Settings);
     assert_eq!(
-        app.config_view_screen().map(|frame| frame.below),
-        Some(vec!["changing handoff.tokens needs a reload".to_owned()])
+        app.config_view_screen()
+            .and_then(|frame| frame.below.last().cloned()),
+        Some(
+            "handoff.tokens · using the default · changing handoff.tokens needs a reload"
+                .to_owned()
+        )
     );
 }
 
@@ -481,7 +505,7 @@ fn a_save_says_the_reload_cost_of_the_session_on_screen() {
             .map(|frame| frame.below)
             .unwrap_or_default();
         assert!(
-            below.iter().any(|line| line == said),
+            below.iter().any(|line| line.ends_with(said)),
             "on_home {on_home}: {below:?}"
         );
     }
@@ -495,8 +519,9 @@ fn an_edit_goes_to_the_open_field_not_the_input_box() {
     app.on_edit(Edit::Paste("9".to_owned()));
     let text = app
         .config_view_screen()
-        .and_then(|frame| frame.field)
-        .map(|(text, _)| text);
+        .and_then(|frame| frame.chrome)
+        .and_then(|chrome| chrome.draft)
+        .map(|draft| draft.text);
     assert!(
         text.is_some_and(|text| text.ends_with('9')),
         "the field takes the paste"
@@ -980,7 +1005,7 @@ fn remote_settings() -> (serde_json::Value, serde_json::Value) {
     use serde_json::json;
     (
         json!({"command":"configure","args":{"operation":"settings","workspace":"/w"}}),
-        json!({"rows":[{"key":"model","shown":"value","value":"\"hub/m\"","layer":"global","file":"/hub/config.json","scope":"global_only"}]}),
+        json!({"rows":[{"key":"model","shown":"value","value":"\"hub/m\"","layer":"global","file":"/hub/config.json","scope":"global_only","label":"Default model","description":"d","tab":"appearance","control":{"kind":"model"}}]}),
     )
 }
 fn remote_read() -> (serde_json::Value, serde_json::Value) {
@@ -1685,146 +1710,151 @@ fn wheel(col: u16, row: u16, down: bool) -> Mouse {
 /// A seam over six settings rows, so the settings list fits three wheel
 /// steps without clamping.
 fn big_fake() -> Arc<Fake> {
-    Arc::new(Fake::new(vec![
-        row(
-            "handoff.tokens",
-            Shown::Value("400000".to_owned()),
-            "default",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "tui.theme",
-            Shown::Unset,
-            "default",
-            WriteScope::Any { repo: false },
-        ),
-        row(
-            "reviewer.model",
-            Shown::Value("a/b".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "shell.approval",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "shell.executor",
-            Shown::Value("worktree".to_owned()),
-            "project",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "context.reserve",
-            Shown::Value("10%".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "handoff.dir",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "hub.badge",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "hub.cards",
-            Shown::Value("4".to_owned()),
-            "project",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "keys.repeat",
-            Shown::Value("50".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "models.recent",
-            Shown::Value("5".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "panel.cards",
-            Shown::Value("session".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "rail.shown",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "session.persist",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "shell.confinement",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "shell.tools",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "steering.attention",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "turns.budget",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "turns.cap",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "turns.follow",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "turns.hints",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "view.banner",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-        row(
-            "view.gutter",
-            Shown::Value("auto".to_owned()),
-            "global",
-            WriteScope::Any { repo: true },
-        ),
-    ]))
+    Arc::new(Fake::new(
+        [
+            row(
+                "handoff.tokens",
+                Shown::Value("400000".to_owned()),
+                "default",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "tui.theme",
+                Shown::Unset,
+                "default",
+                WriteScope::Any { repo: false },
+            ),
+            row(
+                "reviewer.model",
+                Shown::Value("a/b".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "shell.approval",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "shell.executor",
+                Shown::Value("worktree".to_owned()),
+                "project",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "context.reserve",
+                Shown::Value("10%".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "handoff.dir",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "hub.badge",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "hub.cards",
+                Shown::Value("4".to_owned()),
+                "project",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "keys.repeat",
+                Shown::Value("50".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "models.recent",
+                Shown::Value("5".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "panel.cards",
+                Shown::Value("session".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "rail.shown",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "session.persist",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "shell.confinement",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "shell.tools",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "steering.attention",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "turns.budget",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "turns.cap",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "turns.follow",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "turns.hints",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "view.banner",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+            row(
+                "view.gutter",
+                Shown::Value("auto".to_owned()),
+                "global",
+                WriteScope::Any { repo: true },
+            ),
+        ]
+        .into_iter()
+        .map(appearance)
+        .collect(),
+    ))
 }
 
 /// The wheel over the settings view scrolls the view's list, never the
@@ -1845,9 +1875,8 @@ fn wheel_over_settings_scrolls_the_list_not_the_conversation() {
         app.on_key(Key::Down, now());
     }
     let frame = app.config_view_screen().expect("the view is open");
-    // The gutter list holds a header row, so the first key row is 1.
     assert!(frame.rows.len() >= 5, "the list fits three steps");
-    assert_eq!(frame.list.selected(), 4);
+    assert_eq!(frame.list.selected(), 3);
     let shown_top = frame.list.top();
     app.on_wheel(&wheel(10, 5, true));
     assert_eq!(app.top(), top, "the wheel left the conversation");
@@ -1859,7 +1888,7 @@ fn wheel_over_settings_scrolls_the_list_not_the_conversation() {
     );
     assert_eq!(
         frame.list.selected(),
-        4,
+        3,
         "a selection still on screen stays where it was"
     );
 }
