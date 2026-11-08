@@ -125,3 +125,7 @@ impl From<SettingsMetadata> for SettingPresentation {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod tests;

@@ -722,6 +722,12 @@ impl App {
         self.config_act_then_requests(act)
     }
 
+    /// Whether `/settings` is open and waiting on the model picker.
+    #[cfg(test)]
+    pub(in crate::app) fn settings_awaiting_model(&self) -> bool {
+        matches!(&self.config_views.open, Some(Open::Settings(settings)) if settings.awaiting_model())
+    }
+
     /// A model picker that closed without choosing leaves `/settings`
     /// waiting for nothing: it wrote nothing, and its row stays focused.
     fn settle_settings_picker(&mut self) {

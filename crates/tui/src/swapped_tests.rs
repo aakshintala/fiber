@@ -1230,3 +1230,40 @@ fn a_styled_footer_replaces_the_plain_one_and_an_empty_one_leaves_it() {
     render(&chromed(2, 0), area, &mut buf, &mut Vec::new());
     assert_eq!(text(&buf, 5), "keys");
 }
+
+/// What a drag from the top-left of the body to the bottom-right of an
+/// `area`-sized frame copies.
+fn copied_from(frame: &Frame, width: u16, height: u16) -> String {
+    let mut app = app();
+    match drag_over(
+        &mut app,
+        frame,
+        width,
+        height,
+        (0, 1),
+        (width - 1, height - 2),
+    ) {
+        crate::app::Effect::Copy(text) => text,
+        other => panic!("no copy: {other:?}"),
+    }
+}
+
+#[test]
+fn a_drag_copies_an_inline_field_only_from_a_shown_row() {
+    // Six rows high: three body rows fit. The field's row 2 is the last
+    // shown, row 3 the first hidden.
+    let shown = copied_from(&drafting(8, 2, 6, "zz", 0), 40, 6);
+    assert!(shown.contains("zz"), "{shown:?}");
+    let hidden = copied_from(&drafting(8, 3, 6, "zz", 0), 40, 6);
+    assert!(!hidden.contains("zz"), "{hidden:?}");
+}
+
+#[test]
+fn a_drag_copies_the_inline_field_as_drawn_scrolled_to_its_caret() {
+    // Twelve columns: the field starts at column 8, leaving four cells,
+    // and the caret at the end of twenty characters shows the last three.
+    let copied = copied_from(&drafting(2, 0, 6, "abcdefghijklmnopqrst", 20), 12, 6);
+    assert!(copied.contains("rst"), "{copied:?}");
+    assert!(!copied.contains("qrst"), "{copied:?}");
+    assert!(!copied.contains("abc"), "{copied:?}");
+}

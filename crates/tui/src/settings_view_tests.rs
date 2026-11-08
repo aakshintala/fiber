@@ -2769,3 +2769,176 @@ fn settings_editing() {
     typed(&mut settings, &fake, "5");
     insta::assert_snapshot!("settings_editing", drawn(&settings, None, 80, 24));
 }
+
+// Geometry, scrolling and redaction.
+
+/// The layout of the open tab with `lines` things said, `height` tall.
+fn said_layout(lines: usize, height: usize) -> super::Layout {
+    let fake = Fake::new(rows());
+    let mut settings = open(&fake);
+    settings.said = (0..lines).map(|at| format!("said {at}")).collect();
+    settings.layout(80, height, None)
+}
+
+#[test]
+fn a_frame_is_compact_below_eighteen_rows_and_spaced_from_eighteen() {
+    // Compact: the note and the tab bar. Tall: a blank under each.
+    assert_eq!(said_layout(0, 17).top.len(), 2);
+    assert_eq!(said_layout(0, 18).top.len(), 4);
+}
+
+#[test]
+fn the_lines_under_the_list_leave_the_controls_their_rows() {
+    // Tall: 18 rows less the title and footer, four fixed rows and three
+    // controls' rows leave nine lines under the list, the latest said.
+    let layout = said_layout(12, 18);
+    assert_eq!(layout.below.len(), 9);
+    assert_eq!(layout.below.last().map(String::as_str), Some("said 11"));
+    assert_eq!(layout.body, 3);
+    // Compact: two fixed rows leave five.
+    let layout = said_layout(12, 12);
+    assert_eq!(layout.below.len(), 5);
+    assert_eq!(layout.body, 3);
+}
+
+#[test]
+fn a_value_is_cut_to_the_room_left_after_the_label_and_the_layer_tag() {
+    let long = "a".repeat(40);
+    let fake = Fake::new(with("model", value(&format!("\"{long}\"")), "project"));
+    let settings = at(&fake, "model");
+    let layout = settings.layout(80, 24, None);
+    let item = settings
+        .items()
+        .into_iter()
+        .find(|item| matches!(item, super::Item::Key(at) if settings.rows[*at].key == "model"))
+        .unwrap();
+    // The gutter and the gap twice, the label column and the tag
+    // "project" and its gap leave 13 columns of the 26 past the label.
+    let width = layout.label_col + 26;
+    let cells = settings.cells(item, &layout, width, false);
+    assert_eq!(cells[1].0.chars().count(), 13, "{cells:?}");
+    assert!(cells[1].0.ends_with('…'), "{cells:?}");
+    assert_eq!(cells[2].0, "  project");
+}
+
+#[test]
+fn a_list_pages_path_column_stops_eighteen_short_of_the_width() {
+    let path = "p".repeat(40);
+    let fake = Fake::new(extensions(&format!(
+        r#"[{{"path":"{path}","required":true}}]"#
+    )));
+    let settings = page(&fake, "repository_extensions");
+    let page = settings.page.as_ref().unwrap();
+    let frame = settings.page_frame(page, 40, 24);
+    // 40 columns less the gutter and sixteen, then the gap.
+    assert_eq!(frame.rows[0][0].0.chars().count(), 22 + 2);
+    assert_eq!(frame.rows[0][1].0, "[x] required");
+}
+
+#[test]
+fn a_list_page_keeps_the_controls_rows_over_what_was_said() {
+    let fake = Fake::new(rows());
+    let mut settings = page(&fake, "scoped_models");
+    settings.said = (0..6).map(|at| format!("said {at}")).collect();
+    let page = settings.page.as_ref().unwrap();
+    // Nine rows less the title, the footer and three controls' rows.
+    let frame = settings.page_frame(page, 80, 9);
+    assert_eq!(frame.below, ["said 2", "said 3", "said 4", "said 5"]);
+}
+
+#[test]
+fn a_list_page_scrolls_its_focus_into_the_rows_the_lines_below_leave() {
+    let names: Vec<String> = (0..20).map(|at| format!("\"e{at:02}\"")).collect();
+    let fake = Fake::new(with(
+        "scoped_models",
+        value(&format!("[{}]", names.join(","))),
+        "global",
+    ));
+    let mut settings = page(&fake, "scoped_models");
+    settings.page_select(20, &ctx(&fake));
+    settings.said = vec!["note".to_owned()];
+    // Ten rows less the title, the footer and one line below leave seven
+    // rows: the last six names and "+ Add".
+    let shown = drawn(&settings, None, 80, 10);
+    assert!(shown.contains("e14"), "{shown}");
+    assert!(!shown.contains("e13"), "{shown}");
+    assert!(shown.contains("› + Add"), "{shown}");
+}
+
+#[test]
+fn space_on_the_add_row_of_an_object_list_writes_nothing() {
+    let fake = Fake::new(extensions(r#"[{"path":"a","required":false}]"#));
+    let mut settings = page(&fake, "repository_extensions");
+    one(&mut settings, &fake, Key::Down);
+    one(&mut settings, &fake, Key::Char(' '));
+    assert!(fake.writes().is_empty(), "{:?}", fake.writes());
+}
+
+#[test]
+fn the_wheel_clears_what_was_said_only_when_the_focus_moves() {
+    // Six rows leave too few for the tab's rows, so the wheel scrolls.
+    let fake = Fake::new(rows());
+    let small = sized(&fake, 80, 6);
+    let mut settings = Settings::open(&small, Vec::new());
+    settings.said = vec!["note".to_owned()];
+    // Already on the first row: nothing moves.
+    settings.wheel(true, &small);
+    assert_eq!(settings.said, ["note"]);
+    settings.wheel(false, &small);
+    assert!(settings.said.is_empty());
+}
+
+#[test]
+fn the_wheel_over_the_theme_choices_previews_only_when_the_selection_moves() {
+    // Four rows show two of the three choices, so the wheel scrolls.
+    let fake = Fake::new(rows());
+    let small = sized(&fake, 80, 4);
+    let mut settings = Settings::open_theme(&small, Vec::new());
+    for _ in 0..names(&settings).len() {
+        settings.wheel(true, &small);
+    }
+    // At the first choice, an upward wheel moves nothing.
+    assert!(matches!(settings.wheel(true, &small), Act::Stay));
+    assert!(matches!(settings.wheel(false, &small), Act::Theme(_)));
+}
+
+#[test]
+fn a_field_and_a_page_print_without_their_draft() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "tui.rail.width");
+    one(&mut settings, &fake, Key::Enter);
+    typed(&mut settings, &fake, "sekret");
+    let field = format!("{:?}", settings.mode);
+    assert!(field.contains("Field"), "{field}");
+    assert!(field.contains("tui.rail.width"), "{field}");
+    assert!(field.contains("redacted"), "{field}");
+    assert!(!field.contains("sekret"), "{field}");
+
+    let mut settings = page(&fake, "scoped_models");
+    press(&mut settings, &fake, &[Key::Enter]);
+    typed(&mut settings, &fake, "sekret");
+    let page = format!("{:?}", settings.page);
+    assert!(page.contains("Page"), "{page}");
+    assert!(page.contains("scoped_models"), "{page}");
+    assert!(page.contains("PageField"), "{page}");
+    assert!(page.contains("redacted"), "{page}");
+    assert!(!page.contains("sekret"), "{page}");
+}
+
+#[test]
+fn a_narrow_tab_bar_drops_tabs_from_the_left_and_keeps_the_open_one() {
+    let fake = Fake::new(rows());
+    let settings = tab(&fake, SettingsTab::Advanced);
+    let bar = |width: usize| -> String {
+        settings
+            .tab_bar(width)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect()
+    };
+    assert!(bar(80).starts_with(" Appearance "), "{}", bar(80));
+    // " Sessions " and " Advanced " fit in 21 columns, with the gap.
+    assert_eq!(bar(21), " Sessions   Advanced ");
+    // Narrower than the open tab alone, the open tab stays.
+    assert_eq!(bar(3), " Advanced ");
+}

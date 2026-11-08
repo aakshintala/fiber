@@ -762,7 +762,6 @@ impl Settings {
                 (tab, (name, style))
             })
             .collect();
-        let mut start = 0;
         let fits = |from: usize| {
             let used: usize = spans
                 .iter()
@@ -771,9 +770,12 @@ impl Settings {
                 .sum();
             used <= width.saturating_add(1)
         };
-        while !fits(start) && spans.get(start).is_some_and(|(tab, _)| *tab != self.tab) {
-            start += 1;
-        }
+        // The first tab from which the rest fit, or the open one.
+        let start = spans
+            .iter()
+            .enumerate()
+            .find(|(from, (tab, _))| *tab == self.tab || fits(*from))
+            .map_or(0, |(from, _)| from);
         let mut bar = Vec::new();
         for (at, (_, span)) in spans.into_iter().enumerate().skip(start) {
             if at > start {

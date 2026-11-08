@@ -5391,10 +5391,14 @@ fn closing_a_settings_picker_writes_nothing_and_leaves_no_target_behind() {
     let mut app = home();
     app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
     settings_picker(&mut app, 0);
+    assert!(app.settings_awaiting_model());
     assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
     assert!(!app.model_picker_open());
     assert!(app.config_view_open(), "settings is back with its row");
     assert!(saved(&seam).is_empty());
+    // The next input to the view settles it: it waits for nothing.
+    assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    assert!(!app.settings_awaiting_model());
     // An ordinary picker opened next chooses as it always did: the home
     // model, not the settings row.
     app.open_model_picker(crate::model_picker::Mode::Choose);
