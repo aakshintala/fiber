@@ -24,6 +24,26 @@ use serde_json::{Value, json};
 use super::{providers_and_config, refresh_named, refresh_run, run};
 use fakes::{Deadline, NoLock};
 
+pub(crate) fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            set_source_mtime(&entry.path(), mtime);
+        } else {
+            std::fs::File::options()
+                .write(true)
+                .open(entry.path())
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+    }
+    std::fs::File::open(dir)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
 #[test]
 fn catalogue_and_cached_model_lists_follow_project_configuration() {
     fakes::within(
@@ -994,6 +1014,7 @@ fn no_spawn(providers: Vec<String>) -> std::io::Result<()> {
     )))
 }
 
+// Sets every file and directory under an extension to one mtime.
 /// Writes the cached list of `name` and backdates it, so its age reads
 /// against `now`.
 fn write_stale_cache(home: &std::path::Path, name: &str, list: &Value, now: std::time::SystemTime) {
@@ -1047,6 +1068,10 @@ fn a_fresh_list_prints_at_once_and_spawns_nothing() {
                  "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
     )
     .unwrap();
+    set_source_mtime(
+        &setup.home().join("extensions").join("acme-lua"),
+        std::time::SystemTime::UNIX_EPOCH,
+    );
     let spawner = Recorder::fresh();
     let (result, out, err) = setup.run(None, false, &|providers| spawner.spawn(providers), clock);
     result.unwrap();
@@ -1171,6 +1196,10 @@ fn a_list_exactly_refresh_after_old_spawns_nothing() {
         .unwrap()
         .set_modified(now - Duration::from_secs(24 * 60 * 60))
         .unwrap();
+    set_source_mtime(
+        &setup.home().join("extensions/acme-lua"),
+        now - Duration::from_secs(24 * 60 * 60 + 1),
+    );
     let spawner = Recorder::fresh();
     let (result, out, err) = setup.run(None, false, &|providers| spawner.spawn(providers), clock);
     result.unwrap();
@@ -1215,6 +1244,10 @@ fn stale_lists_counts_a_configured_command_without_running_it() {
     }}));
     let clock = fakes::clock::FakeClock::new();
     let now = clock.wall();
+    set_source_mtime(
+        &setup.home().join("extensions/fresh-ext"),
+        now - Duration::from_secs(1),
+    );
     let max_age = Duration::from_secs(24 * 60 * 60);
     for (name, age) in [
         ("fresh", Duration::ZERO),
@@ -1256,6 +1289,46 @@ fn stale_lists_counts_a_configured_command_without_running_it() {
         assert!(
             !marker(name).exists(),
             "presence runs no command for {name}"
+        );
+    }
+}
+
+#[test]
+fn stale_lists_uses_source_mtime_as_well_as_cache_age() {
+    for (cache_offset, source_offset, expected) in [
+        (2_i64, 1_i64, true),
+        (1, 2, false),
+        (25 * 60 * 60, 25 * 60 * 60 + 1, true),
+    ] {
+        let setup = Setup::new();
+        setup.install_lua("acme-lua", "acme", &lua_list("old"));
+        let clock = fakes::clock::FakeClock::new();
+        let now = clock.wall();
+        config::write_model_cache(
+            &setup.home(),
+            "acme",
+            &json!([{"id":"cached", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]),
+        )
+        .unwrap();
+        let cache_mtime = now - Duration::from_secs(u64::try_from(cache_offset).unwrap());
+        fs::File::options()
+            .write(true)
+            .open(setup.home().join("cache/models/acme.json"))
+            .unwrap()
+            .set_modified(cache_mtime)
+            .unwrap();
+        set_source_mtime(
+            &setup.home().join("extensions/acme-lua"),
+            now - Duration::from_secs(u64::try_from(source_offset).unwrap()),
+        );
+        let spawner = Recorder::fresh();
+        let (result, _, err) = setup.run(None, false, &|names| spawner.spawn(names), clock);
+        result.unwrap();
+        assert_eq!(err, "");
+        assert_eq!(
+            !spawner.calls().is_empty(),
+            expected,
+            "cache offset {cache_offset}s, source offset {source_offset}s"
         );
     }
 }

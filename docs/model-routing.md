@@ -838,9 +838,10 @@ every surface that shows a model list draws from that copy at once: the
 terminal's model picker, `fiber models`, and anything an agent reads. A refresh
 runs in the background and never holds a list back. The generator leaves out ids a package's table skips because the vendor rejects them, and a gateway model no probe reaches is skipped.
 
-- **At start,** Fiber refreshes each provider that has a credential and whose
-  cached list is older than `model_lists.refresh_after` (`docs/configuration.md`),
-  one day by default. Each provider that ran is unloaded once its list is
+- **At start,** Fiber refreshes each provider that has a credential when its
+  cached list is older than `model_lists.refresh_after` (`docs/configuration.md`)
+  or its extension source is newer than the cached copy. The default age is one day.
+  Each provider that ran is unloaded once its list is
   written. Only the extensions the session uses stay loaded, among them each
   provider whose quota a client asked for (`docs/tools.md`, "Fetching"), and
   a provider with no credential never runs.
@@ -851,7 +852,7 @@ runs in the background and never holds a list back. The generator leaves out ids
   while a declared placeholder has no value or a value that is not a host,
   so the key goes only to a host the person set.
 - **The model picker** refreshes, in the background, any provider whose list
-  is older than `model_lists.refresh_after`, and updates the list when the result
+  is older than `model_lists.refresh_after` or whose extension source is newer than the cached copy, and updates the list when the result
   arrives. Its refresh button refreshes every provider with a credential,
   whatever the age of its list.
 
