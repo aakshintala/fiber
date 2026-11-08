@@ -1031,6 +1031,9 @@ struct Running {
     id: Option<String>,
     /// Every line `wait_line` has taken, so `wait` returns the whole stream.
     taken: Vec<Value>,
+    /// The sessions directory of the workspace the session runs in: the
+    /// stall dump reads each session's log tail from it.
+    sessions: PathBuf,
 }
 
 impl Running {
@@ -1044,6 +1047,7 @@ impl Running {
         args.extend(extra);
         let mut running = Self::spawn(setup, &args);
         running.id = Some(id.to_owned());
+        running.sessions = sessions_in(&setup.home(), &setup.workspace());
         running
     }
 
@@ -1116,6 +1120,7 @@ impl Running {
                 deadline: setup.deadline,
                 id: None,
                 taken: Vec::new(),
+                sessions: sessions_in(&setup.home(), workspace),
             },
             stdin,
         )
@@ -1136,12 +1141,17 @@ impl Running {
     #[track_caller]
     fn wait_line(&mut self, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
         let wait = self.deadline.start_wait();
+        let before = self.taken.len();
         let mut got = Vec::new();
         loop {
             // Capped, never reset: the started wait's remainder shrinks as the drain runs.
             let left = wait.left().min(fakes::MUST_SUCCEED_WITHIN);
             if left.is_zero() {
-                panic!("waited until the deadline for {what}; got {got:?}")
+                self.stall(
+                    format!("waited until the deadline for {what}"),
+                    before,
+                    &got,
+                )
             }
             match Deadline::after(left).recv(&self.lines) {
                 Ok(line) => {
@@ -1152,14 +1162,35 @@ impl Running {
                         return got;
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    panic!("waited {left:?} with no line for {what}; got {got:?}")
-                }
+                Err(mpsc::RecvTimeoutError::Timeout) => self.stall(
+                    format!("waited {left:?} with no line for {what}"),
+                    before,
+                    &got,
+                ),
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    panic!("stdout ended before {what}; got {got:?}")
+                    self.stall(format!("stdout ended before {what}"), before, &got)
                 }
             }
         }
+    }
+
+    /// Fails a stalled `wait_line`: `headline`, then the durable lines read
+    /// before the wait (`taken[..before]`), the root's stderr so far and the
+    /// session log tails, then the `got` lines of the wait. A poisoned
+    /// stderr lock yields what was captured and an unreadable log reads as
+    /// empty, so the dump never replaces the timeout panic with its own.
+    #[track_caller]
+    fn stall(&self, headline: String, before: usize, got: &[Value]) -> ! {
+        let stderr = self
+            .stderr_snapshot
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_else(|poisoned| poisoned.into_inner().clone());
+        let logs = support::session_logs_tail(&self.sessions);
+        panic!(
+            "{}",
+            stall_message(&headline, &self.taken[..before], &stderr, &logs, got)
+        )
     }
 
     /// Stdout lines until one completes `done`, bounded by
@@ -1535,6 +1566,53 @@ fn stall_message_keeps_only_the_last_durable_reads() {
             .iter()
             .all(|entry| entry.len() <= CHILD_WAIT_SUMMARY_LEN)
     );
+}
+
+#[test]
+fn wait_line_reports_the_reads_stderr_and_logs_when_stdout_ends() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    // Fiber rejects the flag and exits at once, closing stdout.
+    let mut running = Running::spawn(&setup, &["--bogus"]);
+    running
+        .taken
+        .push(json!({"seq": 21, "kind": "job_completed",
+        "payload": {"job_id": "j_1", "status": "failed"}}));
+    let session = running.sessions.join("s_probe");
+    fs::create_dir_all(&session).unwrap();
+    fs::write(session.join("events.jsonl"), "LOG_SENTINEL\n").unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        running.wait_line("the probe line", |_| false)
+    }))
+    .expect_err("a closed stdout fails the wait");
+    let message = panic
+        .downcast_ref::<String>()
+        .expect("the wait panics with a formatted message");
+    assert!(
+        message.starts_with("stdout ended before the probe line"),
+        "{message}"
+    );
+    assert!(message.contains("21 job_completed j_1 failed"), "{message}");
+    let logs = message.split("session log tails").nth(1).expect(message);
+    assert!(logs.contains("session s_probe:\nLOG_SENTINEL"), "{message}");
+    assert!(message.contains("fiber stderr:"), "{message}");
+    // Stderr text is not asserted: the drain thread can lag the stdout EOF.
+    // The reads stop at `before`: lines taken by the stalled wait itself
+    // are its `got`, not earlier reads.
+    running
+        .taken
+        .push(durable_line(22, "tool_call_requested", "jobs"));
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        running.stall("h".to_owned(), 1, &running.taken[1..])
+    }))
+    .expect_err("a stall always panics");
+    let message = panic.downcast_ref::<String>().expect("a formatted message");
+    assert_eq!(
+        stall_reads(message),
+        ["21 job_completed j_1 failed"],
+        "{message}"
+    );
+    assert!(message.contains("got [Object"), "{message}");
 }
 
 #[test]
