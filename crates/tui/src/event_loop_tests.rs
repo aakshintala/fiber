@@ -2,6 +2,7 @@
 
 use super::{Input, Loop, Screen, hub::Connection};
 use crate::app::App;
+use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Event;
 use crate::link::Line;
 use crate::pty_watch::{watch, watched};
@@ -196,6 +197,7 @@ impl<B: Backend> Loop<B> {
             on_attach: Box::new(|_| {}),
             clock,
             timing: crate::timing::Timing::info(),
+            diag: crate::timing::info_diag(),
             attached_frame: None,
             summary_span: None,
             files_out,
@@ -298,6 +300,69 @@ pub(super) fn command_past_reads(
         }
         reader = back;
     }
+}
+
+#[test]
+fn models_diagnostic_records_post_apply_catalogue_size() {
+    let home = fakes::TempDir::new("tui-models-applied");
+    let diag = Arc::new(diag::diag::Diag::new(
+        home.path(),
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.diag = diag;
+    lp.handle_inner(Input::Models(Err("failed read".to_owned())));
+    let text = std::fs::read_to_string(
+        home.path()
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id())),
+    )
+    .unwrap();
+    let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["code"], "models_applied");
+    // docs/state.md, “Diagnostic logs”: the applied catalogue size is its
+    // current length; the failed read leaves this controlled catalogue empty.
+    assert_eq!(line["data"], serde_json::json!({"catalogue_size":0}));
+}
+
+#[test]
+fn models_diagnostic_records_nonempty_post_apply_catalogue_size() {
+    let home = fakes::TempDir::new("tui-models-applied-nonempty");
+    let diag = Arc::new(diag::diag::Diag::new(
+        home.path(),
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.diag = diag;
+    lp.handle_inner(Input::Models(Ok(Catalogue {
+        models: vec![ModelEntry {
+            reference: "p/m".to_owned(),
+            provider: "p".to_owned(),
+            id: "m".to_owned(),
+            name: None,
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+            price: None,
+        }],
+        ..Catalogue::default()
+    })));
+    let text = std::fs::read_to_string(
+        home.path()
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id())),
+    )
+    .unwrap();
+    let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["code"], "models_applied");
+    // docs/state.md, “Diagnostic logs”: models_applied records catalogue_size;
+    // this controlled input applies exactly one model.
+    assert_eq!(line["data"], serde_json::json!({"catalogue_size":1}));
 }
 
 #[test]

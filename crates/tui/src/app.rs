@@ -1069,6 +1069,11 @@ impl App {
         }
     }
 
+    /// Number of models currently held by the picker catalogue.
+    pub(crate) fn model_catalogue_len(&self) -> usize {
+        self.model_picker.catalogue.models.len()
+    }
+
     /// The terminal's size in columns and rows: what full-screen
     /// overlays clamp against.
     pub(crate) fn screen_size(&self) -> (u16, u16) {
