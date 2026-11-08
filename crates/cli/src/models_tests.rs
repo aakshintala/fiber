@@ -1303,7 +1303,7 @@ fn stale_lists_uses_source_mtime_as_well_as_cache_age() {
             &json!([{"id":"cached", "protocol":"openai-responses", "base_url":"http://127.0.0.1:1/v1", "context_window":1000}]),
         )
         .unwrap();
-        let cache_mtime = now - Duration::from_secs(cache_offset as u64);
+        let cache_mtime = now - Duration::from_secs(u64::try_from(cache_offset).unwrap());
         fs::File::options()
             .write(true)
             .open(setup.home().join("cache/models/acme.json"))
@@ -1312,7 +1312,7 @@ fn stale_lists_uses_source_mtime_as_well_as_cache_age() {
             .unwrap();
         set_source_mtime(
             &setup.home().join("extensions/acme-lua"),
-            now - Duration::from_secs(source_offset as u64),
+            now - Duration::from_secs(u64::try_from(source_offset).unwrap()),
         );
         let spawner = Recorder::fresh();
         let (result, _, err) = setup.run(None, false, &|names| spawner.spawn(names), clock);
