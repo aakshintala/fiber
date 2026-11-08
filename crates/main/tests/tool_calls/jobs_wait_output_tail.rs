@@ -8,7 +8,7 @@
     reason = "test code"
 )]
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::sync::{Arc, Mutex};

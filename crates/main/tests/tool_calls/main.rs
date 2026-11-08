@@ -17,6 +17,7 @@ mod driver_shell_no_timeout;
 mod driver_shell_sent;
 mod driver_shell_spill;
 mod failed_tool_result_text;
+mod jobs_wait_output_tail;
 mod mcp;
 mod mcp_commands;
 mod mcp_elicit;

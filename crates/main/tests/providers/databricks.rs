@@ -558,7 +558,7 @@ fn tagged_ask(model: &str, reply: Response, tags: &str) -> (Run, Vec<Request>) {
     let host = install(
         &setup,
         &server,
-        include_str!("../../../providers/databricks/thinking.lua"),
+        include_str!("../../../../providers/databricks/thinking.lua"),
     );
     let flag = format!("providers.databricks.request_tags={tags}");
     let run = run(
@@ -700,7 +700,7 @@ fn request_tags_hub_overrides_are_session_local() {
     let host = install(
         &setup,
         &server,
-        include_str!("../../../providers/databricks/thinking.lua"),
+        include_str!("../../../../providers/databricks/thinking.lua"),
     );
     // The hub's environment is empty, so the host and the token come from
     // configuration.
