@@ -2336,7 +2336,7 @@ fn snapshot_completed_pins_the_call_identity() {
         "details": {"command": COMMAND, "exit_code": 0},
     }))
     .expect("the completion decodes");
-    let snap = crate::turn::opened::snapshot_completed(42, "shell", &arguments, ACTION, &done);
+    let snap = crate::turn::opened::snapshot_completed(42, "shell", &arguments, ACTION, &done, 80);
     assert_eq!(snap.id, 42, "the snapshot keeps the call id");
     assert_eq!(snap.title, "Shell", "the kind pins from the tool name");
     assert_eq!(snap.command, COMMAND, "the target pins from the arguments");
@@ -2746,4 +2746,58 @@ fn link_down_forgets_the_artifact_page_tag() {
     assert_eq!(app.outbox.waiting(&request_id), Some(Waiting::ArtifactPage));
     app.disconnected();
     assert_eq!(app.outbox.waiting(&request_id), None);
+}
+
+#[test]
+fn a_message_call_with_an_artifact_pages_after_its_recipient_and_text() {
+    let mut app = attached(80, 24);
+    turn_started(&mut app);
+    requested(
+        &mut app,
+        "delegate_message",
+        json!({"id": "j_abc", "message": "Please stop and report."}),
+        ACTION,
+    );
+    completed(
+        &mut app,
+        ACTION,
+        "delivered",
+        json!(null),
+        Some(ARTIFACT),
+        None,
+    );
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    let sends = sent(app.open_call_view(id));
+    assert_eq!(sends.len(), 1, "the first page is fetched: {sends:?}");
+    let view = app.call_view().expect("open");
+    assert!(view.paged(), "the artifact pages the output");
+    let rows = frame_text(&app);
+    assert_eq!(rows[0], "to j_abc", "{rows:?}");
+    assert_eq!(rows[1], "Please stop and report.", "{rows:?}");
+}
+
+#[test]
+fn a_message_wraps_at_the_width_of_the_view() {
+    let mut app = attached(80, 24);
+    // A word-spaced paragraph exactly the view's width: the view has no
+    // scroll-bar column, so it stays on one row.
+    let total = usize::from(app.column_width());
+    let half = (total - 1) / 2;
+    let paragraph = format!("{} {}", "a".repeat(half), "b".repeat(total - 1 - half));
+    assert_eq!(paragraph.len(), total);
+    turn_started(&mut app);
+    requested(
+        &mut app,
+        "delegate_message",
+        json!({"id": "j_abc", "message": paragraph}),
+        ACTION,
+    );
+    completed(&mut app, ACTION, "delivered", json!(null), None, None);
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    app.open_call_view(id);
+    let rows = frame_text(&app);
+    assert_eq!(rows[0], "to j_abc", "{rows:?}");
+    assert_eq!(rows[1], paragraph, "{rows:?}");
 }

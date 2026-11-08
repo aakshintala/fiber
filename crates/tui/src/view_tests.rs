@@ -4060,6 +4060,74 @@ fn group_line_and_ledger_show_parsed_arguments_never_json() {
     }
 }
 
+/// An opened message call shows its kind word, the recipient and the
+/// text it sent, before the result (`docs/tui.md`, "Tool groups and the
+/// ledger").
+#[test]
+fn opened_message_call_shows_recipient_and_text() {
+    use serde_json::json;
+    for (name, arguments, id, message) in [
+        (
+            "delegate_message",
+            json!({"id": "j_abc", "message": "Please stop and report."}),
+            "j_abc",
+            "Please stop and report.",
+        ),
+        (
+            "session_message",
+            json!({"id": "s_other", "text": "Please stop and report."}),
+            "s_other",
+            "Please stop and report.",
+        ),
+    ] {
+        let mut app = App::new(PathBuf::from("/w"));
+        app.set_size(100, 24);
+        attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+        app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "go"));
+        app.on_line(at("step_started", None, 0, json!({})));
+        app.on_line(at(
+            "tool_call_requested",
+            Some("a_1"),
+            0,
+            json!({"name": name, "arguments": arguments}),
+        ));
+        app.on_line(at(
+            "tool_call_completed",
+            Some("a_1"),
+            0,
+            json!({"status": "completed", "content": [{"type": "text", "text": "delivered"}]}),
+        ));
+        app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+        let call = app
+            .targets()
+            .into_iter()
+            .find_map(|(_, target)| matches!(target, crate::app::Target::Call(_)).then_some(target))
+            .expect("a call target");
+        app.open(call);
+        let area = Rect::new(0, 0, 100, 24);
+        let mut buf = Buffer::empty(area);
+        render(&app, area, &mut buf, None);
+        let shown = text(&buf);
+        let row = |needle: &str| {
+            shown
+                .lines()
+                .position(|line| line.contains(needle))
+                .unwrap_or_else(|| panic!("{needle:?} missing in {name}: {shown}"))
+        };
+        assert!(shown.contains(&format!("message  {id}")), "{name}: {shown}");
+        let to = row(&format!("to {id}"));
+        let sent = row(message);
+        // The ledger row ends with the result too; the opened one is last.
+        let result = shown
+            .lines()
+            .collect::<Vec<_>>()
+            .iter()
+            .rposition(|line| line.trim() == "delivered")
+            .expect("the opened result row");
+        assert!(to < sent && sent < result, "{name}: {shown}");
+    }
+}
+
 #[test]
 fn the_badge_warning_sign_is_split_from_the_rest_of_the_badge() {
     let attention = ratatui::style::Style::new().fg(crate::theme::Role::Attention.color());
