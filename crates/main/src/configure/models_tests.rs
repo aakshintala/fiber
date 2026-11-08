@@ -5,7 +5,7 @@
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -190,6 +190,26 @@ fn date_cache(home: &Path, name: &str, age: Duration, wall: SystemTime) {
         .open(&file)
         .unwrap()
         .set_modified(wall.checked_sub(age).unwrap())
+        .unwrap();
+}
+
+/// Sets every file and directory in an installed extension source tree
+/// to the same mtime, including the root directory.
+fn set_source_mtime(dir: &Path, mtime: SystemTime) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            set_source_mtime(&entry.path(), mtime);
+        } else {
+            std::fs::File::open(entry.path())
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+    }
+    std::fs::File::open(dir)
+        .unwrap()
+        .set_modified(mtime)
         .unwrap();
 }
 
@@ -484,10 +504,7 @@ fn hub_models_refresh_stale_checks_the_age() {
         &json!({"acme": [format!("{}/v1", server.url())]}),
     );
     write_cache(&rig.home, "acme", &server.url(), &["cached"]);
-    std::fs::File::open(rig.home.join("extensions").join("acme-ext"))
-        .unwrap()
-        .set_modified(SystemTime::UNIX_EPOCH)
-        .unwrap();
+    set_source_mtime(&rig.home.join("extensions").join("acme-ext"), UNIX_EPOCH);
     let wall = fakes::clock::FakeClock::new().wall();
     // A fresh list stays: no refresh runs.
     date_cache(&rig.home, "acme", Duration::from_secs(90), wall);
