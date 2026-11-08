@@ -245,65 +245,6 @@ fn sandbox_notice_reported(
     std::sync::atomic::AtomicBool::new(reported)
 }
 
-/// Whether the delegate catalogue may keep `name`'s cached model list:
-/// a cached list is stale when the provider's extension source is newer
-/// than the cached copy. A provider with no cached copy needs no join:
-/// the load stands in nothing, and the add above already ran discovery
-/// for it. A source that cannot be read counts as newer: one discovery
-/// call, which the cache doc licenses as always safe
-/// (`crates/config/src/cache.rs`). Credential presence still gates the
-/// refresh itself, so a source-changed provider with no credential
-/// stays cache-only and takes no network call here.
-fn delegate_cache_fresh(
-    home: &std::path::Path,
-    providers: &extensions::Providers,
-    extension: &str,
-    lua: &extensions::LuaProvider,
-    wall: std::time::SystemTime,
-) -> bool {
-    let name = lua.name();
-    let Ok(Some(cached)) = config::model_cache_age(home, name, wall) else {
-        return true;
-    };
-    let Some(dir) = providers
-        .provider_source_dir(name)
-        .or_else(|| providers.extension_source_dir(extension))
-    else {
-        return false;
-    };
-    let Ok(newest) = source_newest_mtime(&dir) else {
-        return false;
-    };
-    // Fresh when the source is at least as old as the cache: an equal
-    // age reads as fresh, as a cache that expires exactly on time does.
-    match wall.duration_since(newest) {
-        Ok(source_age) => source_age >= cached,
-        Err(_) => false,
-    }
-}
-
-/// The newest modification time under `dir`, read recursively: the
-/// directory's own time does not move on an in-place rewrite of a file
-/// inside it, so the walk must reach the files.
-fn source_newest_mtime(dir: &std::path::Path) -> std::io::Result<std::time::SystemTime> {
-    let mut newest = std::fs::metadata(dir)?.modified()?;
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir)? {
-            let entry = entry?;
-            let metadata = entry.metadata()?;
-            let modified = metadata.modified()?;
-            if modified > newest {
-                newest = modified;
-            }
-            if metadata.is_dir() {
-                stack.push(entry.path());
-            }
-        }
-    }
-    Ok(newest)
-}
-
 /// The installed extension whose provider data cannot be read, from
 /// the load failure itself: the `ConfigError`'s file lives under that
 /// extension's directory, whose manifest names it, as the install's
@@ -616,9 +557,7 @@ impl State {
         let stale: Vec<std::sync::Arc<extensions::LuaProvider>> = extensions
             .lua_providers()
             .iter()
-            .filter(|(extension, lua)| {
-                !delegate_cache_fresh(&self.sources.home, &providers, extension, lua, clock.wall())
-            })
+            .filter(|(_, lua)| providers.source_is_newer(lua.name()))
             .map(|(_, lua)| std::sync::Arc::clone(lua))
             .collect();
         for (name, handle) in
@@ -651,7 +590,11 @@ impl State {
             }
         }
         (
-            Some(crate::delegates::resolver(&providers, config)),
+            Some(crate::delegates::resolver(
+                &providers,
+                config,
+                route.model.as_str(),
+            )),
             notices,
         )
     }
@@ -974,13 +917,14 @@ impl State {
             );
             infos.extend(synced.tools.iter().map(|(_, _, info)| info.clone()));
         }
-        // The reloaded delegate tools, swapped in as one pair: the
-        // spawn check and the models text never disagree. A rebuild
-        // that failed keeps the old entries, and the notices above say
-        // so. The swap runs before the stored set below is taken, so
-        // the install publishes the fresh pair.
-        if let Some(resolve) = &delegate_resolve {
-            let (spawn, models) = self.delegates.tools_with(resolve);
+        // The reloaded delegate tools, swapped in as one live pair:
+        // the spawn check and the models text never disagree, and both
+        // follow the install's `set_resolve`, as does a later switch.
+        // A rebuild that failed keeps the old entries, and the notices
+        // above say so. The swap runs before the stored set below is
+        // taken, so the install publishes the fresh pair.
+        if delegate_resolve.is_some() {
+            let (spawn, models) = self.delegates.tools_with();
             let mut spawn = Some(spawn);
             let mut models = Some(models);
             for (_, tool) in tools.iter_mut() {
@@ -1030,6 +974,7 @@ impl State {
             workspace: self.sources.workspace.clone(),
             clock: now.loader.clock.clone(),
             cache_diagnostics: config.flag("cache.diagnostics", None).unwrap_or_default(),
+            databricks_request_tags: self.switching.databricks_request_tags().cloned(),
         };
         let (reviewer, reviewer_observe, credential_files, publish) =
             self.switching.reviewer_for(route, &config, &here);

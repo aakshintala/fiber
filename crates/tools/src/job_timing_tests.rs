@@ -29,7 +29,7 @@ use serde_json::{Map, Value, json};
 use crate::Shell;
 
 /// How long a test waits on the wall clock before it fails.
-const STEP: Duration = Duration::from_secs(10);
+const WAIT: Duration = Duration::from_secs(10);
 
 /// The fake-clock step held inside adoption setup: every record below
 /// proves its span from it.
@@ -340,7 +340,7 @@ fn stop_and_end(
     marker: &str,
 ) -> contract::events::JobCompleted {
     let _ = jobs.stop(id);
-    match jobs.ended(fakes::Deadline::after(STEP)) {
+    match jobs.ended(fakes::Deadline::after(WAIT)) {
         Some(ended) => ended,
         None => {
             let live = fakes::matching(marker, fakes::MUST_SUCCEED_WITHIN / 2).unwrap_or_default();
@@ -365,7 +365,7 @@ fn started(output: &contract::tool::Output) -> contract::events::JobStarted {
 /// Holds `open` for one background start, advances the fake clock by
 /// `TICK` inside adoption setup, and releases it.
 fn through_open(fixture: &Fixture, reached: &mpsc::Receiver<()>, release: &mpsc::Sender<()>) {
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(WAIT);
     deadline.recv_or_fail(reached, "the call inside adoption setup");
     // No code under test waits on the clock here; the call is held inside jobs.open and the job's drive thread starts after it returns, so this move is the time the jobs.start scope measures (ruling 6179406086).
     #[allow(
@@ -399,7 +399,7 @@ fn run_in_background_times_adoption_setup_only() {
         CancelToken::new(),
     );
     through_open(&fixture, &reached, &release);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(WAIT);
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
 
     assert!(output.error.is_none(), "{}", fakes::text_of(&output));
@@ -418,7 +418,7 @@ fn run_in_background_times_adoption_setup_only() {
     assert_eq!(job.tool.as_deref(), Some("shell"));
     // The acknowledged child is held at the release fifo until its
     // group is watched, so every path reaps it; releasing lets it exec.
-    let child = ready.wait(fakes::Deadline::after(STEP));
+    let child = ready.wait(fakes::Deadline::after(WAIT));
     assert!(!child.is_empty(), "the job's shell acknowledged its start");
     // The marker cannot match an exec'd child on Linux, so the group is
     // watched by id: the pid is the group id after `setsid`.
@@ -459,7 +459,7 @@ fn tty_times_the_start_before_the_first_output_wait() {
     );
     let (id_rx, output_rx) = run_async(shell, args(&command, "tty"), CancelToken::new());
     through_open(&fixture, &reached, &release);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(WAIT);
     let call_thread = deadline.recv_or_fail(&id_rx, "the drive thread");
     // The record arrives while the call is still waiting for its first
     // output: the result has not answered.
@@ -484,7 +484,7 @@ fn tty_times_the_start_before_the_first_output_wait() {
     assert!(output.error.is_none(), "{}", fakes::text_of(&output));
     assert_eq!(fixture.probe.calls(), 1);
     assert_none(&fixture.records, "the start");
-    let child = ready.wait(fakes::Deadline::after(STEP));
+    let child = ready.wait(fakes::Deadline::after(WAIT));
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
@@ -508,7 +508,7 @@ fn monitor_times_its_start() {
         format!(": {marker}; echo $$ > ready.fifo; read -r _ < release.fifo; exec sleep 60");
     let (_ids, output_rx) = run_async(shell, args(&command, "monitor"), CancelToken::new());
     through_open(&fixture, &reached, &release);
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(WAIT);
     let output = deadline.recv_or_fail(&output_rx, "the receipt");
     let job = started(&output);
     assert!(output.error.is_none(), "{}", fakes::text_of(&output));
@@ -517,7 +517,7 @@ fn monitor_times_its_start() {
     assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
     assert_eq!(record.tool, None);
     assert_eq!(record.jobs, 1);
-    let child = ready.wait(fakes::Deadline::after(STEP));
+    let child = ready.wait(fakes::Deadline::after(WAIT));
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
@@ -543,7 +543,7 @@ fn a_foreground_call_moved_after_thirty_seconds_times_the_move_only() {
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let (id_rx, output_rx) = run_async(shell, arguments, CancelToken::new());
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(WAIT);
     let thread = deadline.recv_or_fail(&id_rx, "the drive thread");
     // The drive thread's park at start + 30 seconds: the move waits there.
     fixture.clock.advance_when_parked(
@@ -568,7 +568,7 @@ fn a_foreground_call_moved_after_thirty_seconds_times_the_move_only() {
         (Op::JobsStart, 5),
         "the foreground's 30 seconds are never counted"
     );
-    let child = ready.wait(fakes::Deadline::after(STEP));
+    let child = ready.wait(fakes::Deadline::after(WAIT));
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
@@ -594,11 +594,11 @@ fn the_background_command_moves_a_call_with_one_start() {
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let (_ids, output_rx) = run_async(shell, arguments, CancelToken::new());
-    let deadline = Deadline::after(STEP);
+    let deadline = Deadline::after(WAIT);
     assert!(
         fixture
             .clock
-            .await_parked(fixture.origin + THIRTY, fakes::Deadline::after(STEP)),
+            .await_parked(fixture.origin + THIRTY, fakes::Deadline::after(WAIT)),
         "the run did not park at 30 seconds"
     );
     assert_eq!(holding.background(), 1);
@@ -614,7 +614,7 @@ fn the_background_command_moves_a_call_with_one_start() {
     let record = closed(&fixture.records, deadline);
     assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
     let job = started(&output);
-    let child = ready.wait(fakes::Deadline::after(STEP));
+    let child = ready.wait(fakes::Deadline::after(WAIT));
     assert!(!child.is_empty(), "the job acknowledged its start");
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
@@ -623,30 +623,28 @@ fn the_background_command_moves_a_call_with_one_start() {
 }
 
 #[test]
-fn a_shell_exit_leaving_a_member_times_the_move() {
+fn a_shell_exit_leaving_a_member_opens_no_job_and_writes_no_timing() {
     let fixture = Fixture::new("fiber-p10-exited");
     let marker = "fiber-p10-exited";
     let _watchdog = Watchdog::matching(marker);
-    let (holding, reached, release) = Holding::wrap(Arc::clone(&fixture.jobs));
-    holding.arm();
+    let ready = Ready::new(fixture.dir.path());
+    let (holding, _reached, _release) = Holding::wrap(Arc::clone(&fixture.jobs));
     let shell = fixture.shell(holding);
-    let command = format!(": {marker}; sleep 60 & exit 0");
+    let command = format!(": {marker}; echo $$ > ready.fifo; sleep 60 & exit 0");
     let mut arguments = Map::new();
     arguments.insert("command".into(), json!(command));
     let (_ids, output_rx) = run_async(shell, arguments, CancelToken::new());
-    through_open(&fixture, &reached, &release);
-    let deadline = Deadline::after(STEP);
-    let output = deadline.recv_or_fail(&output_rx, "the receipt");
-    assert!(
-        fakes::text_of(&output).contains("so it moved to the background."),
-        "{}",
-        fakes::text_of(&output)
-    );
-    assert_eq!(fixture.probe.calls(), 1);
-    let record = closed(&fixture.records, deadline);
-    assert_eq!((record.op, record.ms), (Op::JobsStart, 5));
-    let job = started(&output);
-    stop_and_end(&fixture.jobs, &job.job_id, marker);
+    let pgid = ready.wait(Deadline::after(WAIT))[0];
+    let output = Deadline::after(WAIT).recv_or_fail(&output_rx, "the shell's own result");
+    let body = fakes::text_of(&output);
+    assert!(body.contains("Exit code 0.\n"), "{body}");
+    assert!(body.contains("left running"), "{body}");
+    assert!(output.jobs.is_empty());
+    assert!(fixture.jobs.started().is_empty());
+    assert_eq!(fixture.probe.calls(), 0);
+    assert_none(&fixture.records, "a shell exit that left a member");
+    assert!(fakes::kill_group(pgid, "KILL").unwrap());
+    assert!(fakes::group_empties(pgid, Deadline::after(WAIT)));
 }
 
 #[test]
@@ -748,7 +746,7 @@ fn failures_and_foreground_ends_write_nothing() {
             args(&command, "run_in_background"),
             CancelToken::new(),
         );
-        Deadline::after(STEP).recv_or_fail(&reached, "the call inside the refused open");
+        Deadline::after(WAIT).recv_or_fail(&reached, "the call inside the refused open");
         {
             use std::io::Write as _;
             release_file.write_all(b"go\n").expect("the release line");
@@ -756,7 +754,7 @@ fn failures_and_foreground_ends_write_nothing() {
         match release.send(()) {
             Ok(()) | Err(_) => {}
         }
-        let output = Deadline::after(STEP).recv_or_fail(&output_rx, "the foreground result");
+        let output = Deadline::after(WAIT).recv_or_fail(&output_rx, "the foreground result");
         assert!(
             fakes::text_of(&output).contains("It could not move to the background"),
             "{}",
@@ -869,25 +867,25 @@ fn a_foreground_call_cancelled_before_it_moves_writes_nothing() {
     // drive's park proves it waits in `Running`, past any fork, so
     // cancelling now stops it before any move. Each wait below keeps its
     // own wall-clock budget, so a slow spawn does not eat the result wait.
-    let child = ready.wait(fakes::Deadline::after(STEP));
+    let child = ready.wait(fakes::Deadline::after(WAIT));
     assert!(!child.is_empty(), "the child acknowledged its start");
     // `exec` drops the marker from the command line, so the group is
     // watched by id: the pid is the group id after `setsid`.
     let _group = Watchdog::group(child[0]);
     release_child(&release_path);
-    let call_thread = Deadline::after(STEP).recv_or_fail(&id_rx, "the drive thread");
+    let call_thread = Deadline::after(WAIT).recv_or_fail(&id_rx, "the drive thread");
     assert!(
         fixture.clock.await_thread_parked(
             call_thread,
             Some(fixture.origin + THIRTY),
-            fakes::Deadline::after(STEP)
+            fakes::Deadline::after(WAIT)
         ),
         "the drive parked in Running"
     );
     cancel.cancel();
     // Its own wall-clock budget: the deadline above was shared with the
     // start acknowledgement, so a slow spawn must not eat this wait.
-    let output = Deadline::after(STEP).recv_or_fail(&out_rx, "the cancelled result");
+    let output = Deadline::after(WAIT).recv_or_fail(&out_rx, "the cancelled result");
     assert!(output.jobs.is_empty(), "cancelled before any move");
     assert!(jobs.started().is_empty());
     assert_eq!(fixture.probe.calls(), 0);
@@ -922,15 +920,15 @@ fn untimed_and_timed_background_receipts_agree() {
             args(&command, "run_in_background"),
             CancelToken::new(),
         );
-        let output = Deadline::after(STEP).recv_or_fail(&output_rx, "the receipt");
+        let output = Deadline::after(WAIT).recv_or_fail(&output_rx, "the receipt");
         let job = started(&output);
-        let child = ready.wait(fakes::Deadline::after(STEP));
+        let child = ready.wait(fakes::Deadline::after(WAIT));
         assert!(!child.is_empty(), "the job acknowledged its start");
         let _group = Watchdog::group(child[0]);
         release_child(&release_path);
         assert!(jobs.stop(&job.job_id));
         let ended = jobs
-            .ended(fakes::Deadline::after(STEP))
+            .ended(fakes::Deadline::after(WAIT))
             .expect("the stopped job to end");
         // The receipt names the run's own directory: washed before compare.
         let washed_text = fakes::text_of(&output).replace(&washed, "DIR");

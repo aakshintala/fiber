@@ -24,7 +24,7 @@ use crate::swapped::Spot;
 fn fake() -> Arc<Fake> {
     let mut fake = Fake::new(vec![
         row(
-            "handoff.tokens",
+            "compaction.tokens",
             Shown::Value("400000".to_owned()),
             "default",
             WriteScope::Any { repo: true },

@@ -71,12 +71,13 @@ mod remote;
 #[cfg(test)]
 mod results_support;
 mod retry;
-mod reviewer_setup;
 mod rows;
 mod rules_view;
 mod running_view;
 mod scope_switches;
 mod screen;
+#[cfg(test)]
+mod scroll_stall_tests;
 mod settings_view;
 mod shell;
 mod skills_view;
@@ -132,12 +133,14 @@ pub use open_at::OpenAt;
 
 pub use look::ThemeSetting;
 
+pub use settings_view::{SCREEN_ROWS, ScreenRow};
+
 pub use keyset::{KeysSetup, canonical_key, check_action, person_bound_keys};
 
 pub use layout::{DEFAULT_PANEL_SHARE, DEFAULT_RAIL_SHARE, session_columns};
 
 pub use jigs::{OpenStages, draw, hover_frames, measure_open, measure_paging};
-pub use paging_session::paging_session;
+pub use paging_session::{paging_session, ticket_session};
 
 pub use event_loop::run;
 

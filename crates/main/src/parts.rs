@@ -19,7 +19,7 @@ use r#loop::Model;
 use routing::{Here, connect_observed};
 
 use crate::{
-    failed, handoff, lua_providers, mcp_servers, placeholders, prompt_files, scripted,
+    compaction, failed, lua_providers, mcp_servers, placeholders, prompt_files, scripted,
     session_extensions, settings, switch,
 };
 
@@ -55,8 +55,8 @@ pub(crate) struct Parts {
     /// How a failed model call is retried (`docs/model-routing.md`, "When
     /// a model call fails").
     pub(crate) retry: r#loop::Retry,
-    /// `handoff.*` for the session's model.
-    pub(crate) handoff: r#loop::HandoffSettings,
+    /// `compaction.*` for the session's model.
+    pub(crate) compaction: r#loop::CompactionSettings,
     /// How long an idle session waits before it exits.
     pub(crate) idle: Option<Duration>,
     /// How many cache lifetimes an idle session keeps its cache warm;
@@ -628,6 +628,7 @@ fn parts_inner(
         workspace: workspace.clone(),
         clock: Arc::clone(&clock),
         cache_diagnostics: config.flag("cache.diagnostics", None).unwrap_or_default(),
+        databricks_request_tags: config.databricks_request_tags().cloned(),
     };
     let (provider, observe) = settle(
         connect_observed(
@@ -709,7 +710,7 @@ fn parts_inner(
             limits,
             reviewer_notes,
             retry,
-            handoff,
+            compaction,
             idle_exit: idle,
             warm_cap: warm,
             budget,
@@ -830,7 +831,7 @@ fn parts_inner(
         reviewer_notes,
         budget,
         retry,
-        handoff,
+        compaction,
         idle,
         warm,
         caps: settings::result_caps(&config),
@@ -851,7 +852,7 @@ fn parts_inner(
         switchable: r#loop::Switchable {
             chosen: model.thinking,
         },
-        resolve: crate::delegates::resolver(&providers, &config),
+        resolve: crate::delegates::resolver(&providers, &config, &model.reference()),
         web_search: model.model.web_search.clone(),
         seen_files: BTreeMap::new(),
     })
@@ -881,7 +882,7 @@ pub(crate) fn reload_inputs(
             limits: settings::block_limits(config),
             reviewer_notes: config.reviewer_context(),
             retry: settings::retry_policy(config),
-            handoff: handoff::handoff_settings(config, reference),
+            compaction: compaction::compaction_settings(config, reference),
             idle_exit: Some(settings::idle_exit(config)),
             warm_cap: scripted::warm(model, settings::warm(config)),
             budget: config

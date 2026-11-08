@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
-use contract::{Envelope, GenerationId, Seq, SessionId};
+use contract::events::{JobStarted, TurnCompleted, TurnOutcome, UsageRecorded};
+use contract::{Envelope, GenerationId, JobId, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::text::Line;
 
@@ -20,7 +20,8 @@ use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
-use crate::turn::{DrawSummary, Entry, Fold, Row, Turn, target_id};
+use crate::turn::opened::OPENED_LINES;
+use crate::turn::{DrawSummary, Entry, Fold, Recipients, Row, Turn, target_id};
 
 mod images;
 mod live;
@@ -50,7 +51,7 @@ pub(crate) struct Seed {
     next: usize,
     /// Whether a new group starts with its ledger open.
     ledgers: bool,
-    /// The context size an automatic handoff runs at.
+    /// The context size an automatic compaction runs at.
     trigger_at: Option<u64>,
     /// The last `fiber_exited` carried `suspended_on`.
     suspended: bool,
@@ -284,8 +285,9 @@ pub(crate) struct Pages {
     generations: BTreeMap<GenerationId, usize>,
     /// The ledger default, the last Ctrl+O.
     fold: Fold,
-    /// Shell output, placed after the number of turns in the page where it ran.
-    shells: Vec<(usize, usize, String)>,
+    /// Shell output, placed after the number of turns in the page where it ran,
+    /// and whether the run shows the output past its cap.
+    shells: Vec<(usize, usize, String, bool)>,
     /// Where each page and turn-after keeps its shells, in insertion
     /// order: drawing a turn slot looks up its own bucket instead of
     /// walking every shell the session ever ran.
@@ -337,6 +339,95 @@ pub(crate) struct Pages {
     halves: BTreeMap<SessionId, BTreeMap<String, String>>,
     /// Actual names currently known for senders in this conversation.
     session_names: Arc<HashMap<SessionId, String>>,
+    /// The description of each job the stream started, as the latest
+    /// `job_started` folded gave it: what a `delegate_message` row names.
+    delegates: Delegates,
+}
+
+/// What a message call's recipient resolves against while a history page
+/// folds: the held session names and the held delegate descriptions.
+pub(crate) struct Resolve<'a> {
+    pub(crate) sessions: &'a HashMap<SessionId, String>,
+    pub(crate) held: &'a Delegates,
+}
+
+/// Each job's description and the stream position of the `job_started`
+/// that gave it: the line's segment session and its `seq`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Delegates(HashMap<JobId, (String, SessionId, Option<Seq>)>);
+
+impl Delegates {
+    /// The `job_started` `envelope` carries, if it is one that parses.
+    fn start(envelope: &Envelope) -> Option<JobStarted> {
+        if envelope.kind() != EventKind::JobStarted {
+            return None;
+        }
+        read!(envelope, JobStarted)
+    }
+
+    /// Notes a live line: a `job_started` replaces the held entry.
+    fn note_live(&mut self, envelope: &Envelope) {
+        if let Some(started) = Self::start(envelope) {
+            self.0.insert(
+                started.job_id,
+                (
+                    started.description,
+                    envelope.session_id.clone(),
+                    envelope.seq,
+                ),
+            );
+        }
+    }
+
+    /// Notes a history line into this page-local overlay: a start with a
+    /// `seq` is recorded when `held` has no entry for its job, or when
+    /// `held`'s entry comes from the same segment with a lower `seq`. A
+    /// held entry from another segment, or one with no `seq`, is never
+    /// overtaken: folding goes newest segment first, so an entry already
+    /// held is the newer one. A later line on the page replaces the
+    /// overlay's own entry.
+    fn note_page(&mut self, envelope: &Envelope, held: &Delegates) {
+        let Some(seq) = envelope.seq else {
+            return;
+        };
+        let Some(started) = Self::start(envelope) else {
+            return;
+        };
+        let newer = held.0.get(&started.job_id).is_none_or(|(_, session, at)| {
+            *session == envelope.session_id && at.is_some_and(|at| at < seq)
+        });
+        if newer {
+            self.0.insert(
+                started.job_id,
+                (started.description, envelope.session_id.clone(), Some(seq)),
+            );
+        }
+    }
+
+    /// Keeps a kept page's overlay: each entry already passed the stream
+    /// order rule, so it replaces the held one.
+    fn merge(&mut self, page: Delegates) {
+        self.0.extend(page.0);
+    }
+
+    /// Takes each of `older`'s entries this holds none for. The work is
+    /// one step per entry of `older`.
+    #[allow(
+        clippy::iter_over_hash_type,
+        reason = "insert-if-absent per key gives the same map in any order, and no order reaches a request"
+    )]
+    fn fill_from(&mut self, older: &Delegates) {
+        for (job, entry) in &older.0 {
+            self.0.entry(job.clone()).or_insert_with(|| entry.clone());
+        }
+    }
+
+    /// The description held for `job`.
+    pub(crate) fn get(&self, job: &JobId) -> Option<&str> {
+        self.0
+            .get(job)
+            .map(|(description, _, _)| description.as_str())
+    }
 }
 
 impl Pages {
@@ -370,6 +461,7 @@ impl Pages {
             ext: crate::ext::Ext::default(),
             halves: BTreeMap::new(),
             session_names: Arc::new(HashMap::new()),
+            delegates: Delegates::default(),
         }
     }
 
@@ -419,11 +511,17 @@ impl Pages {
                 Cut::None | Cut::AtCandidate => {}
             }
         }
+        self.delegates.note_live(envelope);
+        let recipients = Recipients {
+            sessions: &self.session_names,
+            delegates: &self.delegates,
+            page: None,
+        };
         let mut pending_folded = None;
         if let Some(pending) = &mut self.pending {
-            pending_folded = Some(fold(&mut pending.next, envelope));
+            pending_folded = Some(fold(&mut pending.next, envelope, &recipients));
         }
-        let folded = fold(&mut self.open, envelope);
+        let folded = fold(&mut self.open, envelope, &recipients);
         if kind == EventKind::UsageRecorded {
             self.usage(envelope);
         }
@@ -757,10 +855,18 @@ impl Pages {
             }
             if folding.as_ref().is_none_or(|(page, _)| *page != at) {
                 if let Some((page, group)) = folding.take()
-                    && self
-                        .residency
-                        .load(page, &group, &self.seeds, &self.overrides)
+                    && let Some(overlay) = self.residency.load(
+                        page,
+                        &group,
+                        &self.seeds,
+                        &self.overrides,
+                        &Resolve {
+                            sessions: &self.session_names,
+                            held: &self.delegates,
+                        },
+                    )
                 {
+                    self.delegates.merge(overlay);
                     self.count(page);
                 }
                 folding = Some((at, Vec::new()));
@@ -770,10 +876,18 @@ impl Pages {
             }
         }
         if let Some((page, group)) = folding.take()
-            && self
-                .residency
-                .load(page, &group, &self.seeds, &self.overrides)
+            && let Some(overlay) = self.residency.load(
+                page,
+                &group,
+                &self.seeds,
+                &self.overrides,
+                &Resolve {
+                    sessions: &self.session_names,
+                    held: &self.delegates,
+                },
+            )
         {
+            self.delegates.merge(overlay);
             self.count(page);
         }
     }
@@ -799,17 +913,27 @@ impl Pages {
         at: usize,
         lines: &[Envelope],
     ) -> Option<(Vec<Row>, Vec<RowText>, TurnRanges, CallPaths)> {
-        let part = self
-            .residency
-            .refold(at, lines, &self.seeds, &self.overrides)?;
+        let part = self.residency.refold(
+            at,
+            lines,
+            &self.seeds,
+            &self.overrides,
+            &Resolve {
+                sessions: &self.session_names,
+                held: &self.delegates,
+            },
+        )?;
         let (rows, texts, _, turns) = self.draw_data(at, &part, Draw::AllOpen);
         Some((rows, texts, turns, call_paths(&part)))
     }
 
-    /// The page holding segment `session`'s `seq` could not be loaded:
-    /// it is not asked for again until the width changes.
-    pub(crate) fn fail(&mut self, session: &SessionId, seq: Seq) {
-        self.residency.fail(session, seq, &self.index);
+    /// The page holding exactly `range` of `session` could not be
+    /// loaded: it is not asked for again until the width changes. The
+    /// seq lookup misses a page whose bounds the seq no longer falls
+    /// in, while the range always resolves to the page `needs`
+    /// yields.
+    pub(crate) fn fail_range(&mut self, session: &SessionId, range: &RangeInclusive<Seq>) {
+        self.residency.fail_range(session, range, &self.index);
     }
 
     /// The seq ranges to load, in order, each with its segment's session:
@@ -1015,10 +1139,46 @@ impl Pages {
             }
         }
         let Some((at, open)) = found else {
-            return false;
+            return self.toggle_shell(target);
         };
         self.record(target, open, at);
         true
+    }
+
+    /// The slot of the run whose more row `target` names.
+    fn shell_slot(&self, target: &Target) -> Option<usize> {
+        let Target::Shell(slot) = target else {
+            return None;
+        };
+        (*slot < self.shells.len()).then_some(*slot)
+    }
+
+    /// Opens a run's output past the cap, or closes it. The state lives
+    /// with the run, never in the overrides: a dropped page loads it
+    /// again as the run holds it. False when no run is named.
+    fn toggle_shell(&mut self, target: &Target) -> bool {
+        let Some(slot) = self.shell_slot(target) else {
+            return false;
+        };
+        let Some((_, _, _, open)) = self.shells.get(slot) else {
+            return false;
+        };
+        let open = !*open;
+        self.set_shell(slot, open);
+        true
+    }
+
+    /// Sets run `slot` open or closed, and recounts the page it drew on.
+    fn set_shell(&mut self, slot: usize, open: bool) {
+        let Some((page, _, _, state)) = self.shells.get_mut(slot) else {
+            return;
+        };
+        *state = open;
+        let page = *page;
+        // The run's more row reads differently open, so the page's search
+        // text changed with it.
+        self.index.invalidate(page);
+        self.count(page);
     }
 
     /// Opens what `target` names on resident pages and the pending parts,
@@ -1041,6 +1201,15 @@ impl Pages {
                 self.record(target, true, at);
                 changed = true;
             }
+        }
+        if !changed && let Some(slot) = self.shell_slot(target) {
+            // A run's state lives with the run, so a dropped page loads
+            // it open without an override.
+            let closed = self.shells.get(slot).is_some_and(|(_, _, _, open)| !open);
+            if closed {
+                self.set_shell(slot, true);
+            }
+            return closed;
         }
         if !changed {
             // Nothing resident holds it, but a dropped page may: the
@@ -1082,6 +1251,7 @@ impl Pages {
         fresh.ext.cache = Arc::new(self.ext.cache.scratch_sharing_pending());
         fresh.halves = self.halves.clone();
         fresh.session_names = Arc::clone(&self.session_names);
+        fresh.delegates = self.delegates.clone();
         fresh
     }
 
@@ -1134,9 +1304,30 @@ impl Pages {
                         .copied()
                 })
                 .map(Target::Image),
+            Target::Shell(slot) => self.find_shell(slot, fold).map(Target::Shell),
             Target::Login => Some(Target::Login),
             Target::Note(_) | Target::Orphans(_) => None,
         }
+    }
+
+    /// The slot the fold gives run `slot`: the run with the same page,
+    /// turn-after and text, counting equal runs in order. A slot moves
+    /// when `carry_chain` prepends runs, so the number is no identity.
+    fn find_shell(&self, slot: usize, fold: &Pages) -> Option<usize> {
+        let key = |run: &(usize, usize, String, bool)| (run.0, run.1, run.2.clone());
+        let run = key(self.shells.get(slot)?);
+        let nth = self
+            .shells
+            .iter()
+            .take(slot)
+            .filter(|other| key(other) == run)
+            .count();
+        fold.shells
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| key(other) == run)
+            .nth(nth)
+            .map(|(at, _)| at)
     }
 
     /// Carries the preview's closed ancestor-segment runs into the fold
@@ -1160,6 +1351,7 @@ impl Pages {
         if len == 0 {
             return;
         }
+        fold.delegates.fill_from(&self.delegates);
         // The summaries the carried pages draw: every summary a carried
         // seed or card names. Summaries are pushed in fold order, so the
         // carried ones are the prefix ending here.
@@ -1204,21 +1396,22 @@ impl Pages {
                 fold.generations.entry(generation.clone()).or_insert(*id);
             }
         }
-        let mut shells: Vec<(usize, usize, String)> = self
+        let mut shells: Vec<(usize, usize, String, bool)> = self
             .shells
             .iter()
-            .filter(|(page, _, _)| *page < len)
+            .filter(|(page, _, _, _)| *page < len)
             .cloned()
             .collect();
-        shells.extend(fold.shells.iter().map(|(page, after, text)| {
+        shells.extend(fold.shells.iter().map(|(page, after, text, open)| {
             (
                 page.saturating_add(len),
                 after.saturating_add(summaries),
                 text.clone(),
+                *open,
             )
         }));
         fold.shell_index.clear();
-        for (slot, (page, after, _)) in shells.iter().enumerate() {
+        for (slot, (page, after, _, _)) in shells.iter().enumerate() {
             fold.shell_index
                 .entry((*page, *after))
                 .or_default()
@@ -1764,7 +1957,7 @@ impl Pages {
             .entry((page, after))
             .or_default()
             .push(self.shells.len());
-        self.shells.push((page, after, item));
+        self.shells.push((page, after, item, false));
         // Shell output draws on the page, so its search text changed.
         self.index.invalidate(page);
         self.count(page);
@@ -1872,11 +2065,8 @@ impl Pages {
             if let Some(bucket) = self.shell_index.get(&(page, after)) {
                 crate::work::add(|work| work.shell_visits += bucket.len());
                 for slot in bucket {
-                    if let Some((_, _, text)) = self.shells.get(*slot) {
-                        out.extend(
-                            text.split('\n')
-                                .map(|line| (Line::raw(line.to_owned()), None)),
-                        );
+                    if let Some((_, _, text, open)) = self.shells.get(*slot) {
+                        shell_rows(text, *open, *slot, &mut out);
                     }
                 }
             }
@@ -2032,6 +2222,58 @@ impl Pages {
     }
 }
 
+/// What clicking run `slot`'s more row opens.
+fn shell_target(slot: usize) -> Target {
+    Target::Shell(slot)
+}
+
+/// The note line of a `!` or `!!` run's row (`crate::shell::row`).
+const SHELL_NOTES: [&str; 2] = ["sent with your next prompt", "only you see this"];
+
+/// Whether `line` is how a run ended: `exit N` or `signal S`.
+fn shell_ending(line: &str) -> bool {
+    if let Some(code) = line.strip_prefix("exit ") {
+        let digits = code.strip_prefix('-').unwrap_or(code);
+        return !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit());
+    }
+    line.strip_prefix("signal ")
+        .is_some_and(|signal| !signal.is_empty() && !signal.contains(char::is_whitespace))
+}
+
+/// One run's lines. A run's row (head, kind note, output, ending) shows
+/// at most [`OPENED_LINES`] logical lines of output, then a dim more row
+/// that opens the rest in place and, open, reads "show less". Anything
+/// else, such as a cannot-start error row, draws whole.
+fn shell_rows(text: &str, open: bool, slot: usize, out: &mut Rows) {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let plain = |line: &&str| ((*line).to_owned(), None);
+    let row = |(line, target): (String, Option<Target>)| (Line::raw(line), target);
+    if !lines.get(1).is_some_and(|note| SHELL_NOTES.contains(note)) {
+        out.extend(lines.iter().map(plain).map(row));
+        return;
+    }
+    let (head, rest) = lines.split_at(2);
+    let ending = usize::from(rest.last().is_some_and(|line| shell_ending(line)));
+    let (output, tail) = rest.split_at(rest.len().saturating_sub(ending));
+    let (shown, past) = output.split_at(output.len().min(OPENED_LINES));
+    out.extend(head.iter().chain(shown).map(plain).map(row));
+    if !past.is_empty() {
+        let target = shell_target(slot);
+        if out.open_scope(target, open) {
+            out.extend(past.iter().map(plain).map(row));
+        }
+        out.end_scope();
+        let more = if open {
+            "show less".to_owned()
+        } else {
+            let left = u64::try_from(past.len()).unwrap_or(u64::MAX);
+            format::count(left, "more line", "more lines")
+        };
+        out.push((format::dim(more), Some(target)));
+    }
+    out.extend(tail.iter().map(plain).map(row));
+}
+
 /// Whether `part`'s replies hold a Markdown table, and how many reply
 /// sources were visited to tell: only replies render through the
 /// table layout, so only they can make a page table-sensitive. The
@@ -2091,10 +2333,10 @@ fn set(part: &mut Part, target: &Target, open: bool) -> bool {
 
 /// Folds one line into a page's cards and fold state using the turn's
 /// current rendering path.
-pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
+pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients<'_>) -> Folded {
     let kind = envelope.kind();
     let was_open = part.turns.last().is_some_and(Turn::is_open);
-    let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
+    let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope, recipients);
     if let Some(turn) = part.turns.last_mut() {
         turn.note_seq(envelope.seq);
     }
@@ -2154,8 +2396,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept
@@ -2230,8 +2472,8 @@ pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept

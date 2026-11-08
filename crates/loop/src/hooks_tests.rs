@@ -143,10 +143,10 @@ impl Hooks for FakeHooks {
         }
     }
 
-    fn before_handoff(
+    fn before_compaction(
         &self,
-        _handoff: &contract::hook::BeforeHandoff<'_>,
-    ) -> contract::hook::BeforeHandoffAnswer {
+        _compaction: &contract::hook::BeforeCompaction<'_>,
+    ) -> contract::hook::BeforeCompactionAnswer {
         fakes::no_note()
     }
 
@@ -1464,7 +1464,7 @@ fn naming_output() -> Output {
             },
         ],
         control: Some(contract::events::Control {
-            handoff: None,
+            compact: None,
             questions: None,
             skill: None,
             name: Some("Fix the parser".into()),

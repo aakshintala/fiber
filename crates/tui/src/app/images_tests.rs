@@ -23,7 +23,14 @@ fn image_fetch_answer_reaches_its_handler_and_settles_its_tag() {
         started_with_image(&mut app, "picture.png");
         let request: Value = serde_json::from_str(&click(&mut app)).unwrap();
         let id = request["id"].as_str().unwrap();
-        assert_eq!(app.outbox.waiting(id), Some(Waiting::ImageFetch));
+        assert_eq!(
+            app.outbox.waiting(id),
+            Some(Waiting::ImageFetch {
+                id: 1,
+                session: SESSION.to_owned(),
+                path: "picture.png".to_owned(),
+            })
+        );
         if accepted {
             accept(&mut app, id, json!({"data":"bytes"}));
             let views = app.take_image_views();
@@ -53,7 +60,10 @@ fn a_display_image_second_answer_takes_the_untagged_path() {
     let id = request["id"].as_str().unwrap();
     assert_eq!(
         app.outbox.waiting(id),
-        Some(crate::app::Waiting::ImageDisplay)
+        Some(crate::app::Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "picture.png".to_owned(),
+        })
     );
     accept(
         &mut app,
@@ -82,10 +92,10 @@ fn an_answer_or_rejection_for_an_unknown_id_returns_false() {
         Some(&accepted("c_unknown", "QUJD", "image/png"))
     ));
     assert!(!app.image_rejected("c_unknown", "no such file."));
-    assert_eq!(
+    assert!(matches!(
         app.outbox.waiting(&id),
-        Some(crate::app::Waiting::ImageDisplay)
-    );
+        Some(crate::app::Waiting::ImageDisplay { .. })
+    ));
     assert_eq!(app.notice(), None);
     // The live fetch still answers.
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
@@ -1186,7 +1196,7 @@ fn forgetting_purges_queued_payloads_and_takes_no_new_ones() {
     let out = app.take_image_out();
     assert!(out.purge);
     assert!(out.items.is_empty());
-    // The purge is one handoff: the next drain carries nothing.
+    // The purge is one compaction: the next drain carries nothing.
     let out = app.take_image_out();
     assert!(!out.purge);
     assert!(out.items.is_empty());
@@ -1267,7 +1277,10 @@ fn a_handover_reask_registers_one_tag_for_its_new_id() {
     assert_ne!(new_id, id);
     assert_eq!(
         app.outbox.waiting(new_id),
-        Some(crate::app::Waiting::ImageDisplay)
+        Some(crate::app::Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "artifacts/shot.png".to_owned(),
+        })
     );
     assert_eq!(app.outbox.waiting(&id), None);
     assert!(app.image_answered(new_id, Some(&accepted(new_id, "QUJD", "image/png"))));
@@ -1302,7 +1315,10 @@ fn a_redraw_after_a_dropped_transmit_reasks_with_one_tag() {
     assert_ne!(new_id, id);
     assert_eq!(
         app.outbox.waiting(new_id),
-        Some(crate::app::Waiting::ImageDisplay)
+        Some(crate::app::Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "artifacts/shot.png".to_owned(),
+        })
     );
     assert!(app.image_answered(new_id, Some(&accepted(new_id, "QUJD", "image/png"))));
     assert!(!app.take_image_out().items.is_empty());
@@ -1614,4 +1630,130 @@ fn a_completion_for_a_retired_generation_posts_nothing() {
     assert!(!app.images.convert_busy);
     assert!(app.take_image_out().items.is_empty());
     assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn the_image_tags_are_the_only_record() {
+    use crate::app::Waiting;
+    // A viewer fetch: the tag carries the view's id, session and path,
+    // and settling it out of band sends its answer down the untagged path.
+    let mut app = app();
+    started_with_image(&mut app, "picture.png");
+    let request: Value = serde_json::from_str(&click(&mut app)).unwrap();
+    let id = request["id"].as_str().unwrap();
+    assert_eq!(
+        app.outbox.waiting(id),
+        Some(Waiting::ImageFetch {
+            id: 1,
+            session: SESSION.to_owned(),
+            path: "picture.png".to_owned(),
+        })
+    );
+    app.outbox.settled(id);
+    assert!(!app.image_answered(id, Some(&json!({"data":"bytes"}))));
+    assert!(!app.image_rejected(id, "image refused"));
+    assert!(app.take_image_views().is_empty());
+    assert_eq!(app.notice(), None);
+
+    // A display fetch: the same, keyed by its session and path.
+    let mut app = inline_app();
+    started_with_image(&mut app, "picture.png");
+    let id = asked(&mut app, 1);
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "picture.png".to_owned(),
+        })
+    );
+    app.outbox.settled(&id);
+    assert!(!app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(app.take_image_out().items.is_empty());
+}
+
+#[test]
+fn a_viewer_dedupe_comes_from_the_tag() {
+    let mut app = app();
+    started_with_image(&mut app, "picture.png");
+    let first: Value = serde_json::from_str(&click(&mut app)).unwrap();
+    // A second open of the same file while its fetch is out sends nothing.
+    assert_eq!(app.view_image(1), Effect::None);
+    // The tag settles out of band: the file is asked for again.
+    app.outbox.settled(first["id"].as_str().unwrap());
+    let again: Value = serde_json::from_str(&click(&mut app)).unwrap();
+    assert_ne!(again["id"], first["id"]);
+}
+
+#[test]
+fn a_late_display_answer_under_an_old_id_after_a_reask_changes_nothing() {
+    use crate::app::Waiting;
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+    // An earlier ask of the same file still holds its tag when a handover
+    // asks again.
+    app.outbox.wait(
+        "c_old",
+        Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "artifacts/shot.png".to_owned(),
+        },
+    );
+    app.images_after_handover(Vec::new());
+    let out = app.take_image_out();
+    assert_eq!(out.display.len(), 1);
+    let request: Value = serde_json::from_str(&out.display[0]).unwrap();
+    let new_id = request["id"].as_str().unwrap();
+    assert_eq!(app.outbox.waiting("c_old"), None);
+    // The old id's answer matches nothing; the new id's still transmits.
+    assert!(!app.image_answered("c_old", Some(&accepted("c_old", "QUJD", "image/png"))));
+    assert!(app.take_image_out().items.is_empty());
+    assert!(app.image_answered(new_id, Some(&accepted(new_id, "QUJD", "image/png"))));
+    assert!(!app.take_image_out().items.is_empty());
+}
+
+#[test]
+fn a_click_after_a_disconnect_makes_a_fresh_viewer_request() {
+    let mut app = app();
+    started_with_image(&mut app, "picture.png");
+    let first: Value = serde_json::from_str(&click(&mut app)).unwrap();
+    let first_id = first["id"].as_str().unwrap();
+    app.images_disconnected();
+    assert_eq!(app.outbox.waiting(first_id), None);
+    // Drawing the image asks nothing: a viewer open is a click.
+    app.images_drawn(&drawn(1));
+    assert!(app.take_image_out().display.is_empty());
+    // Another click sends a new `read_file` under a new id.
+    let again: Value = serde_json::from_str(&click(&mut app)).unwrap();
+    assert_eq!(again["command"], "read_file");
+    assert_ne!(again["id"].as_str().unwrap(), first_id);
+    // The old id's late answer opens nothing.
+    assert!(!app.image_answered(first_id, Some(&json!({"data":"bytes"}))));
+    assert!(app.take_image_views().is_empty());
+}
+
+#[test]
+fn a_redraw_reask_settles_the_old_tag_of_its_key() {
+    let mut app = inline_app();
+    started_with_image(&mut app, "artifacts/shot.png");
+    let id = asked(&mut app, 1);
+    app.attached_screen_mut().pages_mut().set_flat(true);
+    app.refresh_image_sizing();
+    assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
+    // An earlier ask of the same file still holds its tag when the next
+    // draw asks again.
+    app.outbox.wait(
+        "c_old",
+        crate::app::Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "artifacts/shot.png".to_owned(),
+        },
+    );
+    app.attached_screen_mut().pages_mut().set_flat(false);
+    app.refresh_image_sizing();
+    app.images_drawn(&drawn(1));
+    assert_eq!(app.take_image_out().display.len(), 1);
+    assert_eq!(app.outbox.waiting("c_old"), None);
 }

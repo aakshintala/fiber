@@ -520,6 +520,9 @@ fn a_marked_line_under_new_messages_below_does_not_spin() {
     let (mut app, clock) = running_first();
     let origin = clock.origin();
     let now = clock.now();
+    // The layout is the app's own size, so the sixteen rows are set on it.
+    app.set_size(WIDTH, 16);
+    app.settle();
     app.set_now(origin, 0);
     app.jump(0);
     // New output at the top: the overlay takes the bottom row,
@@ -535,7 +538,7 @@ fn a_marked_line_under_new_messages_below_does_not_spin() {
     let shown = text(&buf);
     assert!(shown.contains("New messages below"), "{shown}");
     // The covered mark schedules nothing: it is the only mark on
-    // screen, and with no home there is no working line to ask.
+    // screen.
     assert_eq!(app.take_wake(), None);
     // Following again draws it: the mark spins.
     app.on_key(Key::End, now);
@@ -761,7 +764,7 @@ fn untargeted_lines_never_spin() {
     }
     assert_eq!(diffs.len(), 1, "{diffs:?}");
     let (x, _y, before, after) = &diffs[0];
-    assert_eq!((*x, before.as_str()), (1, "●"));
+    assert_eq!((*x, before.as_str()), (3, "●"));
     assert_eq!(after.as_str(), SPINNER[0]);
 }
 
@@ -836,13 +839,13 @@ fn a_clipped_group_line_off_screen_asks_nothing() {
 }
 
 #[test]
-fn handoff_band_writing_spinner() {
+fn compaction_band_writing_spinner() {
     let (mut app, clock) = writing_band(60, 12);
     app.set_now(clock.origin(), 0);
-    insta::assert_snapshot!("handoff_band_writing_spinner", screen(&app));
+    insta::assert_snapshot!("compaction_band_writing_spinner", screen(&app));
 }
 
-/// An app with a writing handoff band at `width` by `height`.
+/// An app with a writing compaction band at `width` by `height`.
 fn writing_band(width: u16, height: u16) -> (App, Arc<FakeClock>) {
     let clock = FakeClock::new();
     let mut app = App::new(PathBuf::from("/w"));
@@ -863,7 +866,7 @@ fn writing_band(width: u16, height: u16) -> (App, Arc<FakeClock>) {
         None,
     ));
     app.on_line(session_line(
-        "handoff_started",
+        "compaction_started",
         serde_json::json!({"trigger": "auto"}),
         None,
     ));
@@ -952,7 +955,7 @@ fn a_reply_quoting_the_band_text_does_not_spin() {
     ));
     app.on_line(session_line(
         "text_completed",
-        serde_json::json!({"text": "⇄ Handoff · automatic at 400.0k · ● writing the note…"}),
+        serde_json::json!({"text": "⇄ Compaction · automatic at 400.0k · ● writing the note…"}),
         Some("a_m"),
     ));
     app.on_line(session_line(
@@ -964,7 +967,7 @@ fn a_reply_quoting_the_band_text_does_not_spin() {
         None,
     ));
     app.on_line(session_line(
-        "handoff_started",
+        "compaction_started",
         serde_json::json!({"trigger": "auto"}),
         None,
     ));
@@ -1042,7 +1045,7 @@ fn a_cut_band_mark_spins_while_its_dot_survives() {
         None,
     ));
     app.on_line(session_line(
-        "handoff_started",
+        "compaction_started",
         serde_json::json!({"trigger": "auto"}),
         None,
     ));

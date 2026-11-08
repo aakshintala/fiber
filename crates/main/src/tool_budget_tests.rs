@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 /// The largest per-protocol total the built-in definitions may take, in
 /// bytes: `builtin()`'s definitions, `mcp_resources` and `tool_search`,
 /// with no headroom.
-const BUDGET: usize = 16903;
+const BUDGET: usize = 18158;
 
 /// The Anthropic hosted tool type the budget measures
 /// (`config::Protocol::reads_web_search`); `openai-responses` reads
@@ -196,6 +196,7 @@ fn provider(protocol: Protocol) -> Result<Arc<dyn Provider>, String> {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
+        databricks_request_tags: None,
     };
     crate::connect(model, None, None, None, &here)
         .map_err(|failure| format!("{:?}: {}", failure.code, failure.message))

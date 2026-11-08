@@ -48,6 +48,7 @@ pub mod session_argv;
 pub mod session_process;
 pub mod session_search;
 pub mod sessions;
+pub mod settings;
 pub mod shapes;
 pub mod signing;
 pub mod skills;

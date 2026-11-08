@@ -83,8 +83,8 @@ fn classify_job_kind(kind: EventKind) -> Option<JobEventKind> {
         | Kind::InstructionFile
         | Kind::DateChanged
         | Kind::SkillsChanged
-        | Kind::HandoffStarted
-        | Kind::HandoffCompleted
+        | Kind::CompactionStarted
+        | Kind::CompactionCompleted
         | Kind::SkillsResent
         | Kind::ContextNudged
         | Kind::ReviewerKept

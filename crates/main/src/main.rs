@@ -14,11 +14,11 @@ mod builtin;
 mod case;
 mod cli;
 mod clock;
+mod compaction;
 mod completion;
 mod configure;
 mod continue_session;
 mod delegates;
-mod handoff;
 mod hub_command;
 mod keeper;
 mod keeper_child;
@@ -35,6 +35,7 @@ mod read_signals;
 mod reap;
 mod reload;
 mod resume;
+mod reviewer_evidence;
 mod rewind;
 mod session_command;
 mod session_extensions;
@@ -69,6 +70,9 @@ mod reviewer_tests;
 #[cfg(test)]
 #[path = "scripted_session_tests.rs"]
 mod scripted_session_tests;
+#[cfg(test)]
+#[path = "settings_metadata_tests.rs"]
+mod settings_metadata_tests;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -241,6 +245,9 @@ fn run() -> i32 {
                 hub.as_deref(),
                 &process,
             ),
+        },
+        cli::Invocation::Run(Some(cli::Commands::Reviewer(command)), _) => match command {
+            cli::ReviewerCommands::Evidence { json } => reviewer_evidence::run(json, &process),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args)), _) => {
             models_entry(args, &process, read_signals::CancelOnSignal::new)
@@ -927,8 +934,8 @@ fn headless_protected_lines(event: &Event) -> Vec<String> {
 
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
-/// the first prompt, closes when `one_turn`, and writes `fiber_exited` for
-/// what ran. `run` writes the session's first lines through
+/// the first prompt, closes after an ask or delegate run, and writes
+/// `fiber_exited` for what ran. `run` writes the session's first lines through
 /// [`Signals::commit`](doors::Signals::commit): `Ok(Some(code))` means
 /// nothing was written to the session log for this process, and `run_turn`
 /// returns `code` with no `quiesce`, no `fiber_exited` and no stderr line.
@@ -944,7 +951,7 @@ fn run_turn(
     log: &Arc<Log>,
     dir: &Path,
     prompt: Option<String>,
-    one_turn: bool,
+    admission: session_command::StartupAdmission,
     cancel: Arc<r#loop::TurnCancel>,
     diag: &Arc<log::diag::Diag>,
     current: &Arc<session_extensions::Current>,
@@ -954,6 +961,7 @@ fn run_turn(
         &mut Option<r#loop::Summary>,
     ) -> Result<Option<i32>, Failure>,
 ) -> i32 {
+    let one_turn = admission != session_command::StartupAdmission::Serve;
     // The session's watchers, subscribed for the whole turn: every appended
     // line fans out to them, until the shutdown drops the offer. Dropped
     // before `fiber_exited` below, so the session-end drain owns the exit
@@ -977,21 +985,35 @@ fn run_turn(
     // The summary the run leaves behind, as `committed` is: `fiber_exited`
     // reads it, never the log.
     let mut summary: Option<r#loop::Summary> = None;
-    let ran = match prompt {
+    let ran = match (prompt, admission) {
         // `fiber ask` runs one turn: the prompt, then `close`. It always
         // supplies a prompt; without one it would wait for a client.
-        Some(prompt) if one_turn => session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
-            match run(inbox, turn, &mut summary) {
+        (Some(prompt), session_command::StartupAdmission::Ask) => {
+            session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
+                match run(inbox, turn, &mut summary) {
+                    Ok(code) => {
+                        committed = code;
+                        Ok(())
+                    }
+                    Err(failure) => Err(failure),
+                }
+            })
+        }
+        (Some(prompt), session_command::StartupAdmission::Delegate) => session.run_delegate(
+            log,
+            prompt,
+            Arc::new(move || door.cancel()),
+            |inbox| match run(inbox, turn, &mut summary) {
                 Ok(code) => {
                     committed = code;
                     Ok(())
                 }
                 Err(failure) => Err(failure),
-            }
-        }),
+            },
+        ),
         // The session command queues its prompt when one was supplied and
         // serves clients until idle exit or `close`.
-        prompt => session.serve(prompt, Arc::new(move || door.cancel()), |inbox| {
+        (prompt, _) => session.serve(prompt, Arc::new(move || door.cancel()), |inbox| {
             match run(inbox, turn, &mut summary) {
                 Ok(code) => {
                     committed = code;

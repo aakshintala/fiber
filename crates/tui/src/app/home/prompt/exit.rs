@@ -18,12 +18,10 @@ impl App {
     /// the armed Ctrl+C.
     pub(crate) fn quit(&mut self) -> Effect {
         self.close_delete_prompt();
-        if self.home.is_none() || self.working().is_empty() {
+        if self.working().is_empty() {
             return Effect::Quit;
         }
-        if let Some(home) = self.home.as_mut() {
-            home.questions.prompt = Some(Prompt::Quit);
-        }
+        self.home.questions.prompt = Some(Prompt::Quit);
         self.armed_at = None;
         Effect::None
     }
@@ -34,10 +32,7 @@ impl App {
     /// question as it shows. It answers only for the quit prompt: the
     /// close-all question reads through its own counter.
     pub(crate) fn quit_question(&self) -> Option<(usize, usize)> {
-        if !matches!(
-            self.home.as_ref().and_then(|home| home.questions.prompt()),
-            Some(Prompt::Quit)
-        ) {
+        if !matches!(self.home.questions.prompt(), Some(Prompt::Quit)) {
             return None;
         }
         let working = self.working();
@@ -48,7 +43,7 @@ impl App {
     /// elsewhere counts fixed when it opened. The overlay never
     /// live-updates; Enter closes the counted sessions still live.
     pub(crate) fn close_all_question(&self) -> Option<(usize, usize, usize)> {
-        match self.home.as_ref().and_then(|home| home.questions.prompt()) {
+        match self.home.questions.prompt() {
             Some(Prompt::CloseAll { sessions, counts }) => {
                 Some((sessions.len(), counts.0, counts.1))
             }
@@ -78,9 +73,7 @@ impl App {
             self.elsewhere(&sessions),
         );
         self.close_delete_prompt();
-        if let Some(home) = self.home.as_mut() {
-            home.questions.prompt = Some(Prompt::CloseAll { sessions, counts });
-        }
+        self.home.questions.prompt = Some(Prompt::CloseAll { sessions, counts });
         Effect::None
     }
 
@@ -88,7 +81,7 @@ impl App {
     /// was working and open elsewhere when the question opened. The
     /// overlay never live-updates.
     pub(crate) fn stop_question(&self) -> Option<(String, bool, bool)> {
-        match self.home.as_ref().and_then(|home| home.questions.prompt()) {
+        match self.home.questions.prompt() {
             Some(Prompt::Stop {
                 name,
                 working,
@@ -111,8 +104,8 @@ impl App {
         };
         let live = self
             .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
+            .sessions
+            .by_key(key)
             .is_some_and(|row| row.left.is_none());
         if !live {
             return self.delete_key();
@@ -131,8 +124,8 @@ impl App {
         }
         let Some(row) = self
             .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
+            .sessions
+            .by_key(key)
             .filter(|row| row.left.is_none() && row.state != State::Unreadable)
         else {
             return Effect::None;
@@ -142,14 +135,12 @@ impl App {
         let working = self.working().contains(&id);
         let elsewhere = self.elsewhere(std::slice::from_ref(&id)) > 0;
         self.close_delete_prompt();
-        if let Some(home) = self.home.as_mut() {
-            home.questions.prompt = Some(Prompt::Stop {
-                id,
-                name,
-                working,
-                elsewhere,
-            });
-        }
+        self.home.questions.prompt = Some(Prompt::Stop {
+            id,
+            name,
+            working,
+            elsewhere,
+        });
         Effect::None
     }
 
@@ -160,7 +151,7 @@ impl App {
     /// left while it showed gets no close and closes the question. When the
     /// stopped session is the one on screen the terminal goes home.
     fn confirm_stop(&mut self) -> Effect {
-        let id = match self.home.as_ref().and_then(|home| home.questions.prompt()) {
+        let id = match self.home.questions.prompt() {
             Some(Prompt::Stop { id, .. }) => id.clone(),
             _ => return Effect::None,
         };
@@ -172,13 +163,12 @@ impl App {
             return Effect::None;
         }
         let (lines, pairs) = self.close_lines(std::slice::from_ref(&id));
-        if let Some(home) = self.home.as_mut() {
-            for (session, close) in pairs {
-                home.questions
-                    .asks
-                    .insert(close.clone(), Ask::Stop(session));
-                self.outbox.wait(&close, super::super::super::Waiting::Stop);
-            }
+        for (session, close) in pairs {
+            self.home
+                .questions
+                .asks
+                .insert(close.clone(), Ask::Stop(session));
+            self.outbox.wait(&close, super::super::super::Waiting::Stop);
         }
         self.close_prompt();
         self.clear_rail_focus();
@@ -193,9 +183,7 @@ impl App {
     /// the attached session when no live row names it, unless it left
     /// after the attach.
     fn live_sessions(&self) -> Vec<SessionId> {
-        let Some(home) = self.home.as_ref() else {
-            return Vec::new();
-        };
+        let home = &self.home;
         let mut sessions: Vec<SessionId> = home
             .sessions
             .live()
@@ -234,7 +222,7 @@ impl App {
         if !self.quit_open() {
             return None;
         }
-        let prompt = self.home.as_ref().and_then(|home| home.questions.prompt());
+        let prompt = self.home.questions.prompt();
         let closing = matches!(prompt, Some(Prompt::CloseAll { .. }));
         let stopping = matches!(prompt, Some(Prompt::Stop { .. }));
         Some(match key {
@@ -283,7 +271,7 @@ impl App {
         if !self.quit_open() {
             return Effect::None;
         }
-        let prompt = self.home.as_ref().and_then(|home| home.questions.prompt());
+        let prompt = self.home.questions.prompt();
         let stopping = matches!(prompt, Some(Prompt::Stop { .. }));
         if matches!(prompt, Some(Prompt::CloseAll { .. })) || stopping {
             return match choice {
@@ -316,11 +304,9 @@ impl App {
             return Effect::Quit;
         }
         let (lines, pairs) = self.close_lines(&working);
-        if let Some(home) = self.home.as_mut() {
-            for (session, id) in pairs {
-                home.questions.closing.push((session, id.clone()));
-                self.outbox.wait(&id, super::super::super::Waiting::Close);
-            }
+        for (session, id) in pairs {
+            self.home.questions.closing.push((session, id.clone()));
+            self.outbox.wait(&id, super::super::super::Waiting::Close);
         }
         Effect::Exit(lines)
     }
@@ -333,8 +319,7 @@ impl App {
     /// nothing still live, it closes the question and sends nothing: the
     /// terminal stays open on home either way.
     fn confirm_close_all(&mut self) -> Effect {
-        let open: Vec<SessionId> = match self.home.as_ref().and_then(|home| home.questions.prompt())
-        {
+        let open: Vec<SessionId> = match self.home.questions.prompt() {
             Some(Prompt::CloseAll { sessions, .. }) => sessions.clone(),
             _ => return Effect::None,
         };
@@ -345,11 +330,12 @@ impl App {
             return Effect::None;
         }
         let (lines, pairs) = self.close_lines(&close);
-        if let Some(home) = self.home.as_mut() {
-            for (session, id) in pairs {
-                home.questions.asks.insert(id.clone(), Ask::Stop(session));
-                self.outbox.wait(&id, super::super::super::Waiting::Stop);
-            }
+        for (session, id) in pairs {
+            self.home
+                .questions
+                .asks
+                .insert(id.clone(), Ask::Stop(session));
+            self.outbox.wait(&id, super::super::super::Waiting::Stop);
         }
         self.close_prompt();
         self.draft.clear();
@@ -372,11 +358,7 @@ impl App {
         let mut lines = Vec::new();
         let mut pairs = Vec::new();
         for session in sessions {
-            if self
-                .home
-                .as_ref()
-                .is_some_and(|home| home.subs.expected(session).is_none())
-            {
+            if self.subscribed_level(session).is_none() {
                 lines.push(self.subscribe(session, Level::Summary));
             }
             let id = mint();
@@ -400,20 +382,21 @@ impl App {
                     .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             })
             .collect();
-        if let Some(home) = self.home.as_mut() {
-            let mut dropped = Vec::new();
-            home.questions.closing.retain(|(_, close)| {
-                let keep = !ids.contains(close);
-                if !keep {
-                    dropped.push(close.clone());
-                }
-                keep
-            });
-            for id in dropped {
-                self.outbox.settled(&id);
+        // The running command's stop tags are read before the loop below
+        // settles the unsent closes' tags.
+        let stops = self.delete_waiting_close_ids().unwrap_or_default();
+        let mut dropped = Vec::new();
+        self.home.questions.closing.retain(|(_, close)| {
+            let keep = !ids.contains(close);
+            if !keep {
+                dropped.push(close.clone());
             }
+            keep
+        });
+        for id in dropped {
+            self.outbox.settled(&id);
         }
-        self.delete_command_unsent(&ids);
+        self.delete_command_unsent(&ids, &stops);
     }
 
     /// The sessions working now, in list order, the attached one last
@@ -423,9 +406,7 @@ impl App {
     /// Unreadable rows never count, and neither do rows
     /// that left.
     fn working(&self) -> Vec<SessionId> {
-        let Some(home) = self.home.as_ref() else {
-            return Vec::new();
-        };
+        let home = &self.home;
         let mut working: Vec<SessionId> = home
             .sessions
             .live()
@@ -458,9 +439,7 @@ impl App {
     /// Empty without home. `run` writes them after restoring the
     /// terminal.
     pub(crate) fn exit_lines(&self) -> Vec<String> {
-        let Some(home) = self.home.as_ref() else {
-            return Vec::new();
-        };
+        let home = &self.home;
         let mut lines: Vec<String> = home
             .sessions
             .live()
@@ -498,9 +477,7 @@ impl App {
     /// connection to it when it holds one. A session with no row, the
     /// attached one not yet in the feed, counts as not elsewhere.
     fn elsewhere(&self, working: &[SessionId]) -> usize {
-        let Some(home) = self.home.as_ref() else {
-            return 0;
-        };
+        let home = &self.home;
         working
             .iter()
             .filter(|id| {

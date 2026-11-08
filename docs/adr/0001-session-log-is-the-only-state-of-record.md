@@ -15,7 +15,7 @@ after a resume is an event or a fold of events; runtime objects may cache and
 index but never become a second truth. What describes no single session
 lives in Fiber home instead: configuration, credentials, and an extension's
 data directories (`docs/state.md`). The log is append-only for
-the life of the session, so a handoff appends new events rather than rewriting
+the life of the session, so a compaction appends new events rather than rewriting
 it, and a session directory holds no file that can contradict it. The contract
 is `docs/events.md`; the rationale and the rejected alternatives are on
 [issue #6](https://github.com/aakshintala/fiber/issues/6).

@@ -184,8 +184,12 @@ fn a_non_string_or_empty_commit_reads_as_absent() {
 }
 
 #[test]
-fn a_terminal_with_no_home_pushes_nothing() {
+fn a_hub_of_the_launchs_own_version_pushes_nothing() {
     let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        version: "9.9.9".to_owned(),
+        ..Default::default()
+    });
     app.on_line(readable(json!({"fiber_version": "9.9.9"})));
     assert_eq!(app.outbox.link, Link::Up);
     assert!(notices(&app).is_empty());

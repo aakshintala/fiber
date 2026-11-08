@@ -253,7 +253,16 @@ fn home_80x24_wraps_delete_session_and_down_focuses_recall_prompt() {
         "the second wrapped line shows Backspace: {:?}",
         rows
     );
-    // One down-arrow from it focuses the next action, recall_prompt.
+    // One down-arrow from it focuses the next action, interrupt_turn,
+    // and a second the one after, recall_prompt.
+    tap(&mut app, "down");
+    let rows: Vec<String> = screen(&app, 80, 24).lines().map(str::to_owned).collect();
+    assert!(
+        rows.iter()
+            .any(|row| row.starts_with("›") && row.contains("interrupt_turn")),
+        "interrupt_turn focused after one down: {:?}",
+        rows
+    );
     tap(&mut app, "down");
     let rows: Vec<String> = screen(&app, 80, 24).lines().map(str::to_owned).collect();
     assert!(

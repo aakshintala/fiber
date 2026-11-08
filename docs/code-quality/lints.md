@@ -69,6 +69,7 @@ Denied everywhere:
   (see "Visibility" and "Comments"), and the `visibility` check
   (`cargo xtask visibility`) for a function, const or static no other file
   of its crate names
+- a citation in code that gives a line number, quotes a missing heading, or names the doc path without backticks: enforced by `scripts/check-docs` (`xtask/doc-citations.allow` lists what is still allowed)
 - `unsafe_code` and `undocumented_unsafe_blocks` (see "`unsafe`")
 - an allow with no reason: `allow_attributes_without_reason`
 - a lint name the toolchain does not know: rustc's `unknown_lints` and

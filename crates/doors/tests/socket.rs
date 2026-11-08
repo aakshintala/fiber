@@ -192,9 +192,9 @@ fn take(inbox: &Receiver<Delivery>, wait: &Deadline) -> String {
             ack.0(Ok(None));
             format!("reply {}", reply.request_id.0)
         }
-        Delivery::Handoff(id, args, ack) => {
+        Delivery::Compaction(id, args, ack) => {
             ack.0(Ok(None));
-            format!("handoff {} {:?}", id.0, args.instructions)
+            format!("compaction {} {:?}", id.0, args.instructions)
         }
         Delivery::Model(args, ack) => {
             ack.0(Ok(None));
@@ -1596,10 +1596,10 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             );
             send(
                 &sender,
-                r#"{"id":"c_handoff","command":"handoff","args":{"instructions":"focus on tests"}}"#,
+                r#"{"id":"c_compaction","command":"compact","args":{"instructions":"focus on tests"}}"#,
             );
-            send(&sender, r#"{"id":"c_bare","command":"handoff","args":{}}"#);
-            send(&sender, r#"{"id":"c_noargs","command":"handoff"}"#);
+            send(&sender, r#"{"id":"c_bare","command":"compact","args":{}}"#);
+            send(&sender, r#"{"id":"c_noargs","command":"compact"}"#);
             send(&sender, r#"{"id":"c_close","command":"close"}"#);
             let wait = Deadline::after(DEADLINE);
             // The drop is answered at once and never delivered: the reader
@@ -1611,9 +1611,9 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
                     "prompt hi".to_owned(),
                     "steer more".to_owned(),
                     "reply r_1".to_owned(),
-                    "handoff c_handoff Some(\"focus on tests\")".to_owned(),
-                    "handoff c_bare None".to_owned(),
-                    "handoff c_noargs None".to_owned(),
+                    "compaction c_compaction Some(\"focus on tests\")".to_owned(),
+                    "compaction c_bare None".to_owned(),
+                    "compaction c_noargs None".to_owned(),
                     "close".to_owned(),
                 ]
             );
@@ -1628,8 +1628,8 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
                 vec![
                     "c_bare",
                     "c_close",
+                    "c_compaction",
                     "c_drop",
-                    "c_handoff",
                     "c_noargs",
                     "c_prompt",
                     "c_reply",
@@ -1689,7 +1689,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Name(..)
                 | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
-                | Delivery::Handoff(..)
+                | Delivery::Compaction(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)
                 | Delivery::McpReconnect(..)
@@ -1736,7 +1736,7 @@ fn model_arrives_as_delivery_with_its_args_and_its_rejection_stays_put() {
                 | Delivery::Name(..)
                 | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
-                | Delivery::Handoff(..)
+                | Delivery::Compaction(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)
                 | Delivery::McpReconnect(..)
@@ -1835,7 +1835,7 @@ fn credential_arrives_as_delivery_and_its_rejection_reaches_the_client() {
                 | Delivery::Name(..)
                 | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
-                | Delivery::Handoff(..)
+                | Delivery::Compaction(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
                 | Delivery::McpReconnect(..)
@@ -1968,7 +1968,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Name(..)
                 | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
-                | Delivery::Handoff(..)
+                | Delivery::Compaction(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
                 | Delivery::McpReconnect(..)
@@ -2026,7 +2026,7 @@ fn rewind_arrives_as_delivery_and_its_answer_reaches_the_client() {
                 | Delivery::Name(..)
                 | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
-                | Delivery::Handoff(..)
+                | Delivery::Compaction(..)
                 | Delivery::Model(..)
                 | Delivery::Reload(..)
                 | Delivery::McpReconnect(..)
@@ -6311,7 +6311,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::Name(..)
                 | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
-                | Delivery::Handoff(..)
+                | Delivery::Compaction(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)
                 | Delivery::McpReconnect(..)
@@ -6367,7 +6367,7 @@ fn propose_notes_reaches_the_inbox_with_its_args_and_session_items() {
                 | Delivery::Name(..)
                 | Delivery::Sandbox(..)
                 | Delivery::AddDirectory(..)
-                | Delivery::Handoff(..)
+                | Delivery::Compaction(..)
                 | Delivery::Credential(..)
                 | Delivery::Reload(..)
                 | Delivery::McpReconnect(..)
@@ -6603,7 +6603,7 @@ fn ro_evidence(socket: &Path, inbox: &Receiver<Delivery>) -> Vec<contract::notes
         | Delivery::AddDirectory(..)
         | Delivery::Rewind(..)
         | Delivery::ChangeWorkspace(..)
-        | Delivery::Handoff(..)
+        | Delivery::Compaction(..)
         | Delivery::Reply(..)
         | Delivery::Close(_)
         | Delivery::Job(_)

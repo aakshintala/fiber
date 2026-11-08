@@ -257,7 +257,7 @@ impl Loop {
                     Queued::Job(..)
                     | Queued::Notice(..)
                     | Queued::Line(_)
-                    | Queued::Handoff(..)
+                    | Queued::Compaction(..)
                     | Queued::Pending(..) => true,
                 })
                 .collect();
@@ -372,7 +372,7 @@ impl Loop {
                 Queued::Job(..)
                 | Queued::Notice(..)
                 | Queued::Line(_)
-                | Queued::Handoff(..)
+                | Queued::Compaction(..)
                 | Queued::Pending(..) => true,
             })
             .collect();
@@ -473,7 +473,7 @@ impl Loop {
             Queued::Job(..)
             | Queued::Notice(..)
             | Queued::Line(_)
-            | Queued::Handoff(..)
+            | Queued::Compaction(..)
             | Queued::Pending(..) => true,
         });
         self.write_queued(turn)?;
@@ -525,7 +525,7 @@ impl Loop {
             | Delivery::AddDirectory(..)
             | Delivery::Sandbox(..)
             | Delivery::Message(..)
-            | Delivery::Handoff(..)
+            | Delivery::Compaction(..)
             | Delivery::Model(..)
             | Delivery::Reload(..)
             | Delivery::McpReconnect(..)
@@ -634,15 +634,15 @@ impl Loop {
             }
             // A session message joins the turn's input, after `close` too.
             Delivery::Message(message, ack) => self.admit_message_idle(message, ack, input)?,
-            // Like a steer, a handoff starts a turn while idle: one
-            // `handoff` item per command, run at the turn's first step
+            // Like a steer, a compaction starts a turn while idle: one
+            // `compaction` item per command, run at the turn's first step
             // boundary.
-            Delivery::Handoff(id, args, ack) => {
+            Delivery::Compaction(id, args, ack) => {
                 if self.closing && input.pieces.is_empty() {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
                     accept(ack);
-                    input.pieces.push(Queued::Handoff(id, args.instructions));
+                    input.pieces.push(Queued::Compaction(id, args.instructions));
                 }
             }
             // A switch admitted while idle applies at once, before the
@@ -691,7 +691,7 @@ impl Loop {
             // for the session's jobs; without them the claim is left
             // untaken. The claim is asked here, at admission: a refused
             // claim starts no turn.
-            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+            Delivery::Job(notice) if self.compaction.carry.owned(&notice.completed.job_id.0) => {
                 self.end_extension_job(notice)?;
             }
             Delivery::Job(notice) => {
@@ -831,10 +831,10 @@ impl Loop {
             Delivery::Message(message, ack) => self.admit_message_running(message, ack, turn)?,
             // Held until the next step boundary; not listed on
             // `steering_queue`, which holds steering messages only.
-            Delivery::Handoff(id, args, ack) => {
+            Delivery::Compaction(id, args, ack) => {
                 accept(ack);
                 self.queued
-                    .push_back(Queued::Handoff(id, args.instructions));
+                    .push_back(Queued::Compaction(id, args.instructions));
             }
             // A switch admitted during a turn waits for the next turn
             // boundary. While `deferred` still holds one, a live one
@@ -912,7 +912,7 @@ impl Loop {
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning at a drain.
             Delivery::Cancelled => {}
-            Delivery::Job(notice) if self.handoff.carry.owned(&notice.completed.job_id.0) => {
+            Delivery::Job(notice) if self.compaction.carry.owned(&notice.completed.job_id.0) => {
                 self.end_extension_job(notice)?;
             }
             Delivery::Job(notice) => self.admit_job(notice, turn)?,

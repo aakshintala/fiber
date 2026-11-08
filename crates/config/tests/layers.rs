@@ -53,14 +53,14 @@ fn a_run_flag_wins_over_every_file() {
     model_layers(&setup);
     setup.write(&setup.project(), r#"{"model": "openai/gpt-5.6"}"#);
     let config = setup
-        .load(&["model=anthropic/claude-opus-5", "handoff.tokens=200000"])
+        .load(&["model=anthropic/claude-opus-5", "compaction.tokens=200000"])
         .unwrap();
     assert_eq!(
         config.get("model", None),
         Some((json!("anthropic/claude-opus-5"), Source::Run))
     );
     assert_eq!(
-        config.get("handoff.tokens", None),
+        config.get("compaction.tokens", None),
         Some((json!(200000), Source::Run))
     );
 }
@@ -77,16 +77,16 @@ fn objects_merge_key_by_key_and_lists_replace() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"handoff": {"tokens": 1000}, "tui": {"panel": {"cards": ["session", "jobs"]}}}"#,
+        r#"{"compaction": {"tokens": 1000}, "tui": {"panel": {"cards": ["session", "jobs"]}}}"#,
     );
-    setup.write(&setup.repository(), r#"{"handoff": {"nudge": false}}"#);
+    setup.write(&setup.repository(), r#"{"compaction": {"nudge": false}}"#);
     setup.write(
         &setup.project(),
         r#"{"tui": {"panel": {"cards": ["quota"]}}}"#,
     );
     let merged = setup.load(&[]).unwrap().merged(None);
     assert_eq!(
-        merged["handoff"],
+        merged["compaction"],
         json!({"enabled": true, "nudge": false, "tokens": 1000, "window_fraction": 0.7})
     );
     assert_eq!(merged["tui"]["panel"]["cards"], json!(["quota"]));
@@ -96,9 +96,9 @@ fn objects_merge_key_by_key_and_lists_replace() {
 #[test]
 fn an_object_names_the_highest_layer_that_set_part_of_it() {
     let setup = Setup::new();
-    setup.write(&setup.global(), r#"{"handoff": {"tokens": 1000}}"#);
-    setup.write(&setup.repository(), r#"{"handoff": {"nudge": false}}"#);
-    let (value, source) = setup.load(&[]).unwrap().get("handoff", None).unwrap();
+    setup.write(&setup.global(), r#"{"compaction": {"tokens": 1000}}"#);
+    setup.write(&setup.repository(), r#"{"compaction": {"nudge": false}}"#);
+    let (value, source) = setup.load(&[]).unwrap().get("compaction", None).unwrap();
     assert_eq!(source, Source::Repository(setup.repository()));
     assert_eq!(value["tokens"], json!(1000));
 }
@@ -111,12 +111,12 @@ fn get_and_get_segments_pin_the_value_and_source_across_layers() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"model": "g/b", "handoff": {"tokens": 1},
-            "models": {"a/b": {"handoff": {"tokens": 9}}},
+        r#"{"model": "g/b", "compaction": {"tokens": 1},
+            "models": {"a/b": {"compaction": {"tokens": 9}}},
             "skills": {"disabled": ["a"]},
             "providers": {"acme": {"credentials": {"work": {"env": "G"}}}}}"#,
     );
-    setup.write(&setup.repository(), r#"{"handoff": {"nudge": false}}"#);
+    setup.write(&setup.repository(), r#"{"compaction": {"nudge": false}}"#);
     setup.write(
         &setup.project(),
         r#"{"model": "p/b", "skills": {"disabled": ["b", "a"]},
@@ -138,8 +138,8 @@ fn get_and_get_segments_pin_the_value_and_source_across_layers() {
             (json!("p/b"), Source::Project(setup.project())),
         ),
         (
-            "handoff",
-            &["handoff"],
+            "compaction",
+            &["compaction"],
             None,
             (
                 json!({
@@ -152,14 +152,14 @@ fn get_and_get_segments_pin_the_value_and_source_across_layers() {
             ),
         ),
         (
-            "handoff.tokens",
-            &["handoff", "tokens"],
+            "compaction.tokens",
+            &["compaction", "tokens"],
             Some("a/b"),
             (json!(9), Source::Global(setup.global())),
         ),
         (
-            "handoff.tokens",
-            &["handoff", "tokens"],
+            "compaction.tokens",
+            &["compaction", "tokens"],
             Some("c/d"),
             (json!(1), Source::Global(setup.global())),
         ),
@@ -196,18 +196,21 @@ fn a_per_model_key_wins_over_the_same_layers_top_level() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"handoff": {"tokens": 400000}, "cache": {"lifetime": "1h"},
+        r#"{"compaction": {"tokens": 400000}, "cache": {"lifetime": "1h"},
             "models": {"databricks/databricks-claude-opus-5": {
-                "handoff": {"window_fraction": 0.5}, "cache": {"lifetime": "5m"}}}}"#,
+                "compaction": {"window_fraction": 0.5}, "cache": {"lifetime": "5m"}}}}"#,
     );
     let config = setup.load(&[]).unwrap();
     let opus = Some("databricks/databricks-claude-opus-5");
     assert_eq!(
-        config.get("handoff.window_fraction", opus),
+        config.get("compaction.window_fraction", opus),
         Some((json!(0.5), Source::Global(setup.global())))
     );
     assert_eq!(config.get("cache.lifetime", opus).unwrap().0, json!("5m"));
-    assert_eq!(config.get("handoff.tokens", opus).unwrap().0, json!(400000));
+    assert_eq!(
+        config.get("compaction.tokens", opus).unwrap().0,
+        json!(400000)
+    );
     assert_eq!(
         config
             .get("cache.lifetime", Some("openai/gpt-5.6"))
@@ -225,12 +228,12 @@ fn a_later_layers_top_level_wins_over_an_earlier_layers_per_model_key() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"models": {"a/b": {"handoff": {"tokens": 1}}}}"#,
+        r#"{"models": {"a/b": {"compaction": {"tokens": 1}}}}"#,
     );
-    setup.write(&setup.repository(), r#"{"handoff": {"tokens": 2}}"#);
+    setup.write(&setup.repository(), r#"{"compaction": {"tokens": 2}}"#);
     let config = setup.load(&[]).unwrap();
     assert_eq!(
-        config.get("handoff.tokens", Some("a/b")),
+        config.get("compaction.tokens", Some("a/b")),
         Some((json!(2), Source::Repository(setup.repository())))
     );
 }
@@ -240,7 +243,7 @@ fn a_run_flag_value_is_json_or_else_a_bare_string() {
     let setup = Setup::new();
     let config = setup
         .load(&[
-            "handoff.enabled=false",
+            "compaction.enabled=false",
             "tui.panel.cards=[\"quota\"]",
             "model=openai/gpt-5.6",
             "models.\"openai/gpt-5.6\".cache.lifetime=5m",
@@ -248,7 +251,10 @@ fn a_run_flag_value_is_json_or_else_a_bare_string() {
         ])
         .unwrap();
     assert!(config.notices().is_empty(), "{:?}", config.notices());
-    assert_eq!(config.get("handoff.enabled", None).unwrap().0, json!(false));
+    assert_eq!(
+        config.get("compaction.enabled", None).unwrap().0,
+        json!(false)
+    );
     assert_eq!(
         config.get("tui.panel.cards", None).unwrap().0,
         json!(["quota"])
@@ -287,7 +293,7 @@ fn a_run_flag_that_is_not_key_equals_value_is_a_usage_error() {
         assert_eq!(
             e.to_string(),
             format!(
-                "`{named}` is not a dotted key and a value, as in `-c handoff.tokens=200000`. Run `fiber --help` for usage."
+                "`{named}` is not a dotted key and a value, as in `-c compaction.tokens=200000`. Run `fiber --help` for usage."
             ),
             "{arg}"
         );
@@ -297,11 +303,11 @@ fn a_run_flag_that_is_not_key_equals_value_is_a_usage_error() {
 #[test]
 fn a_run_flag_of_the_wrong_type_names_the_flag() {
     let setup = Setup::new();
-    let e = setup.load(&["handoff.tokens=many"]).unwrap_err();
+    let e = setup.load(&["compaction.tokens=many"]).unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert_eq!(
         e.to_string(),
-        "-c: `handoff.tokens` must be a whole number of zero or more."
+        "-c: `compaction.tokens` must be a whole number of zero or more."
     );
 }
 
@@ -309,8 +315,35 @@ fn a_run_flag_of_the_wrong_type_names_the_flag() {
 fn known_key_accepts_a_documented_key_and_refuses_an_unknown_one() {
     // `fiber config get` refuses an unknown key and reads a known one, so
     // neither a body of `true` nor one of `false` stands in for the table.
-    assert!(config::known_key("handoff.tokens"));
+    assert!(config::known_key("compaction.tokens"));
     assert!(!config::known_key("frobnicate"));
+}
+
+/// The retired name for the `compaction` block gets no alias: a config
+/// that still sets it loads with a notice and the default stays.
+#[test]
+fn the_retired_name_is_an_unknown_key_on_load() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"handoff": {"tokens": 200000}, "model": "a/b"}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let notices = config.notices();
+    // One unknown key, one notice (`docs/configuration.md`, "When Fiber
+    // reads configuration": "An unknown key is a `notice`").
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ConfigKeyIgnored);
+    assert_eq!(
+        notices[0].message,
+        format!(
+            "{}: ignored `handoff`, which this Fiber does not know.",
+            setup.global().display()
+        )
+    );
+    let merged = config.merged(None);
+    assert_eq!(merged.get("handoff"), None);
+    assert_eq!(merged["compaction"]["tokens"], json!(400_000));
 }
 
 #[test]
@@ -318,7 +351,7 @@ fn an_unknown_key_is_a_notice_and_is_otherwise_ignored() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"frobnicate": 1, "handoff": {"tokens": 5, "zap": true}, "model": "a/b"}"#,
+        r#"{"frobnicate": 1, "compaction": {"tokens": 5, "zap": true}, "model": "a/b"}"#,
     );
     let config = setup.load(&["future.key=1"]).unwrap();
     let messages: Vec<_> = config.notices().iter().map(|n| n.message.clone()).collect();
@@ -326,8 +359,8 @@ fn an_unknown_key_is_a_notice_and_is_otherwise_ignored() {
     assert_eq!(
         messages,
         [
+            format!("{global}: ignored `compaction.zap`, which this Fiber does not know."),
             format!("{global}: ignored `frobnicate`, which this Fiber does not know."),
-            format!("{global}: ignored `handoff.zap`, which this Fiber does not know."),
             "-c: ignored `future`, which this Fiber does not know.".to_owned(),
         ]
     );
@@ -340,8 +373,8 @@ fn an_unknown_key_is_a_notice_and_is_otherwise_ignored() {
     assert!(config.notices().iter().all(|n| n.extension.is_none()));
     let merged = config.merged(None);
     assert_eq!(merged.get("frobnicate"), None);
-    assert_eq!(merged["handoff"].get("zap"), None);
-    assert_eq!(merged["handoff"]["tokens"], json!(5));
+    assert_eq!(merged["compaction"].get("zap"), None);
+    assert_eq!(merged["compaction"]["tokens"], json!(5));
     assert_eq!(merged["model"], json!("a/b"));
 }
 
@@ -484,7 +517,10 @@ fn a_source_prints_as_where_it_is() {
 #[test]
 fn a_query_that_is_not_a_dotted_key_finds_nothing() {
     let setup = Setup::new();
-    assert_eq!(setup.load(&[]).unwrap().get("handoff..tokens", None), None);
+    assert_eq!(
+        setup.load(&[]).unwrap().get("compaction..tokens", None),
+        None
+    );
 }
 
 #[test]

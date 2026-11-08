@@ -40,7 +40,6 @@ mod quit;
 pub(crate) mod rail;
 pub(crate) mod request;
 mod results;
-mod reviewer_setup;
 pub(crate) mod scroll_bar;
 pub(crate) mod status_rows;
 pub(crate) mod steering_queue;
@@ -607,13 +606,6 @@ fn render_frame(
     // (`docs/tui.md`, "Overlays"). The conversation's own targets go
     // away under it, as under the notices overlay. The quit question
     // draws above the report, as it takes every key while open.
-    // The reviewer setup draws first among them: the report and the quit
-    // question draw over it, as they take every key before it does.
-    let setup = reviewer_setup::draw(app, conversation, buf, &mut targets);
-    if !setup.is_empty() {
-        drop_conversation_targets(&mut targets);
-    }
-    app.frames().note(Surface::ReviewerSetup, setup);
     draw_framed(app, area, buf, &mut targets, |targets, buf| {
         drop_conversation_targets(targets);
         crate::import_report::draw_report(app, conversation, buf, targets)
@@ -709,7 +701,11 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         return if app.results_open() {
             None
         } else {
-            marks::bar_cursor(&bar, area)
+            // The bar draws in the conversation, past the gutter.
+            marks::bar_cursor(
+                &bar,
+                crate::layout::past_gutter(area, app.chrome().gutter()),
+            )
         };
     }
     let (below, col) = input_box::cursor_row(app, area.width, usize::from(area.height));
@@ -788,3 +784,7 @@ mod tests;
 #[cfg(test)]
 #[path = "tool_group_nesting_tests.rs"]
 mod tool_group_nesting_tests;
+
+#[cfg(test)]
+#[path = "hook_rewrite_tests.rs"]
+mod hook_rewrite_tests;

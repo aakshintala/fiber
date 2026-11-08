@@ -5,12 +5,12 @@ expression: wide(&mut app).0
                                                                       ▀▀▀▀▀▀▀▀▀
                                                                      you 00:00
                                                                                ┃
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ Approval 1 of 1 · s_aaaaaaaaaaaaaaaa                         Esc puts it aside
-▌ runs a command · the reviewer failed
-▌
-▌ ▸ 1 Allow once
-▌   2 Deny  type to add feedback
-▌
-▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ Approval 1 of 1 · s_aaaaaaaaaaaaaaaa                        Esc puts it aside
+⋮▌ runs a command · the reviewer failed
+⋮▌
+⋮▌ ▸ 1 Allow once
+ ▌   2 Deny  type to add feedback
+ ▌
+ ▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

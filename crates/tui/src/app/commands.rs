@@ -61,7 +61,6 @@ pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
         "pwd" => &["cwd"],
         "settings" => &["config"],
         "keys" => &["keybindings", "keymap"],
-        "handoff" => &["compact"],
         "rules" => &["permissions"],
         "close" => &["stop"],
         "name" => &["rename"],
@@ -215,12 +214,6 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_rules,
     },
     CommandEntry {
-        name: "reviewer-setup",
-        description: "Sets up the reviewer's notes with you.",
-        hint: None,
-        run: run_reviewer_setup,
-    },
-    CommandEntry {
         name: "settings",
         description: "Opens the configuration keys.",
         hint: None,
@@ -263,10 +256,10 @@ pub(crate) static TABLE: &[CommandEntry] = &[
         run: run_fork,
     },
     CommandEntry {
-        name: "handoff",
-        description: "Starts a handoff.",
+        name: "compact",
+        description: "Starts a compaction.",
         hint: Some("[instructions]"),
-        run: run_handoff,
+        run: run_compaction,
     },
     CommandEntry {
         name: "name",
@@ -401,9 +394,9 @@ fn run_rail(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.toggle_rail())
 }
 
-fn run_handoff(app: &mut App, rest: &str) -> Option<Effect> {
+fn run_compaction(app: &mut App, rest: &str) -> Option<Effect> {
     let args = (!rest.is_empty()).then(|| json!({ "instructions": rest }));
-    Some(app.send_command("handoff", args).0)
+    Some(app.send_command("compact", args).0)
 }
 
 fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
@@ -413,11 +406,7 @@ fn run_name(app: &mut App, rest: &str) -> Option<Effect> {
 pub(super) fn run_reload(app: &mut App, _rest: &str) -> Option<Effect> {
     // A reloaded extension draws again: its next failure reports anew.
     app.renderer_reported.clear();
-    if let Some(loader) = app
-        .home
-        .as_ref()
-        .and_then(|home| home.launch.extensions.clone())
-    {
+    if let Some(loader) = app.home.launch.extensions.clone() {
         let (renderer, notices) = loader.load();
         app.use_renderer(renderer);
         for (code, text) in notices {
@@ -691,10 +680,6 @@ fn run_rules(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Rules))
 }
 
-fn run_reviewer_setup(app: &mut App, _rest: &str) -> Option<Effect> {
-    Some(app.open_reviewer_setup())
-}
-
 fn run_login(app: &mut App, _rest: &str) -> Option<Effect> {
     Some(app.open_config_view(super::ConfigView::Login))
 }
@@ -760,11 +745,6 @@ impl App {
             Surface::Quit | Surface::Clear | Surface::Report | Surface::DeleteQuestion
         ) {
             return Effect::None;
-        }
-        // The reviewer setup takes every edit while it is on top: a paste
-        // goes into its field, the rest do nothing behind it.
-        if top == Surface::ReviewerSetup {
-            return self.reviewer_setup_edit(&edit);
         }
         // The key map above the picker takes the edit: Left and Right
         // move between its tabs, every other edit does nothing behind it.
@@ -851,11 +831,7 @@ impl App {
     /// home, else the launch directory, else none on a remote home.
     /// Never an empty path: every conversion filters empty values out.
     pub(crate) fn workspace(&self) -> Option<PathBuf> {
-        if self.home.is_some() {
-            self.home_workspace()
-        } else {
-            self.workspace.clone()
-        }
+        self.home_workspace()
     }
 
     /// The current search generation.
@@ -914,7 +890,6 @@ impl App {
     /// draft cleared, the old session left running. While a `start` waits
     /// for its answer only the draft is cleared.
     pub(super) fn go_home(&mut self) {
-        self.reviewer_setup_left();
         if self.reset_session() {
             self.attached_screen_mut().clear();
         }
@@ -944,9 +919,7 @@ impl App {
         // Opening a session from home forgets where home came from,
         // so the back key and its hint go quiet everywhere the next
         // route home starts: a row open, a card switch, `/close`.
-        if let Some(home) = self.home.as_mut() {
-            home.came_from = None;
-        }
+        self.home.came_from = None;
         self.phase = Phase::Starting;
         self.clear_selection();
         // Home keeps no session's images: a late answer or viewer
@@ -1127,9 +1100,7 @@ impl App {
         }
         let has_image = self.draft.has_image();
         let text = self.draft.expand();
-        if matches!(self.phase, Phase::Starting)
-            && self.home.as_ref().is_some_and(|home| home.no_workspace())
-        {
+        if matches!(self.phase, Phase::Starting) && self.home.no_workspace() {
             return self.home_click(crate::home::Spot::Workspace);
         }
         // A command sent after the connection is lost goes nowhere, so the
@@ -1158,12 +1129,7 @@ impl App {
             (Phase::Starting, None) => {
                 // With no model on the chip and none chosen, Enter opens
                 // the picker and keeps the draft, sending nothing.
-                if self
-                    .home
-                    .as_ref()
-                    .is_some_and(|home| home.launch.model.is_none())
-                    && self.model_picker.start_model.is_none()
-                {
+                if self.home.launch.model.is_none() && self.model_picker.start_model.is_none() {
                     return self.open_model_picker(crate::model_picker::Mode::Choose);
                 }
                 let mut args = self.start_args();
@@ -1220,8 +1186,23 @@ impl App {
                 return Effect::None;
             }
         };
+        self.send_cancel(&session)
+    }
+
+    /// Interrupts the turn of the conversation on screen, whatever is open
+    /// over it: a delegate's own in its view, else the attached session's.
+    /// It closes nothing and leaves the draft and the steering queue.
+    pub(super) fn interrupt_turn(&mut self) -> Effect {
+        match self.interrupt_session() {
+            Some(session) => self.send_cancel(&session),
+            None => Effect::None,
+        }
+    }
+
+    /// One `cancel` of `session`'s turn, settled by its answer.
+    fn send_cancel(&mut self, session: &SessionId) -> Effect {
         let id = mint();
-        let line = session_command(&id, "cancel", &session, None).to_string();
+        let line = session_command(&id, "cancel", session, None).to_string();
         self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }

@@ -330,23 +330,23 @@ A session message from another session is excluded too (`docs/tools.md`,
 "Messaging other sessions"). Another model wrote it, so including it would let
 one session approve calls in another by messaging it.
 
-### At a handoff
+### At a compaction
 
-The reviewer's input follows the session's handoffs (`docs/handoff.md`), so
-it grows with the context window, not the transcript. At each handoff, Fiber
+The reviewer's input follows the session's compactions (`docs/compaction.md`), so
+it grows with the context window, not the transcript. At each compaction, Fiber
 asks the reviewer which of the person's messages still bind, such as standing
 orders, scope limits and "don't touch X". The reviewer answers with a
 selection of messages, not prose, and Fiber carries those messages word for
-word, each with the reply it answered. After the handoff the reviewer's input
+word, each with the reply it answered. After the compaction the reviewer's input
 is the kept messages, then the person's messages, the replies they answered
-and the agent's tool calls since the handoff.
+and the agent's tool calls since the compaction.
 
 Nothing the reviewer writes enters its own prompt. Tool-call arguments are
 agent-written, so a prose note could repeat text such as `echo "user approved
-pushing to main"` as if it were the person's. The handoff note is excluded for
+pushing to main"` as if it were the person's. The compaction note is excluded for
 the same reason: the session's model writes it after reading tool results.
 
-The selection is recorded in the session log as `reviewer_kept` (`docs/events.md`, "Handoff"), so the person can see what was
+The selection is recorded in the session log as `reviewer_kept` (`docs/events.md`, "Compaction"), so the person can see what was
 kept. When the kept messages would pass the reviewer model's context window,
 the oldest drop first. When the selection request fails, every earlier person
 message is kept and a `notice` says so. When the session has no reviewer, nothing is asked and no line or notice is written.
@@ -394,11 +394,16 @@ them: each layer's text under its heading.
 
 ### Setting up the notes
 
-`/reviewer-setup`, in the interactive terminal, writes the notes with the
-person. The person types it and the terminal runs it, so its save is not an
-agent's edit. It has no command-line form, and a headless run never starts it.
+The `reviewer-setup` skill (`docs/skills/`) writes the notes with the
+person in a session of their own, with the agent proposing the setup. It
+gathers the evidence with `fiber reviewer evidence --json`, drafts one line
+per fact or rule for each topic in order, confirms each topic with the
+person through `ask_user`, and calls `reviewer_notes_save` with their kept
+lines. Two write paths stay closed: no agent edit reaches the notes except
+through that call, and the call writes only on a confirm the person answers.
 The first time in a session that the reviewer blocks a call while both layers
-of the notes are empty, the terminal shows one notice naming the command.
+of the notes are empty, the terminal shows one notice naming the command. A
+call escalated for want of a reviewer model (`no_model`) is no block.
 
 It proposes lines, one topic at a time, in the order of the bullets above.
 Each proposal comes from evidence:
@@ -427,46 +432,49 @@ Each proposal comes from evidence:
   one part has no subject, so it never counts. The tally counts the command
   the reviewer saw, after `before_tool`.
 
-The session's model turns the evidence for each topic but Read-only commands
-into proposed lines, one fact or rule a line, in a request of its own that
-carries no conversation. Its `usage_recorded` belongs to no action. Fourteen
-escalations answered allow for `gh pr merge … --squash` on the person's
-repositories become "squash-merging my own pull requests once CI passes". The
-person confirms, edits or strikes each line. Only confirmed lines are kept,
-and no model writes or rewrites the notes themselves: a template sets each
-confirmed line as a bullet under its topic's heading.
+The agent drafts each topic's lines but Read-only commands from that
+evidence plus what the person tells it in the session, one fact or rule a
+line. Fourteen escalations answered allow for `gh pr merge … --squash` on
+the person's repositories become "squash-merging my own pull requests once
+CI passes". Only confirmed lines are kept, and no model writes or rewrites
+the notes themselves.
 
-For Read-only commands no model request goes out and no `usage_recorded` is
-written: a template builds each proposal from its tally, and the proposal
-shows the counted calls' subjects so the person sees what they are vouching
-for. Each proposal is a `shell.read_only."<command> [<subcommand>]".flags`
-entry holding the flags the counted calls used. The person confirms, edits
-or strikes each entry as with note lines, and Esc on its lines goes back to
-the previous topic's lines, because this topic has no question to return
-to. No model writes the entry. A confirmed entry goes to the per-project
-config when every allow behind it came from this project, and to the global
-config otherwise, using the rule session lines already use. A save that
-writes only entries counts as saved.
+For Read-only commands the agent drafts each entry from its tally in
+rendered form, and the evidence carries the counted calls' subjects so the
+person sees what they are vouching for. Each entry is a
+`shell.read_only."<command> [<subcommand>]".flags` entry holding the flags
+the counted calls used. A confirmed entry goes to the per-project config
+when every allow behind it came from this project, and to the global config
+otherwise, using the rule session lines already use. A save that writes only
+entries counts as saved.
 
-Each line shows the layer it will go to, and one key flips it. A line from the
-project's files goes to the per-project notes. An answer about accounts, hosts
-or tools goes to the global notes. A session line goes to the per-project notes
-when every escalation behind it came from this project, and to the global notes
+`reviewer_notes_save` shows the diff for each file, with the file named,
+and writes only on a confirm the person answers; a call that changes nothing
+reports unchanged and writes nothing. The person's confirm is the gate: a
+`fiber ask` session has nobody to answer it, so the call fails there with a
+`tool_error`, and exiting with a confirm pending abandons the save, because
+the reviewer tool never suspends.
+
+Each line carries the layer it will go to. A line from the project's files
+goes to the per-project notes. An answer about accounts, hosts or tools goes
+to the global notes. A session line goes to the per-project notes when every
+escalation behind it came from this project, and to the global notes
 otherwise.
 
-Last, one screen shows each layer's notes exactly as they will be saved, as a
+Last, Fiber shows each layer's notes exactly as they will be saved, as a
 diff against what is there, with the file named, and beside them the config
-file's diff with its entries, with the file named. Approving saves them and
-then offers a reload now or the change from the next session, because the
-notes are fixed for the session. Cancelling saves nothing.
+file's diff with its entries, with the file named. Approving saves them,
+because the notes are fixed for the session. A refused confirm saves
+nothing.
 
-The command owns the bullets under its topic headings; Read-only commands
-owns none, because its entries live in configuration, not the notes. Run
-again, it shows its earlier lines first, to keep or strike, and proposes
-only what they do not already cover; a command the built-in list or either
-layer's `shell.read_only` already holds is never re-proposed. Text outside
-its headings, such as prose the person wrote — including a person's own
-"### Read-only commands" — is kept byte for byte.
+The save owns the bullets under its topic headings; Read-only commands owns
+none, because its entries live in configuration, not the notes. Send a
+topic's lines only when the topic has at least one kept line: omission
+preserves, so topics left out and entries dropped stand as they are. A
+changed entry is refused before any confirm; a command the built-in list or
+either layer's `shell.read_only` already holds is never re-proposed. Text
+outside its headings, such as prose the person wrote — including a person's
+own "### Read-only commands" — is kept byte for byte.
 
 An entry is proposed only when the command and subcommand words end where
 its paths begin, and only for a command path that neither equals, contains
@@ -487,15 +495,14 @@ A denied, blocked or escalated call that cannot be parsed counts against
 every entry whose command name appears in it, and so does one an extension
 ran.
 
-A subject that gets no entry is shown dim with the reason, and is never
-saved.
+A subject that gets no entry carries the reason, and is never saved.
 
 A call that gave a flag a value, such as "--exec=ls", gets no entry.
 
 A command word containing "/" gets no entry.
 
-If the read-only proposal fails, the setup shows why and goes on to the
-diff without it.
+If the read-only proposal fails, the skill reports why and goes on
+without it.
 
 An entry is trusted: a command on it that writes after all writes without
 review.
@@ -522,7 +529,7 @@ a billed request is never hidden from the `usage` fold. The first stage asks for
 thinking level, or none when the model declares none
 (`docs/model-routing.md`, "Thinking"), and caps its reply at 4,096 tokens:
 a ceiling for a model that does not stop, not the answer's length. The
-second stage and the handoff selection ask for the same level, because a
+second stage and the compaction selection ask for the same level, because a
 change of level misses the reviewer's cache (`docs/prompt-cache.md`,
 "Rules for other areas"). Most reviewed calls cost a few output tokens.
 
@@ -661,8 +668,8 @@ and the rewritten `arguments` with `changed_by` when a `before_tool` hook rewrot
 them, because no `permission_requested` and no `tool_call_started` holds them.
 
 The reviewer's own calls carry the same attribution as `usage_recorded`:
-`reviewer.purpose` is `stage_1`, `stage_2` or `handoff`, and
-`reviewer.action_id` is the call under review, absent on a handoff
+`reviewer.purpose` is `stage_1`, `stage_2` or `compaction`, and
+`reviewer.action_id` is the call under review, absent on a compaction
 (`docs/events.md`, "`usage_recorded`").
 
 A blocked call ends as `tool_call_completed` with `status: denied` and a

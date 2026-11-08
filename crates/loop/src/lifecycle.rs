@@ -30,10 +30,10 @@ thread_local! {
     /// path.
     static BEFORE_HELD_WRITE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
-    /// A shutdown the test runs after a handoff's `session_start` final
+    /// A shutdown the test runs after a compaction's `session_start` final
     /// check, before the guarded completion write: the order a shutdown
     /// landing between the two would force.
-    static AFTER_HANDOFF_START_CHECK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+    static AFTER_COMPACTION_START_CHECK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
 }
 
@@ -57,22 +57,22 @@ fn pause_before_held_write() {
     });
 }
 
-/// Runs the hook [`AFTER_HANDOFF_START_CHECK`] holds, if any, then clears
+/// Runs the hook [`AFTER_COMPACTION_START_CHECK`] holds, if any, then clears
 /// it.
 #[cfg(test)]
-pub(crate) fn pause_after_handoff_start_check() {
-    AFTER_HANDOFF_START_CHECK.with(|hook| {
+pub(crate) fn pause_after_compaction_start_check() {
+    AFTER_COMPACTION_START_CHECK.with(|hook| {
         if let Some(paused) = hook.borrow_mut().take() {
             paused();
         }
     });
 }
 
-/// Parks the next handoff completion on `paused`: it runs after the
+/// Parks the next compaction completion on `paused`: it runs after the
 /// `session_start` final check, before the guarded completion write.
 #[cfg(test)]
-pub(crate) fn pause_after_handoff_start(paused: Box<dyn FnOnce()>) {
-    AFTER_HANDOFF_START_CHECK.with(|hook| {
+pub(crate) fn pause_after_compaction_start(paused: Box<dyn FnOnce()>) {
+    AFTER_COMPACTION_START_CHECK.with(|hook| {
         *hook.borrow_mut() = Some(paused);
     });
 }
@@ -81,13 +81,13 @@ pub(crate) fn pause_after_handoff_start(paused: Box<dyn FnOnce()>) {
 /// resumed turn's `session_start` contexts wait in: held across calls,
 /// never in `queued`, so a cancel never carries them into another turn.
 /// `ran` is set before the hook runs, so a failed or cancelled run is
-/// never retried in the process; a handoff never touches it.
+/// never retried in the process; a compaction never touches it.
 pub(crate) struct State {
     /// Messages `turn_end` hooks continued the turn with, oldest first.
     pub(crate) continued: Vec<contract::hook::Context>,
     /// Why this process's first turn runs `session_start`: `start` on a
     /// new session, `resume` on a resumed one, `rewind` once the rewound
-    /// loop adopts it. A handoff always tells the hook `handoff`.
+    /// loop adopts it. A compaction always tells the hook `compaction`.
     pub(crate) reason: StartReason,
     /// The session's id, as the hook is told it.
     session: SessionId,
@@ -266,14 +266,14 @@ impl Loop {
         }
     }
 
-    /// Runs `session_start` with reason `handoff`, once the note is ready
+    /// Runs `session_start` with reason `compaction`, once the note is ready
     /// (`docs/extensions.md`, "The hook points"). The hook sees the
     /// reason and not the note. Never touches `ran`.
-    pub(crate) fn handoff_start(&mut self, turn: &TurnId) -> Result<Started, Error> {
+    pub(crate) fn compaction_start(&mut self, turn: &TurnId) -> Result<Started, Error> {
         self.session_start_chain(
             Some(turn),
-            StartReason::Handoff,
-            "the handoff did not complete",
+            StartReason::Compaction,
+            "the compaction did not complete",
         )
     }
 }

@@ -32,7 +32,7 @@ fn typing_filters_prefix_matches_first() {
     answer_commands(&mut app, &["tdd", "areview"]);
     type_text(&mut app, "/re");
     // Prefix matches first, each group in the `/` list's drawn order
-    // (`docs/tui.md`, "Slash commands"): resume, release-notes, reviewer-setup,
+    // (`docs/tui.md`, "Slash commands"): resume, release-notes,
     // rewind, name by its `rename` alias, and reload; then the
     // contains matches, credential and the `areview` skill.
     assert_eq!(
@@ -40,7 +40,6 @@ fn typing_filters_prefix_matches_first() {
         [
             "/resume  Goes home, focused on the first exited row.  command",
             "/release-notes  Opens the running version's release notes.  command",
-            "/reviewer-setup  Sets up the reviewer's notes with you.  command",
             "/rewind  Opens the rewind view.  command",
             "/name /rename <text>  Names the session.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
@@ -129,9 +128,9 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
 #[test]
 fn tab_completes_the_selected_name_and_closes_the_panel() {
     let mut app = connected();
-    type_text(&mut app, "/han");
+    type_text(&mut app, "/comp");
     assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
-    assert_eq!(app.draft(), "/handoff ");
+    assert_eq!(app.draft(), "/compact ");
     assert_eq!(app.completions(), None);
 }
 
@@ -189,7 +188,7 @@ fn esc_closes_the_slash_panel_and_keeps_the_draft_until_it_is_emptied() {
 #[test]
 fn a_space_closes_the_slash_panel() {
     let mut app = connected();
-    type_text(&mut app, "/handoff ");
+    type_text(&mut app, "/compact ");
     assert_eq!(app.completions(), None);
     app.on_key(Key::Backspace, now());
     assert_eq!(shown(&app).len(), 1);
@@ -207,6 +206,7 @@ fn the_approvals_row_opens_the_waiting_queue() {
 fn the_slash_panel_reserves_no_rows() {
     let mut app = connected();
     app.set_size(80, 24);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert_eq!(app.conversation_height(), 19);
     // The `/` panel draws over the conversation, reserving nothing,
     // however many rows match (`docs/tui.md`, "Look", "Overlays").
@@ -531,7 +531,7 @@ fn slash_completions_carry_their_window() {
     let completions = app.completions().expect("the panel shows");
     assert_eq!(completions.query, "re");
     // The `/` list shows built-ins in the table order (`docs/tui.md`, "Slash commands").
-    assert_eq!(completions.total, 8);
+    assert_eq!(completions.total, 7);
     assert_eq!(completions.start, 0);
     assert_eq!(completions.selected, Some(0));
     let names: Vec<&str> = match &completions.rows {
@@ -545,7 +545,6 @@ fn slash_completions_carry_their_window() {
         [
             "resume",
             "release-notes",
-            "reviewer-setup",
             "rewind",
             "name",
             "reload",
@@ -558,7 +557,6 @@ fn slash_completions_carry_their_window() {
         [
             "/resume  Goes home, focused on the first exited row.  command",
             "/release-notes  Opens the running version's release notes.  command",
-            "/reviewer-setup  Sets up the reviewer's notes with you.  command",
             "/rewind  Opens the rewind view.  command",
             "/name /rename <text>  Names the session.  command",
             "/reload  Reloads configuration, MCP servers and extensions.  command",
@@ -1094,7 +1092,9 @@ fn closing_the_panels_leaves_the_next_slash_panel_able_to_open() {
     // and the `/` panel still opens after the search closes.
     let mut app = attached();
     type_text(&mut app, "/");
-    assert_eq!(app.on_key(Key::CtrlR, now()), Effect::None);
+    // The panel asks the hub for the project's prompt history.
+    assert!(matches!(app.on_key(Key::CtrlR, now()), Effect::Send(lines)
+            if lines.iter().any(|line| line.contains("prompt_history"))));
     assert!(app.search_panel().is_some());
     app.close_completion_panels();
     assert!(app.search_panel().is_some());

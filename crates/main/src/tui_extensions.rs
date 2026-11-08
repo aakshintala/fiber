@@ -830,7 +830,7 @@ fn input_value(input: &Input<'_>) -> Value {
                 "flat": answers.flat,
             }),
         },
-        Input::HandoffBand(band) => {
+        Input::CompactionBand(band) => {
             json!({
                 "trigger": band.trigger,
                 "ts": band.ts,
@@ -1208,7 +1208,28 @@ fn ledger_value(row: &tui::ext::LedgerRow<'_>) -> Value {
             json!(result.output),
         ),
     };
-    json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": exit, "duration_ms": duration_ms, "lines": lines, "changes": changes, "error": error, "output": output, "answer": row.answer, "flat": row.flat})
+    let mut value = json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": exit, "duration_ms": duration_ms, "lines": lines, "changes": changes, "error": error, "output": output, "answer": row.answer, "flat": row.flat});
+    with_changed_by(&mut value, row.changed_by);
+    with_recipient(&mut value, row.recipient);
+    value
+}
+
+/// Writes `changed_by` onto a call's input only when a hook rewrote the
+/// call: an optional key is absent when it does not apply, never `null`
+/// (`docs/tui.md`, "The slots").
+fn with_changed_by(value: &mut Value, changed_by: Option<&[String]>) {
+    if let (Some(names), Some(object)) = (changed_by, value.as_object_mut()) {
+        object.insert("changed_by".to_owned(), json!(names));
+    }
+}
+
+/// Writes `recipient` onto a call's input only when the terminal held one:
+/// an optional key is absent when it does not apply, never `null`
+/// (`docs/tui.md`, "How a TUI extension runs").
+fn with_recipient(value: &mut Value, recipient: Option<&str>) {
+    if let (Some(text), Some(object)) = (recipient, value.as_object_mut()) {
+        object.insert("recipient".to_owned(), json!(text));
+    }
 }
 
 fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {
@@ -1220,7 +1241,7 @@ fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {
 
 /// A band's state as Lua reads it: `writing`, `done` with its context
 /// sizes, or `unchanged` with `cancelled` (`docs/tui.md`, "The slots",
-/// `handoff_band`).
+/// `compaction_band`).
 fn band_state_value(state: &tui::ext::TurnBandState) -> Value {
     match state {
         tui::ext::TurnBandState::Writing => json!({"kind": "writing"}),
@@ -1384,7 +1405,7 @@ fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
             images_value(&result.images),
         ),
     };
-    json!({
+    let mut value = json!({
         "name": call.name,
         "arguments": call.arguments,
         "status": status,
@@ -1400,7 +1421,10 @@ fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
         "images": images,
         "open": call.open,
         "asking": call.asking,
-    })
+    });
+    with_changed_by(&mut value, call.changed_by);
+    with_recipient(&mut value, call.recipient);
+    value
 }
 
 fn aside_value(aside: &tui::ext::TurnAside<'_>) -> Value {

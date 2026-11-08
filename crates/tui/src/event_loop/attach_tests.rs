@@ -4,8 +4,8 @@
 use super::super::hub::Connection;
 use super::super::pause;
 use super::{
-    DEADLINE, answers_all, counted, counting, line, opened, quit, run_queued, serve, session,
-    shown, turn_lines,
+    DEADLINE, answers_all, counted, counting, line, opened, quit, quit_leaving_work, run_queued,
+    serve, session, shown, turn_lines,
 };
 use crate::Input;
 use crate::link::{Credits, Feed, Line, answers, read_lines};
@@ -16,11 +16,12 @@ use contract::clock::Clock;
 use contract::events::EventKind;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -2132,7 +2133,9 @@ fn a_session_left_before_the_boundary_allows_history_on_demand() {
 
 /// A mouse report against the targets drawn for the app's current view.
 fn select_report(app: &mut crate::app::App, kind: crate::keys::MouseKind, col: u16, row: u16) {
-    let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+    // The app's own size: the layout draws to its height.
+    let (width, height) = app.screen_size();
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
     let mut buffer = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(app, area, &mut buffer, None);
     app.on_select(&crate::keys::Mouse { kind, col, row }, &targets);
@@ -2184,7 +2187,7 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
         .expect("the log names its session");
     lp.app.load(&piece, first.clone());
     assert!(lp.app.pages().part(0).is_some());
-    select_report(&mut lp.app, MouseKind::Press(Button::Left), 0, 0);
+    select_report(&mut lp.app, MouseKind::Press(Button::Left), 2, 0);
     select_report(&mut lp.app, MouseKind::Drag(Button::Left), 59, 2);
     lp.app.on_key(Key::End, lp.clock.now());
     assert!(lp.app.pages().part(0).is_none());
@@ -2327,7 +2330,7 @@ fn reopened_history(older_ending: bool) {
         0
     );
     let second = wait.recv_or_fail(&histories, "history after the reopened fold");
-    tx.send(quit()).unwrap();
+    tx.send(quit_leaving_work()).unwrap();
     let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
     wire.close();
     assert!(
@@ -2439,7 +2442,7 @@ fn a_history_waits_for_the_opening_pass_at_the_opening_window() {
                 break;
             }
         }
-        tx.send(quit()).unwrap();
+        tx.send(quit_leaving_work()).unwrap();
         let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit");
         wire.close();
         let peak = lp.hub.answer_stash_peak();
@@ -2597,7 +2600,8 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
         }
         // Quit is ordered after the answer is received by the loop, so
         // it cannot meet the stash arm in `answer`.
-        tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+        tx.send(quit_leaving_work())
+            .unwrap_or_else(|err| panic!("send: {err}"));
         release_tx
             .send(())
             .unwrap_or_else(|err| panic!("release: {err}"));
@@ -3403,7 +3407,7 @@ fn startup_loader_completes_before_the_first_draw_observes_its_result() {
 
 #[test]
 fn tail_speculation_failure_survives_replay_and_reaches_actual_app_drain_once() {
-    let mut log = super::handoff_log(3, "tail reply");
+    let mut log = super::compaction_log(3, "tail reply");
     let at = log
         .iter()
         .position(|line| line.kind == EventKind::AssistantMessageCompleted)
@@ -3496,7 +3500,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
             }
         }
     }
-    let mut log = super::handoff_log(3, "tail reply");
+    let mut log = super::compaction_log(3, "tail reply");
     let at = log
         .iter()
         .position(|line| line.kind == EventKind::AssistantMessageCompleted)
@@ -3541,7 +3545,7 @@ fn tail_speculation_notice_survives_replay_and_reaches_durable_drain_once() {
 
 #[test]
 fn the_first_frame_draws_the_last_page_before_the_full_subscribe() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let open = tail_open(log, Full::Hung, History::Windows, Vec::new());
     assert_eq!(
         seen_commands(&open),
@@ -3586,7 +3590,7 @@ fn older_reads_use_to_seq_just_below_the_earliest_held_line() {
 /// ends as failed with the answer's message, and the raise goes out.
 #[test]
 fn a_history_rejection_shows_the_notice_and_still_raises() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let open = tail_open(log, Full::Accepted, History::Reject("boom"), Vec::new());
     assert_eq!(open.lp.app.notice(), Some("Could not load history: boom"));
     let levels: Vec<String> = seen_commands(&open)
@@ -3602,7 +3606,7 @@ fn a_history_rejection_shows_the_notice_and_still_raises() {
 /// open, and the raise goes out.
 #[test]
 fn a_reopening_during_the_read_abandons_it_and_still_raises() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let reopened = json!({"kind": "stream_reopened", "ts": 0,
         "schema_version": contract::SCHEMA_VERSION,
         "payload": {"session_id": "s_aaaaaaaaaaaaaaaa"}});
@@ -3621,7 +3625,7 @@ fn a_reopening_during_the_read_abandons_it_and_still_raises() {
 /// the tail never installs, and no raise goes out.
 #[test]
 fn a_lost_connection_during_the_read_ends_everything() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let mut open = tail_open(log, Full::Hung, History::Drop, Vec::new());
     assert!(!open.lp.app.connected());
     assert!(!open.lp.hub.has_stream());
@@ -3644,7 +3648,7 @@ fn a_lost_connection_during_the_read_ends_everything() {
 /// pass.
 #[test]
 fn an_empty_log_draws_no_history_and_raises() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let mut open = tail_open(log, Full::Accepted, History::Empty, Vec::new());
     let drawn = frames(&open);
     let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
@@ -3668,7 +3672,7 @@ fn an_empty_log_draws_no_history_and_raises() {
 /// first with the answer wait holding the commands reply and two notices.
 #[test]
 fn the_tail_read_stashes_other_inputs_and_replays_them_in_order() {
-    let log = super::handoff_log(3, "the last reply");
+    let log = super::compaction_log(3, "the last reply");
     let notice = |text: &str| {
         let envelope = super::line("notice", None, None, json!({"message": text}));
         let mut value = serde_json::to_value(&envelope).unwrap_or_default();
@@ -3717,7 +3721,7 @@ fn no_frame_shows_part_of_the_replay_through_a_slow_channel() {
     const SHORT: usize = 50;
     // Nine lines a turn bar the last: the replay overfills one batch,
     // with a tail behind the short part.
-    let log = super::handoff_log(479, "the last reply holds quokkas");
+    let log = super::compaction_log(479, "the last reply holds quokkas");
     // The ack and `HUB_BATCH - 1` lines fill the first batch.
     let head = HUB_BATCH - 1;
     assert!(
@@ -3925,7 +3929,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
     const SHORT: usize = 50;
     // Nine lines a turn bar the last: the replay overfills one batch,
     // with a tail behind the short part.
-    let log = super::handoff_log(479, "the last reply holds quokkas");
+    let log = super::compaction_log(479, "the last reply holds quokkas");
     // The ack and `HUB_BATCH - 1` lines fill the first batch.
     let head = HUB_BATCH - 1;
     assert!(
@@ -4090,7 +4094,7 @@ fn a_gated_redundant_ack_shifts_the_middle_batch() {
 
 #[test]
 fn a_preview_survives_the_pass_and_lands_with_the_whole_session() {
-    let log = super::handoff_log(3, "the last reply holds quokkas");
+    let log = super::compaction_log(3, "the last reply holds quokkas");
     let mut open = tail_open(log.clone(), Full::Replay, History::Windows, Vec::new());
     let drawn = frames(&open);
     let frame = drawn.last().unwrap_or_else(|| panic!("a frame"));
@@ -4360,7 +4364,7 @@ fn last_seq(log: &[contract::Envelope]) -> u64 {
 fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
     // The held rows stay the preview through the reconnect.
-    let log = super::handoff_log(5, "the held reply holds quokkas");
+    let log = super::compaction_log(5, "the held reply holds quokkas");
     let last = last_seq(&log);
     let mut app = live_app();
     for envelope in &log {
@@ -4399,7 +4403,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     // Without the anchor the landing follows the end: the replay
     // lacks the top row's reply, so the top row's text is gone and
     // the last lines show.
-    let log = super::handoff_log(2, "the first reply");
+    let log = super::compaction_log(2, "the first reply");
     let mut app = live_app();
     for envelope in &log {
         app.on_line(Line::Session(envelope.clone()));
@@ -4411,7 +4415,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
         !lines.iter().any(|line| line.contains("\"history\"")),
         "reads nothing: {lines:?}"
     );
-    let other = super::handoff_log(1, "the other last reply");
+    let other = super::compaction_log(1, "the other last reply");
     let summary = summary_id(&lines);
     app.on_line(session_accepted(SESSION, &summary));
     let raise: serde_json::Value =
@@ -4434,7 +4438,7 @@ fn a_reconnect_to_the_session_on_screen_reads_nothing_and_keeps_its_place() {
     // A row open still reads and follows: the tail read goes out,
     // and the landed screen shows the end of a session taller than
     // the screen.
-    let log = super::handoff_log(5, "the last reply holds quokkas");
+    let log = super::compaction_log(5, "the last reply holds quokkas");
     let mut open = tail_open(log, Full::Replay, History::Windows, Vec::new());
     assert!(
         open.seen
@@ -7091,6 +7095,186 @@ fn fetch_cursor_advances_past_a_window_answered_below_its_start() {
         windows,
         vec![(5, 9), (6, 9), (7, 9), (8, 9), (9, 9)],
         "each window starts past the last window's start"
+    );
+    drop(lp);
+}
+
+/// A history answer covering none of its window ends the fetch as
+/// a failed range: `page_in` fails the range once instead of
+/// re-requesting a window that never fills (#4192).
+#[test]
+fn fetch_fails_a_window_answered_empty() {
+    use contract::Seq;
+    use std::ops::RangeInclusive;
+    let (mut lp, theirs, tx, rx) = opened();
+    demand_top(&mut lp);
+    let needed = lp.app.needs();
+    assert!(!needed.is_empty(), "the top page still needs its lines");
+    let (segment, span) = needed[0].clone();
+    // One `history` command answers 256 lines at most: the span's
+    // first chunk, answered empty.
+    let from = span.start().0;
+    let end = from
+        .saturating_add(super::super::hub::HISTORY_LINES - 1)
+        .min(span.end().0);
+    let range: RangeInclusive<Seq> = Seq(from)..=Seq(end);
+    let seen = serve(
+        theirs,
+        tx,
+        Box::new(move |command: &serde_json::Value| {
+            if command["command"] != "history" {
+                return Vec::new();
+            }
+            let id = command["id"].as_str().unwrap_or_default().to_owned();
+            vec![Input::Hub(Line::Session(command_answer(&id, Vec::new())))]
+        }),
+    );
+    let fetched = lp.hub.fetch(
+        &rx,
+        &segment,
+        &range,
+        &mut lp.app,
+        &lp.tick,
+        lp.clock.as_ref(),
+        lp.tick.armed(),
+    );
+    assert_eq!(
+        fetched,
+        Err("the answer held none of its lines".to_owned()),
+        "an empty answer fails the range instead of returning no lines"
+    );
+    let windows: Vec<(u64, u64)> = seen
+        .lock()
+        .unwrap_or_else(|err| panic!("seen: {err}"))
+        .iter()
+        .filter(|command| command["command"] == "history")
+        .map(|command| {
+            (
+                command["args"]["from_seq"].as_u64().unwrap_or(u64::MAX),
+                command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    assert_eq!(
+        windows,
+        vec![(from, end)],
+        "the failed range goes out once, never again"
+    );
+    drop(lp);
+}
+
+/// Counts the commands `seen` holds by name.
+fn command_counts(seen: &Arc<Mutex<Vec<Value>>>) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for command in seen
+        .lock()
+        .unwrap_or_else(|err| panic!("seen: {err}"))
+        .iter()
+    {
+        *counts
+            .entry(command["command"].as_str().unwrap_or_default().to_owned())
+            .or_insert(0) += 1;
+    }
+    counts
+}
+
+/// A refused resume surfaces its reason as a notice, returns the
+/// draft, and the loop still handles a follow-up input; a refusal for
+/// another session's id settles nothing on the attached session
+/// (#4192).
+#[test]
+fn failed_resume_keeps_draft_and_loop() {
+    let log = exited_log();
+    let (mut lp, theirs, tx, rx, summary) = opened_exited(&log[..307]);
+    opening_as(&mut lp.app, &summary, 318);
+    // The first `prompt` command gets a `session_not_found` refusal
+    // naming the attached session, then the follow-up Enter and the
+    // quit: one sender keeps the refusal first, so the follow-up runs
+    // after the refusal restores the draft. Later prompts go
+    // unanswered. A foreign refusal names an unknown command id on
+    // another session.
+    let mut refused = false;
+    let seen = serve(
+        theirs,
+        tx.clone(),
+        Box::new(move |command: &serde_json::Value| {
+            if command["command"] != "history" {
+                if command["command"] == "prompt" && !refused {
+                    refused = true;
+                    let id = command["id"].as_str().unwrap_or_default().to_owned();
+                    let rejected = line(
+                        "command_rejected",
+                        None,
+                        None,
+                        json!({"command_id": id, "code": "session_not_found",
+                            "message": "No such session."}),
+                    );
+                    return vec![
+                        Input::Hub(Line::Session(rejected)),
+                        Input::Bytes(b"\r".to_vec()),
+                        quit(),
+                    ];
+                }
+                return Vec::new();
+            }
+            let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+            let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+            let id = command["id"].as_str().unwrap_or_default().to_owned();
+            vec![Input::Hub(Line::Session(command_answer(
+                &id,
+                super::tail_history(&log, from, to),
+            )))]
+        }),
+    );
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done_tx
+                .send((code, lp))
+                .unwrap_or_else(|err| panic!("send: {err}"));
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    tx.send(Input::Bytes(b"take up the resumed work".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(Input::Bytes(b"\r".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    // A foreign refusal settles nothing: the draft stays empty and no
+    // prompt goes out for it.
+    let foreign = line(
+        "command_rejected",
+        None,
+        None,
+        json!({"command_id": "c_ffffffffffffffff", "code": "session_not_found",
+            "message": "Foreign refusal.", "session_id": "s_bbbbbbbbbbbbbbbb"}),
+    );
+    tx.send(Input::Hub(Line::Session(foreign)))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit");
+    assert_eq!(code, 0, "the loop still quits after a refused resume");
+    let counts = command_counts(&seen);
+    assert_eq!(
+        counts.get("prompt"),
+        Some(&2),
+        "the follow-up prompt goes out after the refusal: {counts:?}"
+    );
+    assert_eq!(lp.app.draft(), "", "the follow-up Enter consumes the draft");
+    assert!(
+        lp.app.notices().iter().any(|line| matches!(
+            line,
+            crate::app::NoticeLine::Notice { code, text, .. }
+            if *code == contract::ErrorCode::SessionNotFound && text == "No such session."
+        )),
+        "the refused resume surfaces its reason as a notice"
+    );
+    assert!(
+        !lp
+            .app
+            .notices()
+            .iter()
+            .any(|line| matches!(line, crate::app::NoticeLine::Notice { text, .. } if text == "Foreign refusal.")),
+        "a refusal for another session's id settles nothing locally"
     );
     drop(lp);
 }

@@ -30,9 +30,14 @@ fn envelope(kind: &str, payload: serde_json::Value, action: Option<&str>) -> Lin
 /// An app with one turn of `count` read groups and their replies, closed:
 /// one line target per group.
 fn groups(count: usize, width: u16, height: u16) -> App {
+    groups_asked(count, width, height, "go")
+}
+
+/// [`groups`] after a prompt of `prompt`.
+fn groups_asked(count: usize, width: u16, height: u16, prompt: &str) -> App {
     let mut app = attached(width, height);
     let input = serde_json::json!({"input": [{"type": "message", "source": "driver",
-        "content": [{"type": "text", "text": "go"}]}]});
+        "content": [{"type": "text", "text": prompt}]}]});
     app.on_line(envelope("turn_started", input, None));
     for i in 1..=count {
         app.on_line(envelope(
@@ -149,7 +154,7 @@ fn rect_of(targets: &[Hit], id: TargetId) -> Rect {
 
 /// The regions and targets of a screen with a panel and a rail: no panel
 /// or rail ids exist until #669, so a notice and "+N more" stand in for
-/// the panel's cards, and handoff notes for the rail's.
+/// the panel's cards, and compaction notes for the rail's.
 fn screened() -> (Regions, Vec<Hit>) {
     let regions = Regions {
         panel: Some(Rect::new(60, 0, 20, 20)),
@@ -282,7 +287,7 @@ fn j_and_down_step_on_k_and_up_step_back_and_the_ends_hold() {
 
 #[test]
 fn stepping_up_past_the_top_scrolls_the_item_above_onto_the_top_row() {
-    let mut app = groups(12, 60, 8);
+    let mut app = groups(12, 60, 10);
     let ids = group_ids(&app);
     key(&mut app, Key::BackTab);
     assert_eq!(app.focused(), ids.last().copied());
@@ -309,7 +314,7 @@ fn stepping_up_past_the_top_scrolls_the_item_above_onto_the_top_row() {
 
 #[test]
 fn stepping_down_past_the_bottom_scrolls_the_item_below_onto_the_last_row() {
-    let mut app = groups(12, 60, 8);
+    let mut app = groups(12, 60, 10);
     let ids = group_ids(&app);
     key(&mut app, Key::BackTab);
     for want in ids.iter().rev().skip(1) {
@@ -620,6 +625,8 @@ fn global_keys_still_work_while_navigating() {
 #[test]
 fn tab_moves_to_the_panel_then_the_rail() {
     let mut app = attached(60, 20);
+    // The attach's layout lands first, so the regions set below stay.
+    app.settle();
     let (regions, targets) = screened();
     app.set_regions(regions);
     app.drawn(&targets);
@@ -646,6 +653,8 @@ fn tab_moves_to_the_panel_then_the_rail() {
 #[test]
 fn tab_skips_a_hidden_panel() {
     let mut app = attached(60, 20);
+    // The attach's layout lands first, so the regions set below stay.
+    app.settle();
     let (regions, targets) = screened();
     let regions = Regions {
         panel: None,
@@ -748,10 +757,10 @@ fn shift_tab_with_a_completion_panel_open_stays_in_the_input_box() {
 
 #[test]
 fn a_wrapped_item_is_revealed_whole() {
-    // An open ledger's long call row wraps at width 12; a group summary
-    // is one row, whatever runs, so the call row stands in for the
-    // wrapped item the navigation must reveal whole.
-    let mut app = attached(12, 8);
+    // An open ledger's long call row wraps at the Chrome floor's width;
+    // a group summary is one row, whatever runs, so the call row stands
+    // in for the wrapped item the navigation must reveal whole.
+    let mut app = attached(40, 10);
     app.on_line(envelope(
         "turn_started",
         serde_json::json!({"input": [{"type": "message", "source": "driver",
@@ -771,10 +780,11 @@ fn a_wrapped_item_is_revealed_whole() {
         Some("a_1"),
     ));
     key(&mut app, Key::CtrlO);
+    let width = app.conversation_area().width;
     let rows_of = |at: usize| {
         app.lines()
             .get(at)
-            .map(|text| crate::view::rows(text, 12))
+            .map(|text| crate::view::rows(text, width))
             .unwrap_or(0)
     };
     // An open ledger's long call row splits inside the padding, so every
@@ -818,12 +828,12 @@ fn a_wrapped_item_is_revealed_whole() {
 }
 
 #[test]
-fn a_taller_item_is_revealed_from_its_top() {
-    // At width 12 a group line wraps to two rows, taller than the one
-    // conversation row of a 12x6 screen: the full new box (draft, edges,
-    // rule, status row) takes five rows, the minimum leaving one.
-    let mut app = groups(8, 12, 6);
-    assert_eq!(app.conversation_height(), 1);
+fn a_turns_stop_is_revealed_from_its_top() {
+    // Walking up from the last group to the turn puts the turn's first
+    // row on row 0 of a 40x10 screen and fills the conversation with the
+    // turn's rows. At this width no stop wraps, so none is taller than the
+    // conversation (it was, at the 12 columns the floor now forbids).
+    let mut app = groups_asked(8, 40, 10, &"go ".repeat(40));
     key(&mut app, Key::BackTab);
     let first = app.items().first().copied().expect("an item");
     while app.focused() != Some(first.1) {
@@ -883,7 +893,9 @@ fn y_copies_the_focused_line_and_shows_copied() {
         .lines()
         .find(|row| row.contains("Read 1 file"))
         .expect("the group row")
-        .to_owned();
+        .chars()
+        .skip(2)
+        .collect::<String>();
     assert_eq!(key(&mut app, Key::Char('y')), Effect::Copy(text));
     assert!(app.copied());
     key(&mut app, Key::Char('a'));
@@ -987,7 +999,9 @@ fn ctrl_g_opens_the_focused_item_read_only() {
         .lines()
         .find(|row| row.contains("Read 1 file"))
         .expect("the group row")
-        .to_owned();
+        .chars()
+        .skip(2)
+        .collect::<String>();
     assert_eq!(
         app.on_key(Key::CtrlG, now()),
         Effect::Editor {
@@ -1316,7 +1330,7 @@ fn y_on_a_message_image_copies_its_visible_label() {
 
 #[test]
 fn stepping_up_from_a_turns_first_group_reaches_the_turn_then_the_turn_before() {
-    let mut app = groups(1, 60, 6);
+    let mut app = groups(1, 60, 10);
     let input = serde_json::json!({"input": [{"type": "message", "source": "driver",
         "content": [{"type": "text", "text": "go"}]}]});
     app.on_line(envelope("turn_started", input, None));

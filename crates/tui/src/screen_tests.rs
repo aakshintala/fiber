@@ -264,7 +264,8 @@ fn a_wheel_frame_reaches_the_tty_in_one_write() {
     let bottom = app.scroll().0;
     app.on_wheel(&Mouse {
         kind: MouseKind::WheelUp,
-        col: 20,
+        // Over the conversation, past the rail.
+        col: 60,
         row: 10,
     });
     assert_eq!(app.top(), Some(bottom - 3));

@@ -7,7 +7,7 @@ and [Terminal: a control center over many sessions](https://github.com/aakshinta
 those tickets' resolutions hold the rationale and the rejected alternatives.
 
 Vocabulary is `GLOSSARY.md`. Session, turn, step, step boundary, action, tool
-call, job, delegate, handoff, steering message, client and driver mean what it
+call, job, delegate, compaction, steering message, client and driver mean what it
 says there and nothing else. The events the terminal reads are
 `docs/events.md`; the commands it sends are `docs/invocation.md`, "Driver
 commands".
@@ -171,6 +171,33 @@ A failed attach says why on home: the session is held, or its status cannot be r
 a person removed the provider they chose, home shows the same lines `fiber doctor` prints for each blocker, each
 with its fix, above the input box (`docs/invocation.md`, "Commands and flags"). A person
 who runs `fiber` before reading anything is told what to do next.
+
+### First run
+
+`fiber setup` asks the questions a new install needs (`docs/invocation.md`,
+"Commands and flags"). A person who skipped it, or whose install ran without a
+terminal, opens the terminal with nothing configured. The terminal then does
+the missing steps itself, in this order, each one only if it is not done:
+
+1. **Signing in.** No installed provider has a usable credential, counting a
+   key read from the environment such as `OPENCODE_API_KEY`. The terminal
+   opens on home with the `/login` overlay up ("Logging in"). It opens this
+   way on every launch until a credential exists, and keeps no record of
+   having opened. A remote terminal reads the hub's credentials.
+2. **The model.** No model is configured ("Choosing the model" in
+   `docs/model-routing.md`). Once the login's last step saves, the overlay
+   closes and the model picker opens ("The model picker"), with no row
+   chosen for the person. Saving writes the config default.
+3. **The import offer** shows on home as above, once.
+
+A login opened this way closes when its last step saves. A `/login` the
+person typed goes back to the provider list as described in "Logging in".
+
+Esc on the login overlay leaves home with the blocker lines above the input
+box ("When a session cannot start", above). Clicking a credential blocker
+line opens `/login`. Enter on home while no provider has a credential keeps
+the draft in the box and opens `/login`. After the login, the draft is still
+there to send.
 
 ### The logo
 
@@ -427,7 +454,7 @@ rows; scrolling clamps at the top and bottom of the content.
 The default cards, in order:
 
 - **Session status:** the working directory; the git branch; model and thinking level; a context bar that
-  fills toward the automatic handoff point, with a marker there; tokens, cache
+  fills toward the automatic compaction point, with a marker there; tokens, cache
   hit rate, the time until the prompt cache resets, cost billed and cost on subscription, delegates included, against
   `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
   MCP server that is down. Every number has a plain label that says what it
@@ -439,9 +466,9 @@ The default cards, in order:
   speed before the first timed reply, shows a dim "—", so no row moves when
   its data arrives. The bar is drawn empty with 17 cells
   in rule and a dim "—" for context size until its figures are known. Zero is
-  shown as zero. The handoff marker carries one line saying
-  what a handoff is: when the context fills, Fiber writes a summary and the
-  work continues in a fresh context (`docs/handoff.md`).
+  shown as zero. The compaction marker carries one line saying
+  what a compaction is: when the context fills, Fiber writes a summary and the
+  work continues in a fresh context (`docs/compaction.md`).
 - **Changed files:** the five files with the most lines changed, and totals.
 - **Delegates:** one card for all of them, two rows each, at most 6 rows
   shown, drawn from each delegate's `session_status` over a `summary`
@@ -464,7 +491,7 @@ cut with "…". The cards draw:
   git main
   anthropic/claude-opus      high ∴
   ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│          268k
-  handoff at 400k    26% of window
+  compacts at 400k    26% of window
   then a summary, fresh context
   tokens in / out     412k / 18.2k
   cache hits                   91%
@@ -498,11 +525,11 @@ cut with "…". The cards draw:
   "git" dim and the branch
   in `secondary`; the model in `accent`, with the thinking level
   right-aligned in `attention` and a dim "∴" after it while the model thinks.
-  The context bar is 17 cells of ▆, filled in `info` toward the handoff point
-  and `rule` for the rest, then the handoff marker, │ in `attention`, and the
-  context size right-aligned ("268k"). Under it, "handoff at 400k" dim, and
+  The context bar is 17 cells of ▆, filled in `info` toward the compaction point
+  and `rule` for the rest, then the compaction marker, │ in `attention`, and the
+  context size right-aligned ("268k"). Under it, "compacts at 400k" dim, and
   the share of the window right-aligned, dim; then the one line saying what a
-  handoff is, dim. Clicking the bar or the lines under it opens the context
+  compaction is, dim. Clicking the bar or the lines under it opens the context
   breakdown. Each figure after that is a row: its plain label dim, and the
   figure right-aligned in the text colour; a down MCP server is "✗ <server>
   down" right-aligned in `error`. "cache resets in" is the time left before
@@ -546,10 +573,10 @@ waiting · hidden · show" in `attention`, the "!" bold; a click on it
 shows the rail.
 
 The context bar is drawn against the window `session_status` reports and
-the handoff point the session's own `preamble_built` names. That window is
+the compaction point the session's own `preamble_built` names. That window is
 the latest own build's `context_window`, or the inherited one when the
 session logged no `preamble_built` of its own. A session started by a
-rewind, a fork or a workspace change has no handoff point of its own, so
+rewind, a fork or a workspace change has no compaction point of its own, so
 its bar draws against the inherited window with no marker. Per-file counts
 come from `tool_call_completed`'s `changes`,
 never from `details`, which has no fixed shape a client may rely on
@@ -622,7 +649,13 @@ a click on it returns too. The mouse wheel over a view moves its visible rows 3 
   that delegate. The breadcrumb is bold. The status card is a `surface`
   slab: "harness <name>", then " · model <model> · <level>" dim; under it,
   dim, the calls, "elapsed <time>" and "session <id>"; then "■ stop <session id>" in
-  `error`. The input box's hint reads "steering goes to ◆ <description>",
+  `error`. While the delegate's turn runs, "⏸ interrupt" in `attention`
+  comes before the stop target, and the working line shows in the view as it
+  does in the conversation, ending " · ⌥I or click to interrupt" (the first
+  key bound to `interrupt_turn`, or " · click to interrupt" with none): a
+  click on either interrupts the delegate's turn, not the delegate. Both
+  disappear while the delegate is idle or finished. Esc still closes the view.
+  The input box's hint reads "steering goes to ◆ <description>",
   dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
   again every 500 ms. A delegate or job that has finished opens the same
@@ -863,8 +896,8 @@ install still running.
   on a remote terminal it describes the client machine, not the hub.
   When the capture fails, a notice says so and no view opens.
 - **The context breakdown:** one bar of context by category against the
-  handoff point, with the largest tool results. The categories are the
-  system prompt, tool definitions, tool results since the handoff in force,
+  compaction point, with the largest tool results. The categories are the
+  system prompt, tool definitions, tool results since the compaction in force,
   and messages, which takes the rest of the session's context total. Each
   of the first three is estimated from its bytes at the session's own
   tokens-per-byte rate, and the view says the sizes are approximate.
@@ -877,10 +910,10 @@ install still running.
   fork cannot reuse its parent's. Largest results stay in bytes until this
   session has its own first-request rate; the view never reuses a prior
   session's rate. It is drawn indented two columns: "268k tokens" bold,
-  then " · 26% of the 1M window · automatic handoff at 400k" dim; the bar,
+  then " · 26% of the 1M window · automatic compaction at 400k" dim; the bar,
   one █ run per category in its colour, ▁ in `rule` for the room left, and │
-  in `attention` at the handoff
-  point, with "handoff 400k" in `attention` right-aligned under the marker;
+  in `attention` at the compaction
+  point, with "compaction 400k" in `attention` right-aligned under the marker;
   one row per category, "■ " in its colour, the name padded to 20 columns,
   the size and its share dim; then "Largest tool results" bold, one row
   each, what it was dim and its size; and the note that sizes are
@@ -995,9 +1028,14 @@ install still running.
     dim, then the tab bar: Appearance, Notifications, Models, Permissions,
     Sessions, Advanced. The open tab is bold on the `surface` tint, and ←→
     moves between tabs. The view opens on Appearance.
-  - **Tabs:** each key belongs to exactly one tab, named in its `KEYS`
-    entry with its label and one-line description. A test fails when an
-    entry lacks any of the three. Advanced holds what a person rarely
+  - **Tabs:** each key with no `*` in its path belongs to exactly one tab,
+    named in its `KEYS` entry, unless a screen row covers it: then that row
+    draws it, and the key has no row of its own. Every `KEYS` entry has a
+    label and a one-line description. The six screen rows are not `KEYS`
+    entries; each has its own label, one-line description and tab. A test
+    fails when an entry lacks its label or description, when a key with no
+    `*` lacks its tab and no screen row covers it, or when a screen row
+    lacks any of the three. Advanced holds what a person rarely
     changes (`hub.*`, `session.idle_exit_ms`, `cache.*`, `retry.*`,
     `diagnostics.level`). Permissions holds the reviewer keys first, then
     the sandbox keys.
@@ -1005,10 +1043,12 @@ install still running.
     line apart on terminals tall enough, with "› " marking the focused row.
     A value set anywhere but global is followed by its layer, dim
     (`project`, `repository`, `-c`); a global or default value shows no
-    layer. A key with `*` in its path is a row that opens its own screen:
-    Key bindings (`/keys`), Credentials (`/credential`), Rules (`/rules`),
-    Tools (`/tools`), Skills (`/skills`) and MCP servers (`/mcp`). Its
-    value reads "Open /keys ›".
+    layer. A key with `*` in its path has no row of its own; six rows
+    open a screen instead: Key bindings (`/keys`), Credentials
+    (`/credential`), Rules (`/rules`), Tools (`/tools`), Skills (`/skills`)
+    and MCP servers (`/mcp`). Such a row's value reads "Open /keys ›". Key
+    bindings ends Appearance, Credentials ends Models, Rules then Tools end
+    Permissions, and Skills then MCP servers end Sessions.
   - **Controls:** Enter or Space changes the focused value, by its type.
     - A boolean shows `[x] On` or `[ ] Off`, and the key flips it.
     - A key with a fixed set of values (`thinking`, `cache.lifetime`,
@@ -1285,11 +1325,12 @@ says so, "<verb> once" and "<verb> N times": read files, searched patterns,
 listed directories, edited files, wrote files, ran commands, started
 delegates, checked jobs, asked questions, fetched pages, searched the web,
 loaded skills, looked up tools, messaged delegates, messaged sessions,
-looked at sessions, called tools. The first word is capitalised. Read,
-edited and written files count distinct paths, and asked questions count
-questions, not calls. `delegate_models` counts as a delegate, and
-`handoff`, `name_session`, `session_list` and `session_search` count as
-one kind, looked at sessions. An edit's totals follow it, "+N" in
+looked at sessions, saved reviewer notes, called tools. The first word is
+capitalised. Read, edited and written files count distinct paths, and asked
+questions count questions, not calls. `delegate_models` counts as a delegate, and
+`compact`, `name_session`, `session_list` and `session_search` count as
+one kind, looked at sessions, and `reviewer_notes_save` is its own, saved
+reviewer notes. An edit's totals follow it, "+N" in
 `added` and "−N" in `removed`, both dim. Then ", thought N times" ("thought
 once"); while calls run, " · " and their targets, dim; while the model
 thinks, " · Thinking: <heading>" dim and italic. Right-aligned, dim, the
@@ -1308,7 +1349,12 @@ cancelled, ✗ dim otherwise. Then the call's kind in `info`, padded to nine
 columns, its target cut with "…", and its result: "N lines" for a read, "N
 matches" for a search, "N paths" for a listing, "+N −N" for an edit, "exit N
 · N lines" for a command, otherwise the first line of its output, all dim
-but the edit's counts. A running call reads "running" in `attention`, and an
+but the edit's counts. A call whose arguments a `before_tool` hook rewrote
+draws the arguments that ran: `tool_call_started`'s `arguments`, or
+`permission_resolved`'s on a reviewed call's decision that has no request
+(`docs/events.md`, "`changed_by`"). Its result is then followed by " · via
+<names>", dim, the `changed_by` extensions joined by ", "; a rewrite with no
+`changed_by` draws no mark. A running call reads "running" in `attention`, and an
 ask waiting on the person "waiting on you"; "cancelled", "denied" and a
 failure's "<code>: <message>" are dim. A thinking row is "○ Thinking:
 <heading>" or "+ Thought: <heading> · 22s", dim and italic.
@@ -1338,10 +1384,11 @@ fails when it differs from the code.
 | `delegate_models` | delegate | started N delegates | started 1 delegate |
 | `delegate_spawn` | delegate | started N delegates | started 1 delegate |
 | `edit` | edit | edited N files | edited 1 file |
-| `handoff` | session | looked at sessions N times | looked at sessions once |
+| `compact` | session | looked at sessions N times | looked at sessions once |
 | `jobs` | jobs | checked N jobs | checked 1 job |
 | `name_session` | session | looked at sessions N times | looked at sessions once |
 | `read` | read | read N files | read 1 file |
+| `reviewer_notes_save` | notes | saved reviewer notes N times | saved reviewer notes once |
 | `session_list` | session | looked at sessions N times | looked at sessions once |
 | `session_message` | message | messaged sessions N times | messaged sessions once |
 | `session_search` | session | looked at sessions N times | looked at sessions once |
@@ -1376,7 +1423,9 @@ call's `details` (`docs/tools.md`, "What a result carries"); a call whose
   call's arguments (`id` and `message`, or `id` and `text`), not its
   `details`, so a running or failed call shows them too; a failed call's
   "<code>: <message>" still comes first. A part that is absent, not text or
-  empty draws no row. The ledger row's target is the id. When the result has
+  empty draws no row. The ledger row's target is the recipient's description, for a delegate, or its
+  name, for a session, else the id. The row shows the name held when it was
+  folded, and a page loaded again is folded again. When the result has
   an artifact, the swapped view draws these rows before the paged output.
 - **An MCP call, an extension's tool, or any tool whose `details` the
   terminal does not recognise** shows `content` as plain text. Text that is
@@ -1441,43 +1490,48 @@ and dim, "editing a queued message · Enter amends · ⌥X drops · Esc stops".
 
 ### Interrupts
 
-Esc interrupts the turn when nothing is open ("Keys"). The interrupt shows only
+Esc interrupts the turn when nothing is open ("Keys"). `interrupt_turn`, ⌥I,
+interrupts the turn of the conversation on screen, whatever is open over it,
+except the `/keys` screen: in a delegate's view, the delegate's turn, and
+elsewhere the attached session's, leaving the overlay open. In a delegate's view a click on the
+working line or on "⏸ interrupt" does the same, and Esc keeps closing the view.
+The interrupt shows only
 on the ▣ line that closes the card; there is no separate "Interrupted" line. A
 call it stopped reads `cancelled` in its ledger row. With steering messages queued, they start
 the next turn at once (`docs/architecture.md`, "Cancellation"), so Esc means
 "stop, and read these". ⌥X drops them first for a plain stop.
 
-### Handoff
+### Compaction
 
-A handoff breaks the turn's card (`docs/handoff.md`). The card ends where the
-handoff ran, and a tinted band carries:
+A compaction breaks the turn's card (`docs/compaction.md`). The card ends where the
+compaction ran, and a tinted band carries:
 
-- the trigger: "automatic at 400k", "you asked with /handoff", "the request
-  did not fit" or "the model handed off"
+- the trigger: "automatic at 400k", "you asked with /compact", "the request
+  did not fit" or "the model compacted"
 - the context size before and after ("402k → 32k"); the size after comes from
-  the first request after the handoff that reports its input tokens, so it
+  the first request after the compaction that reports its input tokens, so it
   reads "…" until that returns
 - the time
 
 "▸ note" expands the note inside the band. While the note is being written the
 band says so, with a spinner.
 
-The band is one row on the `handoff` tint with ▄ and ▀ edges, across the
-conversation's width: " ⇄ " and "handoff" bold, both in `secondary`, then the
+The band is one row on the `compaction` tint with ▄ and ▀ edges, across the
+conversation's width: " ⇄ " and "compaction" bold, both in `secondary`, then the
 trigger after " · ", dim; right-aligned, the sizes bold ("402k → 32k") and
 " · 14:20" dim. While the note is written the sizes read "writing the note…"
-dim; a failed or cancelled handoff reads "<outcome> · the context is
+dim; a failed or cancelled compaction reads "<outcome> · the context is
 unchanged" in `attention`.
 
 ```
- ⇄ handoff · automatic at 400k                         402k → 32k · 14:20
+ ⇄ compaction · automatic at 400k                         402k → 32k · 14:20
 ```
  A second card continues the turn, and its ▣ line
-closes it. A failed or cancelled handoff says the context is unchanged. The
+closes it. A failed or cancelled compaction says the context is unchanged. The
 Session status card's context bar drops to the new size.
 
 The nudge is one dim line where it happened: "◔ Context at 268k, two thirds of
-the way to the 400k handoff. The model was told a handoff keeps the work
+the way to the 400k compaction. The model was told a compaction keeps the work
 going."
 
 ### Errors and retries
@@ -1570,9 +1624,9 @@ and an expiry wakes the loop even with no input.
 | `models_loading` | condition | The model list arrives. |
 | `no_jobs_running` | event | Fades 10 s after it shows. |
 | `no_model` | event | Fades 10 s after it shows. |
-| `notes_unchanged` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
 | `reviewer_selection_failed` | event | Fades 10 s after it shows. |
+| `reviewer_setup` | event | Fades 10 s after it shows. |
 | `session_held` | event | Fades 10 s after it shows. |
 | `session_not_found` | event | Fades 10 s after it shows. |
 | `skill_invalid` | event | Fades 10 s after it shows. |
@@ -1951,10 +2005,9 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   drops its `ESC [`, and reading goes on from that byte. Invalid UTF-8 drops
   one byte and keeps the rest.
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box and search, choosing
-  in the model picker or the credential picker for this session only, and
-  keeping, editing, striking and flipping a line's layer in the reviewer
-  setup. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search, and choosing
+  in the model picker or the credential picker for this session only.
+  A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -1965,16 +2018,11 @@ what it started keeps running. Large images go to the terminal in chunks (Images
 - **PageUp and PageDown move one screen** wherever something scrolls: the
   conversation, every view, every picker and every list. A screen is the
   scrolling region's own visible rows, not the terminal's height.
-- **The reviewer setup** opens with `/reviewer-setup`. Inside it Enter, Esc,
-  ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
-  panel's legend says. The ✕ and a press outside the panel, which is Esc,
-  are its mouse targets, and the mouse wheel does nothing while it is open.
-  Enter on a diff that would change neither layer's file, notes or read-only
-  entries closes the setup with one notice, `notes_unchanged`, and writes no
-  file.
-  The notice that names the command, shown the first time in a session the
-  reviewer blocks a call while both layers of the notes are empty, closes on
-  any key, and that key goes nowhere else.
+- **The reviewer setup** is the `reviewer-setup` skill (`docs/permissions.md`,
+  "Setting up the notes"): typing `/reviewer-setup` loads it, and the
+  session's agent drafts the notes with you. The first time in a session the
+  reviewer blocks a call while both layers of the notes are empty, a notice
+  names the skill.
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
   filtered as the person types. Each row is a name, a one-line description, a
@@ -2057,7 +2105,7 @@ the slab's edge: the model in `accent` and the thinking level in
 of the window dim ("ctx ▆▆▆▆▆▆▆▆ 268k · 26%"). Segments on each side are
 joined by a dim "  │  ", as in the status line ("The narrow layout"), and
 the two sides keep at least two columns between them. The row says nothing
-about handoff: the handoff point is in the Session status card and the
+about compaction: the compaction point is in the Session status card and the
 context breakdown. When the row is too wide, the working directory is cut
 from the left to keep its last part ("…/fiber"), then the left side is cut
 at its right end; the right side is cut only when the slab is narrower than
@@ -2113,8 +2161,9 @@ through the `input_status` slot ("Extension seams").
   could not start shows `! <command>` then `<code>: <message>` as it
   arrived. A refused run puts that row on the attached screen beside the
   notice. A session `duplicate_command` refusal draws neither a row nor a
-  notice. Shell rows show at most 20 lines, the same way an opened call
-  is.
+  notice. A run's output shows at most 20 lines, then a "N more lines"
+  row; clicking it, or Enter on it, opens the rest in place, and again
+  closes it.
 
 ### Bindings
 
@@ -2128,6 +2177,7 @@ through the `input_status` slot ("Extension seams").
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
 | Delete the selected exited, or a live one with Delete session in the session list | `delete_session` | Delete, or Shift+Backspace, on the row | click a live row's ✕ |
+| Interrupt the turn on screen, whatever is open over it, except the `/keys` screen | `interrupt_turn` | ⌥I | click a delegate's "⏸ interrupt" or its working line; click "Esc to interrupt" |
 | Archive the selected exited session in the session list | `archive_session` | Backspace on the row | click an exited row's ✕; `/archive` |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
@@ -2195,8 +2245,8 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  close-all and stop questions, the import report, the reviewer setup, the
-  `/delete` question on an attached session, the session-list delete question
+  close-all and stop questions, the import report, the `/delete` question on
+  an attached session, the session-list delete question
   on home, the workspace picker, the key map, an approval or question, an
   offer, the hooks install offer, the Ctrl+R panel, or a notice's whole text;
   or the `/` or `@` completion panel while focus is not
@@ -2218,7 +2268,7 @@ of them when a key arrives:
 
 A global action acts in all six. The rest act only where they are listed:
 
-- Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
+- Global: `close_or_interrupt`, `clear_then_quit`, `interrupt_turn`, `rail_row_n`,
   `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
   `next_request`, `key_map`.
 - Picker: `session_only`, `show_all`, `refresh_lists`.
@@ -2322,7 +2372,6 @@ later release still applies.
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules`, `/permissions` | Opens the standing rules. |
-| `/reviewer-setup` | Sets up the reviewer's notes with you (`docs/permissions.md`, "Setting up the notes"). |
 | `/settings`, `/config` | Opens the configuration keys. |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
 | `/keys`, `/keybindings`, `/keymap` | Opens the rebinding screen ("Bindings"). |
@@ -2330,7 +2379,7 @@ later release still applies.
 | `/rewind` | Opens the rewind view. |
 | `/cd <path>` | Moves the session to another workspace ("Moving workspace"). With no path, notes `/cd needs a path.` If the resolved path is the current workspace, refuses `invalid_arguments`, `already in that folder`. |
 | `/fork` | Rewinds to the end of the conversation: sends `rewind` with `at_end`, and the terminal switches to the new session. |
-| `/handoff [instructions]`, `/compact [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
+| `/compact [instructions]` | Starts a compaction (`docs/compaction.md`, "A person"). |
 | `/name <text>`, `/rename <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
 | `/logout` | Logs out ("Logging out"). |
@@ -2571,7 +2620,7 @@ fast sweep wrote 1,458 frames and 568,722 bytes in 20,000 reports.
 ## Look
 
 - **Surfaces, not lines.** The person's messages, each turn's card, code
-  blocks, the handoff band, the input box, the approval panel, the question
+  blocks, the compaction band, the input box, the approval panel, the question
   form, the search box, each panel card and every overlay sit on their own
   background tint,
   with half-block edges (▄ above, ▀ below) and no borders. An edge's cell
@@ -2637,8 +2686,7 @@ key map, the quit question, the close-all question, the stop question, the
 hooks install offer, the `/delete` question on an attached session, the
 session-list delete question on home, the workspace picker, the `/login`
 overlay, the Ctrl+R panel, a notice's whole text, the import report, the
-reviewer setup, the `/` and `@` completion panels, and
-the model picker inside its view.
+`/` and `@` completion panels, and the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
   and no border glyphs. Each row that holds text opens with two blank
@@ -2712,7 +2760,7 @@ The roles, in order, with each built-in theme's values:
 | `success` | a completed call's ✓, a finished delegate's ✓, a finished job's stripe when it succeeded, a login's ✓ | `#6eaafe` | `#0969da` |
 | `warning` | RETRYING and its spinner, a rail card's context bar from 60% | `#ff9f43` | `#bc4c00` |
 | `error` | CRASHED, a failed job's stripe, an escalation's stripe, "irreversible" in an approval's header, a rail card's context bar from 85%, a down MCP server, a quota nearly spent, tool results in the context breakdown, a failed login's reason | `#ff5d73` | `#cf222e` |
-| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the handoff marker, "steer", the steering card's title, stripe and marks, notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
+| `attention` | NEEDS INPUT, what a card waits on, a standing ask's stripe, the working line's spinner and glimmer, a running call or delegate, the permission mode, the thinking level, the compaction marker, "steer", the steering card's title, stripe and marks, notices, approvals put aside, the pill's label, the search box's ⌕ | `#ff9f43` | `#bc4c00` |
 | `added` | lines added: an edited file's `+N`, added lines in a diff | `#73c991` | `#1a7f37` |
 | `removed` | lines removed: an edited file's `−N`, removed lines in a diff | `#ff5d73` | `#cf222e` |
 | `code_text` | code with no syntax role | the terminal's foreground | `#1f2328` |
@@ -2725,7 +2773,7 @@ The roles, in order, with each built-in theme's values:
 | `constant` | constants: `true`, `null`, `ALL_CAPS` names | `#7dd3fc` | `#0b7285` |
 | `operator` | operators | the terminal's foreground | `#1f2328` |
 | `info` | inline code, a call's kind, an approval's tool name and rule prefix, the input box's › and the workspace picker's, "Copied", the context bar's fill | `#7dd3fc` | `#0b7285` |
-| `secondary` | the git branch, the handoff band's label, the question form's stripe, title and marks, the delegates' ◆ | `#b39ddb` | `#6f42c1` |
+| `secondary` | the git branch, the compaction band's label, the question form's stripe, title and marks, the delegates' ◆ | `#b39ddb` | `#6f42c1` |
 | `rule` | rules, line numbers, a bar's empty cells, the pill, a grip's column under the pointer, "Chat about this" | `#3a3a4a` | `#d0d7de` |
 | `scroll` | the scroll bar's thumb | `#808080` | `#b0b7bf` |
 | `background` | every cell of the conversation no surface covers | the terminal's background | `#ffffff` |
@@ -2739,7 +2787,7 @@ The roles, in order, with each built-in theme's values:
 | `turn` | a turn's card | `#101017` | `#f3f5f8` |
 | `prompt` | the person's prompt bubble | `#343541` | `#dde3ea` |
 | `code` | code blocks | `#181821` | `#eff1f4` |
-| `handoff` | the handoff band | `#1f1a2e` | `#efe9f9` |
+| `compaction` | the compaction band | `#1f1a2e` | `#efe9f9` |
 | `approval` | the approval panel for a standing ask, and the question form | `#1a1a22` | `#eaeef2` |
 | `alert` | the approval panel for a reviewer's escalation; red in both built-in themes | `#501c20` | `#ffd7d9` |
 | `hover` | the click target under the pointer where it has no tint; a target on a tint is drawn with that tint lifted: 0x14 on each channel away from the page, lighter on a dark tint and darker on a light one (a tint whose channels average below 0x80 is dark) | `#1e1e26` | `#e3e7ec` |
@@ -2913,8 +2961,9 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   shows the cards folded so far. The scroll bar appears when the pass
   ends. Scrolling, recounting at a new width, search and copy wait.
   The one exception: rows that depend on turns before the held pages (an
-  orphaned job's completion, an automatic handoff's trigger, a ledger
-  toggled earlier: only rows of these kinds) may change in the frame where
+  orphaned job's completion, an automatic compaction's trigger, a ledger
+  toggled earlier, a message call to a delegate started or named before the
+  held pages: only rows of these kinds) may change in the frame where
   the pass ends. An opening that fills only after crossing `seq 0` draws
   through the chain root, so the landing rewrites nothing across the seam.
   If the own segment fills first, the count phase adds ancestors above the
@@ -3046,7 +3095,7 @@ Not built yet (replaced input box; home, view, and overlay slots): see #688.
 | `thinking_line` | A thinking line |
 | `steer` | A steering message in its card |
 | `answers` | The "you answered" rule after a question form |
-| `handoff_band` | A handoff's band |
+| `compaction_band` | A compaction's band |
 | `error_line` | A failed turn's ✗ line |
 | `notice` | A notice |
 | `card:<name>` | A panel card: `session`, `changed_files`, `delegates`, `jobs`, or one an extension adds. `card:quota` is not a slot: the Quota card stays built-in, and an extension reads quota through `status_rows` |
@@ -3067,12 +3116,14 @@ keys set, and notices the terminal raises itself, such as a configuration or
 I/O failure. Chrome slots may also read outside the stream: the branch comes
 from `git status`, the cards follow the panel's configuration, and `spend`
 falls back to the attached spend when the session reports none. A ledger row, for example, receives the call's name,
-arguments, status, exit code, duration, line count, `changes` and error, folded
-from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
+arguments, `changed_by`, status, exit code, duration, line count, `changes` and
+error, folded from its `tool_call_*` and `permission_resolved` events, and a
+message call's `recipient`: the recipient's description or name as the terminal
+held it when the call folded, absent when it held none. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
 
 Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style. Timestamps come as source values, never as elapsed strings. The person's own interaction state (selection, open or closed) is included only where the built-in draws it. An optional key is absent when it does not apply, never `null`. The terminal's internals stay out: no layout, width fit, cache, spinner glyph or motion clock.
 
-A replacement owns its rows whole: where the built-in row carries one target over the row, each replacement line keeps it. A target placed on part of a row goes away when the extension owns those rows. A `notice` keeps its notice target on every replacement line and its dismiss target spans those painted lines. A `notice` replacement with more lines than the notice rows left keeps its first lines in order and drops the rest, as a line too wide is cut; the rows it paints are the rows it takes, and its targets span only those. An `error_line` keeps its failed-login target on each line. A `steer` replacement drops image-line targets because it owns those lines. A `prompt` keeps the target for a single image on each replacement line and drops targets for several images. A writing `handoff_band` has no target, and `reply`, `turn_card` and `answers` remain without targets. A `steering_queue` replacement drops the per-message edit and drop targets, and a card replacement drops the panel targets that differ from row to row; keys still do everything the dropped targets did. The working line keeps its interrupt target, and a card keeps the one target shared by every row it draws, on each replacement line.
+A replacement owns its rows whole: where the built-in row carries one target over the row, each replacement line keeps it. A target placed on part of a row goes away when the extension owns those rows. A `notice` keeps its notice target on every replacement line and its dismiss target spans those painted lines. A `notice` replacement with more lines than the notice rows left keeps its first lines in order and drops the rest, as a line too wide is cut; the rows it paints are the rows it takes, and its targets span only those. An `error_line` keeps its failed-login target on each line. A `steer` replacement drops image-line targets because it owns those lines. A `prompt` keeps the target for a single image on each replacement line and drops targets for several images. A writing `compaction_band` has no target, and `reply`, `turn_card` and `answers` remain without targets. A `steering_queue` replacement drops the per-message edit and drop targets, and a card replacement drops the panel targets that differ from row to row; keys still do everything the dropped targets did. The working line keeps its interrupt target, and a card keeps the one target shared by every row it draws, on each replacement line.
 
 **`turn_card`** draws a turn's card whole: its prompts, every entry, and its
 ending. A replaced card is drawn whole by the extension, so no nested slot
@@ -3097,7 +3148,7 @@ The entries carry these slot inputs and extra fields:
 | `message` | `source` (`fiber`, `session` or `extension`), `label`, `text`, `images`, `ts` |
 | `group` | The `group_line` input, plus `cut` and `sections` |
 | `aside` | No slot: `{kind = "line", text}`, `{kind = "warning", message}`, or `{kind = "orphans", jobs, open}`; each job has `name` and `message` |
-| `band` | The `handoff_band` input: `trigger`, `ts`, `state`; a `done` state carries `before` and optional `after` context sizes |
+| `band` | The `compaction_band` input: `trigger`, `ts`, `state`; a `done` state carries `before` and optional `after` context sizes |
 | `answers` | The `answers` input: `outcome`, `parts`, `note?`, `ts?`; each part has `header`, `text`, `skipped` |
 
 A session message's `label` is the sender's current non-empty session name,
@@ -3158,11 +3209,11 @@ An empty `thinking_line` result draws no row and no opened body.
 | `note` | The note on the whole form, when one was left |
 | `ts` | When the form was resolved; absent when declined |
 
-**`handoff_band`** draws a handoff's band, without its note.
+**`compaction_band`** draws a compaction's band, without its note.
 
 | Field | What it holds |
 |---|---|
-| `trigger` | What the handoff runs at |
+| `trigger` | What the compaction runs at |
 | `ts` | The band's timestamp |
 | `state` | `writing`, `done`, or `unchanged` with `cancelled`; a `done` state carries `before` and optional `after` context sizes |
 
@@ -3188,8 +3239,9 @@ failure raises the same input an extension draws.
 The `extension_failed` switched-off notice always draws built-in: a
 notice extension cannot hide its own switch-off failure.
 
-**`working_line`** draws the working line. It reads the attached session,
-even with a delegate transcript on screen.
+**`working_line`** draws the working line. It reads the session whose
+conversation is on screen: the attached session, or in a delegate's view the
+delegate.
 
 | Field | What it holds |
 |---|---|
@@ -3659,5 +3711,5 @@ server's or an extension's `tools.enabled` and `tools.disabled`.
 - The event stream: `docs/events.md`, settled by
   [What is the event stream, and what is durable?](https://github.com/aakshintala/fiber/issues/6)
 - The front doors and driver commands: `docs/invocation.md`
-- Handoff: `docs/handoff.md`
+- Compaction: `docs/compaction.md`
 - Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md)

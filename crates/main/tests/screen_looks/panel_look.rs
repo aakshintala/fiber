@@ -1,0 +1,896 @@
+//! Binary-level tests of the panel's look (`docs/tui.md`, "The panel",
+//! "The narrow layout"): the real binary with a scripted session holding
+//! three edited files, a running delegate, a running job and 268k of a
+//! 400k compaction. The 160x48 truecolour run pins the slab's surface,
+//! edges, padding and bar; the 100x40 run pins the narrow status rows;
+//! the 256-colour run pins the panel tint's quantisation.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use crate::support;
+
+use std::fs;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use fakes::{ProviderServer, Response};
+use ratatui::style::Style;
+use ratatui::text::Span;
+use serde_json::json;
+use support::hold::Hold;
+use support::pty::{Colour, Grid, Run};
+use support::{Deadline, Setup, TRUECOLOUR, connect_hub, until, write_json};
+
+/// The dark theme's surface, panel, attention and info in truecolour
+/// (`crates/tui/src/theme.rs`).
+const SURFACE: Colour = Colour::Rgb(26, 26, 34);
+const PANEL: Colour = Colour::Rgb(12, 12, 17);
+const ATTENTION: Colour = Colour::Rgb(255, 159, 67);
+const INFO: Colour = Colour::Rgb(125, 211, 252);
+
+/// The panel pinned to 34 columns on a 160-column screen: 21.25% rounds
+/// to 34, kept from the 30-column floor to the 60-column ceiling
+/// (`docs/tui.md`, "Layout").
+const PANEL_SHARE: f64 = 21.25;
+
+/// Quits the run's terminal and waits for it.
+fn quit(mut run: Run) {
+    run.write(b"\x03\x03\r");
+    let finished = run.wait();
+    assert_eq!(finished.status.code(), Some(0));
+}
+
+/// The cell index of `needle` in `row`, counting cells.
+fn locate(row: &str, needle: &str) -> u16 {
+    let chars: Vec<char> = row.chars().collect();
+    let need: Vec<char> = needle.chars().collect();
+    chars
+        .windows(need.len().max(1))
+        .position(|window| window == need.as_slice())
+        .map(|at| at as u16)
+        .unwrap_or_else(|| panic!("{needle:?} in {row:?}"))
+}
+
+/// The scripted turn: three edits, a delegate whose model hangs
+/// mid-stream, a background shell call waiting on the hold FIFO, and a
+/// text step reporting 268k of context, so the panel holds three changed
+/// files, a running delegate, a running job and 268k of the 400k compaction
+/// at once. The background call moves to a job at once, so no timing
+/// decides when the count appears; writing a line to the FIFO releases
+/// it, so nothing leaks.
+fn script(job: &str) -> serde_json::Value {
+    json!({"steps": [
+        {"tool_calls": [
+            {"name": "edit", "arguments": {"path": "a.txt",
+                "edits": [{"old_text": "A1\n", "new_text": "A1\nA2\n"}]}},
+            {"name": "edit", "arguments": {"path": "b.txt",
+                "edits": [{"old_text": "B1\n", "new_text": "B1\nB2\n"}]}},
+            {"name": "edit", "arguments": {"path": "c.txt",
+                "edits": [{"old_text": "C1\n", "new_text": "C1\nC2\n"}]}},
+        ]},
+        {"tool_calls": [
+            {"name": "delegate_spawn", "arguments": {
+                "description": "review the diff",
+                "prompt": "say hi",
+                "model": "fiber:fake/m",
+            }},
+        ], "usage": {"input": 267000, "output": 1000}},
+        {"tool_calls": [
+            {"name": "shell", "arguments": {"command": job, "run_in_background": true}},
+        ]},
+        {"text": ["Done."]},
+    ]})
+}
+
+/// A setup with the scripted session above: the files, the scripts, the
+/// 400k compaction, the pinned panel, the fake provider serving the
+/// delegate's hung stream, and a reviewer allowing every call, so no
+/// approval stalls the turn. Returns the setup with its provider
+/// server, held to the test's end, and the hold helper that parks the
+/// job's holder and releases it.
+fn panel_setup() -> (Setup, ProviderServer, Hold) {
+    // A short root: the status line shows the whole workspace path, and
+    // the narrow row must still reach the `ctx` segment in 99 columns.
+    let root = fakes::TempDir::under(std::path::Path::new("/tmp"), "pl");
+    fs::create_dir_all(root.path().join("h")).unwrap();
+    fs::create_dir_all(root.path().join("w")).unwrap();
+    let setup = Setup {
+        root,
+        deadline: Deadline::start(),
+    };
+    let workspace = setup.workspace();
+    fs::write(workspace.join("a.txt"), "A1\n").unwrap();
+    fs::write(workspace.join("b.txt"), "B1\n").unwrap();
+    fs::write(workspace.join("c.txt"), "C1\n").unwrap();
+    // The held shell call runs in the background at once and waits on
+    // the FIFO: the helper holds it open, so neither open blocks, and
+    // the job outlives every assertion until the test writes its release.
+    let waiter = workspace.join("wait.sh");
+    fs::write(&waiter, "read -r _ < \"$1\"\necho done\n").unwrap();
+    let command = format!(
+        "sh {} {}",
+        waiter.display(),
+        workspace.join("hold").display()
+    );
+    write_json(&workspace.join("s.json"), &script(&command));
+    // The reviewer allows far more calls than the turn makes, so every
+    // call runs without asking.
+    write_json(
+        &workspace.join("r.json"),
+        &json!({"steps": [
+            {"text": ["allow"]}, {"text": ["allow"]},
+            {"text": ["allow"]}, {"text": ["allow"]},
+            {"text": ["allow"]}, {"text": ["allow"]},
+            {"text": ["allow"]}, {"text": ["allow"]},
+            {"text": ["allow"]}, {"text": ["allow"]},
+        ]}),
+    );
+    // The delegate's model hangs mid-stream: the delegate runs until
+    // the test quits. Installed first: installing the fake provider
+    // rewrites the config, so the session's own config lands after.
+    let server = ProviderServer::start([Response::stall(
+        200,
+        "event: response.output_text.delta\ndata: {\"type\": \"response.output_text.delta\", \"delta\": \"working\"}\n\n",
+        1000000,
+    )])
+    .unwrap();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "scripted/s.json",
+            "reviewer": {"model": "scripted/r.json"},
+            "compaction": {"tokens": 400000},
+            "tui": {"panel": {"width": PANEL_SHARE}},
+            "hub": {"idle_exit_ms": 200},
+        }),
+    );
+    let rules = [
+        json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+        json!({"decision": "allow", "tool": "shell", "prefix": command}),
+    ];
+    fs::write(
+        setup.home().join("rules"),
+        rules
+            .iter()
+            .map(|rule| format!("{rule}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    // The hold parks the job's holder and reaps its group if the test
+    // fails before the release lets the read finish.
+    let hold = Hold::park(&setup, &command);
+    (setup, server, hold)
+}
+
+/// Starts the scripted turn and waits for the panel's whole state: both
+/// running counts, the changed files and the Session card's own context-bar
+/// row. The wait looks for the bar row itself because the turn footer also
+/// reads "268.0k tokens" and lands earlier.
+fn wait_panel_state(run: &mut Run) -> Grid {
+    run.ready();
+    run.write(b"go\r");
+    run.wait_screen("the panel's whole state", |grid| {
+        grid.contents.contains("review the diff")
+            && grid.contents.matches("1 running").count() >= 2
+            && grid.contents.contains("Changed files")
+            && grid
+                .rows
+                .iter()
+                .any(|row| row.contains("268.0k") && row.contains(&"▆".repeat(17)))
+    })
+}
+
+/// Whether row `y` opens a slab: a run of 33 half-block top edges at
+/// or past column 120, past any conversation card's edges.
+fn slab_edge_row(grid: &Grid, y: u16) -> Option<(u16, u16)> {
+    let chars: Vec<char> = grid.rows[y as usize].chars().collect();
+    chars
+        .windows(33)
+        .position(|window| window.iter().all(|cell| *cell == '▄'))
+        .filter(|at| *at >= 120)
+        .map(|at| (at as u16, at as u16 + 33))
+}
+
+/// Duration text is normalised rather than compared to the wall clock.
+fn delegate_duration(text: &str) -> bool {
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
+    match text.split(' ').collect::<Vec<_>>().as_slice() {
+        [seconds] => seconds.strip_suffix('s').is_some_and(digits),
+        [minutes, seconds] => {
+            minutes.strip_suffix('m').is_some_and(digits)
+                && seconds
+                    .strip_suffix('s')
+                    .is_some_and(|s| s.len() == 2 && digits(s))
+        }
+        _ => false,
+    }
+}
+
+/// Exact subject text, either complete or maximally cut at the content edge.
+fn delegate_subject_matches(shown: &str, expected: &str, slot: usize) -> bool {
+    if Span::raw(expected).width() <= slot {
+        return shown == expected;
+    }
+    let mut prefix = String::new();
+    let mut used = 0;
+    for grapheme in Span::raw(expected).styled_graphemes(Style::default()) {
+        let width = Span::raw(grapheme.symbol).width();
+        if used + width > slot.saturating_sub(1) {
+            break;
+        }
+        prefix.push_str(grapheme.symbol);
+        used += width;
+    }
+    prefix.push('…');
+    shown == prefix && shown.starts_with("shell head -n 1 ")
+}
+
+#[test]
+fn delegate_subject_matching_is_exact_at_the_content_edge() {
+    let expected = "shell head -n 1 /tmp/hold";
+    let width = ratatui::text::Span::raw(expected).width();
+    for (shown, slot, matches) in [
+        (expected, width - 1, false),
+        (expected, width, true),
+        (expected, width + 1, true),
+        ("shell head -n 1 /tmp/ho…", width - 1, true),
+        ("shell head -n 1 /tmp/hol…", width, false),
+        ("shell head -n 1 /tmp/hol…", width + 1, false),
+        ("shell head -n 1 /tmp/xx…", width - 1, false),
+        ("shell head -n 1 /tmp/ho", width - 1, false),
+        ("shell head -n 1 /tmp/h…", width - 1, false),
+        ("shell head -n 1 /tmp/h… ", width - 1, false),
+        ("shell", width, false),
+        ("read a.txt", width, false),
+        ("done", width, false),
+        ("shell head -…", 12, false),
+        ("…", 1, false),
+        ("", 0, false),
+    ] {
+        assert_eq!(
+            delegate_subject_matches(shown, expected, slot),
+            matches,
+            "{shown:?}, slot {slot}"
+        );
+    }
+    assert!(delegate_subject_matches("done", "done", 4));
+    assert!(delegate_subject_matches("done", "done", 5));
+    assert!(!delegate_subject_matches("done", "done", 3));
+    assert!(!delegate_subject_matches("don…", "done", 3));
+    // At column 120 with 39 columns available, the next two-column
+    // grapheme cannot fit the 38-column prefix budget. The ellipsis is
+    // therefore at 157, with one unavoidable unused column before 159.
+    let wide = "shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界/hold'";
+    let clipped = "shell head -n 1 '/tmp/aaaaaaaaaaaaaaa…";
+    assert_eq!(
+        ratatui::text::Span::raw(clipped.trim_end_matches('…')).width(),
+        37
+    );
+    for (shown, slot, matches) in [
+        (clipped, 38, true),
+        (clipped, 39, true),
+        (clipped, 40, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界…", 40, true),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa… ", 39, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaa…", 39, false),
+        ("shell head -n 1 '/tmp/aaaaaaaaaaaaaaa界…", 39, false),
+    ] {
+        assert_eq!(
+            delegate_subject_matches(shown, wide, slot),
+            matches,
+            "{shown:?}, slot {slot}"
+        );
+    }
+    // Combining marks belong to the base grapheme, not a byte or char edge.
+    assert_eq!(Span::raw("shell head -n 1 /e\u{301}").width(), 18);
+    assert!(delegate_subject_matches(
+        "shell head -n 1 /e\u{301}…",
+        "shell head -n 1 /e\u{301}xy",
+        19
+    ));
+    assert!(!delegate_subject_matches(
+        "shell head -n 1 /e…",
+        "shell head -n 1 /e\u{301}xy",
+        19
+    ));
+}
+
+/// A whole dim progress row below the delegate's description, in the panel.
+fn delegate_progress(grid: &Grid, tail: &str, finished: bool) -> bool {
+    grid.rows.iter().enumerate().any(|(y, row)| {
+        let Some(at) = row.find("review the diff") else {
+            return false;
+        };
+        if at < 100 || (finished && !row.contains("✓ review the diff")) {
+            return false;
+        }
+        let Some(next) = grid.rows.get(y + 1) else {
+            return false;
+        };
+        let Some(start) = next.find("2 calls · ") else {
+            return false;
+        };
+        let text = next[start..].trim_end();
+        let parts: Vec<_> = text.split(" · ").collect();
+        if parts.len() != 3 || parts[0] != "2 calls" || !delegate_duration(parts[1]) {
+            return false;
+        }
+        let Some((x, progress_y)) = grid.text_at(text) else {
+            return false;
+        };
+        if usize::from(progress_y) != y + 1 {
+            return false;
+        }
+        let prefix_width = Span::raw(format!("2 calls · {} · ", parts[1])).width();
+        let subject_x = usize::from(x) + prefix_width;
+        let content_end = usize::from(grid.size().0.saturating_sub(1));
+        if !delegate_subject_matches(parts[2], tail, content_end.saturating_sub(subject_x)) {
+            return false;
+        }
+        let y = progress_y;
+        (0..u16::try_from(Span::raw(text).width()).unwrap()).all(|offset| {
+            let cell = grid.cell(x + offset, y);
+            cell.dim && cell.fg == Colour::Default
+        })
+    })
+}
+
+#[test]
+fn delegates_show_two_calls_and_the_last_subject_then_frozen_done_figures() {
+    for (text, expected) in [
+        ("0s", true),
+        ("9s", true),
+        ("12s", true),
+        ("2m 10s", true),
+        ("", false),
+        ("s", false),
+        ("-1s", false),
+        ("1ms", false),
+        ("2m 1s", false),
+        ("2m 100s", false),
+        ("m 10s", false),
+        ("2m 1xs", false),
+        ("2m 10s extra", false),
+    ] {
+        assert_eq!(delegate_duration(text), expected, "{text:?}");
+    }
+    let setup = Setup::new();
+    let workspace = setup.workspace();
+    fs::write(workspace.join("a.txt"), "hello\n").unwrap();
+    let path = workspace.join("hold");
+    let command = format!(
+        "head -n 1 '{}'",
+        path.display().to_string().replace('\'', "'\\''")
+    );
+    let mut hold = Hold::park(&setup, &command);
+    write_json(
+        &workspace.join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "delegate_spawn", "arguments": {
+                "description": "review the diff", "prompt": "go", "model": "fiber:scripted/d.json"}}]},
+            {"text": ["Waiting."]}, {"text": ["Done."]}
+        ]}),
+    );
+    write_json(
+        &workspace.join("d.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "read", "arguments": {"path": "a.txt"}}]},
+            {"tool_calls": [{"name": "shell", "arguments": {"command": command}}]},
+            {"text": ["Reviewed."]}
+        ]}),
+    );
+    write_json(
+        &workspace.join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}, {"text": ["allow"]}, {"text": ["allow"]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "scripted/s.json", "reviewer": {"model": "scripted/r.json"},
+            "roles": {"delegate": "fiber:scripted/d.json"},
+            "tui": {"panel": {"width": 37.5}}, "hub": {"idle_exit_ms": 200}
+        }),
+    );
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n{}\n",
+            json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+            json!({"decision": "allow", "tool": "shell", "prefix": command})
+        ),
+    )
+    .unwrap();
+    let subject = format!("shell {command}");
+    let mut run = Run::spawn(&setup, 160, 48, &[], &TRUECOLOUR);
+    run.ready();
+    run.write(b"go\r");
+    run.wait_screen("the delegate's two calls and shell subject, dim", |grid| {
+        delegate_progress(grid, &subject, false)
+    });
+    std::io::Write::write_all(hold.release(), b"done\n").unwrap();
+    run.wait_screen(
+        "the finished delegate's calls, elapsed and done, dim",
+        |grid| delegate_progress(grid, "done", true),
+    );
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+#[test]
+fn panel_cards_match_the_doc() {
+    let (setup, _server, mut hold) = panel_setup();
+    // The session shows the canonical workspace, symlinks resolved.
+    let workspace = fs::canonicalize(setup.workspace())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(TRUECOLOUR)
+        .collect();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &env);
+    let grid = wait_panel_state(&mut run);
+    // The first slab on screen is the Session card's: the pinned panel
+    // ends 34 columns wide at the screen's right edge.
+    let top = (0u16..48)
+        .find(|y| slab_edge_row(&grid, *y).is_some())
+        .unwrap();
+    let (slab, _) = slab_edge_row(&grid, top).unwrap();
+    let right = slab + 33;
+    assert_eq!(right, 160, "the slab ends at the screen's edge");
+    // The pinned 34-column panel with the slab one past its drag edge.
+    assert_eq!(slab - 1, 160 - 34, "the pinned 34-column panel");
+
+    // The edges: half blocks in the surface colour over the panel
+    // colour, across the slab past the drag edge.
+    for x in slab..right {
+        let cell = grid.cell(x, top);
+        assert_eq!(cell.symbol.as_str(), "▄", "edge cell ({x}, {top})");
+        assert_eq!(cell.fg, SURFACE, "edge cell ({x}, {top})");
+        assert_eq!(cell.bg, PANEL, "edge cell ({x}, {top})");
+    }
+    let bottom = (top..48)
+        .find(|y| {
+            grid.rows[*y as usize]
+                .chars()
+                .skip(slab as usize)
+                .take(33)
+                .all(|cell| cell == '▀')
+        })
+        .unwrap_or_else(|| panic!("a slab bottom edge"));
+    for x in slab..right {
+        let cell = grid.cell(x, bottom);
+        assert_eq!(cell.symbol.as_str(), "▀");
+        assert_eq!(cell.fg, SURFACE);
+        assert_eq!(cell.bg, PANEL);
+    }
+
+    // The Session title: "Session status" with `auto` in attention ending
+    // one column before the slab's right edge, the text two columns past
+    // the slab.
+    let title = top + 1;
+    let text: String = (slab + 2..right - 1)
+        .map(|x| grid.cell(x, title).symbol)
+        .collect();
+    assert!(text.trim_start().starts_with("Session status"), "{text:?}");
+    assert!(text.trim_end().ends_with("auto"), "{text:?}");
+    let directory: String = (slab + 2..right - 1)
+        .map(|x| grid.cell(x, top + 2).symbol)
+        .collect();
+    assert!(
+        directory.trim().contains(
+            Path::new(&workspace)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(""),
+        ),
+        "{directory:?}"
+    );
+    let row = &grid.rows[title as usize];
+    let auto = locate(row, "auto");
+    assert_eq!(auto, right - 5, "auto ends one past: {row:?}");
+    for (n, expected) in "auto".chars().enumerate() {
+        let cell = grid.cell(auto + n as u16, title);
+        assert_eq!(cell.symbol, expected.to_string());
+        assert_eq!(cell.fg, ATTENTION, "auto cell {n}");
+    }
+    // Every text row sits on the surface tint.
+    for y in top + 1..bottom {
+        for x in slab..right {
+            assert_eq!(grid.cell(x, y).bg, SURFACE, "slab cell ({x}, {y})");
+        }
+    }
+
+    // The blank row after the card shows the panel tint.
+    let blank = bottom + 1;
+    assert!(
+        (slab - 1..right).all(|x| grid.cell(x, blank).symbol.as_str() == " "),
+        "a blank panel row"
+    );
+    for x in slab - 1..right {
+        assert_eq!(grid.cell(x, blank).bg, PANEL, "blank cell ({x}, {blank})");
+    }
+
+    // The context bar: 17 cells of `▆`, eleven in info toward the 400k
+    // compaction, then the marker.
+    let bar = (top + 1..bottom)
+        .find(|y| {
+            grid.rows[*y as usize].contains("268.0k")
+                && (0..17).all(|n| grid.cell(slab + 2 + n, *y).symbol.as_str() == "▆")
+                && grid.cell(slab + 2 + 17, *y).symbol.as_str() == "│"
+        })
+        .unwrap_or_else(|| panic!("the context bar"));
+    let fill = (0..17)
+        .filter(|n| grid.cell(slab + 2 + n, bar).fg == INFO)
+        .count();
+    assert_eq!(fill, 11, "eleven cells toward the compaction");
+
+    // No empty track anywhere in the panel's columns.
+    for y in 0..48 {
+        for x in slab - 1..right {
+            assert_ne!(
+                grid.cell(x, y).symbol.as_str(),
+                "░",
+                "track cell ({x}, {y})"
+            );
+        }
+    }
+
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+#[test]
+fn narrow_status_rows_match_the_doc() {
+    let (setup, _server, mut hold) = panel_setup();
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(TRUECOLOUR)
+        .collect();
+    let mut run = Run::spawn(&setup, 100, 40, &[], &env);
+    run.ready();
+    run.write(b"go\r");
+    // Both status rows: the session's segments, then the running counts.
+    let grid = run.wait_screen("the narrow status rows", |grid| {
+        // The wait hands the parse a settled frame: the segments row
+        // carries its countdown value past "cache 0% " with the
+        // delimiter behind it, in minutes, seconds or expired form, and
+        // the rows read as the asserts below will read them
+        // (`docs/testing.md`, "Waits and timeouts").
+        if !(grid.contents.contains("ctx")
+            && grid.contents.contains("1 delegate running")
+            && grid.contents.contains("1 job running"))
+        {
+            return false;
+        }
+        let Some(second) = (0u16..40)
+            .rev()
+            .find(|y| grid.rows[*y as usize].contains("1 job running"))
+        else {
+            return false;
+        };
+        if second == 0 {
+            return false;
+        }
+        let first = second - 1;
+        if grid.rows[first as usize].contains("ctx") || grid.rows[second as usize].contains("ctx") {
+            return false;
+        }
+        let line: String = (1..100).map(|x| grid.cell(x, first).symbol).collect();
+        let line = line.trim_end();
+        let Some(countdown) = line
+            .split_once("cache 0% ")
+            .and_then(|(_, tail)| tail.split_once("  │  "))
+            .map(|(value, _)| value)
+        else {
+            return false;
+        };
+        let valued = countdown == "expired"
+            || countdown
+                .strip_suffix('m')
+                .or_else(|| countdown.strip_suffix('s'))
+                .is_some_and(|digits| digits.parse::<u64>().is_ok());
+        if !valued {
+            return false;
+        }
+        if line.replace(countdown, "[duration]")
+            != "▌0 waiting  │  $0.00  │  cache 0% [duration]  │  ± 3 files +3 −0"
+        {
+            return false;
+        }
+        for y in [first, second] {
+            for x in 1..90 {
+                if grid.cell(x, y).bg != SURFACE {
+                    return false;
+                }
+            }
+        }
+        let Some(at) = line
+            .find("  │  ")
+            .map(|at| line[..at].chars().count() as u16)
+        else {
+            return false;
+        };
+        for x in 1 + at..1 + at + 5 {
+            if !grid.cell(x, first).dim {
+                return false;
+            }
+        }
+        let Some(status) = (0u16..first)
+            .rev()
+            .find(|y| grid.rows[*y as usize].contains("ctx"))
+        else {
+            return false;
+        };
+        let bar: String = (1..100).map(|x| grid.cell(x, status).symbol).collect();
+        let bar = bar.trim_end();
+        let Some(ctx) = bar.find("ctx").map(|at| bar[..at].chars().count() as u16) else {
+            return false;
+        };
+        (0..8)
+            .filter(|n| grid.cell(1 + ctx + 4 + n, status).symbol.as_str() == "▆")
+            .count()
+            == 8
+    });
+    // The last two content rows: the running counts, then the segments
+    // row above them. Neither carries a ctx segment: context lives on
+    // the input box's status row (`docs/tui.md`, "The input box").
+    let second = (0u16..40)
+        .rev()
+        .find(|y| grid.rows[*y as usize].contains("1 job running"))
+        .unwrap_or_else(|| panic!("a counts row"));
+    let first = second - 1;
+    assert!(
+        !grid.rows[first as usize].contains("ctx"),
+        "no ctx on the segments row"
+    );
+    assert!(
+        !grid.rows[second as usize].contains("ctx"),
+        "no ctx on the counts row"
+    );
+    // Each status row sits on the slab one column in: the status line
+    // sits on the slab (`docs/tui.md`, "The narrow layout"), past the
+    // stripe and the cut edge.
+    for y in [first, second] {
+        for x in 1..90 {
+            assert_eq!(grid.cell(x, y).bg, SURFACE, "tint cell ({x}, {y})");
+        }
+    }
+    // The first row shows its segments whole: short of the terminal's
+    // right edge, so nothing is cut (`docs/tui.md`, "The narrow
+    // layout").
+    let line: String = (1..100).map(|x| grid.cell(x, first).symbol).collect();
+    let line = line.trim_end();
+    let countdown = line
+        .split_once("cache 0% ")
+        .and_then(|(_, tail)| tail.split_once("  │  "))
+        .map(|(value, _)| value)
+        .expect("the cache countdown");
+    let digits = countdown
+        .strip_suffix('m')
+        .or_else(|| countdown.strip_suffix('s'))
+        .expect("a countdown in minutes or seconds");
+    assert!(digits.parse::<u64>().is_ok(), "{countdown:?}");
+    assert_eq!(
+        line.replace(countdown, "[duration]"),
+        "▌0 waiting  │  $0.00  │  cache 0% [duration]  │  ± 3 files +3 −0",
+        "{line:?}"
+    );
+    assert!(line.contains("  │  "), "{line:?}");
+    let at = locate(line, "  │  ");
+    for x in 1 + at..1 + at + 5 {
+        assert!(grid.cell(x, first).dim, "joiner cell ({x}, {first})");
+    }
+    // The ctx bar sits on the input box's status row above the status
+    // line: `ctx` with its eight-cell bar (`docs/tui.md`, "The input
+    // box").
+    let status = (0u16..first)
+        .rev()
+        .find(|y| grid.rows[*y as usize].contains("ctx"))
+        .unwrap_or_else(|| panic!("the input box status row"));
+    let bar: String = (1..100).map(|x| grid.cell(x, status).symbol).collect();
+    let bar = bar.trim_end();
+    let ctx = locate(bar, "ctx");
+    assert_eq!(
+        (0..8)
+            .filter(|n| grid.cell(1 + ctx + 4 + n, status).symbol.as_str() == "▆")
+            .count(),
+        8,
+        "{bar:?}"
+    );
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+/// The input box's status row and its text: the nearest row carrying
+/// `ctx` above the last row carrying the kept status lines' counts.
+/// `None` while either is absent.
+fn status_row_text(grid: &Grid) -> Option<(u16, &str)> {
+    let rows = &grid.rows;
+    let counts = rows.iter().rposition(|r| r.contains("1 job running"))?;
+    let status = rows[..counts].iter().rposition(|r| r.contains("ctx"))?;
+    Some((status as u16, rows[status].as_str()))
+}
+
+/// `status_row_text`'s row, panicking when a row is missing.
+fn status_row(grid: &Grid) -> u16 {
+    status_row_text(grid)
+        .unwrap_or_else(|| panic!("the input box status row"))
+        .0
+}
+
+/// Whether the status row's ctx segment shows a size: until the panel
+/// holds a window and a context figure it draws `— · —`, which leaves the
+/// working directory a different width. Only the text after `ctx` counts,
+/// so a digit in the directory is not a size.
+fn ctx_size_drawn(grid: &Grid) -> bool {
+    let Some((_, row)) = status_row_text(grid) else {
+        return false;
+    };
+    let Some((_, after)) = row.split_once("ctx") else {
+        return false;
+    };
+    !after.contains('—') && after.chars().any(|c| c.is_ascii_digit())
+}
+
+/// A narrow width cuts the working directory from the left first: the
+/// row keeps the tail behind an ellipsis with the mode, while the
+/// right side stays whole (`docs/tui.md`, "The input box").
+#[test]
+fn narrow_width_cuts_the_working_directory_first() {
+    let (setup, _server, mut hold) = panel_setup();
+    // The session shows the canonical workspace, symlinks resolved.
+    let workspace = fs::canonicalize(setup.workspace())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(TRUECOLOUR)
+        .collect();
+    // 68 columns: past the exact fit, short of dropping the left side.
+    let mut run = Run::spawn(&setup, 68, 30, &[], &env);
+    run.ready();
+    run.write(b"go\r");
+    let grid = run.wait_screen("the cut status row", |grid| {
+        grid.contents.contains("1 delegate running") && ctx_size_drawn(grid)
+    });
+    let status = status_row(&grid);
+    let row: String = (1..68).map(|x| grid.cell(x, status).symbol).collect();
+    let row = row.trim_end();
+    // The mode and the model stay: the left side is cut, not dropped,
+    // and the right side is whole.
+    assert!(row.contains("auto"), "the mode stays: {row:?}");
+    assert!(
+        row.contains("scripted/s.json"),
+        "the model stays whole: {row:?}"
+    );
+    // Exactly one ellipsis, left of the mode: the working directory is
+    // cut from the left to keep its tail.
+    assert_eq!(
+        row.chars().filter(|cell| *cell == '…').count(),
+        1,
+        "one left cut: {row:?}"
+    );
+    let cut = row
+        .find('…')
+        .unwrap_or_else(|| panic!("a left cut in {row:?}"));
+    assert!(
+        cut < locate(row, "auto") as usize,
+        "the cut opens the directory: {row:?}"
+    );
+    assert!(!row.contains(&workspace), "the head is shed: {row:?}");
+    // The kept tail is the workspace's own end: 68 columns leave room
+    // for its last 8 cells behind the ellipsis.
+    let after = &row[cut + '…'.len_utf8()..];
+    let tail = after
+        .split("  │  ")
+        .next()
+        .unwrap_or_else(|| panic!("a tail in {row:?}"));
+    assert!(!tail.is_empty(), "a tail stays: {row:?}");
+    assert!(
+        workspace.ends_with(tail),
+        "the tail is the workspace's end: {row:?}"
+    );
+    assert_eq!(
+        tail,
+        &workspace[workspace.len() - 8..],
+        "eight cells stay at 68 columns: {row:?}"
+    );
+
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}
+
+/// Clicking the ctx segment opens the context breakdown: the feed's
+/// `session_status` carries the context figure that moves the segment,
+/// the click finds the `ctx` cell in the frame that shows it, and the
+/// Context view opens (`docs/tui.md`, "The input box").
+#[test]
+fn clicking_ctx_opens_the_context_breakdown() {
+    let (setup, _server, mut hold) = panel_setup();
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(TRUECOLOUR)
+        .collect();
+    // The test's own hub client watches the feed; the terminal joins the
+    // hub it started.
+    let hub = Arc::new(Mutex::new(None));
+    let (feed, hello) = connect_hub(&setup, &hub);
+    assert_eq!(hello["kind"], "hub_hello");
+    let mut run = Run::spawn(&setup, 100, 40, &[], &env);
+    run.ready();
+    feed.send(r#"{"id":"c_feed","command":"feed"}"#);
+    run.write(b"go\r");
+    // The turn reports one context figure, so the first status carrying
+    // it is the last data that moves the segment.
+    until(&feed, "the session_status carrying the context", |line| {
+        line["kind"] == "session_status" && line["payload"]["context"]["tokens"] == 268_000
+    });
+    // The click finds the target in the frame it acts on: the figure is
+    // drawn, and `ctx` sits on the input box's status row.
+    run.click_where("the ctx segment", |grid| {
+        let (status, _) = status_row_text(grid).filter(|_| ctx_size_drawn(grid))?;
+        grid.text_at("ctx").filter(|&(_, y)| y == status)
+    });
+    let grid = run.wait_screen("the open context breakdown", |grid| {
+        grid.contents.contains("Context") && grid.contents.contains("/context")
+    });
+    let top = &grid.rows[0];
+    assert!(top.contains("Context"), "the breakdown title: {top:?}");
+    assert!(top.contains("/context"), "the breakdown command: {top:?}");
+
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
+    // Quitting waits for the hub to exit, which needs no client open.
+    drop(feed);
+    quit(run);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.wait();
+}
+
+#[test]
+fn panel_tint_quantises_to_233() {
+    // 256 colours: xterm without COLORTERM.
+    let (setup, _server, mut hold) = panel_setup();
+    let mut run = Run::spawn(
+        &setup,
+        160,
+        48,
+        &[],
+        &[
+            ("FIBER_TEST_FAKE_KEY", "sk-test"),
+            ("TERM_PROGRAM", "ghostty"),
+        ],
+    );
+    let grid = wait_panel_state(&mut run);
+    // The blank row after a card carries the panel tint, indexed 233.
+    let blank = (0..48)
+        .find(|y| {
+            let row = &grid.rows[*y as usize];
+            row.chars().skip(126).all(|cell| cell == ' ')
+                && (126..160).any(|x| grid.cell(x, *y).bg == Colour::Indexed(233))
+        })
+        .unwrap_or_else(|| panic!("a blank panel row"));
+    for x in 126..160 {
+        assert_eq!(
+            grid.cell(x, blank).bg,
+            Colour::Indexed(233),
+            "blank cell ({x}, {blank})"
+        );
+    }
+    std::io::Write::write_all(hold.release(), b"\n").unwrap();
+    hold.stand_down(setup.deadline.cleanup_phase());
+    quit(run);
+}

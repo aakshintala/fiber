@@ -42,6 +42,30 @@ pub struct ReadOnlyFlags {
     pub flags: Vec<String>,
 }
 
+/// Which layer of the reviewer notes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryLayer {
+    /// Fiber home's `config.json`.
+    Global,
+    /// The project's own `config.json`.
+    Project,
+}
+
+/// One read-only entry the save would add to a layer: the layer, its file,
+/// and the entry. Entries identical to the layer's own table converge and
+/// are omitted, so every item here is an addition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntryPreview {
+    /// The layer the entry would land in.
+    pub layer: EntryLayer,
+    /// The layer's file.
+    pub file: PathBuf,
+    /// The command path, such as `"acme-cli query"`.
+    pub command: String,
+    /// The flag names the entry allows.
+    pub flags: Vec<String>,
+}
+
 /// Why a read-only entry is refused: every variant fails the save with
 /// the existing `config_invalid` code, naming the entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -277,6 +301,75 @@ fn entry_error(file: &Path, entry: &ReadOnlyFlags, problem: ReadOnlyEntryProblem
     }
 }
 
+/// Every entry in `sent` validated and de-duplicated, in order: the shape
+/// and duplicate refusals the save raises before it writes either layer.
+/// The save's check and its preview share this, so the two cannot disagree
+/// on what a sent entry is.
+fn checked_sent_entries(file: &Path, sent: &[ReadOnlyFlags]) -> Result<(), ConfigError> {
+    for entry in sent {
+        validate_read_only_entry(&entry.command, &entry.flags)
+            .map_err(|problem| entry_error(file, entry, problem))?;
+    }
+    let mut seen = BTreeSet::new();
+    for entry in sent {
+        if !seen.insert(entry.command.clone()) {
+            return Err(entry_error(file, entry, ReadOnlyEntryProblem::Duplicate));
+        }
+    }
+    Ok(())
+}
+
+/// `sent` merged over the layer's current entries: every sent command takes
+/// its flags, so an identical entry converges and any other sent entry is
+/// added. The save's writer and its preview merge through this one
+/// function, so the two cannot disagree on what an entry adds.
+fn merged_entries(current: &HashMapFlags, sent: &[ReadOnlyFlags]) -> HashMapFlags {
+    let mut next = current.clone();
+    for entry in sent {
+        next.insert(entry.command.clone(), entry.flags.clone());
+    }
+    next
+}
+
+/// The entries `sent` would add over the layer's current table: entries
+/// identical to what the layer already holds converge and are omitted. A
+/// changed entry — one overlapping any configured key or an earlier kept
+/// entry — is the save's `Overlap` refusal. Every sent entry, identical or
+/// added, joins `kept` for the next layer's check, exactly as the save
+/// checks the run's entries global first. The save's check and its preview
+/// share this, so the two cannot disagree on what a sent entry adds.
+fn checked_additions(
+    file: &Path,
+    sent: &[ReadOnlyFlags],
+    current: Option<&HashMapFlags>,
+    configured: &[&HashMapFlags],
+    kept: &mut Vec<ReadOnlyFlags>,
+) -> Result<Vec<ReadOnlyFlags>, ConfigError> {
+    let empty = HashMapFlags::new();
+    let current = current.unwrap_or(&empty);
+    let merged = merged_entries(current, sent);
+    let mut added = Vec::new();
+    for entry in sent {
+        let changed = merged.get(&entry.command) != current.get(&entry.command);
+        if changed
+            && (configured
+                .iter()
+                .flat_map(|table| table.keys())
+                .any(|key| overlaps(key, &entry.command))
+                || kept
+                    .iter()
+                    .any(|kept| overlaps(&kept.command, &entry.command)))
+        {
+            return Err(entry_error(file, entry, ReadOnlyEntryProblem::Overlap));
+        }
+        kept.push(entry.clone());
+        if changed {
+            added.push(entry.clone());
+        }
+    }
+    Ok(added)
+}
+
 /// Refuses the run's entries before any layer is written: every entry's
 /// own shape, a repeated command in one layer, an unreadable
 /// `shell.read_only` in either layer, and an overlap with either layer's
@@ -288,16 +381,7 @@ fn check_entries(
     pending: &[(PathBuf, &NotesWrite, Option<Vec<u8>>, Value)],
 ) -> Result<(), ConfigError> {
     for (file, sent, _, _) in pending {
-        for entry in &sent.read_only {
-            validate_read_only_entry(&entry.command, &entry.flags)
-                .map_err(|problem| entry_error(file, entry, problem))?;
-        }
-        let mut seen = BTreeSet::new();
-        for entry in &sent.read_only {
-            if !seen.insert(entry.command.clone()) {
-                return Err(entry_error(file, entry, ReadOnlyEntryProblem::Duplicate));
-            }
-        }
+        checked_sent_entries(file, &sent.read_only)?;
     }
     // Both layers' configured keys, read before any layer is written. A
     // sent layer's keys come from its locked read; a layer that is not
@@ -330,28 +414,14 @@ fn check_entries(
     // kept entries, global first: a layer flip or an in-run overlap
     // refuses with the entry named, and an unchanged entry converges
     // below.
-    let mut kept: Vec<&ReadOnlyFlags> = Vec::new();
+    let configured: Vec<&HashMapFlags> = layers.iter().map(|(_, table)| table).collect();
+    let mut kept: Vec<ReadOnlyFlags> = Vec::new();
     for (file, sent, _, _) in pending {
         let same = layers
             .iter()
             .find(|(layer, _)| layer == file)
             .map(|(_, table)| table);
-        for entry in &sent.read_only {
-            let identical =
-                same.is_some_and(|table| table.get(&entry.command) == Some(&entry.flags));
-            if !identical
-                && (layers
-                    .iter()
-                    .flat_map(|(_, table)| table.keys())
-                    .any(|key| overlaps(key, &entry.command))
-                    || kept
-                        .iter()
-                        .any(|kept| overlaps(&kept.command, &entry.command)))
-            {
-                return Err(entry_error(file, entry, ReadOnlyEntryProblem::Overlap));
-            }
-            kept.push(entry);
-        }
+        checked_additions(file, &sent.read_only, same, &configured, &mut kept)?;
     }
     Ok(())
 }
@@ -373,23 +443,7 @@ fn existing_keys(root: &Value) -> Result<HashMapFlags, ReadOnlyEntryProblem> {
         return Ok(HashMapFlags::new());
     };
     let entries = node.as_object().ok_or(ReadOnlyEntryProblem::Malformed)?;
-    let mut table = HashMapFlags::new();
-    for (command, value) in entries {
-        let flags = value
-            .get("flags")
-            .and_then(Value::as_array)
-            .ok_or(ReadOnlyEntryProblem::Malformed)?;
-        let mut taken = Vec::new();
-        for flag in flags {
-            taken.push(
-                flag.as_str()
-                    .ok_or(ReadOnlyEntryProblem::Malformed)?
-                    .to_owned(),
-            );
-        }
-        table.insert(command.clone(), taken);
-    }
-    Ok(table)
+    entry_table(entries).ok_or(ReadOnlyEntryProblem::Malformed)
 }
 
 /// The configured `shell.read_only` entries in `file`, read unlocked: a
@@ -472,23 +526,112 @@ fn with_notes_and_entries(
                 key: "shell.read_only".into(),
                 expected: "an object".into(),
             })?;
+        let current = entry_table(table).ok_or_else(|| ConfigError::WrongType {
+            source_name: file.display().to_string(),
+            key: "shell.read_only".into(),
+            expected: "an object".into(),
+        })?;
+        // Only changed commands are written back, so entries the save did
+        // not touch keep their bytes: an identical entry converges instead
+        // of rewriting. The merged table decides the flags; iterating the
+        // sent entries keeps the write order deterministic.
+        let merged = merged_entries(&current, entries);
         for entry in entries {
-            table.insert(
-                entry.command.clone(),
-                Value::Object(Map::from_iter([(
-                    "flags".to_owned(),
-                    Value::Array(
-                        entry
-                            .flags
-                            .iter()
-                            .map(|flag| Value::String(flag.clone()))
-                            .collect(),
-                    ),
-                )])),
-            );
+            if merged.get(&entry.command) != current.get(&entry.command) {
+                table.insert(entry.command.clone(), entry_object(&entry.flags));
+            }
         }
     }
     Ok(next)
+}
+
+/// The flags each configured command holds in the layer's live table.
+/// `None` for a table the save's check would have refused: every flags
+/// value is a string array past it.
+fn entry_table(table: &Map<String, Value>) -> Option<HashMapFlags> {
+    let mut current = HashMapFlags::new();
+    for (command, value) in table {
+        let flags = value.get("flags")?.as_array()?;
+        let mut taken = Vec::new();
+        for flag in flags {
+            taken.push(flag.as_str()?.to_owned());
+        }
+        current.insert(command.clone(), taken);
+    }
+    Some(current)
+}
+
+/// One entry as its `{"flags": [...]}` object.
+fn entry_object(flags: &[String]) -> Value {
+    Value::Object(Map::from_iter([(
+        "flags".to_owned(),
+        Value::Array(
+            flags
+                .iter()
+                .map(|flag| Value::String(flag.clone()))
+                .collect(),
+        ),
+    )]))
+}
+
+/// The read-only additions the save would merge for `global` and
+/// `project_layer`, global first: identical entries converge and are
+/// omitted, and a changed entry fails with the writer's `Overlap` refusal.
+/// Each layer reads like the save reads it — a sent layer through its
+/// root, an unsent one through its keys alone — so every failure names the
+/// same entry the save would name. The save re-validates under its locks,
+/// so the preview is advisory and the save stays authoritative.
+pub fn preview_read_only_changes(
+    home: &Path,
+    project: &ProjectKey,
+    global: &[ReadOnlyFlags],
+    project_layer: &[ReadOnlyFlags],
+) -> Result<Vec<EntryPreview>, ConfigError> {
+    let global_file = global_config_file(home);
+    let project_file = project_config_file(home, project);
+    let sent = [
+        (&global_file, global, EntryLayer::Global),
+        (&project_file, project_layer, EntryLayer::Project),
+    ];
+    // Malformed tables fail naming the run's first entry, as the save's
+    // check does; with no sent entry there is nothing to add.
+    let Some((first_file, first_entry)) = sent
+        .iter()
+        .find_map(|(file, entries, _)| entries.first().map(|entry| (*file, entry)))
+    else {
+        return Ok(Vec::new());
+    };
+    let malformed = || entry_error(first_file, first_entry, ReadOnlyEntryProblem::Malformed);
+    let mut tables: Vec<HashMapFlags> = Vec::new();
+    for (file, entries, _) in &sent {
+        let table = if entries.is_empty() {
+            unread_keys(file).map_err(|_| malformed())?
+        } else {
+            let (_, root) = read_root(file)?;
+            checked_root(file, &root)?;
+            existing_keys(&root).map_err(|_| malformed())?
+        };
+        tables.push(table);
+    }
+    let configured: Vec<&HashMapFlags> = tables.iter().collect();
+    let mut kept: Vec<ReadOnlyFlags> = Vec::new();
+    let mut out = Vec::new();
+    for ((file, entries, layer), current) in sent.iter().zip(tables.iter()) {
+        if entries.is_empty() {
+            continue;
+        }
+        checked_sent_entries(file, entries)?;
+        let added = checked_additions(file, entries, Some(current), &configured, &mut kept)?;
+        for entry in &added {
+            out.push(EntryPreview {
+                layer: *layer,
+                file: (*file).clone(),
+                command: entry.command.clone(),
+                flags: entry.flags.clone(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// The bytes `write_root` would write for `root`: the convergence check

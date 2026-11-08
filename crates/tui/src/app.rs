@@ -72,6 +72,8 @@ mod home;
 pub(crate) mod hooks_view;
 mod hub_version;
 mod images;
+#[cfg(test)]
+mod interrupt_tests;
 pub(crate) mod items;
 mod keyboard;
 mod links;
@@ -88,7 +90,6 @@ mod paste;
 pub(crate) mod rail;
 mod reconnect;
 pub(crate) mod results;
-mod reviewer_setup;
 mod rewind;
 mod screen;
 mod select;
@@ -150,6 +151,11 @@ pub(crate) const QUIT_WINDOW: Duration = Duration::from_secs(1);
 
 /// What the quit hint says.
 pub(crate) const QUIT_HINT: &str = "Press Ctrl+C again to quit";
+
+/// What the notice says the first time in a session the reviewer blocks a
+/// call while both layers of the notes are empty: the skill that sets them
+/// up (`docs/permissions.md`, "Setting up the notes").
+const FIRST_BLOCK_NOTICE: &str = "The reviewer blocked a call while both layers of the notes are empty. Set them up with the reviewer-setup skill: run /reviewer-setup.";
 
 /// What a key does.
 #[derive(Debug, PartialEq, Eq)]
@@ -215,11 +221,14 @@ pub(crate) enum Target {
     Call(usize),
     /// A call's whole view, opened from its more row.
     CallView(usize),
+    /// A `!` or `!!` run's output past the row cap, opened from its more
+    /// row. The number is the run's slot among its page's runs.
+    Shell(usize),
     /// A thinking block's text.
     Thought(usize),
     /// The login a failed turn offers.
     Login,
-    /// A handoff's note.
+    /// A compaction's note.
     Note(usize),
     /// An image's line: clicking it, or Enter on it while focused,
     /// opens it in the system viewer (`docs/tui.md`, "Images").
@@ -252,11 +261,9 @@ pub(crate) struct App {
     /// only ancestor lines strictly older than it, so already-displayed
     /// preview lines never refold.
     installed_floor: Option<(SessionId, Seq)>,
-    /// The launch directory `start` names: none on a remote home, which
-    /// carries no local workspace.
-    workspace: Option<PathBuf>,
-    /// Home's state, once `run` sets it; `None` is a launch without home.
-    home: Option<home::Home>,
+    /// Home's state: `App::new` seeds it and `set_home` replaces it with
+    /// the launch's.
+    home: home::Home,
     draft: Draft,
     /// The one clipboard image read at a time, and its ticket.
     paste: paste::Paste,
@@ -321,7 +328,9 @@ pub(crate) struct App {
     queue: Queue,
     /// The attached session's offer of its repository's code.
     offer: crate::offer::Offer,
-    /// The attached session's steering queue.
+    /// The steering queue the input box shows: the attached session's, or
+    /// the open fiber delegate's while its view is swapped in, the attached
+    /// session's queue parked in the open item meanwhile.
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
@@ -420,9 +429,11 @@ pub(crate) struct App {
     motion: crate::motion::Motion,
     /// The slabs the last frame drew for its framed surfaces.
     frames: top::Frames,
-    /// The reviewer notes setup, while open (`docs/permissions.md`,
-    /// "Setting up the notes").
-    reviewer_setup: reviewer_setup::State,
+    /// Sessions whose first-block notice showed or whose notes were
+    /// found, by id: the notes are fixed for the session, so neither is
+    /// read again (`docs/permissions.md`, "Setting up the notes"). Held
+    /// in memory only.
+    first_block_notice_done: BTreeSet<SessionId>,
 }
 
 impl App {
@@ -433,14 +444,21 @@ impl App {
         // An empty launch directory is no workspace: the default launch
         // carries an empty `Local` path, and a remote home carries none.
         let workspace = workspace.into().filter(|path| !path.as_os_str().is_empty());
+        let seed = crate::home::Launch {
+            location: crate::home::LaunchLocation::Local {
+                workspace: workspace.unwrap_or_default(),
+                project: String::new(),
+                git: false,
+            },
+            ..Default::default()
+        };
         let mut app = Self {
             passes: Vec::new(),
             overlay: overlay::Overlay::None,
             preview: None,
             count: None,
             installed_floor: None,
-            workspace,
-            home: None,
+            home: home::Home::new(seed),
             draft: Draft::default(),
             paste: paste::Paste::default(),
             phase: Phase::Starting,
@@ -501,20 +519,20 @@ impl App {
             hooks_failed: None,
             motion: crate::motion::Motion::default(),
             frames: top::Frames::default(),
-            reviewer_setup: reviewer_setup::State::default(),
+            first_block_notice_done: BTreeSet::new(),
         };
         // One install reaches every page the screen draws.
         app.screen.pages_mut().ext.handle = app.handle;
         app.screen
             .pages_mut()
             .set_image_ids(app.images.id_allocator.clone());
+        app.apply_launch();
         app
     }
 
     /// Attaches straight to `session`. The `draw` jig uses it: an events
     /// file is one session's stream.
     pub(crate) fn attach(&mut self, session: SessionId) {
-        self.reviewer_setup_attached(&session);
         self.end_overlay();
         // A `/copy` waiting on a pass was for the screen before this one.
         self.copy_owed = false;
@@ -529,10 +547,8 @@ impl App {
         // A fresh attachment supersedes an exit that arrived after the
         // last one: opening resumes the session, and its live update has
         // yet to land.
-        if let Some(home) = self.home.as_mut()
-            && home.left_after_attach.as_ref() == Some(&session)
-        {
-            home.left_after_attach = None;
+        if self.home.left_after_attach.as_ref() == Some(&session) {
+            self.home.left_after_attach = None;
         }
         self.phase = Phase::Attached {
             session,
@@ -855,6 +871,52 @@ impl App {
         self.notices.push(code, text);
     }
 
+    /// The first live block of the attached session while both layers of
+    /// the reviewer notes are empty shows the notice naming the skill
+    /// that sets them up. A later block stays silent, as does a block for
+    /// another session, a failed read, or a session the terminal cannot
+    /// bind: the notes are fixed for the session, so neither is read
+    /// again.
+    fn first_block_notice(&mut self, envelope: &Envelope) {
+        if !is_block(envelope)
+            || self.pass_open()
+            || self.first_block_notice_done.contains(&envelope.session_id)
+        {
+            return;
+        }
+        if self.session() != Some(&envelope.session_id) {
+            return;
+        }
+        let session = envelope.session_id.clone();
+        let seam = self.configure_seam();
+        let Ok(workspace) = self.reviewer_binding(&session) else {
+            return;
+        };
+        let Ok(notes) = seam.reviewer_notes(&workspace) else {
+            return;
+        };
+        self.first_block_notice_done.insert(session);
+        if !(notes.global.text.trim().is_empty() && notes.project.text.trim().is_empty()) {
+            return;
+        }
+        self.push_notice(ErrorCode::ReviewerSetup, FIRST_BLOCK_NOTICE.to_owned());
+    }
+
+    /// The workspace of `session`'s own row on home's list, and nothing
+    /// else: the picked, chosen and launch workspaces can name another
+    /// project's directory, or none on a remote home.
+    fn reviewer_binding(&self, session: &SessionId) -> Result<PathBuf, &'static str> {
+        let row = self
+            .home
+            .sessions
+            .row(session)
+            .ok_or("the session has not loaded yet")?;
+        if row.workspace.is_empty() || row.project.is_empty() {
+            return Err("this session has no project");
+        }
+        Ok(PathBuf::from(&row.workspace))
+    }
+
     /// Births unborn notices and removes expired events; the frame calls
     /// it before each draw and again after, and `run_with` calls it
     /// before the first arm.
@@ -1011,6 +1073,11 @@ impl App {
         }
     }
 
+    /// Number of models currently held by the picker catalogue.
+    pub(crate) fn model_catalogue_len(&self) -> usize {
+        self.model_picker.catalogue.models.len()
+    }
+
     /// The terminal's size in columns and rows: what full-screen
     /// overlays clamp against.
     pub(crate) fn screen_size(&self) -> (u16, u16) {
@@ -1133,10 +1200,7 @@ impl App {
     /// on, graphics were detected, and the window is not flat
     /// (`docs/tui.md`, "Images", "Screen readers").
     fn inline_images(&self) -> bool {
-        self.home
-            .as_ref()
-            .is_some_and(|home| home.launch.inline_images)
-            && self.graphics
+        self.home.launch.inline_images && self.graphics
     }
 
     /// Resizes the attached and shown screens' images between the
@@ -1150,10 +1214,7 @@ impl App {
         // The converter is available when the launch names the running
         // executable, so a stored JPEG or WebP converts to PNG before
         // Kitty transmission (`docs/tui.md`, "Images").
-        let converts = self
-            .home
-            .as_ref()
-            .is_some_and(|home| home.launch.fiber.is_some());
+        let converts = self.home.launch.fiber.is_some();
         let sizing_of = |flat: bool| {
             if inline && !flat {
                 crate::image::Sizing::Inline { cell, converts }
@@ -1302,11 +1363,7 @@ impl App {
     pub(crate) fn panel(&self) -> Option<Panel> {
         let width = crate::surface::inset(self.column_width());
         self.queue.panel_with(width, &|id| {
-            let name = self
-                .home
-                .as_ref()
-                .and_then(|home| home.sessions.row(id))
-                .map(|row| row.name.clone());
+            let name = self.home.sessions.row(id).map(|row| row.name.clone());
             if name.as_deref().is_some_and(|name| !name.is_empty()) {
                 return name;
             }
@@ -1419,7 +1476,7 @@ impl App {
         range: &RangeInclusive<Seq>,
         message: &str,
     ) {
-        self.screen.pages_mut().fail(session, *range.start());
+        self.screen.pages_mut().fail_range(session, range);
         if !self.pass_open() {
             self.screen.pages_mut().clear_anchor();
         }
@@ -1585,7 +1642,7 @@ impl App {
                             return lines;
                         }
                     }
-                    Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                    Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                         if self.image_answered(id, answer.payload.get("result")) {
                             return Vec::new();
                         }
@@ -1600,16 +1657,16 @@ impl App {
                     Some(Waiting::Sessions) => {}
                     Some(Waiting::Abandoned) => {}
                     Some(
-                        Waiting::Directories
-                        | Waiting::Subscribe
+                        Waiting::Directories(..)
+                        | Waiting::Subscribe { .. }
                         | Waiting::Stop
                         | Waiting::Delete
                         | Waiting::OfferImport
-                        | Waiting::DeleteDiscovery
-                        | Waiting::DeleteStop
-                        | Waiting::DeleteFinal
+                        | Waiting::DeleteDiscovery(..)
+                        | Waiting::DeleteStop { .. }
+                        | Waiting::DeleteFinal(..)
                         | Waiting::Feed
-                        | Waiting::Recent
+                        | Waiting::Recent(..)
                         | Waiting::Close,
                     ) => {}
                     Some(
@@ -1622,7 +1679,6 @@ impl App {
                         | Waiting::ConfigAsk
                         | Waiting::Credentials
                         | Waiting::CredentialSwitch
-                        | Waiting::ProposeNotes
                         | Waiting::JobStop
                         | Waiting::JobInput,
                     ) => {}
@@ -1663,7 +1719,7 @@ impl App {
                             }
                         }
                         Some(Waiting::ClearClose) => self.clear_close_settled(id),
-                        Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                        Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                             if self.image_rejected(id, &message) {
                                 return Vec::new();
                             }
@@ -1703,21 +1759,21 @@ impl App {
                             self.outbox.settled(id);
                         }
                         Some(Waiting::Branch) | Some(Waiting::Quota) => {}
-                        Some(Waiting::ArtifactPage) | Some(Waiting::ProposeNotes) => {}
+                        Some(Waiting::ArtifactPage) => {}
                         Some(Waiting::JobStop) | Some(Waiting::JobInput) => {
                             self.outbox.settled(id);
                         }
                         Some(
-                            Waiting::Directories
-                            | Waiting::Subscribe
+                            Waiting::Directories(..)
+                            | Waiting::Subscribe { .. }
                             | Waiting::Stop
                             | Waiting::Delete
                             | Waiting::OfferImport
-                            | Waiting::DeleteDiscovery
-                            | Waiting::DeleteStop
-                            | Waiting::DeleteFinal
+                            | Waiting::DeleteDiscovery(..)
+                            | Waiting::DeleteStop { .. }
+                            | Waiting::DeleteFinal(..)
                             | Waiting::Feed
-                            | Waiting::Recent
+                            | Waiting::Recent(..)
                             | Waiting::Close,
                         ) => {}
                         None => {}
@@ -1972,20 +2028,20 @@ impl App {
             Some(Waiting::RewindSend) => None,
             Some(Waiting::ClearStart) => None,
             Some(Waiting::History) => None,
-            Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => None,
+            Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => None,
             Some(Waiting::Sessions) => None,
             Some(Waiting::Abandoned) => None,
             Some(
-                Waiting::Directories
-                | Waiting::Subscribe
+                Waiting::Directories(..)
+                | Waiting::Subscribe { .. }
                 | Waiting::Stop
                 | Waiting::Delete
                 | Waiting::OfferImport
-                | Waiting::DeleteDiscovery
-                | Waiting::DeleteStop
-                | Waiting::DeleteFinal
+                | Waiting::DeleteDiscovery(..)
+                | Waiting::DeleteStop { .. }
+                | Waiting::DeleteFinal(..)
                 | Waiting::Feed
-                | Waiting::Recent
+                | Waiting::Recent(..)
                 | Waiting::Close,
             ) => None,
             Some(
@@ -1998,20 +2054,11 @@ impl App {
                 | Waiting::ConfigAsk
                 | Waiting::Credentials
                 | Waiting::CredentialSwitch
-                | Waiting::ProposeNotes
                 | Waiting::JobStop
                 | Waiting::JobInput,
             ) => None,
             None => None,
         };
-        // The reviewer setup's `propose_notes` answers settle first, and
-        // reach no other path. The tag settles here so a second answer
-        // for the id falls through to the generic path below.
-        if answer.and_then(|answer| answer.waiting.as_ref()) == Some(&Waiting::ProposeNotes)
-            && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
-        {
-            self.outbox.settled(id);
-        }
         // A `job_stop` or `job_input` answer settles its tag here so the
         // item-session and other-session exits below, which clear the
         // pending entry and return before `items_line`, do not leave it.
@@ -2020,9 +2067,6 @@ impl App {
             && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
         {
             self.outbox.settled(id);
-        }
-        if self.reviewer_setup_settled(envelope) {
-            return Vec::new();
         }
         // The queue takes every session's requests; everything else is the
         // attached session's alone.
@@ -2122,8 +2166,8 @@ impl App {
                 | EventKind::InstructionFile
                 | EventKind::DateChanged
                 | EventKind::SkillsChanged
-                | EventKind::HandoffStarted
-                | EventKind::HandoffCompleted
+                | EventKind::CompactionStarted
+                | EventKind::CompactionCompleted
                 | EventKind::SkillsResent
                 | EventKind::ContextNudged
                 | EventKind::ReviewerKept
@@ -2230,8 +2274,8 @@ impl App {
                 | EventKind::InstructionFile
                 | EventKind::DateChanged
                 | EventKind::SkillsChanged
-                | EventKind::HandoffStarted
-                | EventKind::HandoffCompleted
+                | EventKind::CompactionStarted
+                | EventKind::CompactionCompleted
                 | EventKind::SkillsResent
                 | EventKind::ContextNudged
                 | EventKind::ReviewerKept
@@ -2266,7 +2310,7 @@ impl App {
         }
         send.extend(self.panel_line(envelope, answer));
         self.pwd_arrived(envelope);
-        self.reviewer_block(envelope);
+        self.first_block_notice(envelope);
         self.items_line(envelope);
         self.output_line(envelope);
         send.extend(self.session_views_line(envelope, answer));
@@ -2352,7 +2396,7 @@ impl App {
             }
             EventKind::SteeringQueue => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {
-                    self.steering.fold(&queue, &mut self.draft);
+                    self.fold_attached_queue(&queue);
                 }
             }
             EventKind::FiberStarted
@@ -2392,8 +2436,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept
@@ -2479,6 +2523,109 @@ fn hub_code(payload: &Map<String, Value>) -> ErrorCode {
         None => ErrorCode::Malformed,
     }
 }
+
+/// Whether a session line is the reviewer blocking a call: its deny, or an
+/// escalation to the person whose cause is a block (`docs/events.md`,
+/// `permission_requested`), except a failure for want of a reviewer model.
+fn is_block(envelope: &Envelope) -> bool {
+    let payload = &envelope.payload;
+    let word = |key: &str| payload.get(key).and_then(Value::as_str);
+    match envelope.kind() {
+        EventKind::PermissionResolved => {
+            word("decided_by") == Some("reviewer") && word("decision") == Some("deny")
+        }
+        EventKind::PermissionRequested => {
+            let escalation = payload.get("escalation");
+            let cause = escalation
+                .and_then(|escalation| escalation.get("cause"))
+                .and_then(Value::as_str);
+            // With no reviewer model no reviewer ran, so nothing was
+            // blocked: the `no_model` notice already says what to set.
+            let no_model = escalation
+                .and_then(|escalation| escalation.get("error"))
+                .and_then(Value::as_object)
+                .map(hub_code)
+                == Some(ErrorCode::NoModel);
+            matches!(
+                cause,
+                Some("consecutive_blocks" | "session_blocks" | "reviewer_failed")
+            ) && !no_model
+        }
+        EventKind::FiberStarted
+        | EventKind::FiberExited
+        | EventKind::SessionStarted
+        | EventKind::Rewound
+        | EventKind::Moved
+        | EventKind::TurnStarted
+        | EventKind::StepStarted
+        | EventKind::TurnCompleted
+        | EventKind::SteeringApplied
+        | EventKind::SteeringQueue
+        | EventKind::ShellCommand
+        | EventKind::DirectoryAdded
+        | EventKind::SessionNamed
+        | EventKind::Clients
+        | EventKind::SessionStatus
+        | EventKind::ContextAdded
+        | EventKind::AssistantMessageStarted
+        | EventKind::AssistantMessageDelta
+        | EventKind::AssistantMessageCompleted
+        | EventKind::TextCompleted
+        | EventKind::ToolCallArgumentsDelta
+        | EventKind::ReasoningStarted
+        | EventKind::ReasoningDelta
+        | EventKind::ReasoningCompleted
+        | EventKind::ToolCallRequested
+        | EventKind::ToolCallStarted
+        | EventKind::ToolCallDelta
+        | EventKind::ToolCallCompleted
+        | EventKind::InteractionRequested
+        | EventKind::InteractionResolved
+        | EventKind::RepositoryCodeOffered
+        | EventKind::RepositoryCodeResolved
+        | EventKind::UsageRecorded
+        | EventKind::QuotaNoticed
+        | EventKind::QuotaRearmed
+        | EventKind::RetryScheduled
+        | EventKind::Notice
+        | EventKind::PreambleBuilt
+        | EventKind::ModelChanged
+        | EventKind::OpeningMessage
+        | EventKind::InstructionFile
+        | EventKind::DateChanged
+        | EventKind::SkillsChanged
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
+        | EventKind::SkillsResent
+        | EventKind::ContextNudged
+        | EventKind::ReviewerKept
+        | EventKind::McpServerFailed
+        | EventKind::McpServerReady
+        | EventKind::Reloaded
+        | EventKind::ExtensionsLoaded
+        | EventKind::ExtensionStateSet
+        | EventKind::ExtensionStateUnset
+        | EventKind::ExtensionUi
+        | EventKind::ExtensionMessage
+        | EventKind::ExtensionLog
+        | EventKind::ExtensionExec
+        | EventKind::ExtensionHello
+        | EventKind::ExtensionRequest
+        | EventKind::JobStarted
+        | EventKind::DelegateStarted
+        | EventKind::JobDelta
+        | EventKind::JobLine
+        | EventKind::DelegateFinished
+        | EventKind::JobCompleted
+        | EventKind::JobsPendingNotified
+        | EventKind::CommandAccepted
+        | EventKind::CommandRejected
+        | EventKind::Unknown(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod delegate_steering_tests;
 
 #[cfg(test)]
 #[path = "app_tests.rs"]

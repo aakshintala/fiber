@@ -15,14 +15,12 @@ impl App {
     /// dispatches fresh instead of appending to a stale row.
     pub(crate) fn open_clear(&mut self, id: SessionId, name: String, waiting: String) -> Effect {
         self.close_delete_prompt();
-        if let Some(home) = self.home.as_mut() {
-            home.questions.prompt = Some(Prompt::Clear {
-                id,
-                name,
-                waiting,
-                now: false,
-            });
-        }
+        self.home.questions.prompt = Some(Prompt::Clear {
+            id,
+            name,
+            waiting,
+            now: false,
+        });
         self.draft.clear();
         Effect::None
     }
@@ -89,14 +87,17 @@ impl App {
         if self.outbox.waiting_any(&Waiting::ClearStart) {
             return Effect::None;
         }
-        let staged = self.home.as_mut().and_then(|home| {
-            let Some(Prompt::Clear { id, now, .. }) = home.questions.prompt.as_mut() else {
-                return None;
-            };
-            *now = true;
-            let status = home.sessions.row(id)?.status.clone()?;
-            Some((status, id.clone()))
-        });
+        let home = &mut self.home;
+        let staged = match home.questions.prompt.as_mut() {
+            Some(Prompt::Clear { id, now, .. }) => {
+                *now = true;
+                home.sessions
+                    .row(id)
+                    .and_then(|row| row.status.clone())
+                    .map(|status| (status, id.clone()))
+            }
+            _ => None,
+        };
         self.close_clear();
         let Some((status, session)) = staged else {
             return Effect::None;
@@ -107,10 +108,8 @@ impl App {
     /// Closes the clear question, keeping the session: a
     /// `Prompt::Clear` only, anything else stays as it is.
     fn close_clear(&mut self) {
-        if let Some(home) = self.home.as_mut()
-            && matches!(home.questions.prompt, Some(Prompt::Clear { .. }))
-        {
-            home.questions.prompt = None;
+        if matches!(self.home.questions.prompt, Some(Prompt::Clear { .. })) {
+            self.home.questions.prompt = None;
         }
     }
 }

@@ -20,7 +20,7 @@ use contract::events::{
 };
 
 use super::{App, Effect, Kind, mint};
-use crate::context_view::Handoff;
+use crate::context_view::Compaction;
 use crate::input::Draft;
 use crate::shell;
 use crate::view::panel::delegates::DELEGATES_SHOWN;
@@ -339,8 +339,8 @@ impl PanelState {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept
@@ -494,21 +494,21 @@ impl PanelState {
         }
     }
 
-    /// The latest `preamble_built`'s handoff point, in tokens.
+    /// The latest `preamble_built`'s compaction point, in tokens.
     pub(crate) fn trigger_at(&self) -> Option<u64> {
         self.trigger_at
     }
 
-    /// The automatic handoff point in force: the latest own
+    /// The automatic compaction point in force: the latest own
     /// `preamble_built`'s, known off when that build sets none, or
     /// unknown when the session logged no `preamble_built` of its own.
     /// A build always sets the window, so a window means an own build
     /// replaced the inherited one (`docs/tui.md`, "Swapped views").
-    pub(crate) fn handoff(&self) -> Handoff {
+    pub(crate) fn compaction(&self) -> Compaction {
         match (self.window.is_some(), self.trigger_at) {
-            (true, Some(point)) => Handoff::At(point),
-            (true, None) => Handoff::Off,
-            (false, _) => Handoff::Unknown,
+            (true, Some(point)) => Compaction::At(point),
+            (true, None) => Compaction::Off,
+            (false, _) => Compaction::Unknown,
         }
     }
 
@@ -620,7 +620,7 @@ impl PanelState {
         self.quota.attached();
         self.workspace = None;
         // The new attachment folds its own `preamble_built` and
-        // `session_status`: the old window and handoff point end here.
+        // `session_status`: the old window and compaction point end here.
         // Keep the cached status; its session identity prevents it from
         // supplying the new attachment's context (`docs/tui.md`, "Swapped views").
         self.window = None;
@@ -727,10 +727,7 @@ impl App {
     /// The card list the panel draws, in order; empty without home, so no
     /// card draws there.
     pub(crate) fn panel_cards(&self) -> &[String] {
-        self.home
-            .as_ref()
-            .map(|home| home.launch.panel_cards.as_slice())
-            .unwrap_or(&[])
+        self.home.launch.panel_cards.as_slice()
     }
 
     /// Folds one attached-session envelope into the panel's data, with the
@@ -778,20 +775,20 @@ impl App {
                 | super::Waiting::ClearStart
                 | super::Waiting::ClearClose
                 | super::Waiting::History
-                | super::Waiting::ImageFetch
-                | super::Waiting::ImageDisplay
+                | super::Waiting::ImageFetch { .. }
+                | super::Waiting::ImageDisplay { .. }
                 | super::Waiting::Sessions
                 | super::Waiting::Abandoned
-                | super::Waiting::Directories
-                | super::Waiting::Subscribe
+                | super::Waiting::Directories(..)
+                | super::Waiting::Subscribe { .. }
                 | super::Waiting::Stop
                 | super::Waiting::Delete
                 | super::Waiting::OfferImport
-                | super::Waiting::DeleteDiscovery
-                | super::Waiting::DeleteStop
-                | super::Waiting::DeleteFinal
+                | super::Waiting::DeleteDiscovery(..)
+                | super::Waiting::DeleteStop { .. }
+                | super::Waiting::DeleteFinal(..)
                 | super::Waiting::Feed
-                | super::Waiting::Recent
+                | super::Waiting::Recent(..)
                 | super::Waiting::Close,
             )
             | Some(
@@ -802,7 +799,6 @@ impl App {
                 | super::Waiting::ConfigAsk
                 | super::Waiting::Credentials
                 | super::Waiting::CredentialSwitch
-                | super::Waiting::ProposeNotes
                 | super::Waiting::JobStop
                 | super::Waiting::JobInput,
             )
@@ -891,8 +887,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept

@@ -122,9 +122,9 @@ fn texts(app: &App) -> Vec<String> {
 }
 
 /// The answered rule's row at 60 columns with the resolution at midnight
-/// UTC: the time and the rule filling the card's inner 58 columns.
+/// UTC: the time and the rule filling the card's inner 56 columns.
 fn rule_row() -> String {
-    format!(" you answered · 00:00 {}", "─".repeat(58 - 12 - 10))
+    format!(" you answered · 00:00 {}", "─".repeat(56 - 12 - 10))
 }
 
 /// The rows of the "you answered" rules, each rule from its first row.
@@ -301,7 +301,18 @@ fn folded(lines: &[contract::Envelope]) -> (Vec<Turn>, Vec<bool>) {
     let mut fold = Fold::default();
     let changed = lines
         .iter()
-        .map(|line| fold_line(&mut turns, &mut fold, line))
+        .map(|line| {
+            fold_line(
+                &mut turns,
+                &mut fold,
+                line,
+                &crate::turn::Recipients {
+                    sessions: &Default::default(),
+                    delegates: &Default::default(),
+                    page: None,
+                },
+            )
+        })
         .collect();
     (turns, changed)
 }
@@ -652,9 +663,11 @@ fn card_with_you_answered() {
     insta::assert_snapshot!("card_with_you_answered", answered_screen(60));
 }
 
+/// The narrowest screen the layout draws: the card wraps its answers at
+/// the floor's width.
 #[test]
-fn card_with_you_answered_at_30() {
-    insta::assert_snapshot!("card_with_you_answered_at_30", answered_screen(30));
+fn card_with_you_answered_at_40() {
+    insta::assert_snapshot!("card_with_you_answered_at_40", answered_screen(40));
 }
 
 #[test]

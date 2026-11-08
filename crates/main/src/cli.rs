@@ -25,6 +25,7 @@ Sessions:
   sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
   sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                                                                                      List the models the installed providers serve
+  reviewer evidence --json                                                                                        Print the evidence behind the reviewer's notes as JSON
 
 Fiber itself:
   setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]  Ask the questions a new install needs, applying each answer
@@ -214,6 +215,9 @@ pub(crate) enum Commands {
     },
     /// List sessions, or delete, export or prune them
     Sessions(SessionsArgs),
+    /// Show the evidence behind the reviewer's notes
+    #[command(subcommand)]
+    Reviewer(ReviewerCommands),
     /// List the models the installed providers serve
     Models(ModelsArgs),
     /// Manage extensions
@@ -524,6 +528,17 @@ pub(crate) enum SessionsCommands {
 
 #[derive(Debug, Subcommand)]
 #[command(disable_help_subcommand = true)]
+pub(crate) enum ReviewerCommands {
+    /// Print each topic's evidence as one JSON object keyed by topic
+    Evidence {
+        /// Print the evidence as JSON.
+        #[arg(long, required = true)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+#[command(disable_help_subcommand = true)]
 pub(crate) enum ExtensionCommands {
     /// Install an extension and its dependencies
     Install {
@@ -679,7 +694,7 @@ impl From<ImportSource> for config::ImportSource {
 pub(crate) enum ConfigCommands {
     /// Print the effective value and the layer it came from
     Get {
-        /// The dotted key, such as `model` or `handoff.tokens`.
+        /// The dotted key, such as `model` or `compaction.tokens`.
         #[arg(value_name = "key")]
         key: String,
     },
@@ -1022,13 +1037,13 @@ fn parse_session_id(text: &str) -> Result<String, String> {
 }
 
 /// One `-c` override: a dotted key and a value, as in
-/// `-c handoff.tokens=200000`. The parser checks only for the `=`; the
+/// `-c compaction.tokens=200000`. The parser checks only for the `=`; the
 /// configuration load checks the key path and the value's type.
 fn parse_override(text: &str) -> Result<String, String> {
     if text.contains('=') {
         Ok(text.to_owned())
     } else {
-        Err("expected a dotted key and a value, as in `-c handoff.tokens=200000`".to_owned())
+        Err("expected a dotted key and a value, as in `-c compaction.tokens=200000`".to_owned())
     }
 }
 

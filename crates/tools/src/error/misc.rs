@@ -142,3 +142,49 @@ impl WebSearchError {
         }
     }
 }
+
+/// Every way `reviewer_notes_save` fails.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReviewerNotesError {
+    /// The call ran where no person answers: it needs the person's
+    /// confirm.
+    #[error(
+        "reviewer_notes_save needs the person's confirm, so it cannot run where no person \
+         answers; in a program-driven session, ask with `fiber ask` instead."
+    )]
+    ProgramDriven,
+    /// The call's `lines` do not parse.
+    #[error("`lines` cannot be read: {detail}.")]
+    LinesUnreadable {
+        /// What does not parse.
+        detail: String,
+    },
+    /// A read-only line does not parse as an entry.
+    #[error(
+        "The read-only line `{line}` does not parse as \
+         `shell.read_only.\"command\".flags = [\"--flag\"]`."
+    )]
+    Unparseable {
+        /// The line, as the call sent it.
+        line: String,
+    },
+    /// The driver's answer fits no confirm the call raised.
+    #[error("The answer does not fit the confirm.")]
+    AnswerMismatch,
+    /// Reading, previewing or saving the notes failed: the message is the
+    /// config failure's, naming its file or entry.
+    #[error(transparent)]
+    Config(#[from] config::ConfigError),
+}
+
+impl ReviewerNotesError {
+    /// The code from `docs/errors.md`: one fixed code per case, with no
+    /// wildcard arm.
+    pub(crate) fn code(&self) -> ErrorCode {
+        match self {
+            Self::ProgramDriven | Self::AnswerMismatch => ErrorCode::ToolError,
+            Self::LinesUnreadable { .. } | Self::Unparseable { .. } => ErrorCode::InvalidArguments,
+            Self::Config(error) => error.code(),
+        }
+    }
+}

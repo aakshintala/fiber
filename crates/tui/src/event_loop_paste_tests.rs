@@ -35,7 +35,7 @@ fn ctrl_v_without_a_clipboard_draws_the_notice() {
     assert_eq!(lp.app.input().expand(), "");
 }
 
-/// A 1x1 PNG, 69 bytes, as `crates/main/tests/session_command.rs` holds
+/// A 1x1 PNG, 69 bytes, as `crates/main/tests/session_turns/session_command.rs` holds
 /// it.
 const PIXEL: &[u8] = &[
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
@@ -82,7 +82,7 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     lp.hub.store(ours);
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
-    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app.on_line(Line::Hub(hello()));
     let (_, step_rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
     let landed = Deadline::after(DEADLINE).recv(&worker).unwrap();

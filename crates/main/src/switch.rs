@@ -13,7 +13,7 @@ mod read;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use config::{Config, ProviderData, Secret};
 use contract::clock::Clock;
@@ -27,6 +27,7 @@ use contract::{ErrorCode, ThinkingLevel};
 use extensions::{LuaProvider, Providers, SessionExtensions};
 
 pub(crate) use self::read::{CancelOnDrop, Reads};
+use crate::delegates::Delegates;
 use crate::lua_providers::{Access, KeyAndSigner};
 
 /// The credentials read at startup, by provider name: the label, and the
@@ -199,6 +200,11 @@ pub(crate) struct Switching {
     loaded: Mutex<BTreeMap<String, Arc<LuaProvider>>>,
     started: Arc<StartLock>,
     reads: Arc<Reads>,
+    /// The session's delegate service, handed over once the session builds
+    /// it: applying a switch rebuilds its resolver around the switched
+    /// model. Unset in tests that never build a session, whose switches
+    /// publish nothing.
+    delegates: OnceLock<Arc<Delegates>>,
     /// The session's diagnostic writer: a switch prepares observed
     /// factories over it. `None` until the session shares its writer, and
     /// a switch then carries no factories.
@@ -294,6 +300,7 @@ impl Switching {
             loaded: Mutex::new(loaded.into_iter().collect()),
             reads,
             diag: None,
+            delegates: OnceLock::new(),
         }
     }
 
@@ -337,6 +344,29 @@ impl Switching {
         self.reloadable().loader
     }
 
+    /// Hands a switch the session's delegate service: the next applied
+    /// switch rebuilds its resolver around the switched model. The
+    /// session calls this once, after it builds its delegates.
+    pub(crate) fn set_delegates(&self, delegates: &Arc<Delegates>) {
+        let _first = self.delegates.set(Arc::clone(delegates));
+    }
+
+    /// Rebuilds the delegate resolver around the switched model and swaps
+    /// it onto the session whole, the same snapshot swap a reload uses:
+    /// without it `delegate_models` would keep leading with the old model.
+    /// Switches without a session publish nothing.
+    fn publish_resolve(&self, reference: &str) {
+        let Some(delegates) = self.delegates.get() else {
+            return;
+        };
+        let now = self.reloadable();
+        delegates.set_resolve(crate::delegates::resolver(
+            &self.registry,
+            &now.config,
+            reference,
+        ));
+    }
+
     pub(crate) fn reloadable(&self) -> Reloadable {
         support::lock(&self.now).clone()
     }
@@ -345,6 +375,16 @@ impl Switching {
         self.registry
             .resolve(reference)
             .map_err(|error| crate::failed(error.code(), error))
+    }
+
+    /// The request tags fixed when the session started: the reviewer's
+    /// reconstructed connection reads them here, never from the reloaded
+    /// configuration (`docs/configuration.md`, "When Fiber reads
+    /// configuration").
+    pub(crate) fn databricks_request_tags(
+        &self,
+    ) -> Option<&std::collections::BTreeMap<String, String>> {
+        self.startup_config.databricks_request_tags()
     }
 
     pub(crate) fn reviewer_for(
@@ -444,6 +484,7 @@ impl Switching {
                     .startup_config
                     .flag("cache.diagnostics", None)
                     .unwrap_or_default(),
+                databricks_request_tags: shared.startup_config.databricks_request_tags().cloned(),
             };
             let provider = connect(
                 resolved,
@@ -610,7 +651,7 @@ type Read = Result<(Got, Option<Result<Got, Failure>>), Failure>;
 
 /// Prepares a switch from the same calls `parts_in` makes for the startup
 /// model: resolving, thinking, the reviewer's model, the credential and
-/// Lua provider, connecting, the cache lifetime, the handoff settings, the
+/// Lua provider, connecting, the cache lifetime, the compaction settings, the
 /// addendum and the hosted search. Every check that can reject runs before
 /// the read, so a read's key is cached only for an admitted switch; a
 /// failed read rejects with its own code and caches nothing. The keys and
@@ -713,6 +754,7 @@ pub(crate) fn prepare(
             .config
             .flag("cache.diagnostics", None)
             .unwrap_or_default(),
+        databricks_request_tags: switching.startup_config.databricks_request_tags().cloned(),
     };
     // The session's route with its observed factory when the session
     // shared its writer; without one the switch carries no factories.
@@ -806,12 +848,14 @@ pub(crate) fn prepare(
         .collect();
     let shared = Arc::clone(switching);
     let (switched_provider, switched_label) = (session.clone(), got.label.clone());
+    let applied_reference = reference.clone();
     let applied: Applied = Box::new(move || {
         shared.keep_loaded(keep);
         shared.repoint(&switched_provider, &switched_label);
         if let Some(publish) = publish {
             publish();
         }
+        shared.publish_resolve(&applied_reference);
     });
     Ok(r#loop::Prepared {
         provider,
@@ -828,7 +872,7 @@ pub(crate) fn prepare(
         cache_lifetime: crate::settings::cache_lifetime(&now.config, &reference),
         context_window,
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
-        handoff: crate::handoff::handoff_settings(&now.config, &reference),
+        compaction: crate::compaction::compaction_settings(&now.config, &reference),
         reviewer,
         observe,
         reviewer_observe,

@@ -23,8 +23,8 @@ pub enum Input<'a> {
     Steer(Steer<'a>),
     /// What a form left: the answers or the decline.
     Answers(Answers<'a>),
-    /// A handoff's band without its note.
-    HandoffBand(HandoffBand<'a>),
+    /// A compaction's band without its note.
+    CompactionBand(CompactionBand<'a>),
     /// A turn's failure line.
     ErrorLine(ErrorLine<'a>),
     /// One notice, wherever the built-in draws one.
@@ -52,8 +52,8 @@ pub use chrome::{
 };
 
 pub use slots::{
-    Answers, ErrorLine, GroupLine, HandoffBand, LedgerRow, Notice, Prompt, PromptImage, ReplyText,
-    RowError, Steer, ThinkingLine,
+    Answers, CompactionBand, ErrorLine, GroupLine, LedgerRow, Notice, Prompt, PromptImage,
+    ReplyText, RowError, Steer, ThinkingLine,
 };
 pub use turn::{
     AnswerDisposition, CallState, CardPrompt, LedgerResult, TurnAnswerPart, TurnAnswers, TurnAside,

@@ -307,11 +307,12 @@ fn resolve(
     if functions.is_empty() {
         return Ok(None);
     }
+    let module = member_module(path, sources);
     let mut tests = Vec::new();
     for function in functions {
         for binary in binaries {
             for test in &binary.tests {
-                if test_name_matches(&test.name, &function.name) {
+                if test_name_matches(&test.name, &function.name, module) {
                     tests.push((
                         TestFn {
                             name: function.name.clone(),
@@ -327,8 +328,40 @@ fn resolve(
     Ok(Some(FileTests::Functions(tests)))
 }
 
-fn test_name_matches(test: &str, function: &str) -> bool {
-    test == function || test.ends_with(&format!("::{function}"))
+/// The module an area binary names `path` by, when `path` is a member of one:
+/// `<crate>/tests/<dir>/<stem>.rs` beside a `<crate>/tests/<dir>/main.rs`
+/// root, which declares it as module `<stem>`. Any other file, including a
+/// `tests/support/` file of a crate with no area root, has none.
+fn member_module<'a>(path: &'a str, sources: &[RustFile]) -> Option<&'a str> {
+    let (dir, file) = path.rsplit_once('/')?;
+    let stem = file.strip_suffix(".rs").filter(|stem| *stem != "main")?;
+    let (tests, _area) = dir.rsplit_once('/')?;
+    if tests != "tests" && !tests.ends_with("/tests") {
+        return None;
+    }
+    let root = format!("{dir}/main.rs");
+    sources
+        .iter()
+        .any(|source| source.path == root)
+        .then_some(stem)
+}
+
+/// Whether the nextest test name `test` is the function `function`: exactly,
+/// or as a function in a nested module. Inside an area `module` the name must
+/// also sit under that member's module, so a same-named function in another
+/// member of the area never matches.
+fn test_name_matches(test: &str, function: &str, module: Option<&str>) -> bool {
+    let scoped = match module {
+        Some(module) => match test
+            .strip_prefix(module)
+            .and_then(|rest| rest.strip_prefix("::"))
+        {
+            Some(rest) => rest,
+            None => return false,
+        },
+        None => test,
+    };
+    scoped == function || scoped.ends_with(&format!("::{function}"))
 }
 
 /// The test ids the linked flake issue names, one per marker line outside
@@ -775,11 +808,12 @@ pub(crate) fn tests_in_files(
         if functions.is_empty() {
             continue;
         }
+        let module = member_module(path, sources);
         for binary in index.binaries_for(path) {
             for test in &binary.tests {
                 if functions
                     .iter()
-                    .any(|function| test_name_matches(&test.name, &function.name))
+                    .any(|function| test_name_matches(&test.name, &function.name, module))
                     && !out.contains(test)
                 {
                     out.push(test.clone());

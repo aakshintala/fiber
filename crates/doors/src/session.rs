@@ -374,6 +374,62 @@ impl Session {
         }
     }
 
+    /// Runs one delegate turn: queues its prompt, then closes admission and
+    /// delivers ordinary close when the first newly completed turn is
+    /// appended. A rejected initial prompt closes it as well. A client cannot
+    /// keep a delegate's one-turn run alive (`docs/delegates.md`, "Lifetime").
+    pub fn run_delegate(
+        &self,
+        log: &Arc<Log>,
+        prompt: String,
+        cancel: Arc<dyn Fn() -> bool + Send + Sync>,
+        run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        self.gate.one_turn.store(true, Ordering::SeqCst);
+        let closed = Arc::new(AtomicBool::new(false));
+        let gate = Arc::downgrade(&self.gate);
+        let close = Arc::new(move || {
+            if !closed.swap(true, Ordering::SeqCst)
+                && let Some(gate) = gate.upgrade()
+            {
+                gate.mark_closed();
+                gate.deliver(Delivery::Close(ignore()));
+            }
+        });
+        let on_completion = Arc::clone(&close);
+        let _completion = log.subscribe(Arc::new(move |event, _| {
+            if matches!(event, Event::TurnCompleted(_)) {
+                on_completion();
+            }
+        }));
+
+        let (done, rejection) = mpsc::channel();
+        let on_rejection = Arc::clone(&close);
+        let ack = Ack(Box::new(move |answer| {
+            if let Err(rejection) = answer {
+                on_rejection();
+                done.send(rejection).unwrap_or(());
+            }
+        }));
+        let outcome = self.run(
+            vec![Delivery::Prompt(prompt_message(prompt), ack)],
+            cancel,
+            run,
+        );
+        match outcome {
+            Err(failure) => Err(failure),
+            Ok(()) => match rejection.try_recv() {
+                Ok(rejection) => Err(Failure {
+                    code: rejection.code,
+                    message: rejection.message,
+                    retry_after_ms: None,
+                    provider: None,
+                }),
+                Err(_) => Ok(()),
+            },
+        }
+    }
+
     /// Runs the internal session command: queues `prompt` when one was
     /// supplied and serves clients until idle exit or `close`. With no
     /// prompt it delivers nothing until a client sends one; each accepted

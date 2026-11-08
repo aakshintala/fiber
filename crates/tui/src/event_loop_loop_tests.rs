@@ -541,7 +541,7 @@ fn kitty_event_loop_draws_at_chunk_boundary() {
     // `inline_opened` attached before any frame ran, so the attach's purge
     // is still queued. No frame the test cares about has drained it, and the
     // key frame below would hand it to the writer as an abort of the test's
-    // own upload. Drop that stale handoff before the test's payload.
+    // own upload. Drop that stale compaction before the test's payload.
     let _ = lp.app.take_image_out();
     // A large payload pending: the first chunk reads off the pipe with the
     // deadline, and the held gate parks the writer after it.
@@ -645,7 +645,7 @@ fn stop_kitty_joins_the_writer() {
 }
 
 /// `pause_kitty` retains the writer's ids for the post-resume replay: an
-/// empty handoff would drop the shown image without re-fetching it.
+/// empty compaction would drop the shown image without re-fetching it.
 #[test]
 fn pause_kitty_retains_handover_ids() {
     use super::kitty_writer::{Item, KittyWriter};
@@ -1692,7 +1692,7 @@ fn a_selection_waiting_on_a_page_copies_in_the_same_step() {
     // release: the copy waits on page 0, which the same step fetches,
     // and copies.
     let mut inputs = to_the_top();
-    inputs.push(Input::Bytes(b"\x1b[<0;1;1M\x1b[<32;60;3M".to_vec()));
+    inputs.push(Input::Bytes(b"\x1b[<0;3;1M\x1b[<32;60;3M".to_vec()));
     inputs.push(Input::Bytes(b"\x1b[F".to_vec()));
     inputs.push(Input::Bytes(b"\x1b[<0;60;3m".to_vec()));
     let _lp = run(lp, rx, &tx, inputs);
@@ -1797,6 +1797,9 @@ fn counting() -> (
     };
     app.on_line(Line::Hub(hello));
     app.attach(contract::SessionId(SESSION.to_owned()));
+    // The attach's layout lands before the counted batches, as the
+    // loop's first input would settle it.
+    app.settle();
     let flushes = std::rc::Rc::new(std::cell::Cell::new(0));
     let backend = CountingBackend {
         inner: TestBackend::new(60, 12),
@@ -2321,9 +2324,9 @@ fn filler(len: usize, seed: u64) -> String {
     text
 }
 
-/// A log of `turns` handoff turns with 4 KiB replies, the last reply
-/// `last`: one screenful per reply, a handoff between turns.
-fn handoff_log(turns: u64, last: &str) -> Vec<Envelope> {
+/// A log of `turns` compaction turns with 4 KiB replies, the last reply
+/// `last`: one screenful per reply, a compaction between turns.
+fn compaction_log(turns: u64, last: &str) -> Vec<Envelope> {
     let mut lines = Vec::new();
     let mut seq = 0u64;
     let mut push = |kind: &str, action: Option<&str>, payload: Value| {
@@ -2353,9 +2356,9 @@ fn handoff_log(turns: u64, last: &str) -> Vec<Envelope> {
         push("turn_completed", None, json!({"outcome": "completed"}));
         push("usage_recorded", None, json!({}));
         if turn + 1 < turns {
-            push("handoff_started", None, json!({"trigger": "manual"}));
+            push("compaction_started", None, json!({"trigger": "manual"}));
             push(
-                "handoff_completed",
+                "compaction_completed",
                 None,
                 json!({"outcome": "completed", "tokens_before": 1000}),
             );
@@ -2374,7 +2377,7 @@ fn a_batch_settles_once_at_its_end() {
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.begin_batch();
     assert!(app.pages().holding());
-    for envelope in handoff_log(150, "the last reply holds quokkas") {
+    for envelope in compaction_log(150, "the last reply holds quokkas") {
         app.on_line(Line::Session(envelope));
     }
     assert!(app.pages().part(0).is_some());
@@ -2394,7 +2397,7 @@ fn a_batch_settles_once_at_its_end() {
 #[test]
 fn resume_open_replays_the_log_to_the_tail() {
     use std::io::{BufRead, BufReader, Write};
-    let lines = handoff_log(150, "the last reply holds quokkas");
+    let lines = compaction_log(150, "the last reply holds quokkas");
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(crate::home::Launch {
         location: crate::LaunchLocation::Local {
@@ -2746,6 +2749,12 @@ fn quit() -> Input {
     Input::Bytes(vec![0x03, 0x03])
 }
 
+/// Ctrl+C twice, then Enter: with a turn running the second Ctrl+C asks
+/// to quit, and Enter leaves the work running and quits.
+fn quit_leaving_work() -> Input {
+    Input::Bytes(vec![0x03, 0x03, b'\r'])
+}
+
 /// A wide loop with the delegates card, attached, holding one running
 /// Fiber delegate: the first delegate spot's 0-based cell.
 fn delegate_spot() -> (Loop<TestBackend>, (u16, u16)) {
@@ -2859,6 +2868,8 @@ fn a_quit_in_its_own_batch_leaves_nothing_held() {
 fn a_hub_batch_holds_while_folding() {
     let (mut lp, _) = super::tests::new_loop(TestBackend::new(60, 12), None);
     lp.app.attach(contract::SessionId(SESSION.to_owned()));
+    // The attach's layout lands before the counted batch.
+    lp.app.settle();
     let mut seq = 0u64;
     let mut turn = |kind: &str, action: Option<&str>, payload: Value| {
         let envelope = line(kind, Some(seq), action, payload);
@@ -2879,7 +2890,8 @@ fn a_hub_batch_holds_while_folding() {
         json!({"text": "marker one"}),
     ))
     .unwrap_or_else(|err| panic!("send: {err}"));
-    tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(quit_leaving_work())
+        .unwrap_or_else(|err| panic!("send: {err}"));
     drop(tx);
     let before = lp.app.pages().recounts;
     let (done, finished) = mpsc::channel();

@@ -1,13 +1,17 @@
 //! Tests for terminal state.
 
+use super::top::tests::{home_app, session_app};
 use super::{App, Effect, QUIT_WINDOW};
 use crate::app::testkit::{SESSION as S_A, sent, session_line};
+use crate::configure::{ConfigureError, NotesFile, ReviewerNotes};
+use crate::configure_fake::Fake;
 use crate::keys::{Edit, Key, Parser};
 use crate::link::Line;
 use contract::clock::Clock;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// The app's lines as text.
@@ -22,9 +26,20 @@ impl App {
     }
 }
 
-/// Creates an app in `/w`.
+/// Creates an app in `/w` whose home has a model chosen, so Enter sends a
+/// `start` instead of opening the model picker.
 fn app() -> App {
-    App::new(PathBuf::from("/w"))
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
 }
 
 /// Connects the app to the hub.
@@ -35,7 +50,7 @@ fn connect(app: &mut App) {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    app.on_line(Line::Hub(hello));
 }
 
 /// Types `text` and presses Enter, returning the effect.
@@ -290,10 +305,19 @@ fn enter_before_connect_holds_start_until_hub_hello() {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
+    // The held `start` goes first, then home's startup reads.
     let lines = app.on_line(Line::Hub(hello));
-    assert_eq!(lines.len(), 1);
+    let commands: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            parse(line)["command"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(commands, ["start", "feed", "recent"]);
     let value = parse(&lines[0]);
-    assert_eq!(value["command"], "start");
     assert!(value["args"].get("content").is_none());
 }
 
@@ -316,7 +340,11 @@ fn a_failed_connect_returns_a_held_start_to_the_draft() {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    assert!(
+        app.on_line(Line::Hub(hello))
+            .iter()
+            .all(|line| parse(line)["command"] != "start")
+    );
     // Back to no session: the next Enter sends `start` again.
     let line = one_line(app.on_key(Key::Enter, now));
     assert_eq!(parse(&line)["command"], "start");
@@ -672,12 +700,12 @@ fn turn_started_sets_busy_and_completed_clears_it() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " steer · 00:00 ───────────────────────────────────────────────────────────────",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            " steer · 00:00 ─────────────────────────────────────────────────────────────",
             " more",
             "",
             " ▣ completed",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
             "",
             "▄▄▄▄▄▄▄",
             " next ▐",
@@ -698,10 +726,10 @@ fn failed_turn_says_why_before_it_closes() {
     assert_eq!(
         texts(&app)[6..],
         [
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " ✗ boom · io_failed",
             " ▣ failed",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -757,11 +785,11 @@ fn each_action_streams_its_own_reply() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " one more",
             "",
             " two",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -778,7 +806,7 @@ fn steering_applied_is_a_line() {
         serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
         None,
     ));
-    assert!(texts(&app).contains(&format!(" steer · 00:00 {}", "─".repeat(63))));
+    assert!(texts(&app).contains(&format!(" steer · 00:00 {}", "─".repeat(61))));
     assert!(texts(&app).contains(&" use x".to_owned()));
 }
 
@@ -803,6 +831,7 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
+    app.attach(contract::SessionId(S_A.to_owned()));
     assert_eq!(app.conversation_height(), 7);
     app.on_key(Key::CtrlC, now);
     assert_eq!(app.conversation_height(), 6);
@@ -929,10 +958,7 @@ fn the_commands_answer_fills_the_list_with_hints_and_tags() {
     assert!(app.on_line(answer).is_empty());
     assert_eq!(
         slash_rows(&mut app, "rev", now),
-        [
-            "/reviewer-setup  Sets up the reviewer's notes with you.  command",
-            "/review [base]  Review a diff.  template"
-        ]
+        ["/review [base]  Review a diff.  template"]
     );
     assert_eq!(
         slash_rows(&mut app, "td", now),
@@ -1510,6 +1536,7 @@ fn the_input_box_grows_to_a_third_of_the_screen() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
+    app.attach(contract::SessionId(S_A.to_owned()));
     assert_eq!(app.input_height(), 1);
     assert_eq!(app.conversation_height(), 7);
     for _ in 0..2 {
@@ -1769,7 +1796,10 @@ fn shell_box_rows(shown: &str) -> (String, String) {
         .lines()
         .nth(rule - 1)
         .expect("a first draft row")
-        .to_owned();
+        .chars()
+        // Past the grip's column.
+        .skip(1)
+        .collect();
     (edge, draft)
 }
 
@@ -2158,12 +2188,12 @@ where
 
 use contract::ErrorCode;
 use contract::events::{
-    AssistantMessageCompleted, CommandAccepted, CommandRejected, ContextNudged, DelegateFinished,
-    DelegateStarted, ExtensionUi, FiberExited, FiberStarted, HandoffCompleted, HandoffStarted,
-    InteractionRequested, InteractionResolved, JobCompleted, JobDelta, JobStarted, McpServerFailed,
-    McpServerReady, ModelChanged, Notice, PermissionRequested, PreambleBuilt, ReasoningCompleted,
-    RetryScheduled, Rewound, SessionNamed, SessionStarted, SessionStatus, ShellCommand,
-    SteeringApplied, SteeringQueue, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    AssistantMessageCompleted, CommandAccepted, CommandRejected, CompactionCompleted,
+    CompactionStarted, ContextNudged, DelegateFinished, DelegateStarted, ExtensionUi, FiberExited,
+    FiberStarted, InteractionRequested, InteractionResolved, JobCompleted, JobDelta, JobStarted,
+    McpServerFailed, McpServerReady, ModelChanged, Notice, PermissionRequested, PreambleBuilt,
+    ReasoningCompleted, RetryScheduled, Rewound, SessionNamed, SessionStarted, SessionStatus,
+    ShellCommand, SteeringApplied, SteeringQueue, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnCompleted, TurnStarted,
     UsageRecorded,
 };
@@ -2319,9 +2349,9 @@ fn read_ref_matches_the_clone_for_mcp_and_extension_ui() {
 }
 
 #[test]
-fn read_ref_matches_the_clone_for_handoff_and_context() {
-    read_parity::<HandoffStarted>(serde_json::json!({"trigger": "auto"}));
-    read_parity::<HandoffCompleted>(
+fn read_ref_matches_the_clone_for_compaction_and_context() {
+    read_parity::<CompactionStarted>(serde_json::json!({"trigger": "auto"}));
+    read_parity::<CompactionCompleted>(
         serde_json::json!({"outcome": "completed", "tokens_before": 1000}),
     );
     read_parity::<ContextNudged>(serde_json::json!({"tokens": 1, "trigger_at": 2}));
@@ -2329,6 +2359,368 @@ fn read_ref_matches_the_clone_for_handoff_and_context() {
         serde_json::json!({"content": [{"type": "text", "text": "go"}], "source": "driver"}),
     );
     // A trigger outside the enum never decodes.
-    read_none::<HandoffStarted>(serde_json::json!({"trigger": "manual"}));
+    read_none::<CompactionStarted>(serde_json::json!({"trigger": "manual"}));
     read_none::<ContextNudged>(serde_json::json!({"tokens": 1}));
+}
+
+// --------------------------------------- the first-block notice
+
+/// Another session id, never the attached one.
+const OTHER: &str = "s_cccccccccccccccc";
+
+/// The session app with a fake seam answering empty notes.
+fn notice_app() -> (App, Arc<Fake>) {
+    let mut app = session_app();
+    let fake = Arc::new(Fake::new(Vec::new()));
+    set_notice_notes(&fake, "", "");
+    app.set_configure(fake.clone() as Arc<dyn crate::Configure>);
+    (app, fake)
+}
+
+fn notice_notes(global: &str, project: &str) -> ReviewerNotes {
+    ReviewerNotes {
+        global: NotesFile {
+            file: PathBuf::from("/home/fiber/config.json"),
+            text: global.to_owned(),
+            version: "global-v1".to_owned(),
+        },
+        project: NotesFile {
+            file: PathBuf::from("/home/fiber/projects/-w/config.json"),
+            text: project.to_owned(),
+            version: "project-v1".to_owned(),
+        },
+    }
+}
+
+fn set_notice_notes(fake: &Fake, global: &str, project: &str) {
+    *fake.notes.lock().expect("notes lock") = Ok(notice_notes(global, project));
+}
+
+fn notice_failure(message: &str) -> ConfigureError {
+    ConfigureError {
+        code: contract::ErrorCode::IoFailed,
+        message: message.to_owned(),
+    }
+}
+
+/// A home row for `session`, so the trigger can bind its workspace.
+fn notice_status(session: &str, workspace: &str, project: &str) -> Line {
+    session_line(
+        session,
+        "session_status",
+        serde_json::json!({
+            "name": "work", "workspace": workspace, "project": project,
+            "state": "idle", "since": 0, "started": 0, "calls": 0,
+            "delegates": 0, "jobs": 0, "clients": 0, "model": "test/model",
+            "spend": {"tokens": {"input": 1, "output": 2, "cache_read": 0,
+                "cache_write": {}}, "cost": 0.0, "subscription_cost": 0.0},
+        }),
+        None,
+    )
+}
+
+/// A deny verdict on the attached session, from `decided_by`.
+fn notice_verdict(decided_by: &str, decision: &str) -> Line {
+    session_line(
+        S_A,
+        "permission_resolved",
+        serde_json::json!({"request_id": "r_9", "decision": decision, "decided_by": decided_by}),
+        Some("a_1"),
+    )
+}
+
+/// An escalation to the person on the attached session, with `cause` when
+/// it has one.
+fn notice_escalation(cause: Option<&str>) -> Line {
+    let mut payload = serde_json::json!({"request_id": "r_8", "effects": ["executes"],
+        "reversible": true, "step": "review"});
+    if let (Some(cause), Some(map)) = (cause, payload.as_object_mut()) {
+        map.insert(
+            "escalation".to_owned(),
+            serde_json::json!({"cause": cause, "reason": "it blocked three in a row"}),
+        );
+    }
+    session_line(S_A, "permission_requested", payload, Some("a_1"))
+}
+
+#[test]
+fn first_block_notice_deny_names_the_skill() {
+    let (mut app, _) = notice_app();
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+    assert!(
+        app.notice()
+            .is_some_and(|text| text.contains("reviewer-setup")),
+        "the notice names the skill"
+    );
+    // The row shows the registry code (`docs/errors.md`, "Registry").
+    assert!(
+        matches!(
+            app.notices().as_slice(),
+            [crate::app::NoticeLine::Notice {
+                code: ErrorCode::ReviewerSetup,
+                ..
+            }]
+        ),
+        "the notice carries the reviewer_setup code: {:?}",
+        app.notices()
+    );
+}
+
+#[test]
+fn first_block_notice_second_block_stays_silent() {
+    let (mut app, _) = notice_app();
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert!(app.notice().is_some());
+    app.on_line(notice_verdict("reviewer", "deny"));
+    // One notice per session (`docs/permissions.md`, "Setting up the notes").
+    assert_eq!(app.notices().len(), 1, "no second notice");
+}
+
+#[test]
+fn first_block_notice_each_block_escalation_cause_shows() {
+    for cause in ["consecutive_blocks", "session_blocks", "reviewer_failed"] {
+        let (mut app, _) = notice_app();
+        app.on_line(notice_escalation(Some(cause)));
+        assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE), "{cause}");
+    }
+}
+
+#[test]
+fn first_block_notice_a_reviewer_failure_for_no_model_stays_silent() {
+    let (mut app, _) = notice_app();
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_8", "effects": ["executes"],
+            "reversible": true, "step": "review",
+            "escalation": {"cause": "reviewer_failed",
+                "error": {"code": "no_model", "message": "No reviewer model is set."}}}),
+        Some("a_1"),
+    ));
+    assert_eq!(
+        app.notice(),
+        None,
+        "no reviewer ran, so nothing was blocked"
+    );
+    // Other failures of the reviewer still count, and the silent line did
+    // not mark the session done.
+    app.on_line(session_line(
+        S_A,
+        "permission_requested",
+        serde_json::json!({"request_id": "r_9", "effects": ["executes"],
+            "reversible": true, "step": "review",
+            "escalation": {"cause": "reviewer_failed",
+                "error": {"code": "provider_unavailable", "message": "down"}}}),
+        Some("a_2"),
+    ));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_other_escalation_causes_stay_silent() {
+    for cause in [Some("escalate_rule"), Some("not_a_block"), None] {
+        let (mut app, _) = notice_app();
+        app.on_line(notice_escalation(cause));
+        assert_eq!(app.notice(), None, "{cause:?}");
+    }
+}
+
+#[test]
+fn first_block_notice_only_a_reviewer_deny_shows() {
+    for (by, decision) in [
+        ("person", "deny"),
+        ("reviewer", "allow"),
+        ("cancel", "deny"),
+        ("rule", "deny"),
+    ] {
+        let (mut app, _) = notice_app();
+        app.on_line(notice_verdict(by, decision));
+        assert_eq!(app.notice(), None, "{by} {decision}");
+    }
+}
+
+#[test]
+fn first_block_notice_opening_fold_replay_marks_nothing() {
+    let (mut app, _) = notice_app();
+    app.passes.push((
+        contract::SessionId(S_A.to_owned()),
+        crate::app::Pass::Pending,
+    ));
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), None);
+    app.passes.clear();
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(
+        app.notice(),
+        Some(super::FIRST_BLOCK_NOTICE),
+        "the replayed block did not use the notice up"
+    );
+}
+
+#[test]
+fn first_block_notice_notes_in_either_layer_end_reads_for_the_session() {
+    for (global, project) in [
+        ("### Source control\n- g\n", ""),
+        ("", "### Source control\n- p\n"),
+    ] {
+        let (mut app, fake) = notice_app();
+        set_notice_notes(&fake, global, project);
+        app.on_line(notice_verdict("reviewer", "deny"));
+        assert_eq!(app.notice(), None, "{global:?} {project:?}");
+        // The notes are fixed for the session: a later read is not made.
+        set_notice_notes(&fake, "", "");
+        app.on_line(notice_verdict("reviewer", "deny"));
+        assert_eq!(app.notice(), None, "read again");
+    }
+}
+
+#[test]
+fn first_block_notice_failed_read_shows_nothing_and_reads_again() {
+    let (mut app, fake) = notice_app();
+    *fake.notes.lock().expect("notes lock") = Err(notice_failure("config.json: unreadable"));
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), None);
+    set_notice_notes(&fake, "", "");
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_whitespace_only_layers_count_as_empty() {
+    let (mut app, fake) = notice_app();
+    set_notice_notes(&fake, "  \n\t", " \n");
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_whitespace_beside_notes_shows_none() {
+    let (mut app, fake) = notice_app();
+    set_notice_notes(&fake, "  \n", "### Source control\n- p\n");
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), None);
+}
+
+#[test]
+fn first_block_notice_other_session_with_a_row_stays_silent() {
+    let (mut app, _) = notice_app();
+    app.on_line(notice_status(OTHER, "/w", "-w"));
+    app.on_line(session_line(
+        OTHER,
+        "permission_resolved",
+        serde_json::json!({"request_id": "r_9", "decision": "deny", "decided_by": "reviewer"}),
+        Some("a_1"),
+    ));
+    assert_eq!(app.notice(), None);
+    // The other session marked nothing: the attached session still shows.
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_session_with_no_project_waits_for_its_row() {
+    let (mut app, _) = notice_app();
+    app.on_line(notice_status(S_A, "/w", ""));
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), None);
+    app.on_line(notice_status(S_A, "/w", "-w"));
+    app.on_line(notice_verdict("reviewer", "deny"));
+    assert_eq!(app.notice(), Some(super::FIRST_BLOCK_NOTICE));
+}
+
+#[test]
+fn first_block_notice_session_with_no_row_shows_nothing() {
+    let mut app = home_app();
+    let fake = Arc::new(Fake::new(Vec::new()));
+    app.set_configure(fake as Arc<dyn crate::Configure>);
+    app.attach(contract::SessionId(OTHER.to_owned()));
+    app.on_line(session_line(
+        OTHER,
+        "permission_resolved",
+        serde_json::json!({"request_id": "r_9", "decision": "deny", "decided_by": "reviewer"}),
+        Some("a_1"),
+    ));
+    assert_eq!(app.notice(), None);
+}
+
+/// A `!` run of `seq 1 N` as its `shell_command` line.
+fn shell_run(app: &mut App, lines: usize) {
+    let output = (1..=lines)
+        .map(|n| format!("out {n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "shell_command",
+        serde_json::json!({"command": "seq", "output": output,
+            "process": {"exit_code": 0, "timed_out": false}}),
+        None,
+    ));
+}
+
+/// The run's transcript rows with `shown` output lines then `tail`.
+fn shell_rows_want(shown: usize, tail: &[&str]) -> Vec<String> {
+    let mut want = vec!["! seq".to_owned(), "sent with your next prompt".to_owned()];
+    want.extend((1..=shown).map(|n| format!("out {n:02}")));
+    want.extend(tail.iter().map(|line| (*line).to_owned()));
+    want
+}
+
+/// Renders `app` whole on an 80 by 60 screen as text.
+fn shell_tall_screen(app: &App) -> String {
+    let area = Rect::new(0, 0, 80, 60);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
+}
+
+/// A run with more than 20 output lines shows 20 and a "N more lines"
+/// row; a click on it, or Enter while it is focused, opens the rest in
+/// place with "show less", and the same again closes it. A run of 20
+/// lines or fewer has no more row.
+#[test]
+fn shell_cap_screen_more_row() {
+    use crate::app::Target;
+    use crate::mouse::TargetId;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.set_size(80, 60);
+    shell_run(&mut app, 25);
+    let closed = shell_rows_want(20, &["5 more lines", "exit 0"]);
+    let open = shell_rows_want(25, &["show less", "exit 0"]);
+    assert_eq!(texts(&app), closed);
+    let screen = shell_tall_screen(&app);
+    assert!(screen.contains("5 more lines"), "{screen}");
+    assert!(!screen.contains("out 21"), "{screen}");
+    let stops = app.targets();
+    assert_eq!(stops.len(), 1, "the more row is the one focus stop");
+    let (at, target) = stops[0];
+    assert!(matches!(target, Target::Shell(_)));
+    assert_eq!(
+        texts(&app).get(at).map(String::as_str),
+        Some("5 more lines")
+    );
+    // Click opens, click closes.
+    assert_eq!(app.on_click(TargetId::Line(target)), Effect::None);
+    assert_eq!(texts(&app), open);
+    let screen = shell_tall_screen(&app);
+    assert!(screen.contains("out 25") && screen.contains("show less"));
+    assert!(!screen.contains("5 more lines"), "{screen}");
+    assert_eq!(app.on_click(TargetId::Line(target)), Effect::None);
+    assert_eq!(texts(&app), closed);
+    // Enter on the focused row opens, and again closes.
+    app.focus = Some(TargetId::Line(target));
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(texts(&app), open);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(texts(&app), closed);
+    // Twenty lines show whole, with no more row and no focus stop.
+    let mut small = self::app();
+    attach(&mut small, now, "s_aaaaaaaaaaaaaaaa");
+    small.set_size(80, 60);
+    shell_run(&mut small, 20);
+    assert_eq!(texts(&small), shell_rows_want(20, &["exit 0"]));
+    assert!(small.targets().is_empty());
 }

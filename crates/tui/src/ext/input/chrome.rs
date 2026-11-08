@@ -120,7 +120,7 @@ pub struct SessionContext {
     pub tokens: u64,
     /// The model's context window, in tokens.
     pub window: u64,
-    /// The latest preamble's handoff point, in tokens.
+    /// The latest preamble's compaction point, in tokens.
     pub trigger_at: Option<u64>,
 }
 

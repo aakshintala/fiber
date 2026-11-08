@@ -11,8 +11,10 @@ use contract::ErrorCode;
 use contract::shapes::ProviderFailure;
 use contract::{ActionId, Envelope, JobId, SessionId};
 
+use super::steering::Steering;
 use super::{App, Effect, Kind, Phase, mint, session_command};
 use crate::home::Level;
+use crate::input::Draft;
 use crate::keys::{Edit, Key};
 use crate::tty_screen::Output;
 
@@ -81,6 +83,15 @@ pub(super) struct JobRecord {
     tty: bool,
 }
 
+/// The attached session's steering queue and the draft it edits, parked
+/// while an item view is open: the view shows its own queue, and the
+/// attached session's lines keep folding into this one.
+#[derive(Default)]
+pub(super) struct Parked {
+    steering: Steering,
+    draft: Draft,
+}
+
 /// The open item: the job and the attached session's screen while a fiber
 /// delegate's transcript is swapped in.
 pub(super) struct Open {
@@ -140,6 +151,9 @@ pub(crate) struct ItemView {
     /// Whether the job runs under a pseudo-terminal: the body's screen
     /// slab, kept after the run ends.
     pub(crate) tty: bool,
+    /// Whether the connected delegate's turn runs, so the card offers to
+    /// interrupt it; apart from `running`, the job's lifetime.
+    pub(crate) interruptible: bool,
 }
 
 /// The attached session's items: the per-job fold, the open item and the
@@ -154,6 +168,9 @@ pub(crate) struct Items {
     pub(super) next_serial: u64,
     /// The open item, if any.
     pub(super) open: Option<Open>,
+    /// The attached session's queue and draft while the open item's view
+    /// shows its own; back in the box when the view closes.
+    parked: Option<Parked>,
     /// The delegate subscription wishes, by delegate session.
     pub(super) wants: BTreeMap<SessionId, retry::Want>,
     /// The tool calls waiting for their `job_started`: their action ids,
@@ -171,6 +188,7 @@ impl Default for Items {
             by_serial: HashMap::new(),
             next_serial: 1,
             open: None,
+            parked: None,
             wants: BTreeMap::new(),
             tty_marks: HashSet::new(),
             last_due: None,
@@ -215,7 +233,7 @@ impl App {
     /// delegate's, swapped onto the screen. A job's view and another
     /// harness's delegate show none, and the screen behind is the
     /// parent's.
-    pub(super) fn item_transcript(&self) -> bool {
+    pub(crate) fn item_transcript(&self) -> bool {
         self.items
             .open
             .as_ref()
@@ -225,6 +243,15 @@ impl App {
     /// The open item's job, if any.
     fn open_job(&self) -> Option<JobId> {
         self.items.open.as_ref().map(|open| open.job_id.clone())
+    }
+
+    /// Whether the open item is a delegate of any harness, not a plain job.
+    fn item_is_delegate(&self) -> bool {
+        self.items
+            .open
+            .as_ref()
+            .and_then(|open| self.items.jobs.get(&open.job_id))
+            .is_some_and(|record| record.delegate.is_some())
     }
 
     /// Whether `session` is the open fiber delegate's session.
@@ -340,7 +367,46 @@ impl App {
             output_path: record.output_path.clone(),
             job_id: open.job_id.clone(),
             tty: record.tty,
+            interruptible: self.item_transcript() && self.interrupt_session().is_some(),
         })
+    }
+
+    /// The delegate whose running turn the swapped transcript shows: the
+    /// open Fiber delegate's session while its job runs and the shown
+    /// pages hold an open turn. A finished delegate, an idle one or a view
+    /// with no transcript has none, and never falls back to the parent.
+    pub(super) fn item_turn_session(&self) -> Option<SessionId> {
+        let open = self.items.open.as_ref()?;
+        open.stashed.as_ref()?;
+        let record = self.items.jobs.get(&open.job_id)?;
+        if record.outcome.is_some() {
+            return None;
+        }
+        let delegate = record.delegate.as_ref()?;
+        self.screen.pages().open_turn()?;
+        Some(delegate.session.clone())
+    }
+
+    /// The session whose turn the on-screen conversation runs, while the
+    /// terminal is connected to interrupt it: a delegate's own in its
+    /// view, else the attached session's when busy, whatever else is open
+    /// over it. A delegate's view of another harness has no turn to
+    /// interrupt and never falls back to its parent; an ordinary job's
+    /// view shows the attached conversation and does.
+    pub(super) fn interrupt_session(&self) -> Option<SessionId> {
+        if !self.connected() {
+            return None;
+        }
+        if self.item_transcript() || self.item_is_delegate() {
+            return self.item_turn_session();
+        }
+        match &self.phase {
+            Phase::Attached {
+                session,
+                busy: true,
+            } => Some(session.clone()),
+            Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. } => None,
+        }
     }
 
     /// The job holding `serial`, if any.
@@ -380,6 +446,10 @@ impl App {
         self.model_picker.close();
         self.close_find();
         self.clear_selection();
+        self.items.parked = Some(Parked {
+            steering: std::mem::take(&mut self.steering),
+            draft: std::mem::take(&mut self.draft),
+        });
         let fiber = record
             .delegate
             .as_ref()
@@ -457,6 +527,7 @@ impl App {
         let open = self.items.open.take()?;
         // A `/copy` waiting on a pass was for the view closing.
         self.copy_owed = false;
+        self.unpark();
         if let Some(stashed) = open.stashed {
             let (width, height) = (self.screen.width(), self.screen.height());
             self.screen = stashed;
@@ -473,6 +544,35 @@ impl App {
         // The lowering goes out through `items_due` on the same step, so
         // a close never sends at a level the connection holds.
         None
+    }
+
+    /// Puts the attached session's queue and draft back in the box.
+    fn unpark(&mut self) {
+        if let Some(parked) = self.items.parked.take() {
+            self.steering = parked.steering;
+            self.draft.put_back(parked.draft);
+        }
+    }
+
+    /// Folds the attached session's `steering_queue`: into the shown
+    /// queue, or into the parked one while an item view shows its own.
+    pub(super) fn fold_attached_queue(&mut self, queue: &contract::events::SteeringQueue) {
+        match self.items.parked.as_mut() {
+            Some(parked) => parked.steering.fold(queue, &mut parked.draft),
+            None => self.steering.fold(queue, &mut self.draft),
+        }
+    }
+
+    /// The session steering commands go to: the attached session, or the
+    /// open fiber delegate while it runs; none for a finished delegate, a
+    /// delegate of another harness or a job, whose views take no steering.
+    pub(super) fn steering_session(&self) -> Option<SessionId> {
+        let Some(open) = self.items.open.as_ref() else {
+            return self.session().cloned();
+        };
+        let record = self.items.jobs.get(&open.job_id)?;
+        let delegate = record.delegate.as_ref()?;
+        (delegate.harness == "fiber" && record.outcome.is_none()).then(|| delegate.session.clone())
     }
 
     /// Esc in an item view closes it, after notices, panels and
@@ -633,6 +733,9 @@ impl App {
         if !self.outbox.is_up() {
             return Some(Effect::None);
         }
+        if self.steering.is_selected() {
+            return Some(self.amend());
+        }
         let id = mint();
         let args = super::commands::content_arg(&self.draft);
         let line = session_command(&id, "steer", &delegate.session, Some(args)).to_string();
@@ -666,6 +769,8 @@ impl App {
                         && open.job_id == started.job_id
                     {
                         open.message = None;
+                        // The previous run's queue went with its outcome.
+                        self.steering.reset(&mut self.draft);
                     }
                     // A resume turns the replay live again: the open
                     // view of this job re-wants `full` for its session.
@@ -715,6 +820,17 @@ impl App {
                     if let Some(delegate) = record.delegate.clone() {
                         self.items.wants.remove(&delegate.session);
                     }
+                    // A finished delegate takes no steering: its queue and
+                    // selection go with the outcome, and a late replayed
+                    // queue does not bring them back.
+                    if self
+                        .items
+                        .open
+                        .as_ref()
+                        .is_some_and(|open| open.job_id == done.job_id)
+                    {
+                        self.steering.reset(&mut self.draft);
+                    }
                 }
             }
             EventKind::FiberStarted
@@ -762,8 +878,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept
@@ -817,6 +933,12 @@ impl App {
         // branch; the transcript folds here without touching the
         // attached busy flag.
         self.record_extensions(envelope);
+        if envelope.kind() == EventKind::SteeringQueue
+            && self.steering_session().as_ref() == Some(&envelope.session_id)
+            && let Some(queue) = super::read!(envelope, contract::events::SteeringQueue)
+        {
+            self.steering.fold(&queue, &mut self.draft);
+        }
         let applied = self.screen.pages_mut().apply(envelope);
         if applied.changed || envelope.kind() == EventKind::ExtensionsLoaded {
             self.screen.changed();
@@ -908,10 +1030,11 @@ impl App {
     /// Drops the item state on a lost connection: the hub connection and
     /// its levels are gone.
     pub(super) fn drop_items(&mut self) {
-        if let Some(open) = self.items.open.take()
-            && let Some(stashed) = open.stashed
-        {
-            self.screen = stashed;
+        if let Some(open) = self.items.open.take() {
+            self.unpark();
+            if let Some(stashed) = open.stashed {
+                self.screen = stashed;
+            }
         }
         self.items.wants.clear();
         self.items.last_due = None;

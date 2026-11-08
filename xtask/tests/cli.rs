@@ -1995,7 +1995,7 @@ fn the_docs_check_fails_a_line_number_cite_in_code() {
         (
             1,
             format!(
-                "check-docs: crates/b/src/cite.rs:1: unlisted cite \"{doc}:7\": use {doc}, \"Y\"\n"
+                "check-docs: crates/b/src/cite.rs:1: unlisted cite \"{doc}:7\": wrap the path in backticks\n"
             )
         )
     );
@@ -2029,7 +2029,7 @@ fn doc_citations_print_lists_the_table() {
     dir.write("crates/b/src/cite.rs", &format!("// {doc}:{}\n", 7));
     dir.write("docs/x.md", "# X\n\n## Y\nt\nt\nt\nt\nt\nt\nt\n");
     dir.write("xtask/doc-citations.allow", "bad table\n");
-    let header = "# Code citations still allowed a line number or a missing heading.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
+    let header = "# Code citations still allowed a line number, a missing heading, or a doc path not in backticks.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
     assert_eq!(
         xtask(&dir, &["doc-citations", "--print"], &[], ""),
         (0, format!("{header}crates/b/src/cite.rs\t1\t{doc}:7\n"))
@@ -2288,18 +2288,18 @@ fn flake_classify_files_two_tests_of_one_binary_once() {
 
 #[test]
 fn flake_classify_keys_main_modules_by_file() {
-    // The aggregate `main` binary yields one record per test-module file,
-    // while a root-level `main` test falls back to the binary title and a
+    // An area binary yields one record per test-module file, while a
+    // root-level test in one falls back to its binary title and a
     // single-file integration binary keeps its title. The arm-list
     // occurrence contributes the reload-module record.
     let dir = TempDir::new("xtask-flake-classify-main-key");
     dir.write(
         "flaky/flaky-tests-linux.txt",
-        "main reviewer_setup::the_setup_saves\tthread the_setup_saves panicked at crates/main/tests/reviewer_setup.rs:10\nmain root_level_test\tthread root_level_test panicked at crates/main/tests/main.rs:5\nmain::hub_exit_window helper_tests::case\tthread case panicked at crates/main/tests/hub_exit_window.rs:7\n",
+        "main::extension_host reviewer_setup::the_setup_saves\tthread the_setup_saves panicked at crates/main/tests/reviewer_setup.rs:10\nmain::extension_host root_level_test\tthread root_level_test panicked at crates/main/tests/main.rs:5\nmain::hub_service helper_tests::case\tthread case panicked at crates/main/tests/hub_service.rs:7\n",
     );
     dir.write(
         "flaky/flaky-tests-arm.txt",
-        "main reload_tests::some_test\tthread some_test panicked at crates/main/tests/reload_tests.rs:3\n",
+        "main::session_turns reload_tests::some_test\tthread some_test panicked at crates/main/tests/reload_tests.rs:3\n",
     );
     let flaky = dir.path().join("flaky");
     let (code, out) = xtask(
@@ -2326,8 +2326,8 @@ fn flake_classify_keys_main_modules_by_file() {
     // docs/ci.md, "On every pull request that changes code": "writes one
     // classification line per unique title": two modules give two titles plus
     // the root fallback and integration titles.
-    // docs/testing/running.md, "Flaky tests": "the aggregate `main`
-    // integration binary names its first test-module segment".
+    // docs/testing/running.md, "Flaky tests": "an area binary names its first
+    // test-module segment, the file".
     assert_eq!(records.len(), 4, "{out}");
     let by_title = |title: &str| {
         records
@@ -2338,7 +2338,10 @@ fn flake_classify_keys_main_modules_by_file() {
     let reviewer = by_title("Flaky tests: main::reviewer_setup");
     assert_eq!(reviewer["action"], "lookup");
     assert_eq!(reviewer["runner"], "linux");
-    assert_eq!(reviewer["name"], "main reviewer_setup::the_setup_saves");
+    assert_eq!(
+        reviewer["name"],
+        "main::extension_host reviewer_setup::the_setup_saves"
+    );
     assert_eq!(
         reviewer["detail"],
         "thread the_setup_saves panicked at crates/main/tests/reviewer_setup.rs:10"
@@ -2350,16 +2353,13 @@ fn flake_classify_keys_main_modules_by_file() {
     let reload = by_title("Flaky tests: main::reload_tests");
     assert_eq!(reload["action"], "lookup");
     assert_eq!(reload["runner"], "arm");
-    let fallback = by_title("Flaky tests: main");
+    let fallback = by_title("Flaky tests: main::extension_host");
     assert_eq!(fallback["action"], "lookup");
-    assert_eq!(fallback["name"], "main root_level_test");
+    assert_eq!(fallback["name"], "main::extension_host root_level_test");
     assert_eq!(fallback["runner"], "linux");
-    let integration = by_title("Flaky tests: main::hub_exit_window");
+    let integration = by_title("Flaky tests: main::hub_service");
     assert_eq!(integration["action"], "lookup");
-    assert_eq!(
-        integration["name"],
-        "main::hub_exit_window helper_tests::case"
-    );
+    assert_eq!(integration["name"], "main::hub_service helper_tests::case");
     assert_eq!(integration["runner"], "linux");
 }
 
@@ -2959,4 +2959,40 @@ fn break_glass_audit_exits_one_on_an_undeclared_merge_and_two_on_bad_input() {
     let (code, out) = xtask_without(&dir, &args, &[], &["GITHUB_ACTIONS"], "{not json");
     assert_eq!(code, 2, "{out}");
     assert!(out.starts_with("xtask: break-glass-audit:"), "{out}");
+}
+
+#[test]
+fn shellcheck_files_lists_a_new_broken_script() {
+    let dir = TempDir::new("xtask-shellcheck-files-cli");
+    dir.write("scripts/ok", "#!/usr/bin/env bash\n");
+    dir.write("scripts/install.sh", "#!/usr/bin/env bash\n");
+    dir.write("scripts/lib/release.sh", "# no shebang\n");
+    dir.write(
+        "scripts/broken",
+        "#!/usr/bin/env bash\nif [ ; then echo $unquoted\n",
+    );
+    let (code, out) = xtask(&dir, &["shellcheck-files"], &[], "");
+    assert_eq!(code, 0, "{out}");
+    // `docs/ci.md` leaves the order open: compare as a set.
+    let mut listed: Vec<&str> = out.lines().collect();
+    listed.sort_unstable();
+    assert_eq!(
+        listed,
+        ["scripts/broken", "scripts/lib/release.sh", "scripts/ok"],
+        "{out}"
+    );
+
+    let only_install = TempDir::new("xtask-shellcheck-files-cli");
+    only_install.write("scripts/install.sh", "#!/bin/sh\n");
+    let (code, out) = xtask(&only_install, &["shellcheck-files"], &[], "");
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("no bash files"), "{out}");
+
+    dir.write("other/tool", "#!/bin/bash\n");
+    let (code, out) = xtask(&dir, &["shellcheck-files", "other"], &[], "");
+    assert_eq!(code, 0, "{out}");
+    assert_eq!(out, "other/tool\n", "{out}");
+
+    let (code, out) = xtask(&dir, &["shellcheck-files", "missing"], &[], "");
+    assert_eq!(code, 2, "{out}");
 }

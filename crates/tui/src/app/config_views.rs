@@ -1031,20 +1031,20 @@ impl App {
                 | super::Waiting::ClearStart
                 | super::Waiting::ClearClose
                 | super::Waiting::History
-                | super::Waiting::ImageFetch
-                | super::Waiting::ImageDisplay
+                | super::Waiting::ImageFetch { .. }
+                | super::Waiting::ImageDisplay { .. }
                 | super::Waiting::Sessions
                 | super::Waiting::Abandoned
-                | super::Waiting::Directories
-                | super::Waiting::Subscribe
+                | super::Waiting::Directories(..)
+                | super::Waiting::Subscribe { .. }
                 | super::Waiting::Stop
                 | super::Waiting::Delete
                 | super::Waiting::OfferImport
-                | super::Waiting::DeleteDiscovery
-                | super::Waiting::DeleteStop
-                | super::Waiting::DeleteFinal
+                | super::Waiting::DeleteDiscovery(..)
+                | super::Waiting::DeleteStop { .. }
+                | super::Waiting::DeleteFinal(..)
                 | super::Waiting::Feed
-                | super::Waiting::Recent
+                | super::Waiting::Recent(..)
                 | super::Waiting::Close,
             )
             | Some(
@@ -1054,7 +1054,6 @@ impl App {
                 | super::Waiting::Branch
                 | super::Waiting::Quota
                 | super::Waiting::ArtifactPage
-                | super::Waiting::ProposeNotes
                 | super::Waiting::JobStop
                 | super::Waiting::JobInput,
             )
@@ -1189,8 +1188,8 @@ impl App {
             | EventKind::InstructionFile
             | EventKind::DateChanged
             | EventKind::SkillsChanged
-            | EventKind::HandoffStarted
-            | EventKind::HandoffCompleted
+            | EventKind::CompactionStarted
+            | EventKind::CompactionCompleted
             | EventKind::SkillsResent
             | EventKind::ContextNudged
             | EventKind::ReviewerKept

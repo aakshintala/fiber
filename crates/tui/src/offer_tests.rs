@@ -147,16 +147,24 @@ fn buffer(items: Value, width: u16) -> Buffer {
         payload: serde_json::Map::new(),
     }));
     app.attach(SessionId(SESSION.to_owned()));
-    app.set_size(width, height);
+    // The screen is one column wider than the conversation: the grip
+    // takes column 0, and the buffer returned starts past it.
+    app.set_size(width + 1, height);
     app.on_line(Line::Session(envelope(
         "repository_code_offered",
         json!({"request_id": "r_1", "items": items}),
     )));
     assert!(app.offer_open());
 
-    let area = Rect::new(0, 0, width, height);
-    let mut buf = Buffer::empty(area);
-    crate::view::render(&app, area, &mut buf, None);
+    let area = Rect::new(0, 0, width + 1, height);
+    let mut screen = Buffer::empty(area);
+    crate::view::render(&app, area, &mut screen, None);
+    let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
+    for y in 0..height {
+        for x in 0..width {
+            buf[(x, y)] = screen[(x + 1, y)].clone();
+        }
+    }
     buf
 }
 

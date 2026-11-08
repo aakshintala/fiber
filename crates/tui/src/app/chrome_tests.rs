@@ -56,18 +56,10 @@ fn launch() -> Launch {
     }
 }
 
-/// An app with home state, attached, at `width` by `height`.
+/// An app attached at `width` by `height`.
 fn attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_home(launch());
-    app.attach(contract::SessionId(SESSION.to_owned()));
-    app.set_size(width, height);
-    app
-}
-
-/// An app without home state, attached, at `width` by `height`.
-fn plain(width: u16, height: u16) -> App {
-    let mut app = App::new(PathBuf::from("/w"));
     app.attach(contract::SessionId(SESSION.to_owned()));
     app.set_size(width, height);
     app
@@ -134,17 +126,24 @@ fn type_draft(app: &mut App, text: &str) {
 }
 
 #[test]
-fn without_home_the_column_is_the_screen() {
-    let app = plain(160, 40);
-    assert_eq!(app.chrome().layout(), None);
+fn the_seeded_home_lays_the_column_out_beside_the_rail_and_panel() {
+    let app = attached(160, 40);
+    let layout = app.chrome().layout().expect("a layout");
+    assert_eq!(layout.rail, Some(Rect::new(0, 0, 24, 40)));
+    assert_eq!(layout.column, Rect::new(24, 0, 102, 40));
+    assert_eq!(layout.panel, Some(Rect::new(126, 0, 34, 40)));
     assert_eq!(app.chrome().floor_line(), None);
-    assert_eq!(app.column_width(), 160);
+    assert_eq!(app.column_width(), 102);
     // No header row: the input box's input row, status row, and rule with
     // its edges are all that sit below.
     assert_eq!(app.conversation_height(), 35);
-    // Below the floor, without home, today's screen still draws.
-    let small = plain(30, 8);
-    assert_eq!(small.chrome().floor_line(), None);
+    // Below the floor the one floor line draws in place of the layout.
+    let small = attached(30, 8);
+    assert_eq!(small.chrome().layout(), None);
+    assert_eq!(
+        small.chrome().floor_line(),
+        Some("Fiber needs 40×10 · now 30×8")
+    );
 }
 
 #[test]
@@ -181,9 +180,17 @@ fn the_pages_rewrap_at_the_column_width() {
     let long: String = std::iter::repeat_n('w', 400).collect();
     let mut app = attached(160, 40);
     app.on_line(turn_started(&long));
-    let mut narrow = plain(101, 40);
+    // A screen whose column is the same 102 wide: the grip and nothing else
+    // beside it.
+    let mut narrow = attached(103, 40);
+    assert_eq!(narrow.column_width(), 102);
     narrow.on_line(turn_started(&long));
-    let mut wide = plain(160, 40);
+    // The same screen with the rail and the panel hidden: a wider column.
+    let mut wide = attached(160, 40);
+    wide.toggle_panel();
+    wide.chrome.hide_rail();
+    wide.settle();
+    assert!(wide.column_width() > 102);
     wide.on_line(turn_started(&long));
     assert_ne!(total(&narrow), total(&wide));
     assert_eq!(total(&app), total(&narrow));
@@ -195,7 +202,10 @@ fn alt_p_hides_and_shows_the_panel_and_rewraps() {
     let long: String = std::iter::repeat_n('w', 400).collect();
     let mut app = attached(160, 40);
     app.on_line(turn_started(&long));
-    let mut wide = plain(135, 40);
+    // The pages built at the panel-hidden width from the start.
+    let mut wide = attached(160, 40);
+    wide.toggle_panel();
+    wide.settle();
     wide.on_line(turn_started(&long));
     let shown = total(&app);
     app.on_key(Key::AltP, now);
@@ -265,7 +275,6 @@ fn started_with_reply(app: &mut App, prompt: &str, reply: &str) {
 
 #[test]
 fn the_gutter_applies_only_with_the_layout() {
-    assert_eq!(plain(160, 40).chrome().gutter(), 0);
     let mut home = App::new(PathBuf::from("/w"));
     home.set_home(launch());
     home.set_size(160, 40);
@@ -547,12 +556,12 @@ fn title_parts_are_left_out_when_empty() {
 
 #[test]
 fn the_draft_wraps_at_the_inset_width() {
-    // Attached at 60: the box insets past its stripe and gap, so 55
-    // characters stay on one row and 56 wrap (`docs/tui.md`, "Look",
-    // "The input box").
+    // Attached at 60 the column is 59 wide: the box insets past its stripe
+    // and gap, so 54 characters stay on one row and 55 wrap
+    // (`docs/tui.md`, "Look", "The input box").
     let now = fakes::clock::FakeClock::new().now();
-    let mut app = plain(60, 12);
-    for _ in 0..55 {
+    let mut app = attached(60, 12);
+    for _ in 0..54 {
         app.on_key(Key::Char('d'), now);
     }
     assert_eq!(app.input_height(), 1);
@@ -583,9 +592,9 @@ fn clicking_the_directory_or_the_mode_opens_the_session_status_view() {
 fn draft_width_is_the_inset_except_on_home() {
     // The session box wraps past its stripe and gap; the home box draws
     // at its own width (`docs/tui.md`, "Look", "The input box").
-    assert_eq!(plain(60, 12).draft_width(), 58);
-    assert_eq!(plain(3, 12).draft_width(), 1);
-    assert_eq!(plain(2, 12).draft_width(), 2);
+    assert_eq!(attached(60, 12).draft_width(), 57);
+    assert_eq!(attached(3, 12).draft_width(), 1);
+    assert_eq!(attached(2, 12).draft_width(), 2);
     let mut home = App::new(PathBuf::from("/w"));
     home.set_home(launch());
     home.set_size(60, 12);

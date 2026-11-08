@@ -6,13 +6,14 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use serde_json::{Map, Value};
 
-use super::group::{Call, dim_span, fit};
+use super::group::{dim_span, fit};
 use crate::app::Target;
 use crate::diff::{diff_lines, gutter_prefix, gutter_width, safe_line, styled_spans};
 use crate::format::{count, dim};
 use crate::rows::{RowText, Rows};
 use crate::swapped::Ink;
 use crate::theme::{Role, style};
+pub(crate) use crate::turn::group::Call;
 
 /// An opened call shows at most this many logical lines, then a dim
 /// "… N more lines (Enter to view)" row (`docs/tui.md`, "Tool groups
@@ -165,6 +166,7 @@ fn message_rows(call: &Call, width: u16, bodies: &mut Vec<Body>) {
         | Kind::Skill
         | Kind::Tools
         | Kind::Session
+        | Kind::Notes
         | Kind::Other => return,
     };
     let argument = |key: &str| {
@@ -238,6 +240,9 @@ pub(crate) struct CallSnapshot {
     /// On a cut result, the byte ranges of the full output held in
     /// `content`: the model's-view edges.
     pub(crate) kept: Option<Vec<[u64; 2]>>,
+    /// The call the rows come from, kept to lay them out again when the
+    /// width changes.
+    pub(crate) source: Call,
 }
 
 /// Snapshots the call `id` names among `calls` for its swapped view:
@@ -255,6 +260,7 @@ pub(crate) fn snapshot<'a>(
     }
     let copy = call.content().to_owned();
     Some(CallSnapshot {
+        source: call.clone(),
         id: call.id,
         open: call.open,
         title,
@@ -341,6 +347,7 @@ pub(crate) fn snapshot_completed(
             .result
             .as_deref()
             .and_then(|result| result.kept.clone()),
+        source: call,
     }
 }
 

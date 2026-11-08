@@ -122,7 +122,7 @@ fn among_by_role() {
     assert_eq!(among(Role::CardReady), GREY);
     assert_eq!(among(Role::CardCrashed), GREY);
     assert_eq!(among(Role::Rule), GREY);
-    assert_eq!(among(Role::Handoff), CUBE);
+    assert_eq!(among(Role::Compaction), CUBE);
     assert_eq!(among(Role::Alert), CUBE);
     assert_eq!(among(Role::Scroll), ALL);
     assert_eq!(among(Role::Info), ALL);
@@ -173,7 +173,7 @@ fn dark_at_256_known_entries() {
         (Role::Turn, 233),
         (Role::Prompt, 237),
         (Role::Code, 234),
-        (Role::Handoff, 16),
+        (Role::Compaction, 16),
         (Role::Approval, 234),
         (Role::Alert, 52),
         (Role::Hover, 234),

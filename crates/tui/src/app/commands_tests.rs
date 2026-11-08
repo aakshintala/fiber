@@ -50,7 +50,7 @@ fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
         })));
         app.home_click(crate::home::Spot::Pick(0));
         // A model is now present, so the selected workspace can start.
-        app.home.as_mut().unwrap().launch.model = Some("test/model".to_owned());
+        app.home.launch.model = Some("test/model".to_owned());
         let lines = sent(app.on_enter());
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0]["command"], "start");
@@ -59,17 +59,17 @@ fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
 }
 
 #[test]
-fn handoff_sends_its_instructions() {
+fn compact_sends_its_instructions() {
     let mut app = attached();
-    let lines = sent(enter(&mut app, "/handoff  do x "));
+    let lines = sent(enter(&mut app, "/compact  do x "));
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "handoff");
+    assert_eq!(lines[0]["command"], "compact");
     assert_eq!(lines[0]["session_id"], SESSION);
     assert_eq!(lines[0]["args"], json!({"instructions": "do x"}));
     assert_eq!(app.draft(), "");
-    let lines = sent(enter(&mut app, "/handoff"));
+    let lines = sent(enter(&mut app, "/compact"));
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "handoff");
+    assert_eq!(lines[0]["command"], "compact");
     assert_eq!(lines[0].get("args"), None);
 }
 
@@ -742,23 +742,23 @@ fn a_rejected_import_keeps_the_existing_notice_path() {
 }
 
 #[test]
-fn a_rejected_handoff_returns_its_draft_with_the_notice() {
+fn a_rejected_compaction_returns_its_draft_with_the_notice() {
     let mut app = attached();
-    let lines = sent(enter(&mut app, "/handoff do x"));
+    let lines = sent(enter(&mut app, "/compact do x"));
     let id = lines[0]["id"].clone();
     let rejected = session_line(
         "command_rejected",
         json!({"command_id": id, "code": "busy", "message": "Busy."}),
     );
     assert!(app.on_line(rejected).is_empty());
-    assert_eq!(app.draft(), "/handoff do x");
+    assert_eq!(app.draft(), "/compact do x");
     assert_eq!(app.notice(), Some("Busy."));
 }
 
 #[test]
 fn a_command_with_no_session_says_so() {
     for command in [
-        "/handoff x",
+        "/compact x",
         "/name x",
         "/reload",
         "/import",
@@ -955,7 +955,7 @@ fn pwd_pending_cancels_on_detach_or_switch() {
 #[test]
 fn a_command_with_the_link_down_keeps_its_draft() {
     for command in [
-        "/handoff x",
+        "/compact x",
         "/name x",
         "/reload",
         "/import",
@@ -1149,6 +1149,17 @@ fn home_refuses_an_unknown_slash_and_keeps_its_built_ins() {
 #[test]
 fn start_carries_no_content() {
     let mut app = App::new(PathBuf::from("/w"));
+    // A home with a model chosen, so Enter sends a `start` instead of
+    // opening the model picker.
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
     // Held before `hub_hello`, sent after it.
     assert_eq!(enter(&mut app, "hi"), Effect::None);
     let hello = hub_line("hub_hello", json!({}));
@@ -1157,8 +1168,14 @@ fn start_carries_no_content() {
         .iter()
         .map(|line| serde_json::from_str(line).unwrap_or_default())
         .collect();
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["command"], "start");
+    // The held `start` goes first, then home's startup reads.
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line["command"].clone())
+            .collect::<Vec<_>>(),
+        [json!("start"), json!("feed"), json!("recent")]
+    );
     assert_eq!(lines[0]["args"], json!({"workspace": "/w"}));
 }
 

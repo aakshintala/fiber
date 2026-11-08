@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use contract::events::EventKind;
 use contract::events::{CallStatus, FileChange};
-use ratatui::style::Modifier;
+use ratatui::style::{Modifier, Style};
 use serde_json::json;
 
 use super::{Call, CallResult, Group, Section, Streaming, Thought, Timing};
@@ -844,6 +844,21 @@ fn shell_call(id: usize, command: &str, exit: Option<i32>, lines: u64, content: 
     }
 }
 
+/// A completed `shell` call whose arguments the extension `guard`
+/// rewrote.
+fn rewritten_call(id: usize) -> Call {
+    Call {
+        changed_by: Some(vec!["guard".to_owned()]),
+        ..shell_call(
+            id,
+            "cargo test --workspace --all-features",
+            Some(0),
+            1,
+            "ok",
+        )
+    }
+}
+
 fn failed_call(id: usize) -> Call {
     Call {
         id,
@@ -1378,6 +1393,7 @@ fn ledger_rows_never_pass_their_width() {
                         ..read_call(2, "crates/hub/src/lock.rs")
                     },
                     running_call(3, "shell", json!({"command": "cargo test -p hub lock"})),
+                    rewritten_call(5),
                 ],
                 ..Section::default()
             },
@@ -1400,7 +1416,7 @@ fn ledger_rows_never_pass_their_width() {
     assert!(rows[1].to_string().starts_with("      ✓ read"));
     // Past five digits the gutter grows, and the row is still cut to
     // the width.
-    assert!(rows[3].to_string().starts_with("100000 "));
+    assert!(rows[4].to_string().starts_with("100000 "));
     // At step 100000 and width 6 the renderer's row is cut to the
     // width too, and its links shift by the gutter actually drawn:
     // every row is at most 6 cells, and every link lands on the cells
@@ -2185,6 +2201,11 @@ fn answered_ask_call(id: usize) -> Call {
         },
         0,
         &mut fold,
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
+        },
     );
     let mut turns = vec![turn];
     for (kind, payload) in [
@@ -2253,6 +2274,11 @@ fn outer_action_id_stored_from_ran_by() {
             },
             0,
             &mut fold,
+            &crate::turn::Recipients {
+                sessions: &Default::default(),
+                delegates: &Default::default(),
+                page: None,
+            },
         );
         turn.groups()
             .flat_map(|group| group.sections.iter())
@@ -2441,6 +2467,43 @@ fn a_decorator_draws_the_built_in_row_plus_its_badge() {
     // (`docs/tui.md`, "How a TUI extension runs": each drawn item is cached by its input and the width.)
     assert_eq!(fake.calls.borrow().len(), 1);
     assert_eq!(crate::work::take().renderer_calls, 1);
+}
+
+/// A message call's built-in row draws the recipient the terminal held
+/// as its target, on one line, and the id when it held none; a held
+/// name of only whitespace is drawn, not replaced by the id.
+#[test]
+fn a_message_row_draws_its_recipient_else_the_id() {
+    let group = Group::default();
+    let call = |recipient: Option<&str>| Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "delegate_message".to_owned(),
+        arguments: json!({"id": "j_abc", "message": "hi"}),
+        recipient: recipient.map(str::to_owned),
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    let text = |recipient: Option<&str>| -> String {
+        let call = call(recipient);
+        let row = group.ledger_input(&call, "", false);
+        group
+            .builtin_row(&row, 72)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    let named = text(Some("Fix\nthe parser"));
+    assert!(named.contains("Fix the parser"), "{named:?}");
+    assert!(!named.contains("j_abc"), "{named:?}");
+    assert!(text(None).contains("j_abc"));
+    assert!(!text(Some(" ")).contains("j_abc"));
+    // A recipient wider than the room is cut with "…", as the id is.
+    let long = "d".repeat(100);
+    let cut = text(Some(&long));
+    assert!(cut.contains('…'), "{cut:?}");
+    assert!(crate::format::width(&cut) <= 72, "{cut:?}");
 }
 
 /// The renderer gets the row width less the six-column gutter: 74 at
@@ -2838,11 +2901,17 @@ fn ledger_input_folds_the_call_events() {
         ..Call::default()
     };
     let row = group.ledger_input(&pending, "", false);
+    assert_eq!(row.changed_by, None);
     assert_eq!(row.name, "shell");
     assert_eq!(row.arguments, &json!({"command": "sleep 1"}));
     assert!(matches!(row.state, CallState::Pending));
     assert_eq!(row.answer, None);
     assert!(!row.flat);
+    // A rewritten call hands its attribution on, flat or not.
+    let rewritten = rewritten_call(8);
+    let row = group.ledger_input(&rewritten, "", true);
+    assert_eq!(row.changed_by, Some(&["guard".to_owned()][..]));
+    assert!(row.flat);
     // A started call with no completion is running.
     let running = running_call(2, "shell", json!({"command": "sleep 1"}));
     let row = group.ledger_input(&running, "", false);
@@ -3280,6 +3349,39 @@ fn entry_of(group: &Group, running: bool) -> crate::ext::TurnGroup<'_> {
     group.turn_entry(running)
 }
 
+/// A message call's card fields carry the recipient its ledger row
+/// does; a call that holds none carries none.
+#[test]
+fn a_card_call_carries_the_ledger_rows_recipient() {
+    let call = |recipient: Option<&str>| Call {
+        id: 1,
+        action: "a_1".to_owned(),
+        name: "delegate_message".to_owned(),
+        arguments: json!({"id": "j_abc", "message": "hi"}),
+        recipient: recipient.map(str::to_owned),
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    for (held, want) in [
+        (Some("Fix the parser"), Some("Fix the parser")),
+        (None, None),
+    ] {
+        let group = Group {
+            sections: vec![Section {
+                step: 1,
+                calls: vec![call(held)],
+                ..Section::default()
+            }],
+            ..Group::default()
+        };
+        let entry = entry_of(&group, false);
+        let calls = &entry.sections[0].calls;
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].recipient, want);
+    }
+}
+
 /// A cut group is cut however the caller names running: `Cut` wins
 /// over the running flag, and only an uncut open group runs.
 #[test]
@@ -3476,7 +3578,7 @@ fn kinds_count_each_built_in_under_its_own_field() {
         call(7, "delegate_models", json!({})),
         call(8, "session_list", json!({})),
         call(9, "session_search", json!({"query": "q"})),
-        call(10, "handoff", json!({})),
+        call(10, "compact", json!({})),
         call(11, "name_session", json!({"name": "n"})),
         call(12, "ask_user", json!({"questions": [{}]})),
     ];
@@ -3499,4 +3601,104 @@ fn kinds_count_each_built_in_under_its_own_field() {
     assert_eq!(kinds.delegates, 1);
     assert_eq!(kinds.asked, 1);
     assert_eq!(kinds.called, 0);
+}
+
+/// The one-call group the mark's width tests draw.
+fn hook_rewrite_group(call: Call) -> Group {
+    Group {
+        open: true,
+        sections: vec![Section {
+            step: 1,
+            calls: vec![call],
+            ..Section::default()
+        }],
+        ..Group::default()
+    }
+}
+
+/// The mark leaves the target the width less the gutter, the glyph, the
+/// kind, the gap and the whole result: the row keeps `exit 0 · 1 line ·
+/// via guard` (27 cells) and cuts the target to what remains.
+#[test]
+fn hook_rewrite_mark_takes_its_width_from_the_target_not_the_result() {
+    let group = hook_rewrite_group(rewritten_call(1));
+    let mark = "exit 0 · 1 line · via guard";
+    assert_eq!(crate::format::width(mark), 27);
+    // 6 gutter + 13 + 27 result + 10 target cells.
+    let rows = ledger_rows(&group, 56);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].to_string(),
+        format!("    1 ✓ shell    cargo tes…  {mark}")
+    );
+    assert_eq!(cells(&rows[0]), 56);
+    // One column less: the target loses one cell, the result none.
+    let rows = ledger_rows(&group, 55);
+    assert_eq!(
+        rows[0].to_string(),
+        format!("    1 ✓ shell    cargo te…  {mark}")
+    );
+    assert_eq!(cells(&rows[0]), 55);
+}
+
+/// Too narrow for the result and the mark together, the row holds no
+/// target: its text is cut to the width.
+#[test]
+fn hook_rewrite_mark_in_an_undersized_row_leaves_the_target_out() {
+    let group = hook_rewrite_group(rewritten_call(1));
+    // 6 gutter + 13 + 10: the 27-cell result does not fit.
+    let rows = ledger_rows(&group, 29);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].to_string(), "    1 ✓ shell      exit 0 · …");
+    assert_eq!(cells(&rows[0]), 29);
+}
+
+/// The mark is dim; a call no hook rewrote draws none.
+#[test]
+fn hook_rewrite_mark_is_dim_and_absent_without_a_rewrite() {
+    let group = Group::default();
+    let call = rewritten_call(1);
+    let output = super::first_result_line(call.content());
+    let row = group.ledger_input(&call, &output, false);
+    let spans = group.builtin_row(&row, 80);
+    let last = spans.last().expect("the row's spans");
+    assert_eq!(last.content.as_ref(), " · via guard");
+    assert!(last.style.add_modifier.contains(Modifier::DIM));
+    let plain = Call {
+        changed_by: None,
+        ..call
+    };
+    let row = group.ledger_input(&plain, &output, false);
+    let text: String = group
+        .builtin_row(&row, 80)
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(!text.contains(" · via"), "{text}");
+}
+
+/// A flat extension row carries the mark in plain text: the renderer's
+/// input names the rewrite, and no cell past the gutter has a style.
+#[test]
+fn hook_rewrite_mark_reaches_a_flat_extension_row_unstyled() {
+    let group = hook_rewrite_group(rewritten_call(1));
+    let fake = Rc::new(Fake {
+        fills: RefCell::new(vec!["ledger_row".to_owned()]),
+        script: RefCell::new(Script::Decorate { badge: vec![] }),
+        ..Fake::default()
+    });
+    let (rows, _) = draw(&group, 100, Some(&seam(&fake, true)));
+    let row = &rows[1].0;
+    assert!(row.to_string().contains(" · via guard"), "{row}");
+    for span in row.spans.iter().skip(1) {
+        assert_eq!(span.style, Style::default(), "{span:?}");
+    }
+    let calls = fake.calls.borrow();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        calls[0].2.contains("changed_by: Some([\"guard\"])"),
+        "{}",
+        calls[0].2
+    );
+    assert!(calls[0].2.contains("flat: true"), "{}", calls[0].2);
 }

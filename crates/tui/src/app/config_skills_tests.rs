@@ -26,7 +26,7 @@ fn now() -> Instant {
 fn fake() -> Arc<Fake> {
     Arc::new(Fake::new(vec![
         row(
-            "handoff.tokens",
+            "compaction.tokens",
             Shown::Value("400000".to_owned()),
             "default",
             WriteScope::Any { repo: true },

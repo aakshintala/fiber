@@ -1127,14 +1127,14 @@ fn parses_argv_into_its_invocation() {
                 "config",
                 "set",
                 "--project",
-                "handoff.tokens",
+                "compaction.tokens",
                 "200000",
             ],
             Invocation::Run(
                 Some(Commands::Config(ConfigCommands::Set {
                     project: true,
                     repo: false,
-                    key: "handoff.tokens".to_owned(),
+                    key: "compaction.tokens".to_owned(),
                     value: "200000".to_owned(),
                 })),
                 TopLevel::default(),
@@ -2515,6 +2515,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "resume",
             "continue",
             "sessions",
+            "reviewer",
             "models",
             "extension",
             "mcp",
@@ -2589,6 +2590,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "resume",
             "continue",
             "sessions",
+            "reviewer",
             "models",
             "extension",
             "mcp",
@@ -3829,7 +3831,8 @@ fn synopses_come_from_command_tables_only() {
 #[test]
 fn doc_synopses_are_the_commands_section() {
     let synopses = doc_synopses();
-    assert_eq!(synopses.len(), 47);
+    // One synopsis per row of `docs/invocation.md`, "Commands and flags".
+    assert_eq!(synopses.len(), 48);
     assert_eq!(synopses[0], "fiber [--model <model>] [-c <key>=<value>]...");
     assert_eq!(
         synopses[1],

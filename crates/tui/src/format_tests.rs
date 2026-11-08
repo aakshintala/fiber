@@ -5,6 +5,7 @@ use serde_json::json;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
+use super::via;
 use super::{
     Kind, Kinds, capitalise, content_text, count, cut, duration, heading, headline, kind, money,
     seconds, spend_against_budget, summary, tokens, warning_line, wrap, wrap_joined,
@@ -262,6 +263,7 @@ fn every_kind_in_order_capitalised() {
         messaged_delegates: 1,
         messaged_sessions: 2,
         sessions: 1,
+        saved_notes: 2,
         called: 3,
         thoughts: 4,
     };
@@ -271,7 +273,7 @@ fn every_kind_in_order_capitalised() {
          wrote 5 files, ran 9 commands, started 2 delegates, checked 3 jobs, asked 4 questions, \
          fetched 2 pages, searched the web once, loaded 1 skill, looked up tools 3 times, \
          messaged delegates once, messaged sessions 2 times, looked at sessions once, \
-         called 3 tools, thought 4 times"
+         saved reviewer notes 2 times, called 3 tools, thought 4 times"
     );
 }
 
@@ -296,6 +298,7 @@ fn every_kind_singular() {
         messaged_delegates: 1,
         messaged_sessions: 1,
         sessions: 1,
+        saved_notes: 1,
         called: 1,
         thoughts: 1,
     };
@@ -304,7 +307,7 @@ fn every_kind_singular() {
         "Read 1 file, searched 1 pattern, listed 1 directory, edited 1 file +3 −1, wrote 1 file, \
          ran 1 command, started 1 delegate, checked 1 job, asked 1 question, fetched 1 page, \
          searched the web once, loaded 1 skill, looked up tools once, messaged delegates once, \
-         messaged sessions once, looked at sessions once, called 1 tool, thought once"
+         messaged sessions once, looked at sessions once, saved reviewer notes once, called 1 tool, thought once"
     );
 }
 
@@ -711,6 +714,7 @@ fn ask_user_counts_its_questions_when_it_has_any() {
         | Kind::DelegateMessage
         | Kind::SessionMessage
         | Kind::Session
+        | Kind::Notes
         | Kind::Other => None,
     };
     assert_eq!(questions(json!({"questions": [{}]})), Some(1));
@@ -1083,7 +1087,7 @@ const KIND_WORDS: [(&str, &str); 11] = [
     ("delegate_models", "delegate"),
     ("session_list", "session"),
     ("session_search", "session"),
-    ("handoff", "session"),
+    ("compact", "session"),
     ("name_session", "session"),
 ];
 
@@ -1136,6 +1140,7 @@ fn every_kind_word_fits_the_nine_column_pad() {
         Kind::DelegateMessage,
         Kind::SessionMessage,
         Kind::Session,
+        Kind::Notes,
         Kind::Other,
     ] {
         assert!(kind.word().chars().count() <= 9, "{}", kind.word());
@@ -1230,6 +1235,7 @@ fn kinds_of(kind: &Kind, n: u64) -> Kinds {
         Kind::DelegateMessage => kinds.messaged_delegates = n,
         Kind::SessionMessage => kinds.messaged_sessions = n,
         Kind::Session => kinds.sessions = n,
+        Kind::Notes => kinds.saved_notes = n,
         Kind::Other => kinds.called = n,
     }
     kinds
@@ -1277,4 +1283,14 @@ fn docs_kind_table_matches_code() {
         assert!(tools.contains(name), "{name} has no row in the table");
     }
     assert_eq!(tools.len(), contract::tool::BUILT_IN_TOOLS.len());
+}
+
+#[test]
+fn via_names_the_extensions_that_rewrote_a_call() {
+    assert_eq!(via(&["guard".to_owned()]).as_deref(), Some("via guard"));
+    assert_eq!(
+        via(&["guard".to_owned(), "audit".to_owned()]).as_deref(),
+        Some("via guard, audit")
+    );
+    assert_eq!(via(&[]), None);
 }

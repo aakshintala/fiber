@@ -8,7 +8,7 @@ The provider evidence is
 ## The shape
 
 Every failure is `error { code, message }`: on `tool_call_completed`,
-`job_completed`, `handoff_completed`, `mcp_server_failed`, a failed model call,
+`job_completed`, `compaction_completed`, `mcp_server_failed`, a failed model call,
 `turn_completed` and `fiber_exited`. A `notice` carries the same `code` and message.
 
 - `code` is a stable label. A consumer switches on it and never parses the
@@ -99,7 +99,7 @@ asked for the session.
 | Code | When | Exit |
 |---|---|---|
 | `usage` | the invocation or its environment is wrong: a bad flag, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME`, `git` is not installed, `fiber ask --worktree` outside a git repository, or an unknown `--hub` name | 2 |
-| `config_invalid` | invalid JSON, a value of the wrong type, one extension key set under both its full and short name in a configuration or script file (`docs/configuration.md`; `docs/model-routing.md`, "The scripted provider"), or an MCP server marked `required` that declares both `command` and `url` or whose `url` carries a user name or password, or `hub.default` names a missing entry or a stored hub address is invalid | 1 |
+| `config_invalid` | invalid JSON, a value of the wrong type (except `providers.databricks.request_tags`, whose invalid value produces one nonfatal `config_invalid` notice and uses the default header), one extension key set under both its full and short name in a configuration or script file (`docs/configuration.md`; `docs/model-routing.md`, "The scripted provider"), or an MCP server marked `required` that declares both `command` and `url` or whose `url` carries a user name or password, or `hub.default` names a missing entry or a stored hub address is invalid | 1 |
 | `io_failed` | a filesystem failure, or a `git` command on a worktree that failed: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path; or Fiber could not install its signal handlers, and the message starts `signals:`; or the terminal could not start its input reader, and the message starts `terminal:` | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
@@ -163,7 +163,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit, as an HTTP status or inside the stream ("Recognising a quota or billing error") | never |
 | `authentication_failed` | HTTP 401, a rejected key, an AWS exception refusing the signature or the credential ("Recognising an AWS exception"), an OAuth refresh the token endpoint rejected, a login with nobody attached, or a login that did not finish within `credential()`'s timeout | never |
-| `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
+| `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/compaction.md`, "Overflow") |
 | `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter`, a Gemini safety finish reason, and a `bedrock-converse` `stopReason` of `guardrail_intervened` or `content_filtered` | never |
 | `model_not_found` | the provider's error body says it does not know the model: a code `model_not_found`, a `not_found_error` whose message names the model, Gemini's `NOT_FOUND` for a `models/` name, Google Vertex's `NOT_FOUND` for a `Publisher model`, which also covers a model the project may not call, OpenRouter's "is not a valid model ID" (`research/provider-errors/README.md`, "Unknown model"), or Bedrock's "The provided model identifier is invalid."; or AWS names a `ResourceNotFoundException`. A 404 alone is not enough, since a wrong base URL also returns 404 | never |
 | `invalid_request` | any other HTTP 4xx; for a 404 the message names the status and the requested host and path, never the query string | never |
@@ -202,11 +202,11 @@ A wait longer than 60 seconds fails at once as `rate_limited` with
 Anything else is `invalid_request` with the provider's message. muse reports
 an overflow as a generic "invalid parameters" 400, so on muse it is
 `invalid_request`. A catch-all word match was rejected: a message such as
-"max_tokens exceeds …" would start a handoff whose note request fails the same
+"max_tokens exceeds …" would start a compaction whose note request fails the same
 way.
 
-Fiber also checks its own token estimate before sending, and hands off at
-the point `docs/handoff.md`, "Automatic", sets, so a provider-reported overflow is
+Fiber also checks its own token estimate before sending, and compacts at
+the point `docs/compaction.md`, "Automatic", sets, so a provider-reported overflow is
 the exception.
 
 ### Recognising a quota or billing error
@@ -294,10 +294,10 @@ one. With wrong data the retries waste three minutes and then fail
 A tool call's failure never ends a turn: the model reads it as the call's
 result. `turn_completed` is `failed`, with `error` set to the cause, on:
 
-- a model call that failed after its retries, other than a handoff's note
-  request (`docs/handoff.md`, "Recording"): that call's code
+- a model call that failed after its retries, other than a compaction's note
+  request (`docs/compaction.md`, "Recording"): that call's code
 - `context_overflow` after the overflow rule's one retry, or with automatic
-  handoff off (`docs/handoff.md`)
+  compaction off (`docs/compaction.md`)
 - `hook_failed` from a `turn_start`, `before_model_call` or `turn_end` hook
   (`docs/extensions.md`, "When a hook fails")
 - `blocked`: with no human to answer, the session used up its block budget
@@ -343,7 +343,7 @@ the lines that carry it.
 | `fetch_failed` | exit, driver command (`rewind`) | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") | — |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) | — |
 | `history_loading` | notice | the terminal is still reading the session's history (`docs/tui.md`, "Notices") | condition |
-| `hook_failed` | tool call, turn, handoff, notice, exit | an extension hook errored or ran out of time, or a TUI extension's renderer errored or returned the wrong shape (one notice for each extension and slot until `/reload`; `docs/tui.md`, "When an extension fails"); or a TUI extension's key binding errored or returned the wrong shape, which counts as not handled with one notice for each extension and key slot until `/reload`; or an approved repository hook's pinned copy could not be made: a `required` one fails the start with exit 1 naming it, any other is skipped with a notice naming it (`docs/extensions.md`, "Hooks") | event |
+| `hook_failed` | tool call, turn, compaction, notice, exit | an extension hook errored or ran out of time, or a TUI extension's renderer errored or returned the wrong shape (one notice for each extension and slot until `/reload`; `docs/tui.md`, "When an extension fails"); or a TUI extension's key binding errored or returned the wrong shape, which counts as not handled with one notice for each extension and key slot until `/reload`; or an approved repository hook's pinned copy could not be made: a `required` one fails the start with exit 1 naming it, any other is skipped with a notice naming it (`docs/extensions.md`, "Hooks") | event |
 | `hook_unapproved` | exit, driver command (`rewind`) | a repository's required hook is not approved; run `fiber approve` in the repository | — |
 | `http_error` | extension call, tool call | `web_fetch` got a status other than 2xx, was redirected more than 10 times, or was redirected to a URL it cannot parse | — |
 | `hub_version` | notice | the hub runs another Fiber version or commit than this terminal (`docs/tui.md`, "Notices") | event |
@@ -373,10 +373,9 @@ the lines that carry it.
 | `no_model` | exit, notice, driver command (`rewind`), hub command | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id; or a hub `configure` operation sets `model` to one no installed provider has | event |
 | `nonzero_exit` | tool call, job | a process exited nonzero | — |
 | `not_found` | extension call, tool call, hub command, driver command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files"), or `revoke` names no paired device (`docs/invocation.md`, "Remote clients"), or `artifact_page` names no file (`docs/invocation.md`, "Driver commands") | — |
-| `notes_unchanged` | notice | `/reviewer-setup` reached its diff and the save would change neither layer's notes or read-only entries, so no file was written (`docs/tui.md`, "Rules") | event |
 | `orphaned` | job | the job's keeper died before it wrote the job's end, or the session had no keeper (`docs/tools.md`, "The keeper") | — |
 | `output_cap` | job | a job's output file passed 5 GB | — |
-| `output_truncated` | tool call, turn, handoff | a reply was cut off by the output-token limit, so its calls did not run | — |
+| `output_truncated` | tool call, turn, compaction | a reply was cut off by the output-token limit, so its calls did not run | — |
 | `pairing_failed` | hub connection | a pairing code was wrong, already used or more than 10 minutes old (`docs/invocation.md`, "Remote clients") | — |
 | `path_changed` | tool call | a symbolic link changed between the permission decision and the read or write | — |
 | `paused_too_long` | turn | a reply was still paused (`pause_turn`) after 5 continuations in a row; send the request again or simplify it | — |
@@ -385,7 +384,8 @@ the lines that carry it.
 | `rate_limited` | extension call, model call, turn | the provider rate-limited the request | — |
 | `refused` | model call, turn | the provider declined on policy grounds | — |
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") | event |
-| `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one | event |
+| `reviewer_selection_failed` | notice | the reviewer could not choose which of the person's messages still bind at a compaction, so it kept every one | event |
+| `reviewer_setup` | notice | the reviewer blocked a call while both layers of the reviewer notes are empty; the notice names the `reviewer-setup` skill (`docs/permissions.md`, "Setting up the notes") | event |
 | `sandbox` | notice | `/sandbox` reports the session sandbox switch (`docs/tui.md`, "Slash commands") | event |
 | `session_has_dependents` | exit, hub command, driver command (`rewind`) | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") | — |
 | `session_held` | exit, hub command, notice, driver command (`rewind`, `change_workspace`) | another process holds the session, or runs it at a schema version this build cannot read (`docs/invocation.md`, "Processes"), or the terminal cannot attach: the session runs another Fiber build than this terminal, or its status did not parse | event |
@@ -409,7 +409,7 @@ the lines that carry it.
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map | — |
 | `unknown_tool` | tool call | the model named a tool that does not exist | — |
 | `unreachable` | tool call | `session_message` named an id no running session has | — |
-| `unreadable_reply` | extension call, permission request, handoff | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") | — |
+| `unreadable_reply` | extension call, permission request, compaction | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") | — |
 | `unsupported_file` | extension call, tool call | a file tool was given a directory, device or file it cannot handle | — |
 | `usage` | exit, driver command (`rewind`), hub command | the invocation or its environment is wrong, including an unknown `--hub` name; exits 2; or a hub configuration operation is refused by the configuration or credential writer | — |
 | `version_conflict` | exit, driver command (`rewind`) | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") | — |
@@ -438,7 +438,8 @@ code: its message gives the count and lists each item.
 | `no_model` | event | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `protected_paths_restored` | event | a protected path changed while a confined call ran; startup recovery restored it, and the message names each path |
 | `repository_code_skipped` | event | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
-| `reviewer_selection_failed` | event | the reviewer could not choose which of the person's messages still bind at a handoff, so it kept every one; the message names the cause |
+| `reviewer_selection_failed` | event | the reviewer could not choose which of the person's messages still bind at a compaction, so it kept every one; the message names the cause |
+| `reviewer_setup` | event | the reviewer blocked a call while both layers of the reviewer notes are empty; the message names the `reviewer-setup` skill (`docs/permissions.md`, "Setting up the notes") |
 | `sandbox` | event | `/sandbox` reports the session sandbox switch (`docs/sandbox.md`, "The rule") |
 | `skill_invalid` | event | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | event | two skills share a name, an MCP server's prompt is named like a skill, an extension's command is named like a skill or prompt template, an MCP server's prompt is named like an extension's command, or two servers' prompts share a name; the message names both and which one won (`docs/system-prompt.md`, "Skills") |

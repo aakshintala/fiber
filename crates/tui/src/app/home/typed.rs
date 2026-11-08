@@ -1,8 +1,9 @@
 //! The workspace picker's typed path: splitting the text, matching
 //! the hub's one-level listings, queueing one `directories` request per
-//! directory, and resolving Enter. Pure state: no `App`, no `Link`. The
-//! caller sends what [`Typed::due`] returns while the link is up, and
-//! feeds answers to [`Typed::answered`] and [`Typed::rejected`].
+//! directory, and resolving Enter. Pure state: no `App`, no `Link`, no
+//! command ids. The caller sends what [`Typed::due`] returns while the
+//! link is up, tags each line with its directory, and feeds answers to
+//! [`Typed::answered`] and [`Typed::rejected`] by that directory.
 
 use std::collections::HashMap;
 
@@ -44,8 +45,9 @@ pub(super) enum Resolved {
 }
 
 /// The typed path's state: its text, whether Enter found no directory,
-/// one cached listing per directory text, the directories queued to
-/// ask, and the asked ones waiting for their answers, in send order.
+/// one cached listing per directory text, and the directories queued to
+/// ask. A directory asked and waiting for its answer lives only as its
+/// outbox `Directories` tag.
 #[derive(Debug)]
 pub(super) struct Typed {
     /// The typed text, append-only through [`Typed::push`].
@@ -58,9 +60,6 @@ pub(super) struct Typed {
     cache: HashMap<String, Listing>,
     /// The directories to ask for, in the order typed.
     queued: Vec<String>,
-    /// The asked directories waiting for their answers, as
-    /// `(id, directory)` in send order.
-    inflight: Vec<(String, String)>,
     /// The focused row while typing.
     focus: Focus,
 }
@@ -73,7 +72,6 @@ impl Typed {
             missing: false,
             cache: HashMap::new(),
             queued: Vec::new(),
-            inflight: Vec::new(),
             focus: Focus::Nothing,
         }
     }
@@ -118,7 +116,7 @@ impl Typed {
 
     /// Removes the last character. False when the text became empty:
     /// the picker returns to the recents alone, dropping the queue but
-    /// keeping the cache and the in-flight set.
+    /// keeping the cache.
     pub(super) fn pop(&mut self) -> bool {
         self.text.pop();
         self.missing = false;
@@ -170,7 +168,7 @@ impl Typed {
     }
 
     /// Puts the focused completion into the path with a trailing `/`
-    /// and queues its directory when not held, in flight or queued.
+    /// and queues its directory when not held or queued.
     /// False with a recent or nothing focused: Tab completes only
     /// completions, never recents.
     pub(super) fn tab(&mut self) -> bool {
@@ -189,70 +187,50 @@ impl Typed {
         true
     }
 
-    /// The queued directories as `(id, directory)` in send order,
-    /// moving each to the in-flight set under the id `mint` returned.
-    pub(super) fn due(&mut self, mut mint: impl FnMut() -> String) -> Vec<(String, String)> {
-        let queued = std::mem::take(&mut self.queued);
-        let mut out = Vec::with_capacity(queued.len());
-        for dir in queued {
-            let id = mint();
-            self.inflight.push((id.clone(), dir.clone()));
-            out.push((id, dir));
-        }
-        out
+    /// The queued directories in the order typed, minus those
+    /// `in_flight` says are already asked and waiting: such a directory
+    /// is not sent twice while its tag lives.
+    pub(super) fn due(&mut self, in_flight: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut queued = std::mem::take(&mut self.queued);
+        queued.retain(|dir| !in_flight(dir));
+        queued
     }
 
-    /// Folds an accepted answer for `id`: a well-formed result stores
-    /// its names with its absolute path, anything else an empty failed
-    /// listing, held so the directory is never asked again. True when
-    /// `id` was in flight.
-    pub(super) fn answered(&mut self, id: &str, result: Option<&Value>) -> bool {
-        let Some(at) = self.inflight.iter().position(|(sent, _)| sent == id) else {
-            return false;
-        };
-        let (_, dir) = self.inflight.remove(at);
-        let listing = result.map(parse_listing).unwrap_or(Listing {
-            path: None,
-            names: Vec::new(),
-        });
+    /// Folds an accepted answer for the asked `dir`: a well-formed
+    /// result stores its names with its absolute path, anything else an
+    /// empty failed listing, held so the directory is never asked again.
+    pub(super) fn answered(&mut self, dir: &str, result: Option<&Value>) {
+        let listing = result.map(parse_listing).unwrap_or_else(failed);
         let current = split(&self.text).map(|(dir, _)| dir.to_owned());
-        self.cache.insert(dir.clone(), listing);
-        if current.as_deref() == Some(dir.as_str()) && matches!(self.focus, Focus::Nothing) {
+        self.cache.insert(dir.to_owned(), listing);
+        if current.as_deref() == Some(dir) && matches!(self.focus, Focus::Nothing) {
             self.refocus();
         }
-        true
     }
 
-    /// Folds a rejection for `id` as a failed listing, keeping the
-    /// recents with no notice. True when `id` was in flight.
-    pub(super) fn rejected(&mut self, id: &str) -> bool {
-        self.answered(id, None)
+    /// Folds a rejection for the asked `dir` as a failed listing,
+    /// keeping the recents with no notice.
+    pub(super) fn rejected(&mut self, dir: &str) {
+        self.answered(dir, None);
     }
 
-    /// Forgets the in-flight ids, queueing their directories again in
+    /// Queues the directories `retry` read from the dropped tags, in
     /// send order ahead of any directory already queued: a directory in
-    /// flight at a disconnect is asked once more. The cache stays, and
-    /// an answer under an old id matches nothing.
-    pub(super) fn disconnected(&mut self) {
-        let retry: Vec<String> = self.inflight.iter().map(|(_, dir)| dir.clone()).collect();
-        self.inflight.clear();
-        let mut queued = std::mem::take(&mut self.queued);
+    /// flight at a disconnect is asked once more. The cache stays.
+    pub(super) fn disconnected(&mut self, mut retry: Vec<String>) {
+        for dir in std::mem::take(&mut self.queued) {
+            if !retry.contains(&dir) {
+                retry.push(dir);
+            }
+        }
         self.queued = retry;
-        self.queued.append(&mut queued);
-    }
-
-    /// Drops the in-flight ids without queueing them again: with the
-    /// recents alone open a disconnect asks nothing more. The cache
-    /// stays, and an answer under an old id matches nothing.
-    pub(super) fn forget(&mut self) {
-        self.inflight.clear();
     }
 
     /// Resolves the typed text with nothing focused: a completion's
     /// prefix would have focused it, so a name with at least one
     /// character is always missing, and only text ending in `/` reads
     /// its parent listing. Bare `~` queues the hub's home listing when
-    /// not held, in flight or queued, and waits for it.
+    /// not held or queued, and waits for it.
     pub(super) fn resolve(&mut self) -> Resolved {
         if self.text == "~" {
             let home = self
@@ -267,12 +245,9 @@ impl Typed {
                 }
                 None => {}
             }
-            if self.inflight.iter().any(|(_, dir)| dir == "~/")
-                || self.queued.iter().any(|dir| dir == "~/")
-            {
-                return Resolved::Loading;
+            if !self.queued.iter().any(|dir| dir == "~/") {
+                self.queued.push("~/".to_owned());
             }
-            self.queued.push("~/".to_owned());
             return Resolved::Loading;
         }
         let Some((dir, name)) =
@@ -371,16 +346,10 @@ impl Typed {
         }
     }
 
-    /// Queues `dir` unless held, in flight or already queued: at most
-    /// one request per distinct directory text per picker opening.
+    /// Queues `dir` unless held or already queued; [`Typed::due`] drops
+    /// it again while an ask for it is out.
     fn queue_dir(&mut self, dir: &str) {
-        if self.cache.contains_key(dir) {
-            return;
-        }
-        if self.inflight.iter().any(|(_, sent)| sent == dir) {
-            return;
-        }
-        if self.queued.iter().any(|queued| queued == dir) {
+        if self.cache.contains_key(dir) || self.queued.iter().any(|queued| queued == dir) {
             return;
         }
         self.queued.push(dir.to_owned());

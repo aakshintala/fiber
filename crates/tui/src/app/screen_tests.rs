@@ -192,6 +192,210 @@ fn needs_is_empty_when_every_page_is_resident() {
     );
 }
 
+/// A still-needed range fails: an answer covering none of its
+/// window cannot leave the range needed forever (#4192). The high
+/// page below is inverted by a backward line, closed, dropped, and
+/// needed again; the seq-based fail cannot see it, so the range-based
+/// fail must clear it with the `IoFailed` notice instead.
+#[test]
+fn still_needed_range_fails() {
+    use crate::app::App;
+    use crate::link::Line;
+    use std::path::PathBuf;
+    let session = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(80, 24);
+    app.on_line(Line::Hub(contract::HubLine {
+        kind: contract::HubEventKind::HubHello,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
+    app.attach(session.clone());
+    // Folds one durable line with its own seq and payload; a
+    // `turn_started` answer the fold asks for is left pending, as the
+    // attach harness does while it replays.
+    let fold = |app: &mut App,
+                seq: &mut u64,
+                kind: &str,
+                action: Option<&str>,
+                at: u64,
+                payload: Value| {
+        let mut line = envelope(seq, kind, action, payload);
+        line.seq = Some(Seq(at));
+        let _ = app.on_line(Line::Session(line));
+    };
+    let turn = |app: &mut App, seq: &mut u64, at: &mut u64, nth: usize, text: &str| {
+        let message = format!("a_m{nth}");
+        let user = json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": text}]}]});
+        fold(app, seq, "turn_started", None, *at, user);
+        *at += 1;
+        fold(app, seq, "step_started", None, *at, json!({}));
+        *at += 1;
+        fold(
+            app,
+            seq,
+            "assistant_message_started",
+            Some(&message),
+            *at,
+            json!({}),
+        );
+        *at += 1;
+        fold(
+            app,
+            seq,
+            "text_completed",
+            Some(&message),
+            *at,
+            json!({"text": text}),
+        );
+        *at += 1;
+        fold(
+            app,
+            seq,
+            "assistant_message_completed",
+            Some(&message),
+            *at,
+            json!({}),
+        );
+        *at += 1;
+        fold(
+            app,
+            seq,
+            "turn_completed",
+            None,
+            *at,
+            json!({"outcome": "completed"}),
+        );
+        *at += 1;
+    };
+    let mut seq = 0u64;
+    // Twenty-two turns fill two pages past the cut threshold, so the
+    // next turn starts the high page with a cut.
+    for nth in 0..22usize {
+        let mut at = 6u64 * nth as u64;
+        turn(&mut app, &mut seq, &mut at, nth, &format!("line {nth}"));
+    }
+    // The high page's backward lines keep it inverted: every seq stays
+    // below its start, so no forward line repairs it, and the page
+    // still reaches the cut threshold to close.
+    let mut at = 400u64;
+    turn(&mut app, &mut seq, &mut at, 100, "high line");
+    for back in (100..300u64).rev() {
+        fold(
+            &mut app,
+            &mut seq,
+            "text_completed",
+            Some("a_m100"),
+            back,
+            json!({"text": "backward"}),
+        );
+    }
+    turn(&mut app, &mut seq, &mut at, 101, "closing line");
+    // A tall tail so settling at the bottom drops the inverted page.
+    for nth in 14..30usize {
+        turn(&mut app, &mut seq, &mut at, nth, "tail line");
+    }
+    app.jump(10_000);
+    app.settle_and_find_outgoing();
+    // The inverted page sits mid-log: scan the window tops for it.
+    let total = app.pages().index().total();
+    let mut inverted = None;
+    let mut top = 0usize;
+    while inverted.is_none() && top <= total {
+        app.jump(top);
+        inverted = app
+            .needs()
+            .iter()
+            .find(|(_, range)| *range.start() > *range.end())
+            .cloned();
+        top += 20;
+    }
+    let inverted = inverted.unwrap_or_else(|| panic!("an inverted need below row {total}"));
+    // An empty answer covers none of the window, so the need stays.
+    app.load_inner(&inverted.0, Vec::new());
+    assert!(
+        app.needs().contains(&inverted),
+        "the uncovered range stays needed"
+    );
+    // Failing the still-needed range clears it with the `IoFailed`
+    // notice, instead of asking for it again.
+    app.load_failed_inner(
+        &inverted.0,
+        &inverted.1,
+        "the answer held none of its lines",
+    );
+    assert!(
+        !app.needs().contains(&inverted),
+        "the failed range leaves the needs"
+    );
+    assert!(
+        app.notices().iter().any(|line| matches!(
+            line,
+            crate::app::NoticeLine::Notice { code, text, .. }
+            if *code == contract::ErrorCode::IoFailed && text.contains("Could not load history")
+        )),
+        "the failed range pushes its notice"
+    );
+}
+
+/// `fail_range` marks only the named session's page: a page on another
+/// session with the same seq bounds stays needed, so a later fetch
+/// still loads it. Joining either `&&` with `||` instead would mark
+/// the other session's same-bounded page (it sits earlier in the
+/// index with the same last seq), silently dropping a range no fetch
+/// ever failed.
+#[test]
+fn fail_range_leaves_the_same_range_on_another_session() {
+    let mut screen = Screen::new();
+    let mut aseq = 0u64;
+    for turn in 0..20 {
+        for line in segment_turn(&mut aseq, ANCESTOR, turn) {
+            screen.pages_mut().apply(&line);
+        }
+    }
+    let mut dseq = 0u64;
+    for turn in 0..20 {
+        for line in segment_turn(&mut dseq, SESSION, turn) {
+            screen.pages_mut().apply(&line);
+        }
+    }
+    // Away and back, the tail pages drop: each session's tail is
+    // asked under its own session.
+    screen.jump(0);
+    screen.settle(10);
+    // Both sessions hold the same tail bounds: ancestor and
+    // descendant logs both start at Seq(0) with the same turns.
+    let before = screen.pages().needs(0, total(&screen));
+    let shared = before
+        .iter()
+        .filter(|(session, _)| session.0 == ANCESTOR)
+        .filter(|(_, range)| {
+            before
+                .iter()
+                .any(|(other, other_range)| other.0 == SESSION && other_range == range)
+        })
+        .map(|(_, range)| range.clone())
+        .next()
+        .expect("both sessions hold the same tail range");
+    // Fail the second session's copy: the first session's same-bounded
+    // page sits earlier in the index, so an `||` mutant marks that one
+    // instead and this copy stays needed.
+    screen
+        .pages_mut()
+        .fail_range(&SessionId(SESSION.to_owned()), &shared);
+    let after = screen.pages().needs(0, total(&screen));
+    assert!(
+        !after.contains(&(SessionId(SESSION.to_owned()), shared.clone())),
+        "the failed range leaves the needs"
+    );
+    assert!(
+        after.contains(&(SessionId(ANCESTOR.to_owned()), shared)),
+        "the other session's same range stays needed"
+    );
+}
+
 #[test]
 fn reveal_scrolls_up_to_a_row_above_the_top_and_follows_at_the_bottom() {
     let mut screen = screen(6);
@@ -935,6 +1139,7 @@ fn a_top_row_on_a_call_image_row_pins_the_group() {
                 | Target::Note(_)
                 | Target::Image(_)
                 | Target::Orphans(_)
+                | Target::Shell(_)
                 | Target::Copy { .. } => unreachable!(),
             })]
             && line.to_string().contains("a.png")

@@ -21,10 +21,11 @@ use contract::tool::{Cancel, Output};
 use support::cancel::Token;
 
 use super::command::{Finished, MovePolicy, MoveReason, StopKind};
+use super::drive::finish;
 use super::monitor::Feed;
 use super::moved::Moved;
-use super::output::{JobStream, align_char_boundary};
-use super::sandbox::protected::Report as ProtectedReport;
+use super::output::{JobStream, Shared, align_char_boundary, lock};
+use super::sandbox::protected::{Guard as ProtectionGuard, Report as ProtectedReport};
 use super::tty;
 use super::{Limit, assemble};
 use crate::error::{ShellError, ToolError};
@@ -76,6 +77,16 @@ pub(crate) fn running_step(
     move_due: bool,
     asked: bool,
 ) -> Step {
+    // A foreground shell already reaped with its group occupied ends the
+    // call with its own result: a timeout that falls due while the group is
+    // listed must not stop the leftovers (RULING-4238-1).
+    if policy == MovePolicy::Foreground
+        && !cancelled
+        && !seen_empty
+        && let Some(code) = shell_exit
+    {
+        return Step::Move(MoveReason::ShellExited { code });
+    }
     if timed_out {
         return Step::Stop(StopKind::Timeout);
     }
@@ -242,6 +253,142 @@ pub(crate) fn take(
     }
 }
 
+/// The shell exited and left processes in its group: the call returns the
+/// shell's own result at once, with no job (`docs/tools.md`, "When a
+/// command ends"). What the leftovers print from now on goes to a file
+/// under the session's artifacts directory, named in one trailing line
+/// after the closing line. The group stays on the process-wide list, so
+/// session shutdown stops it; nothing else does.
+///
+/// The artifact is installed as the reader's sink under the reader lock
+/// before the result is taken, so each byte lands once, in the result or in
+/// the artifact.
+pub(crate) fn finish_inline(
+    mut moved: Moved,
+    _clock: &dyn Clock,
+    limit: Option<Limit>,
+    command: &str,
+    emit: &dyn Emit,
+    carry: &mut Vec<u8>,
+) -> Output {
+    moved.detach_call_cancel();
+    let members = moved.progress.members.take();
+    let kept = match &moved.spill {
+        Some(config) => {
+            let path = config.dir.join(format!("{}.txt", support::mint("s_")));
+            match File::create_new(&path) {
+                Ok(file) => Ok((file, path)),
+                Err(error) => Err(format!(
+                    "could not save the output to {}: {error}",
+                    path.display()
+                )),
+            }
+        }
+        None => Err("the session has no artifacts directory".to_owned()),
+    };
+    let Moved {
+        progress,
+        protection,
+        cap,
+        ..
+    } = moved;
+    let saved = match kept {
+        Ok((file, path)) => {
+            let mut inner = lock(&progress.shared.inner);
+            inner.file = Some(file);
+            inner.artifact_sink = true;
+            inner.cap = cap;
+            format!(
+                "Output written after the call returns is in {}.",
+                path.display()
+            )
+        }
+        Err(why) => format!("Output written after the call returns could not be saved: {why}."),
+    };
+    // The reader is still open on the leftovers' pipe, so the end is
+    // neither indeterminate nor held open: the shell's exit is the result.
+    // Without a sink the finish discards what the reader gets from now on.
+    let finished = finish(
+        &progress.shared,
+        None,
+        progress.sent_signal,
+        progress.seen_empty,
+        false,
+        emit,
+        carry,
+    );
+    steward(progress.shared, progress.pgid, progress.listing);
+    let report = protection.map(ProtectionGuard::finish);
+    let line = leftover_line(members.as_ref(), &saved);
+    super::assemble_tailed(limit, finished, None, Some(command), report, Some(&line))
+}
+
+/// Looks after what the call leaves behind, on its own thread: closes the
+/// artifact file once the reader reaches the end of the pipe, and takes the
+/// group off the process-wide list once it is empty. It sends no signal and
+/// waits on no clock and no cancel.
+fn steward(shared: Arc<Shared>, pgid: u32, listing: Option<Box<support::group::Listing>>) {
+    let mut listing = listing;
+    let mut closed = false;
+    // A thread that cannot start leaves the group listed and the file open
+    // until the shared state drops: shutdown still stops the group.
+    let _started = std::thread::Builder::new()
+        .name("shell-leftovers".to_owned())
+        .spawn(move || {
+            loop {
+                {
+                    let mut inner = lock(&shared.inner);
+                    if inner.eof {
+                        drop(inner.file.take());
+                        closed = true;
+                    }
+                    // The reader wakes this on every chunk and at the end of
+                    // the pipe; the timeout is the poll of the group. The
+                    // real time bound is a poll pause, not a deadline.
+                    drop(shared.cv.wait_timeout(inner, support::group::GROUP_POLL));
+                }
+                if listing.is_some()
+                    && !support::group::alive(pgid)
+                    && let Some(listing) = listing.take()
+                {
+                    support::group::live().unlist(*listing);
+                }
+                if closed && listing.is_none() {
+                    return;
+                }
+            }
+        });
+}
+
+/// How many names the trailing line gives.
+const FIRST_NAMES: usize = 3;
+
+/// The one line after the closing line of a shell that exited with
+/// processes left running: how many, the first few by name, where their
+/// later output goes (`saved`), and how to keep a long-running process.
+/// A listing that did not answer names no one and invents no count.
+fn leftover_line(members: Option<&GroupMembers>, saved: &str) -> String {
+    let hint = super::MOVED_JOB_HINT;
+    match members {
+        Some(GroupMembers::Members(rows)) => {
+            let count = rows.len();
+            let first: Vec<&str> = rows.iter().take(FIRST_NAMES).map(String::as_str).collect();
+            let (number, noun) = if count == 1 {
+                ("1".to_owned(), "process")
+            } else {
+                (count.to_string(), "processes")
+            };
+            format!(
+                "{number} {noun} left running (first: {first}). {saved} {hint}",
+                first = first.join(", "),
+            )
+        }
+        Some(GroupMembers::Empty) | Some(GroupMembers::Unavailable) | None => {
+            format!("{UNNAMED} {saved} {hint}")
+        }
+    }
+}
+
 /// The job's stop: cancelling the job's own signal. The closure may run
 /// more than once and must not wake twice (`Token` idempotence).
 fn stop_of(token: &Token) -> Stop {
@@ -270,7 +417,7 @@ fn hand_off(
     // `ps` a second time. Only a shell exit with members carries one.
     // Read before the job's thread takes the move.
     let members: Option<String> = match moved.progress.members.as_ref() {
-        Some(GroupMembers::Members(names)) => Some(names.clone()),
+        Some(GroupMembers::Members(rows)) => Some(rows.join(", ")),
         Some(GroupMembers::Empty) | Some(GroupMembers::Unavailable) | None => None,
     };
     // A spill in progress goes to the job's output file; the line names
@@ -318,7 +465,7 @@ fn hand_off(
     // plus what is left of the drive's deadline, saturated when the
     // deadline already passed. A keeper-hosted move keeps no drive
     // deadline (`docs/tools.md`, "The keeper"), so the receipt reads the
-    // wall the host handoff stored instead. Without a limit, or without a
+    // wall the host transfer stored instead. Without a limit, or without a
     // deadline in hand, there is nothing to name. Captured before the job's
     // thread takes the move, beside the saved members above.
     let stop = match (limit, moved.progress.timeout_at) {
@@ -532,7 +679,7 @@ fn shell_sentence(code: i32, members: Option<&str>) -> String {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum GroupMembers {
     /// Member names for the receipt, as `name (pid)`.
-    Members(String),
+    Members(Vec<String>),
     /// A successful listing with no rows: the group is empty.
     Empty,
     /// The listing failed or never answered within [`PS_BOUND`].
@@ -653,11 +800,10 @@ fn parse_ps(text: &str, pgid: u32) -> Vec<(u32, String)> {
     rows
 }
 
-fn format_rows(rows: &[(u32, String)]) -> String {
+fn format_rows(rows: &[(u32, String)]) -> Vec<String> {
     rows.iter()
         .map(|(pid, name)| format!("{name} ({pid})"))
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect()
 }
 
 /// The command's first line, cut to [`DESCRIPTION_LIMIT`] characters.
@@ -733,8 +879,7 @@ pub(super) fn to_completed_reported(
         job_id,
         status,
         output_tail: match status {
-            Outcome::Failed => output_tail(path),
-            Outcome::Completed | Outcome::Cancelled => None,
+            Outcome::Failed | Outcome::Completed | Outcome::Cancelled => output_tail(path),
         },
         error: output.error,
         process: output.process,

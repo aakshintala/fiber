@@ -11,10 +11,10 @@ use common::{Setup, go_module, install_lua, write};
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::events::{CallStatus, ExtensionExec, ExtensionLog, HandoffTrigger};
+use contract::events::{CallStatus, CompactionTrigger, ExtensionExec, ExtensionLog};
 use contract::hook::{
-    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeHandoff, BeforeHandoffAnswer,
-    BeforeHandoffOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
+    AfterToolAnswer, AfterToolCall, AfterToolOutcome, BeforeCompaction, BeforeCompactionAnswer,
+    BeforeCompactionOutcome, BeforeMessage, BeforeMessageAnswer, BeforeMessageOutcome,
     BeforeModelCall, BeforeToolAnswer, BeforeToolCall, BeforeToolOutcome, CheckAnswer,
     CheckOutcome, Context, ContextAnswer, ContextOutcome, Hooks, SessionStart, StartReason,
     TurnEnd,
@@ -1913,9 +1913,9 @@ fn held_session_start(started: &str) {
     assert!(!dir.join("b_ran").exists(), "the second hook never started");
 }
 
-/// Asks the `before_handoff` hooks about a short conversation, on its own
+/// Asks the `before_compaction` hooks about a short conversation, on its own
 /// thread. The cancel never fires, so the chain runs every hook.
-fn ask_handoff(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeHandoffAnswer> {
+fn ask_compaction(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeCompactionAnswer> {
     let (tx, rx) = mpsc::channel();
     let session = Arc::clone(session);
     std::thread::spawn(move || {
@@ -1924,8 +1924,8 @@ fn ask_handoff(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeHandoff
             text: "hi".into(),
             images: Vec::new(),
         }];
-        let answer = session.before_handoff(&BeforeHandoff {
-            trigger: HandoffTrigger::Auto,
+        let answer = session.before_compaction(&BeforeCompaction {
+            trigger: CompactionTrigger::Auto,
             instructions: None,
             conversation: &conversation,
             cancel: &cancel,
@@ -1939,25 +1939,25 @@ fn ask_handoff(session: &Arc<SessionExtensions>) -> mpsc::Receiver<BeforeHandoff
 
 #[test]
 #[allow(clippy::expect_used, reason = "a failure is the test's")]
-fn a_blocking_before_handoff_hook_past_its_timeout_fails() {
+fn a_blocking_before_compaction_hook_past_its_timeout_fails() {
     let setup = Setup::new();
     let dir = install_lua(
         &setup,
         "a",
         &json!({}),
-        &spinning_at("before_handoff", "blocking", 50, "{ note = \"late\" }"),
+        &spinning_at("before_compaction", "blocking", 50, "{ note = \"late\" }"),
     );
     let went = go_module(&dir, "spin");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
     let answer = timed_out(
-        || ask_handoff(&session),
+        || ask_compaction(&session),
         &clock,
         &went,
         Duration::from_millis(50),
         &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let BeforeHandoffOutcome::Failed(failure) = answer.outcome else {
+    let BeforeCompactionOutcome::Failed(failure) = answer.outcome else {
         panic!("the hook fails: {:?}", answer.outcome);
     };
     assert_eq!(failure.extension, "fiber.test/a");
@@ -1970,32 +1970,37 @@ fn a_blocking_before_handoff_hook_past_its_timeout_fails() {
 
 #[test]
 #[allow(clippy::expect_used, reason = "a failure is the test's")]
-fn a_non_blocking_before_handoff_hook_past_its_timeout_is_dropped() {
+fn a_non_blocking_before_compaction_hook_past_its_timeout_is_dropped() {
     let setup = Setup::new();
     let dir = install_lua(
         &setup,
         "a",
         &json!({}),
-        &spinning_at("before_handoff", "non-blocking", 50, "{ note = \"late\" }"),
+        &spinning_at(
+            "before_compaction",
+            "non-blocking",
+            50,
+            "{ note = \"late\" }",
+        ),
     );
     install_lua(
         &setup,
         "b",
         &json!({}),
-        "fiber.hook(\"before_handoff\", { timeout = 1000, on_failure = \"blocking\",\n\
+        "fiber.hook(\"before_compaction\", { timeout = 1000, on_failure = \"blocking\",\n\
            run = function(call) return { note = (call.note or \"none\") .. \"|b\" } end })\n",
     );
     let went = go_module(&dir, "spin");
     let clock = FakeClock::new();
     let session = load(&setup, &[], clock.clone());
     let answer = timed_out(
-        || ask_handoff(&session),
+        || ask_compaction(&session),
         &clock,
         &went,
         Duration::from_millis(50),
         &Deadline::after(MUST_SUCCEED_WITHIN),
     );
-    let BeforeHandoffOutcome::Note { text, extension } = answer.outcome else {
+    let BeforeCompactionOutcome::Note { text, extension } = answer.outcome else {
         panic!("the chain goes on: {:?}", answer.outcome);
     };
     assert_eq!(text, "none|b");
@@ -2010,9 +2015,9 @@ fn a_non_blocking_before_handoff_hook_past_its_timeout_is_dropped() {
     );
     // The hook stopped the loop and left the VM up: the next call runs it.
     let again = Deadline::after(MUST_SUCCEED_WITHIN)
-        .recv(&ask_handoff(&session))
+        .recv(&ask_compaction(&session))
         .expect("waited for the second answer");
-    let BeforeHandoffOutcome::Note { text, extension } = again.outcome else {
+    let BeforeCompactionOutcome::Note { text, extension } = again.outcome else {
         panic!("the hook runs again: {:?}", again.outcome);
     };
     assert_eq!(text, "late|b");

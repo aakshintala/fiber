@@ -169,7 +169,7 @@ pub(super) fn pump_inner(
                     // listing that names members or never answers is saved
                     // and the loop re-reads the view, so a timeout or
                     // cancellation that became due during the listing wins
-                    // before any handoff.
+                    // before any transfer.
                     if !matches!(reason, MoveReason::ShellExited { .. }) {
                         return LoopEnd::Move(reason);
                     }
@@ -299,10 +299,11 @@ pub(super) fn finish(
 ) -> Finished {
     let (output, status, capped) = {
         let mut inner = lock(&shared.inner);
-        if !eof {
+        if !eof && !inner.artifact_sink {
             // The reader blocks in its read until the last holder closes
             // the pipe. Discarding drops those bytes so they are not part
-            // of the result.
+            // of the result. The artifact `finish_inline` installs keeps
+            // them instead.
             inner.discard = true;
         }
         // The spill leaves `Inner` with the result: nothing writes the

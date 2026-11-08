@@ -147,6 +147,14 @@ fn a_session_info_line_has_today_s_bytes_and_creates_logs_mode_0700() {
 
 #[test]
 fn at_info_debug_lines_write_nothing_and_create_nothing() {
+    let debug_home = Home::new("ld-info-debug-event-control");
+    debug_home.diag(Process::Tui, Level::Debug).debug_event(
+        "models_applied",
+        "Models were applied.",
+        &serde_json::json!({"catalogue_size":2}),
+    );
+    assert!(debug_home.text(&pid_file("tui")).contains("models_applied"));
+
     let home = Home::new("ld-info-quiet");
     for process in [
         Process::Hub,
@@ -161,8 +169,39 @@ fn at_info_debug_lines_write_nothing_and_create_nothing() {
         assert!(!diag.debugging());
         diag.http_request(&request());
         diag.resources();
+        diag.debug_event(
+            "models_applied",
+            "Models were applied.",
+            &serde_json::json!({"catalogue_size":2}),
+        );
     }
     assert!(!home.path().join("logs").exists());
+}
+
+#[test]
+fn debug_event_writes_structured_code_and_data() {
+    let home = Home::new("ld-debug-event");
+    let diag = home.diag(Process::Tui, Level::Debug);
+    diag.debug_event(
+        "models_read_done",
+        "Model lists were read.",
+        &serde_json::json!({"kind":"cached","lists":3}),
+    );
+    let lines = home.text(&pid_file("tui"));
+    let line: serde_json::Value = serde_json::from_str(lines.trim()).unwrap();
+    assert_eq!(line["level"], "debug");
+    assert_eq!(line["process"], "tui");
+    assert_eq!(line["code"], "models_read_done");
+    assert_eq!(line["message"], "Model lists were read.");
+    assert_eq!(line["data"], serde_json::json!({"kind":"cached","lists":3}));
+    assert_eq!(
+        line.as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["code", "data", "level", "message", "process", "ts"]
+    );
 }
 
 #[test]
@@ -619,7 +658,6 @@ fn at_info_timed_reads_no_clock_and_writes_nothing() {
     assert!(!home.path().join("logs").exists());
 }
 
-// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
     let home = Home::new("ld-timed-drop");
@@ -636,12 +674,23 @@ fn at_debug_a_dropped_guard_writes_one_line_and_no_file_before() {
     assert!(timer.is_some(), "a debug guard is active");
     assert!(!home.path().join("logs").exists(), "no file before drop");
     drop(timer);
-    assert_eq!(
-        home.text("hub.log"),
-        "{\"ts\":1700000000007,\"level\":\"debug\",\"process\":\"hub\",\
-         \"code\":\"op_timing\",\"message\":\"An operation ended.\",\
-         \"data\":{\"op\":\"tool.run\",\"ms\":7,\"tool\":\"read\"}}\n"
-    );
+    let text = home.text("hub.log");
+    let head = "{\"ts\":1700000000007,\"level\":\"debug\",\"process\":\"hub\",\
+                \"code\":\"op_timing\",\"message\":\"An operation ended.\",\
+                \"data\":{\"op\":\"tool.run\",\"ms\":7,\"tool\":\"read\"";
+    // An `alloc-stats` build follows `tool` with the alloc keys, whose values
+    // this binary does not pin.
+    #[cfg(not(feature = "alloc-stats"))]
+    assert_eq!(text, format!("{head}}}}}\n"));
+    #[cfg(feature = "alloc-stats")]
+    {
+        let alloc = format!("{head},\"alloc_bytes\":");
+        assert!(text.starts_with(&alloc), "{text}");
+        assert!(text.ends_with("}}\n"), "{text}");
+        assert_eq!(text.lines().count(), 1, "{text}");
+        let parsed: serde_json::Value = serde_json::from_str(text.trim_end()).unwrap();
+        assert_timing_data(&parsed, "tool.run", Some("read"), None);
+    }
 }
 
 fn early_return(diag: &Diag, stop: bool) -> u32 {
@@ -872,9 +921,9 @@ fn a_backwards_clock_contributes_zero() {
         .now()
         .checked_add(Duration::from_secs(1))
         .expect("one second ahead");
-    drop(timed(&diag, Op::TurnHandoff, None, Some(start)).expect("debug guard"));
+    drop(timed(&diag, Op::TurnCompaction, None, Some(start)).expect("debug guard"));
     let line = op_line(&home, "hub.log");
-    assert_eq!(line["data"]["op"], "turn.handoff");
+    assert_eq!(line["data"]["op"], "turn.compaction");
     assert_eq!(line["data"]["ms"], 0);
 }
 
@@ -938,7 +987,7 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, Option<&'static str>, &'
         (ToolRun, "tool.run"),
         (TurnRequest, "turn.request"),
         (TurnModelCall, "turn.model_call"),
-        (TurnHandoff, "turn.handoff"),
+        (TurnCompaction, "turn.compaction"),
         (McpConnect, "mcp.connect"),
         (JobsStart, "jobs.start"),
         (JobsReceive, "jobs.receive"),
@@ -974,9 +1023,14 @@ fn every_timed_case() -> Vec<(Op, Option<&'static str>, Option<&'static str>, &'
     cases
 }
 
+/// The `data` keys an `alloc-stats` build adds when a timer ends on the thread
+/// that started it. The one list every key-set check reads.
+#[cfg(feature = "alloc-stats")]
+const ALLOC_KEYS: [&str; 3] = ["alloc_bytes", "allocs", "live_delta_bytes"];
+
 /// Asserts the closed `data` key set on one parsed `op_timing` line: `op`
-/// and `ms`, plus `tool` exactly when the guard carried one and `job`
-/// exactly when it carried one. Every new timing test passes its lines
+/// and `ms`, plus `tool` or `job` exactly when the guard carried one, plus
+/// `ALLOC_KEYS` in an `alloc-stats` build. Every timing test passes its lines
 /// through here.
 fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>, job: Option<&str>) {
     assert_eq!(line["code"], "op_timing");
@@ -990,10 +1044,18 @@ fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>, jo
     if job.is_some() {
         want.push("job");
     }
+    #[cfg(feature = "alloc-stats")]
+    want.extend(ALLOC_KEYS);
     want.sort_unstable();
     assert_eq!(keys, want, "closed data keys: {line}");
     assert_eq!(data["op"], op);
     assert!(data["ms"].is_u64(), "{line}");
+    #[cfg(feature = "alloc-stats")]
+    {
+        assert!(data["alloc_bytes"].is_u64(), "{line}");
+        assert!(data["allocs"].is_u64(), "{line}");
+        assert!(data["live_delta_bytes"].is_i64(), "{line}");
+    }
     match tool {
         Some(tool) => assert_eq!(data["tool"], tool),
         None => assert!(data.get("tool").is_none(), "{line}"),
@@ -1004,7 +1066,6 @@ fn assert_timing_data(line: &serde_json::Value, op: &str, tool: Option<&str>, jo
     }
 }
 
-// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn op_timing_data_holds_only_op_ms_tool_and_job() {
     let home = Home::new("ld-timed-data");
@@ -1029,25 +1090,25 @@ fn op_timing_data_holds_only_op_ms_tool_and_job() {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), cases.len(), "one line per guard");
     for (line, (_, tool, job, want)) in lines.iter().zip(&cases) {
-        // The raw bytes pin the key order: `op`, `ms`, then `tool` or
-        // `job`, whichever subject the timer named.
-        let data = match (tool, job) {
-            (Some(tool), None) => {
-                format!("\"data\":{{\"op\":\"{want}\",\"ms\":0,\"tool\":\"{tool}\"}}")
-            }
-            (None, Some(job)) => {
-                format!("\"data\":{{\"op\":\"{want}\",\"ms\":0,\"job\":\"{job}\"}}")
-            }
-            (None, None) => format!("\"data\":{{\"op\":\"{want}\",\"ms\":0}}"),
+        // The raw bytes pin the subject key order. In an `alloc-stats` build,
+        // the alloc keys follow the subject; their order is not pinned.
+        #[cfg(feature = "alloc-stats")]
+        let tail = ",\"alloc_bytes\":";
+        #[cfg(not(feature = "alloc-stats"))]
+        let tail = "}";
+        let subject = match (tool, job) {
+            (Some(tool), None) => format!(",\"tool\":\"{tool}\""),
+            (None, Some(job)) => format!(",\"job\":\"{job}\""),
+            (None, None) => String::new(),
             (Some(_), Some(_)) => panic!("a timer names one subject: {line}"),
         };
+        let data = format!("\"data\":{{\"op\":\"{want}\",\"ms\":0{subject}{tail}");
         assert!(line.contains(&data), "{line}");
         let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
         assert_timing_data(&parsed, want, *tool, *job);
     }
 }
 
-// Excluded from the `--features alloc-stats` gate: build configuration — these asserts run only under alloc-stats, which CI does not test (see #4294).
 #[test]
 fn every_process_shape_writes_the_closed_data_keys() {
     for (process, kind) in [

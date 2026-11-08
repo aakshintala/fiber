@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use super::super::{App, Effect};
-use super::{Kind, Link, Outbox};
+use super::{Kind, Link, Outbox, RecentAsk, Waiting};
 use crate::app::testkit::{SESSION, hello, now};
 use crate::input::Draft;
 
@@ -63,6 +63,51 @@ fn waiting_any_and_forget_match_variants_not_payloads() {
     assert_eq!(outbox.waiting("c_first"), None);
     assert_eq!(outbox.waiting("c_other"), None);
     assert_eq!(outbox.waiting("c_fork"), Some(super::Waiting::Fork));
+}
+
+#[test]
+fn tags_come_back_in_send_order() {
+    let mut outbox = up();
+    outbox.wait("c_b", Waiting::Fork);
+    outbox.wait("c_a", Waiting::Sessions);
+    outbox.wait("c_c", Waiting::Feed);
+    let ids: Vec<&str> = outbox.tags().map(|(id, _)| id).collect();
+    assert_eq!(ids, ["c_b", "c_a", "c_c"]);
+}
+
+#[test]
+fn a_repeat_wait_keeps_its_place() {
+    let mut outbox = up();
+    outbox.wait("c_b", Waiting::Fork);
+    outbox.wait("c_a", Waiting::Sessions);
+    assert_eq!(outbox.wait("c_b", Waiting::Feed), Some(Waiting::Fork));
+    let tags: Vec<(&str, &Waiting)> = outbox.tags().collect();
+    assert_eq!(tags, [("c_b", &Waiting::Feed), ("c_a", &Waiting::Sessions)]);
+    assert_eq!(outbox.settled("c_b"), Some(Waiting::Feed));
+    assert_eq!(outbox.settled("c_b"), None);
+}
+
+#[test]
+fn settle_where_removes_only_matches() {
+    let mut outbox = up();
+    outbox.wait("c_s1", Waiting::Recent(RecentAsk::Scoped("p1".to_owned())));
+    outbox.wait("c_first", Waiting::Recent(RecentAsk::First));
+    outbox.wait("c_s2", Waiting::Recent(RecentAsk::Scoped("p2".to_owned())));
+    outbox.settle_where(|owner| matches!(owner, Waiting::Recent(RecentAsk::Scoped(_))));
+    let tags: Vec<(&str, &Waiting)> = outbox.tags().collect();
+    assert_eq!(tags, [("c_first", &Waiting::Recent(RecentAsk::First))]);
+}
+
+#[test]
+fn forget_ignores_the_payload_but_keeps_the_order_of_the_rest() {
+    let mut outbox = up();
+    outbox.wait("c_1", Waiting::Directories("/a/".to_owned()));
+    outbox.wait("c_2", Waiting::Fork);
+    outbox.wait("c_3", Waiting::Directories("/b/".to_owned()));
+    outbox.wait("c_4", Waiting::Feed);
+    outbox.forget(&Waiting::Directories(String::new()));
+    let ids: Vec<&str> = outbox.tags().map(|(id, _)| id).collect();
+    assert_eq!(ids, ["c_2", "c_4"]);
 }
 
 /// An outbox with the link up.
@@ -180,7 +225,19 @@ fn wrote_keeps_session_commands_but_not_subscribe_commands_or_start() {
 
 /// An app with no home, before the hub connects.
 fn fresh() -> App {
-    App::new(PathBuf::from("/w"))
+    let mut app = App::new(PathBuf::from("/w"));
+    // A home with a model chosen, so Enter sends a `start` instead of
+    // opening the model picker.
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
 }
 
 /// Types `text`, checking each key does nothing else.

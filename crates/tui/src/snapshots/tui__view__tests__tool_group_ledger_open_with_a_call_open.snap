@@ -2,19 +2,19 @@
 source: crates/tui/src/view_tests.rs
 expression: "sized(&mut app, 60, 16)"
 ---
-       ✓ read     src/a.rs                          1 line
-       ✓ edit     src/a.rs                           +3 −1
-         -assert!(false)
-         +assert!(true)
-     2 ✗ shell    cargo te…  nonzero_exit: exit status 101
+         ✓ read     src/a.rs                        1 line
+         ✓ edit     src/a.rs                         +3 −1
+           -assert!(false)
+           +assert!(true)
+       2 ✗ shell    cargo …  nonzero_exit: exit status 101
                                                            ┃
- Fixed.                                                    ┃
-                                                           ┃
- ▣ completed · 38s · 3 calls · 18.2k tokens · $0.41 ·      ┃
- $1.10 on subscription                                     ┃
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ › █
-▌──────────────────────────────────────────────────────────
-▌auto                                    ctx ▆▆▆▆▆▆▆▆ — · —
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   Fixed.                                                  ┃
+⋮                                                          ┃
+⋮  ▣ completed · 38s · 3 calls · 18.2k tokens · $0.41 ·    ┃
+⋮  $1.10 on subscription                                   ┃
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ › █
+ ▌─────────────────────────────────────────────────────────
+ ▌auto                                   ctx ▆▆▆▆▆▆▆▆ — · —
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

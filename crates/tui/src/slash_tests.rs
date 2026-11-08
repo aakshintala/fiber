@@ -72,7 +72,6 @@ const DRAWN_ORDER: &[&str] = &[
     "panel",
     "rail",
     "rules",
-    "reviewer-setup",
     "settings",
     "theme",
     "keys",
@@ -80,7 +79,7 @@ const DRAWN_ORDER: &[&str] = &[
     "rewind",
     "cd",
     "fork",
-    "handoff",
+    "compact",
     "name",
     "login",
     "logout",
@@ -141,7 +140,7 @@ fn the_doc_table_lists_the_drawn_commands_in_drawn_order() {
         let cell = line.split('|').nth(1).unwrap_or("");
         for part in cell.split(',') {
             let part = part.trim().trim_matches('`');
-            // `/handoff [instructions]`, `/?`.
+            // `/compact [instructions]`, `/?`.
             let name = part
                 .trim_start_matches('/')
                 .split_whitespace()
@@ -183,7 +182,6 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"config",
         &"keybindings",
         &"keymap",
-        &"compact",
         &"rename",
         &"stop",
         &"exit",
@@ -329,7 +327,7 @@ fn an_empty_query_shows_every_row() {
 fn prefix_matches_come_before_contains_matches() {
     let all = rows(&[skill("prereview"), skill("Review")]);
     // `re`: prefix matches first, each group in the `/` list's drawn
-    // order (`docs/tui.md`, "Slash commands"): resume, release-notes, reviewer-setup,
+    // order (`docs/tui.md`, "Slash commands"): resume, release-notes,
     // rewind, name by its alias `rename`, reload, and the skill `Review`
     // (case ignored); then the contains matches, credential and
     // `prereview`.
@@ -338,7 +336,6 @@ fn prefix_matches_come_before_contains_matches() {
         [
             "resume",
             "release-notes",
-            "reviewer-setup",
             "rewind",
             "name",
             "reload",
@@ -355,12 +352,11 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
-    // The table orders `/compact` after `/handoff` (`docs/tui.md`, "Slash commands").
     let all = rows(&[]);
-    let handoff = all.iter().find(|row| row.name == "handoff");
+    let compact = all.iter().find(|row| row.name == "compact");
     assert_eq!(
-        handoff.map(Row::line),
-        Some("/handoff /compact [instructions]  Starts a handoff.  command".to_owned())
+        compact.map(Row::line),
+        Some("/compact [instructions]  Starts a compaction.  command".to_owned())
     );
     let home = all.iter().find(|row| row.name == "home");
     assert_eq!(

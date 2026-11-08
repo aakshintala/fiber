@@ -229,6 +229,7 @@ fn reload_reviewer_uses_the_route_label_and_publishes_only_other_provider_reads(
                 workspace: fixture.workspace.clone(),
                 clock: switching.loader().clock,
                 cache_diagnostics: false,
+                databricks_request_tags: None,
             };
             let route = r#loop::ReloadRoute {
                 model: "fake/m".into(),
@@ -594,6 +595,91 @@ fn another_installed_provider_reads_its_command_once() {
         runs(&fixture.marker),
         1,
         "a key read once is not read again"
+    );
+}
+
+/// The installed models tool's text: the catalogue with the quota
+/// section appended. The loop keeps this instance across the switch,
+/// so it must follow the swapped snapshot.
+fn installed_models_text(models: &crate::delegates::LiveModels) -> String {
+    use contract::tool::Tool as _;
+    let output = models.run(
+        &Map::new(),
+        &fakes::CancelToken::new(),
+        &fakes::Recorder::default(),
+    );
+    assert!(output.error.is_none(), "{:?}", output.error);
+    let [contract::shapes::ContentPart::Text { text }] = &output.content[..] else {
+        panic!("one text part: {:?}", output.content);
+    };
+    text.clone()
+}
+
+/// A `/model` switch rebuilds the delegate resolver around the new model:
+/// applying it swaps the snapshot whole, so `delegate_models` leads with
+/// the switched model instead of the stale one, and the already-installed
+/// tools read the swapped snapshot on their next call.
+#[test]
+fn a_model_switch_rebuilds_the_delegate_resolver_around_the_new_model() {
+    let fixture = fixture("fiber-switch-delegates");
+    let present = stored_key(&fixture, "fake");
+    let switching = switching(&fixture, &[present.as_str()]);
+    let (providers, _) = Providers::load(&fixture.home).expect("providers load");
+    let config = config(&fixture, &[present.as_str()]);
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let delegates = Arc::new(crate::delegates::Delegates::new(
+        fixture.home.join("fiber-stub"),
+        fixture.home.clone(),
+        contract::SessionId("s_switch_delegates".into()),
+        fixture.workspace.clone(),
+        fixture.home.join("sessions"),
+        jobs::Registry::new(
+            fixture.home.join("artifacts"),
+            Arc::clone(&clock),
+            Arc::new(fakes::Recorder::default()),
+        ),
+        clock,
+        crate::delegates::resolver(&providers, &config, "fake/m"),
+        Arc::new(Mutex::new(tools::SandboxSettings {
+            enabled: false,
+            allow_write: Vec::new(),
+            deny_read: Vec::new(),
+            fiber_home: std::path::PathBuf::new(),
+        })),
+    ));
+    switching.set_delegates(&delegates);
+    // The tools the session installed before the switch: the loop keeps
+    // these instances, so they must follow the swapped snapshot.
+    let installed_models = delegates.models();
+    let installed_spawn = delegates.tool();
+    let before = delegates.resolve_snapshot().catalogue.to_string();
+    assert!(
+        before.starts_with("Session model: fiber:fake/m\n"),
+        "{before}"
+    );
+    let made = prepared(&switching, &args("other/m"), None);
+    assert_eq!(made.model.reference, "other/m");
+    made.applied.expect("a switch applies")();
+    // Without the rebuild the first line would still name `fake/m`.
+    let after = delegates.resolve_snapshot().catalogue.to_string();
+    assert!(
+        after.starts_with("Session model: fiber:other/m\n"),
+        "{after}"
+    );
+    assert!(after.contains("fake ("), "{after}");
+    // The already-installed tools follow the switch: the models text
+    // leads with the new session model, and the installed spawn tool
+    // reads the new catalogue. Cloned snapshots would still name
+    // `fake/m` here.
+    let installed = installed_models_text(&installed_models);
+    assert!(
+        installed.starts_with("Session model: fiber:other/m\n"),
+        "{installed}"
+    );
+    let installed_catalogue = installed_spawn.resolve().catalogue.to_string();
+    assert!(
+        installed_catalogue.starts_with("Session model: fiber:other/m\n"),
+        "{installed_catalogue}"
     );
 }
 
@@ -1206,7 +1292,7 @@ fn without_a_reviewer_the_loop_gets_its_failure() {
 #[test]
 fn the_prepared_fields_follow_the_new_model() {
     let fixture = fixture("fiber-switch-fields");
-    let switching = switching(&fixture, &["cache.lifetime=5m", "handoff.enabled=false"]);
+    let switching = switching(&fixture, &["cache.lifetime=5m", "compaction.enabled=false"]);
     let made = prepared(&switching, &args("fake/n"), None);
     assert_eq!(made.context_window, 1000);
     assert_eq!(made.addendum, Some("The extra paragraph.\n".to_owned()));
@@ -1214,7 +1300,7 @@ fn the_prepared_fields_follow_the_new_model() {
         made.cache_lifetime,
         contract::events::CacheLifetime::FiveMinutes
     );
-    assert!(!made.handoff.enabled);
+    assert!(!made.compaction.enabled);
     let searched = prepared(&switching, &args("claude/w"), None);
     assert_eq!(searched.context_window, 500);
 }
@@ -1557,7 +1643,7 @@ fn only_a_web_search_from_another_registrant_stands() {
         let (tool, _) = crate::builtin::hosted("web_search_20250305").unwrap();
         tool
     };
-    let other: Arc<dyn contract::tool::Tool> = Arc::new(tools::Handoff);
+    let other: Arc<dyn contract::tool::Tool> = Arc::new(tools::Compact);
     assert!(!hosted_stands(&[]));
     assert!(!hosted_stands(&[("builtin".to_owned(), hosted())]));
     assert!(!hosted_stands(&[("search-ext".to_owned(), other)]));

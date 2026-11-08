@@ -152,6 +152,18 @@ pub(crate) const BINDINGS: &[Binding] = &[
         default_events: &[Canon::Edit(Edit::Delete), Canon::Key(Key::Backspace)],
     },
     Binding {
+        area: "Sessions",
+        id: "interrupt_turn",
+        when: "",
+        description: "Interrupt the turn on screen, whatever is open over it, except the /keys screen",
+        keys: "⌥I",
+        other_paths: "click a delegate's \"⏸ interrupt\" or its working line; click \"Esc to interrupt\"",
+        contexts: Contexts::ALL,
+        defaults: &["alt+i"],
+        events: &[Canon::Action],
+        default_events: &[Canon::Action],
+    },
+    Binding {
         area: "The input box",
         id: "recall_prompt",
         when: "in an empty box",
