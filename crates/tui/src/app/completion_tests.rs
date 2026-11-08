@@ -128,7 +128,7 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
 #[test]
 fn tab_completes_the_selected_name_and_closes_the_panel() {
     let mut app = connected();
-    type_text(&mut app, "/han");
+    type_text(&mut app, "/comp");
     assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
     assert_eq!(app.draft(), "/compact ");
     assert_eq!(app.completions(), None);

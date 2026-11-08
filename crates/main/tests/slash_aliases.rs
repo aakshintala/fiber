@@ -173,27 +173,6 @@ fn home_notice(command: &str, prefix: &str, row: &str, rest: &str, notice: &str)
 }
 
 #[test]
-fn compact_starts_a_compaction_like_compaction() {
-    // The table and alias rule set this row order (`docs/tui.md`, "Slash commands").
-    let row = "compaction /compact";
-    let compaction = home_notice(
-        "/compact",
-        "/handof",
-        row,
-        "f take over\r",
-        "No session on screen.",
-    );
-    let compact = home_notice(
-        "/compact",
-        "/compa",
-        row,
-        "ct take over\r",
-        "No session on screen.",
-    );
-    assert_eq!(compact, compaction);
-}
-
-#[test]
 fn stop_asks_to_close_all_like_close() {
     // The table and alias rule set this row order (`docs/tui.md`, "Slash commands").
     let row = "close /stop";

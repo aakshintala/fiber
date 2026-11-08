@@ -182,7 +182,6 @@ fn built_ins_are_the_drawn_commands_their_aliases_and_rewind() {
         &"config",
         &"keybindings",
         &"keymap",
-        &"compact",
         &"rename",
         &"stop",
         &"exit",
@@ -353,12 +352,11 @@ fn prefix_matches_come_before_contains_matches() {
 
 #[test]
 fn a_row_draws_name_hint_description_and_tag() {
-    // The table orders `/compact` after `/compact` (`docs/tui.md`, "Slash commands").
     let all = rows(&[]);
-    let compaction = all.iter().find(|row| row.name == "compaction");
+    let compact = all.iter().find(|row| row.name == "compact");
     assert_eq!(
-        compaction.map(Row::line),
-        Some("/compact /compact [instructions]  Starts a compaction.  command".to_owned())
+        compact.map(Row::line),
+        Some("/compact [instructions]  Starts a compaction.  command".to_owned())
     );
     let home = all.iter().find(|row| row.name == "home");
     assert_eq!(

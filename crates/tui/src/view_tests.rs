@@ -1848,7 +1848,7 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
     // the same four matches above the input line.
     let (buf, _) = pointed(&mut app, 80, 14, None);
     let shown = text(&buf);
-    // `/h` matches home, hooks, compaction and help in the four-row overlay
+    // `/h` matches home, hooks, help and thinking in the four-row overlay
     // above the input line, the first focused. Its cells sit on the bar in
     // `accent`; the rest keep the surface tint.
     let row = |y: u16| {
@@ -1861,8 +1861,8 @@ fn the_focused_completion_sits_on_the_bar_and_the_others_do_not() {
     for (name, barred) in [
         ("home", true),
         ("hooks", false),
-        ("compaction", false),
         ("help", false),
+        ("thinking", false),
     ] {
         let y = u16::try_from(
             shown

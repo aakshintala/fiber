@@ -2367,7 +2367,7 @@ later release still applies.
 | `/rewind` | Opens the rewind view. |
 | `/cd <path>` | Moves the session to another workspace ("Moving workspace"). With no path, notes `/cd needs a path.` If the resolved path is the current workspace, refuses `invalid_arguments`, `already in that folder`. |
 | `/fork` | Rewinds to the end of the conversation: sends `rewind` with `at_end`, and the terminal switches to the new session. |
-| `/compact [instructions]`, `/compact [instructions]` | Starts a compaction (`docs/compaction.md`, "A person"). |
+| `/compact [instructions]` | Starts a compaction (`docs/compaction.md`, "A person"). |
 | `/name <text>`, `/rename <text>` | Names the session. |
 | `/login` | Logs in ("Logging in"). |
 | `/logout` | Logs out ("Logging out"). |

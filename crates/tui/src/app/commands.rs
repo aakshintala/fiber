@@ -61,7 +61,6 @@ pub(crate) fn aliases_of(name: &str) -> &'static [&'static str] {
         "pwd" => &["cwd"],
         "settings" => &["config"],
         "keys" => &["keybindings", "keymap"],
-        "compaction" => &["compact"],
         "rules" => &["permissions"],
         "close" => &["stop"],
         "name" => &["rename"],

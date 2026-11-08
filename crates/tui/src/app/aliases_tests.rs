@@ -18,7 +18,6 @@ const ALIASES: &[(&str, &[&str])] = &[
     ("rules", &["permissions"]),
     ("settings", &["config"]),
     ("keys", &["keybindings", "keymap"]),
-    ("compaction", &["compact"]),
     ("name", &["rename"]),
     ("close", &["stop"]),
     ("feedback", &["bug"]),
@@ -478,22 +477,6 @@ fn a_skill_named_like_an_alias_is_left_out_of_the_list() {
     assert!(rows.iter().all(|row| row.tag != "skill"));
     let feedback = rows.iter().find(|row| row.name == "feedback").unwrap();
     assert_eq!(feedback.aliases, ["bug"]);
-}
-
-#[test]
-fn compact_starts_a_compaction_with_instructions_as_compaction_does() {
-    for command in ["/compact take over", "/compact take over"] {
-        let mut app = attached();
-        let lines = sent(run(&mut app, command));
-        // Typing the alias runs the same one command (`docs/tui.md`, "Slash commands").
-        assert_eq!(lines.len(), 1, "{command}");
-        assert_eq!(lines[0]["command"], "compact", "{command}");
-        assert_eq!(
-            lines[0]["args"],
-            json!({"instructions": "take over"}),
-            "{command}"
-        );
-    }
 }
 
 #[test]

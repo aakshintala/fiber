@@ -641,7 +641,7 @@ fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
     // One extension per alias, so every alias gets its own collision
     // notice naming it.
     for (extension, alias) in [
-        ("w-compact", "compact"),
+        ("w-cost", "cost"),
         ("w-keymap", "keymap"),
         ("w-permissions", "permissions"),
         ("w-stop", "stop"),
@@ -659,7 +659,7 @@ fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
     // read stdout until `extensions_loaded` and every alias is named by
     // an `extension_failed` notice. The load notices are written after
     // `extensions_loaded`; wait for both.
-    let aliases = ["compact", "keymap", "permissions", "stop"];
+    let aliases = ["cost", "keymap", "permissions", "stop"];
     let mut loaded = false;
     let mut noticed = BTreeSet::new();
     loop {
@@ -703,7 +703,7 @@ fn registering_a_slash_alias_without_replaces_unloads_with_extension_failed() {
     let result = lines.last().unwrap()["payload"]["result"].clone();
     // None of the aliases loads: no command by that name arrives from
     // any of the four extensions.
-    for alias in ["compact", "keymap", "permissions", "stop"] {
+    for alias in ["cost", "keymap", "permissions", "stop"] {
         assert!(
             !result["commands"]
                 .as_array()

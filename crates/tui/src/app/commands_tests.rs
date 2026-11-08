@@ -59,7 +59,7 @@ fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
 }
 
 #[test]
-fn compaction_sends_its_instructions() {
+fn compact_sends_its_instructions() {
     let mut app = attached();
     let lines = sent(enter(&mut app, "/compact  do x "));
     assert_eq!(lines.len(), 1);

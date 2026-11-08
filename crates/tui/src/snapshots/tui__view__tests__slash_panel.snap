@@ -11,11 +11,11 @@ expression: "sized(&mut app, 80, 24)"
 
 
 
+
 ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
 
   › home     Goes home, focused on the session on screen's row.        command
     hooks    Opens the hooks view.                                     command
-    compaction  /compact Starts a compaction. [instructions]                 command
     help     Opens the key map.                                        command
     thinking /effort Sets the thinking level, or opens the … [<level>] command
     theme    Opens the theme picker, or sets the named theme. [<name>] command
