@@ -10984,7 +10984,8 @@ fn delegate_admission_forked_run_takes_a_message_and_exits_with_a_client_attache
             && !held.swap(true, Ordering::SeqCst)
         {
             entered_tx.send(()).unwrap();
-            let _ = Deadline::after(Duration::from_secs(40)).recv(&release_rx.lock().unwrap());
+            let _released =
+                Deadline::after(Duration::from_secs(40)).recv(&release_rx.lock().unwrap());
         }
         reply(request)
     })
