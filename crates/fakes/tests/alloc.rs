@@ -12,7 +12,6 @@
 use std::hint::black_box;
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
 
 use fakes::Deadline;
 use fakes::alloc::{CHAIN, Counting, LARGE, bytes_during, large_blocks_during};
