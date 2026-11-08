@@ -374,7 +374,7 @@ impl Fixture {
         // The same object the state holds: the snapshot moves, never
         // the service, as the install does.
         self.delegates
-            .set_resolve(crate::delegates::resolver(&providers, &config));
+            .set_resolve(crate::delegates::resolver(&providers, &config, "fake/m"));
     }
 
     /// The fake provider's data file, as `install_fake` lays it out.
@@ -586,8 +586,10 @@ fn tool_text(
     text.clone()
 }
 
-/// The held `delegate_spawn` and `delegate_models` definitions, as the
-/// pre-reload tools declare them.
+/// The held `delegate_spawn` definition, as the pre-reload tools declare
+/// it. `delegate_models` is pinned separately in the jobs crate
+/// (`models_tests.rs`): its schema takes the `filter` argument, so the
+/// reload swap does not pin it here.
 fn held_definitions(fixture: &Fixture) -> Vec<(String, Vec<u8>)> {
     fixture
         .state
@@ -597,7 +599,7 @@ fn held_definitions(fixture: &Fixture) -> Vec<(String, Vec<u8>)> {
         .iter()
         .filter(|(_, tool)| {
             let name = tool.definition().name;
-            name == "delegate_spawn" || name == "delegate_models"
+            name == "delegate_spawn"
         })
         .map(|(_, tool)| {
             let definition = tool.definition();
@@ -630,9 +632,17 @@ fn provider_reload_refreshes_the_spawn_catalogue() {
         (snapshot.lookup)("fiber:fake/m:high"),
         Ok("fake/m:high".to_owned())
     );
-    // `delegate_models` from the installed set lists the new level.
+    // `delegate_models` from the installed set lists the new level,
+    // grouped under its provider beneath the session line.
     let text = tool_text(&models, &serde_json::Map::new());
-    assert!(text.contains("fiber:fake/m (thinking: high)"), "{text}");
+    assert!(
+        text.contains("Session model: fiber:scripted/s.json"),
+        "{text}"
+    );
+    assert!(
+        text.contains("fake (2):\nfiber:fake/m (thinking: high)\nfiber:fake/plain"),
+        "{text}"
+    );
     // The installed `delegate_spawn`, run with a level `plain` does not
     // take, fails with the tool's own refusal before any process
     // starts: the refusal ships the fresh catalogue.
@@ -677,6 +687,49 @@ fn provider_reload_refreshes_the_spawn_catalogue() {
     );
 }
 
+/// A reload installs live delegate tools, so a later switch moves the
+/// already-installed pair: the installed models text leads with the
+/// switched session model, not the reload-time one. Snapshot-bound
+/// tools would still name the reload-time model here.
+#[test]
+fn reload_then_switch_moves_the_installed_models_tool() {
+    let mut fixture = Fixture::new();
+    fixture.install_fake(fake_models_without_levels());
+    fixture.rewrite_fake_models(fake_models_with_levels());
+    fixture.touch_fake_source();
+    let prepared = fixture.prepare();
+    // The installed set holds the reload's pair before it runs, as the
+    // loop adopts it.
+    let models = Arc::clone(prepared_tool(&prepared.tools, "delegate_models"));
+    (prepared.installed)();
+    // The reload-time session model leads the installed text.
+    let text = tool_text(&models, &serde_json::Map::new());
+    assert!(
+        text.starts_with("Session model: fiber:scripted/s.json\n"),
+        "{text}"
+    );
+    // The switch rebuilds the resolver around the new model and swaps
+    // the stored snapshot whole, as `publish_resolve` does.
+    let config = crate::test_support::load(
+        &fixture.rig.home,
+        &fixture.rig.workspace,
+        "test",
+        Vec::<String>::new(),
+    );
+    let (providers, _) = extensions::Providers::load(&fixture.rig.home).unwrap();
+    fixture.delegates.set_resolve(crate::delegates::resolver(
+        &providers,
+        &config,
+        "fake/plain",
+    ));
+    // The already-installed tool follows the switch.
+    let text = tool_text(&models, &serde_json::Map::new());
+    assert!(
+        text.starts_with("Session model: fiber:fake/plain\n"),
+        "{text}"
+    );
+}
+
 #[test]
 fn provider_reload_failure_keeps_the_old_catalogue() {
     let mut fixture = Fixture::new();
@@ -698,9 +751,11 @@ fn provider_reload_failure_keeps_the_old_catalogue() {
     };
     assert!(reason.contains("takes no thinking level"), "{reason}");
     assert_eq!(snapshot.catalogue.to_string(), before);
-    // The installed models catalogue is unchanged too.
+    // The installed models catalogue is unchanged too: the held tool
+    // reads the stored snapshot, which the failed reload left alone,
+    // so it still lists the last good catalogue with its fake entries.
     let text = tool_text(&models, &serde_json::Map::new());
-    assert!(!text.contains("fiber:fake/"), "{text}");
+    assert_eq!(text, format!("{before}\nQuota: none"), "{text}");
     // The failure reaches the session as a notice naming the extension.
     assert!(
         notices.iter().any(|notice| {

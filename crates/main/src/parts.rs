@@ -851,7 +851,7 @@ fn parts_inner(
         switchable: r#loop::Switchable {
             chosen: model.thinking,
         },
-        resolve: crate::delegates::resolver(&providers, &config),
+        resolve: crate::delegates::resolver(&providers, &config, &model.reference()),
         web_search: model.model.web_search.clone(),
         seen_files: BTreeMap::new(),
     })

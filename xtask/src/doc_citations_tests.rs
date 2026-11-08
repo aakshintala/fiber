@@ -6,6 +6,7 @@ const GONE: &str = "docs/gone.md";
 const SUB: &str = "docs/sub.md";
 const RESEARCH: &str = "research/notes.md";
 const TARGET: &str = "intro\nmore intro\n## The gate\ntext\ntext\ntext\ntext\ntext\n## `unsafe`\ntext\ntext\ntext\ntext\ntext\n```\n## Not a heading\n```\ntext\ntext\ntext\n";
+const WRAP: &str = "wrap the path in backticks";
 const RESEARCH_MD: &str = "# Notes\n\n## Findings\n";
 
 fn run(files: &[(&str, &str)], allow: Option<&str>) -> Vec<String> {
@@ -27,42 +28,42 @@ fn a_line_cite_names_the_heading_above_its_line() {
         run(
             &[(
                 "crates/a/src/x.rs",
-                &format!("// one\n// two\n// {DOC}:4\n")
+                &format!("// one\n// two\n// `{DOC}`:4\n")
             )],
             None
         ),
         [format!(
-            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}:4{q}: use {DOC}, {q}The gate{q}"
+            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}`:4{q}: use {DOC}, {q}The gate{q}"
         )]
     );
     assert_eq!(
-        run(&[("crates/a/src/x.rs", &format!("// {DOC}:3\n"))], None),
+        run(&[("crates/a/src/x.rs", &format!("// `{DOC}`:3\n"))], None),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:3{q}: use {DOC}, {q}The gate{q}"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`:3{q}: use {DOC}, {q}The gate{q}"
         )]
     );
     assert_eq!(
-        run(&[("crates/a/src/x.rs", &format!("// {DOC}:2\n"))], None),
+        run(&[("crates/a/src/x.rs", &format!("// `{DOC}`:2\n"))], None),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:2{q}: no heading of {DOC} at or above that line: delete the citation"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`:2{q}: no heading of {DOC} at or above that line: delete the citation"
         )]
     );
     assert_eq!(
-        run(&[("crates/a/src/x.rs", &format!("// {DOC}:9\n"))], None),
+        run(&[("crates/a/src/x.rs", &format!("// `{DOC}`:9\n"))], None),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:9{q}: use {DOC}, {q}`unsafe`{q}"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`:9{q}: use {DOC}, {q}`unsafe`{q}"
         )]
     );
     assert_eq!(
-        run(&[("crates/a/src/x.rs", &format!("// {DOC}:99\n"))], None),
+        run(&[("crates/a/src/x.rs", &format!("// `{DOC}`:99\n"))], None),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:99{q}: use {DOC}, {q}`unsafe`{q}"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`:99{q}: use {DOC}, {q}`unsafe`{q}"
         )]
     );
     assert_eq!(
-        run(&[("crates/a/src/x.rs", &format!("// {GONE}:3\n"))], None),
+        run(&[("crates/a/src/x.rs", &format!("// `{GONE}`:3\n"))], None),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{GONE}:3{q}: no such file"
+            "crates/a/src/x.rs:1: unlisted cite {q}{GONE}`:3{q}: no such file"
         )]
     );
 }
@@ -74,19 +75,18 @@ fn the_three_spellings_and_the_span_are_reported_as_written() {
     let gate_use = format!("use {DOC}, {q}The gate{q}");
     let fallback = format!("no heading of {DOC} at or above that line: delete the citation");
     let tails: &[(&str, &str, String)] = &[
-        (":12", ":12", unsafe_use.clone()),
-        (":12-14", ":12-14", unsafe_use.clone()),
-        (":74,77,227-229", ":74,77,227-229", unsafe_use.clone()),
-        (":1, 2", ":1, 2", fallback.clone()),
-        (":12:", ":12", unsafe_use.clone()),
-        (":12 and", ":12", unsafe_use.clone()),
-        (":12-", ":12", unsafe_use.clone()),
-        ("`:12", "`:12", unsafe_use.clone()),
-        ("` line 274", "` line 274", unsafe_use.clone()),
-        (" line 7", " line 7", gate_use.clone()),
+        (":12", "`:12", unsafe_use.clone()),
+        (":12-14", "`:12-14", unsafe_use.clone()),
+        (":74,77,227-229", "`:74,77,227-229", unsafe_use.clone()),
+        (":1, 2", "`:1, 2", fallback.clone()),
+        (":12:", "`:12", unsafe_use.clone()),
+        (":12 and", "`:12", unsafe_use.clone()),
+        (":12-", "`:12", unsafe_use.clone()),
+        (" line 274", "` line 274", unsafe_use.clone()),
+        (" line 7", "` line 7", gate_use.clone()),
     ];
     for (tail, key_tail, reason) in tails {
-        let content = format!("// {DOC}{tail}\n");
+        let content = format!("// `{DOC}`{tail}\n");
         let failures = run(&[("crates/a/src/x.rs", &content)], None);
         assert_eq!(
             failures,
@@ -98,7 +98,7 @@ fn the_three_spellings_and_the_span_are_reported_as_written() {
     }
     let quiet: &[&str] = &[": text", ":x", " line x", " lines 7", "#L12"];
     for tail in quiet {
-        let content = format!("// {DOC}{tail}\n");
+        let content = format!("// `{DOC}`{tail}\n");
         assert_eq!(
             run(&[("crates/a/src/x.rs", &content)], None),
             Vec::<String>::new(),
@@ -116,11 +116,11 @@ fn the_three_spellings_and_the_span_are_reported_as_written() {
     let dir = TempDir::new("xtask-doc-citations-research");
     dir.write("docs/target.md", TARGET);
     dir.write(RESEARCH, RESEARCH_MD);
-    dir.write("crates/a/src/x.rs", &format!("// {RESEARCH}:3\n"));
+    dir.write("crates/a/src/x.rs", &format!("// `{RESEARCH}`:3\n"));
     assert_eq!(
         check(dir.path()).unwrap(),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{RESEARCH}:3{q}: use {RESEARCH}, {q}Findings{q}"
+            "crates/a/src/x.rs:1: unlisted cite {q}{RESEARCH}`:3{q}: use {RESEARCH}, {q}Findings{q}"
         )]
     );
 }
@@ -150,13 +150,13 @@ fn line_suffix_reads_both_prefixes() {
 #[test]
 fn two_cites_on_one_line_each() {
     let failures = run(
-        &[("crates/a/src/x.rs", &format!("// {DOC}:4 {DOC}:9\n"))],
+        &[("crates/a/src/x.rs", &format!("// `{DOC}`:4 `{DOC}`:9\n"))],
         None,
     );
     assert_eq!(failures.len(), 2);
     assert!(failures[0].contains(":1:"));
-    assert!(failures[0].contains(&format!("{DOC}:4")));
-    assert!(failures[1].contains(&format!("{DOC}:9")));
+    assert!(failures[0].contains(&format!("{DOC}`:4")));
+    assert!(failures[1].contains(&format!("{DOC}`:9")));
     for failure in &failures {
         assert!(failure.contains("unlisted"), "{failure}");
     }
@@ -166,7 +166,7 @@ fn two_cites_on_one_line_each() {
 fn a_cite_in_a_string_literal_is_scanned() {
     let q = '"';
     let failures = run(
-        &[("crates/a/src/x.rs", &format!("let s = {q}{DOC}:12{q};\n"))],
+        &[("crates/a/src/x.rs", &format!("let s = {q}`{DOC}`:12{q};\n"))],
         None,
     );
     assert_eq!(failures.len(), 1);
@@ -180,19 +180,19 @@ fn a_dangling_heading_fails_and_a_resolving_one_passes() {
         run(
             &[(
                 "crates/a/src/x.rs",
-                &format!("// ({DOC}, {q}Not a heading{q})\n"),
+                &format!("// (`{DOC}`, {q}Not a heading{q})\n"),
             )],
             None
         ),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}, {q}Not a heading{q}{q}: no such heading"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`, {q}Not a heading{q}{q}: no such heading"
         )]
     );
     assert_eq!(
         run(
             &[(
                 "crates/a/src/x.rs",
-                &format!("// ({DOC}, {q}The gate{q})\n"),
+                &format!("// (`{DOC}`, {q}The gate{q})\n"),
             )],
             None
         ),
@@ -212,7 +212,7 @@ fn a_dangling_heading_fails_and_a_resolving_one_passes() {
         run(
             &[(
                 "crates/a/src/x.rs",
-                &format!("// ({DOC}, {q}`unsafe`{q})\n"),
+                &format!("// (`{DOC}`, {q}`unsafe`{q})\n"),
             )],
             None
         ),
@@ -222,25 +222,25 @@ fn a_dangling_heading_fails_and_a_resolving_one_passes() {
         run(
             &[(
                 "crates/a/src/x.rs",
-                &format!("// ({DOC}, {q}the gate{q})\n"),
+                &format!("// (`{DOC}`, {q}the gate{q})\n"),
             )],
             None
         ),
         [format!(
-            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}, {q}the gate{q}{q}: no such heading"
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`, {q}the gate{q}{q}: no such heading"
         )]
     );
     assert_eq!(
         run(
             &[(
                 "crates/a/src/x.rs",
-                &format!("// ({GONE}, {q}A{q})\n// ({GONE}, {q}B{q})\n"),
+                &format!("// (`{GONE}`, {q}A{q})\n// (`{GONE}`, {q}B{q})\n"),
             )],
             None
         ),
         [
-            format!("crates/a/src/x.rs:1: unlisted cite {q}{GONE}, {q}A{q}{q}: no such file"),
-            format!("crates/a/src/x.rs:2: unlisted cite {q}{GONE}, {q}B{q}{q}: no such file"),
+            format!("crates/a/src/x.rs:1: unlisted cite {q}{GONE}`, {q}A{q}{q}: no such file"),
+            format!("crates/a/src/x.rs:2: unlisted cite {q}{GONE}`, {q}B{q}{q}: no such file"),
         ]
     );
     assert_eq!(
@@ -254,7 +254,7 @@ fn a_dangling_heading_fails_and_a_resolving_one_passes() {
         run(
             &[(
                 "crates/a/src/x.rs",
-                &format!("// ({DOC}, \\{q}The gate\\{q})\n"),
+                &format!("// (`{DOC}`, \\{q}The gate\\{q})\n"),
             )],
             None
         ),
@@ -266,13 +266,13 @@ fn a_dangling_heading_fails_and_a_resolving_one_passes() {
 fn a_cite_broken_over_comment_lines_resolves() {
     let q = '"';
     for marker in ["//", "///", "//!"] {
-        let content = format!("{marker} {DOC},\n{marker} {q}The gate{q}\n");
+        let content = format!("{marker} `{DOC}`,\n{marker} {q}The gate{q}\n");
         assert_eq!(
             run(&[("crates/a/src/x.rs", &content)], None),
             Vec::<String>::new(),
             "marker {marker}"
         );
-        let missing = format!("{marker} {DOC},\n{marker} {q}Missing{q}\n");
+        let missing = format!("{marker} `{DOC}`,\n{marker} {q}Missing{q}\n");
         let failures = run(&[("crates/a/src/x.rs", &missing)], None);
         assert_eq!(failures.len(), 1, "marker {marker}");
         assert!(
@@ -282,12 +282,12 @@ fn a_cite_broken_over_comment_lines_resolves() {
         );
         assert!(failures[0].contains("unlisted"), "{}", failures[0]);
     }
-    let content = format!("# {DOC},\n# {q}The gate{q}\n");
+    let content = format!("# `{DOC}`,\n# {q}The gate{q}\n");
     assert_eq!(
         run(&[("scripts/run.sh", &content)], None),
         Vec::<String>::new()
     );
-    let missing = format!("# {DOC},\n# {q}Missing{q}\n");
+    let missing = format!("# `{DOC}`,\n# {q}Missing{q}\n");
     let failures = run(&[("scripts/run.sh", &missing)], None);
     assert_eq!(failures.len(), 1);
     assert!(
@@ -310,7 +310,7 @@ fn any_text_file_under_the_three_roots_is_scanned() {
         "crates/a/.git/z",
     ];
     for path in scanned {
-        let failures = run(&[(path, &format!("// {DOC}:4\n"))], None);
+        let failures = run(&[(path, &format!("// `{DOC}`:4\n"))], None);
         assert_eq!(failures.len(), 1, "{path}");
         assert!(
             failures[0].starts_with(&format!("{path}:1:")),
@@ -321,7 +321,7 @@ fn any_text_file_under_the_three_roots_is_scanned() {
     let unscanned = ["docs/x.md", "README.md", ".github/x.yml"];
     for path in unscanned {
         assert_eq!(
-            run(&[(path, &format!("// {DOC}:4\n"))], None),
+            run(&[(path, &format!("// `{DOC}`:4\n"))], None),
             Vec::<String>::new(),
             "{path}"
         );
@@ -329,13 +329,13 @@ fn any_text_file_under_the_three_roots_is_scanned() {
     let dir = TempDir::new("xtask-doc-citations-bytes");
     dir.write("docs/target.md", TARGET);
     std::fs::create_dir_all(dir.path().join("crates/a")).unwrap();
-    let mut bytes = format!("// {DOC}:4\n").into_bytes();
+    let mut bytes = format!("// `{DOC}`:4\n").into_bytes();
     bytes.push(0xff);
     bytes.push(b'\n');
     std::fs::write(dir.path().join("crates/a/bin.dat"), bytes).unwrap();
     assert_eq!(check(dir.path()).unwrap(), Vec::<String>::new());
     assert_eq!(
-        run(&[("crates/a/src/x.rs", &format!("// {DOC}:4\n"))], None).len(),
+        run(&[("crates/a/src/x.rs", &format!("// `{DOC}`:4\n"))], None).len(),
         1
     );
 }
@@ -345,7 +345,7 @@ fn a_multibyte_character_before_a_cite_does_not_panic() {
     let failures = run(
         &[(
             "crates/a/src/x.rs",
-            &format!("// \u{2503}\u{2503} {DOC}:4\n"),
+            &format!("// \u{2503}\u{2503} `{DOC}`:4\n"),
         )],
         None,
     );
@@ -355,12 +355,21 @@ fn a_multibyte_character_before_a_cite_does_not_panic() {
         "{}",
         failures[0]
     );
+    let plain = run(
+        &[(
+            "crates/a/src/x.rs",
+            &format!("// \u{2503}\u{2503} {DOC}, \"The gate\"\n"),
+        )],
+        None,
+    );
+    assert_eq!(plain.len(), 1);
+    assert!(plain[0].ends_with(WRAP), "{}", plain[0]);
 }
 
 #[test]
 fn only_the_table_itself_is_exempt() {
-    let content = format!("// {DOC}:4\n");
-    let table = format!("crates/a/src/x.rs\t1\t{DOC}:4\n");
+    let content = format!("// `{DOC}`:4\n");
+    let table = format!("crates/a/src/x.rs\t1\t{DOC}`:4\n");
     let failures = run(
         &[
             ("xtask/src/docs_tests.rs", content.as_str()),
@@ -385,8 +394,8 @@ fn only_the_table_itself_is_exempt() {
 #[test]
 fn a_pair_allowed_twice_passes_at_two_and_fails_the_third() {
     let q = '"';
-    let cite = format!("// {DOC}:4\n");
-    let entry = format!("crates/a/src/x.rs\t2\t{DOC}:4\n");
+    let cite = format!("// `{DOC}`:4\n");
+    let entry = format!("crates/a/src/x.rs\t2\t{DOC}`:4\n");
     assert_eq!(
         run(
             &[("crates/a/src/x.rs", &format!("{cite}{cite}"))],
@@ -400,19 +409,19 @@ fn a_pair_allowed_twice_passes_at_two_and_fails_the_third() {
             Some(&entry)
         ),
         [format!(
-            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}:4{q}: use {DOC}, {q}The gate{q}"
+            "crates/a/src/x.rs:3: unlisted cite {q}{DOC}`:4{q}: use {DOC}, {q}The gate{q}"
         )]
     );
     assert_eq!(
         run(&[("crates/a/src/x.rs", &cite)], Some(&entry)),
         [format!(
-            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 2, found 1: lower or delete the entry"
+            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}`:4{q} allowed 2, found 1: lower or delete the entry"
         )]
     );
     assert_eq!(
         run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&entry)),
         [format!(
-            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 2, found 0: lower or delete the entry"
+            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}`:4{q} allowed 2, found 0: lower or delete the entry"
         )]
     );
 }
@@ -420,17 +429,17 @@ fn a_pair_allowed_twice_passes_at_two_and_fails_the_third() {
 #[test]
 fn a_new_text_cannot_take_a_deleted_texts_slot() {
     let q = '"';
-    let entry = format!("crates/a/src/x.rs\t1\t{DOC}:4\n");
+    let entry = format!("crates/a/src/x.rs\t1\t{DOC}`:4\n");
     let failures = run(
-        &[("crates/a/src/x.rs", &format!("// {DOC}:9\n"))],
+        &[("crates/a/src/x.rs", &format!("// `{DOC}`:9\n"))],
         Some(&entry),
     );
     assert_eq!(
         failures,
         [
-            format!("crates/a/src/x.rs:1: unlisted cite {q}{DOC}:9{q}: use {DOC}, {q}`unsafe`{q}"),
+            format!("crates/a/src/x.rs:1: unlisted cite {q}{DOC}`:9{q}: use {DOC}, {q}`unsafe`{q}"),
             format!(
-                "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 1, found 0: lower or delete the entry"
+                "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}`:4{q} allowed 1, found 0: lower or delete the entry"
             ),
         ]
     );
@@ -438,8 +447,8 @@ fn a_new_text_cannot_take_a_deleted_texts_slot() {
 
 #[test]
 fn the_same_text_in_two_files_is_two_pairs() {
-    let cite = format!("// {DOC}:4\n");
-    let table = format!("crates/a/src/x.rs\t1\t{DOC}:4\ncrates/b/src/y.rs\t1\t{DOC}:4\n");
+    let cite = format!("// `{DOC}`:4\n");
+    let table = format!("crates/a/src/x.rs\t1\t{DOC}`:4\ncrates/b/src/y.rs\t1\t{DOC}`:4\n");
     assert_eq!(
         run(
             &[("crates/a/src/x.rs", &cite), ("crates/b/src/y.rs", &cite)],
@@ -451,8 +460,8 @@ fn the_same_text_in_two_files_is_two_pairs() {
 
 #[test]
 fn a_listed_text_in_another_file_does_not_cover_this_one() {
-    let entry = format!("crates/a/src/x.rs\t1\t{DOC}:4\n");
-    let cite = format!("// {DOC}:4\n");
+    let entry = format!("crates/a/src/x.rs\t1\t{DOC}`:4\n");
+    let cite = format!("// `{DOC}`:4\n");
     let failures = run(
         &[("crates/a/src/x.rs", &cite), ("crates/b/src/y.rs", &cite)],
         Some(&entry),
@@ -468,11 +477,11 @@ fn a_listed_text_in_another_file_does_not_cover_this_one() {
 #[test]
 fn an_entry_for_a_missing_file_is_stale() {
     let q = '"';
-    let entry = format!("crates/gone/src/x.rs\t1\t{DOC}:4\n");
+    let entry = format!("crates/gone/src/x.rs\t1\t{DOC}`:4\n");
     assert_eq!(
         run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&entry)),
         [format!(
-            "{ALLOW}:1: stale: crates/gone/src/x.rs: {q}{DOC}:4{q} allowed 1, found 0: lower or delete the entry"
+            "{ALLOW}:1: stale: crates/gone/src/x.rs: {q}{DOC}`:4{q} allowed 1, found 0: lower or delete the entry"
         )]
     );
 }
@@ -480,18 +489,18 @@ fn an_entry_for_a_missing_file_is_stale() {
 #[test]
 fn a_resolved_heading_entry_is_stale() {
     let q = '"';
-    let entry = format!("crates/a/src/x.rs\t1\t{DOC}, {q}The gate{q}\n");
+    let entry = format!("crates/a/src/x.rs\t1\t{DOC}`, {q}The gate{q}\n");
     let failures = run(
         &[(
             "crates/a/src/x.rs",
-            &format!("// ({DOC}, {q}The gate{q})\n"),
+            &format!("// (`{DOC}`, {q}The gate{q})\n"),
         )],
         Some(&entry),
     );
     assert_eq!(
         failures,
         [format!(
-            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}, {q}The gate{q}{q} allowed 1, found 0: lower or delete the entry"
+            "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}`, {q}The gate{q}{q} allowed 1, found 0: lower or delete the entry"
         )]
     );
 }
@@ -499,9 +508,12 @@ fn a_resolved_heading_entry_is_stale() {
 #[test]
 fn the_key_is_the_exact_source_spelling() {
     let q = '"';
-    let entry = format!("crates/a/src/x.rs\t1\t{DOC}`, {q}Missing{q}\n");
+    let entry = format!("crates/a/src/x.rs\t1\t{DOC}, {q}Missing{q}\n");
     let failures = run(
-        &[("crates/a/src/x.rs", &format!("// ({DOC}, {q}Missing{q})\n"))],
+        &[(
+            "crates/a/src/x.rs",
+            &format!("// (`{DOC}`, {q}Missing{q})\n"),
+        )],
         Some(&entry),
     );
     assert_eq!(failures.len(), 2);
@@ -511,7 +523,7 @@ fn the_key_is_the_exact_source_spelling() {
         failures[0]
     );
     assert!(
-        failures[0].contains(&format!("{DOC}, {q}Missing{q}")),
+        failures[0].contains(&format!("{DOC}`, {q}Missing{q}")),
         "{}",
         failures[0]
     );
@@ -520,11 +532,11 @@ fn the_key_is_the_exact_source_spelling() {
         "{}",
         failures[1]
     );
-    let entry2 = format!("crates/a/src/x.rs\t1\t{DOC}, {q}Not  a heading{q}\n");
+    let entry2 = format!("crates/a/src/x.rs\t1\t{DOC}`, {q}Not  a heading{q}\n");
     let failures2 = run(
         &[(
             "crates/a/src/x.rs",
-            &format!("// ({DOC}, {q}Not a heading{q})\n"),
+            &format!("// (`{DOC}`, {q}Not a heading{q})\n"),
         )],
         Some(&entry2),
     );
@@ -544,36 +556,36 @@ fn the_key_is_the_exact_source_spelling() {
 #[test]
 fn table_fields_unescape_losslessly() {
     let q = '"';
-    let table = format!("crates/a\\tb.rs\t1\t{DOC}:12\n");
+    let table = format!("crates/a\\tb.rs\t1\t{DOC}`:12\n");
     assert_eq!(
         run(
-            &[("crates/a\tb.rs", &format!("// {DOC}:12\n"))],
+            &[("crates/a\tb.rs", &format!("// `{DOC}`:12\n"))],
             Some(&table)
         ),
         Vec::<String>::new()
     );
-    let table2 = format!("crates/a\\\\b.rs\t1\t{DOC}:12\n");
+    let table2 = format!("crates/a\\\\b.rs\t1\t{DOC}`:12\n");
     assert_eq!(
         run(
-            &[("crates/a\\b.rs", &format!("// {DOC}:12\n"))],
+            &[("crates/a\\b.rs", &format!("// `{DOC}`:12\n"))],
             Some(&table2)
         ),
         Vec::<String>::new()
     );
-    let broken = format!("// {DOC},\n// {q}Missing{q}\n");
-    let table3 = format!("crates/a/src/x.rs\t1\t{DOC},\\n// {q}Missing{q}\n");
+    let broken = format!("// `{DOC}`,\n// {q}Missing{q}\n");
+    let table3 = format!("crates/a/src/x.rs\t1\t{DOC}`,\\n// {q}Missing{q}\n");
     assert_eq!(
         run(&[("crates/a/src/x.rs", &broken)], Some(&table3)),
         Vec::<String>::new()
     );
-    let bad_x = format!("crates/a/src/x.rs\t1\t{DOC}:4\\x\n");
+    let bad_x = format!("crates/a/src/x.rs\t1\t{DOC}`:4\\x\n");
     assert_eq!(
         run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&bad_x)),
         [format!(
             "{ALLOW}:1: expected <path>, a tab, a count, a tab, then the citation"
         )]
     );
-    let bad_trail = format!("crates/a/src/x.rs\t1\t{DOC}:4\\\n");
+    let bad_trail = format!("crates/a/src/x.rs\t1\t{DOC}`:4\\\n");
     assert_eq!(
         run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&bad_trail)),
         [format!(
@@ -585,7 +597,7 @@ fn table_fields_unescape_losslessly() {
 #[test]
 fn a_bad_table_line_fails() {
     let table = format!(
-        "# header\n\nonly-one-field\na\tb\tc\td\ncrates/a/src/x.rs\tnotnum\t{DOC}:4\ncrates/a/src/x.rs\t0\t{DOC}:4\n"
+        "# header\n\nonly-one-field\na\tb\tc\td\ncrates/a/src/x.rs\tnotnum\t{DOC}`:4\ncrates/a/src/x.rs\t0\t{DOC}`:4\n"
     );
     assert_eq!(
         run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&table)),
@@ -597,14 +609,14 @@ fn a_bad_table_line_fails() {
         ]
     );
     let q = '"';
-    let dup_table = format!("crates/a/src/x.rs\t1\t{DOC}:4\ncrates/a/src/x.rs\t1\t{DOC}:4\n");
+    let dup_table = format!("crates/a/src/x.rs\t1\t{DOC}`:4\ncrates/a/src/x.rs\t1\t{DOC}`:4\n");
     assert_eq!(
         run(&[("crates/a/src/x.rs", "// nothing\n")], Some(&dup_table)),
         [
             format!(
-                "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}:4{q} allowed 1, found 0: lower or delete the entry"
+                "{ALLOW}:1: stale: crates/a/src/x.rs: {q}{DOC}`:4{q} allowed 1, found 0: lower or delete the entry"
             ),
-            format!("{ALLOW}:2: crates/a/src/x.rs: {q}{DOC}:4{q} listed twice"),
+            format!("{ALLOW}:2: crates/a/src/x.rs: {q}{DOC}`:4{q} listed twice"),
         ]
     );
     assert_eq!(
@@ -621,18 +633,18 @@ fn the_printed_table_round_trips() {
     let q = '"';
     let dir = TempDir::new("xtask-doc-citations-table");
     dir.write("docs/target.md", TARGET);
-    dir.write("crates/b/src/y.rs", &format!("// {DOC}:4\n"));
+    dir.write("crates/b/src/y.rs", &format!("// `{DOC}`:4\n"));
     dir.write(
         "crates/a/src/x.rs",
-        &format!("// {DOC}:9\n// ({DOC}, {q}Missing{q})\n// ({DOC}, {q}The gate{q})\n// {DOC}:9\n"),
+        &format!("// `{DOC}`:9\n// (`{DOC}`, {q}Missing{q})\n// (`{DOC}`, {q}The gate{q})\n// `{DOC}`:9\n"),
     );
     let printed = super::table(dir.path()).unwrap();
-    let header = "# Code citations still allowed a line number or a missing heading.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
-    let missing = format!("{DOC}, {q}Missing{q}");
+    let header = "# Code citations still allowed a line number, a missing heading, or a doc path not in backticks.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
+    let missing = format!("{DOC}`, {q}Missing{q}");
     assert_eq!(
         printed,
         format!(
-            "{header}crates/a/src/x.rs\t1\t{missing}\ncrates/a/src/x.rs\t2\t{DOC}:9\ncrates/b/src/y.rs\t1\t{DOC}:4\n"
+            "{header}crates/a/src/x.rs\t1\t{missing}\ncrates/a/src/x.rs\t2\t{DOC}`:9\ncrates/b/src/y.rs\t1\t{DOC}`:4\n"
         )
     );
     assert!(!printed.contains("The gate"));
@@ -673,7 +685,7 @@ fn a_cite_target_that_is_a_directory_is_an_error() {
     let dir = TempDir::new("xtask-doc-citations-dir-target");
     dir.write("docs/target.md", TARGET);
     std::fs::create_dir_all(dir.path().join(SUB)).unwrap();
-    dir.write("crates/a/src/x.rs", &format!("// {SUB}:3\n"));
+    dir.write("crates/a/src/x.rs", &format!("// `{SUB}`:3\n"));
     let err = check(dir.path()).expect_err("a directory cite target must return Err");
     assert!(err.contains(SUB), "{err}");
 }
@@ -684,7 +696,7 @@ fn an_unreadable_source_file_is_an_error() {
     use std::os::unix::fs::PermissionsExt;
     let dir = TempDir::new("xtask-doc-citations-unreadable");
     dir.write("docs/target.md", TARGET);
-    dir.write("crates/a/src/x.rs", &format!("// {DOC}:4\n"));
+    dir.write("crates/a/src/x.rs", &format!("// `{DOC}`:4\n"));
     let path = dir.path().join("crates/a/src/x.rs");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
     if std::fs::read_to_string(&path).is_ok() {
@@ -699,7 +711,7 @@ fn a_backslash_path_round_trips_through_the_table() {
     assert_eq!(escape("a\\b"), "a\\\\b");
     let dir = TempDir::new("xtask-doc-citations-backslash");
     dir.write("docs/target.md", TARGET);
-    dir.write("crates/a\\b.rs", &format!("// {DOC}:4\n"));
+    dir.write("crates/a\\b.rs", &format!("// `{DOC}`:4\n"));
     let printed = super::table(dir.path()).unwrap();
     assert!(printed.contains("crates/a\\\\b.rs\t1\t"), "{printed:?}");
     dir.write(ALLOW, &printed);
@@ -711,7 +723,7 @@ fn a_carriage_return_path_prints_escaped() {
     assert_eq!(escape("a\rb"), "a\\rb");
     let dir = TempDir::new("xtask-doc-citations-cr");
     dir.write("docs/target.md", TARGET);
-    dir.write("crates/a\rb.rs", &format!("// {DOC}:4\n"));
+    dir.write("crates/a\rb.rs", &format!("// `{DOC}`:4\n"));
     let printed = super::table(dir.path()).unwrap();
     assert!(printed.contains("crates/a\\rb.rs\t1\t"), "{printed:?}");
     assert!(!printed.contains('\r'), "{printed:?}");
@@ -722,13 +734,13 @@ fn an_allow_line_with_a_carriage_return_unescapes() {
     assert_eq!(unescape("a\\rb"), Some("a\rb".to_owned()));
     let dir = TempDir::new("xtask-doc-citations-cr-allow");
     dir.write("docs/target.md", TARGET);
-    dir.write("crates/a\rb.rs", &format!("// {DOC}:4\n"));
-    dir.write(ALLOW, &format!("crates/a\\rb.rs\t1\t{DOC}:4\n"));
+    dir.write("crates/a\rb.rs", &format!("// `{DOC}`:4\n"));
+    dir.write(ALLOW, &format!("crates/a\\rb.rs\t1\t{DOC}`:4\n"));
     assert_eq!(super::check(dir.path()).unwrap(), Vec::<String>::new());
 }
 
 #[test]
-fn a_comma_span_returns_its_length_and_first_line() {
+fn a_comma_span_returns_its_length_and_no_table() {
     let (done, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         done.send(parse_span("1,2")).unwrap();
@@ -750,5 +762,211 @@ fn a_multibyte_char_advances_past_its_bytes() {
         fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN)
             .recv_or_fail(&rx, "next_boundary(\"é\", 0) to return"),
         2
+    );
+}
+
+fn no_table(files: &[(&str, &str)]) -> Vec<String> {
+    run(files, None)
+}
+
+#[test]
+fn the_ruling_form_passes_and_a_dangling_heading_in_it_still_fails() {
+    let q = '"';
+    assert_eq!(
+        no_table(&[(
+            "crates/a/src/x.rs",
+            &format!("// `{DOC}`, {q}The gate{q}\n")
+        )]),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        no_table(&[(
+            "crates/a/src/x.rs",
+            &format!("// `{DOC}`, {q}Not a heading{q}\n")
+        )]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`, {q}Not a heading{q}{q}: no such heading"
+        )]
+    );
+}
+
+#[test]
+fn a_plain_heading_cite_reports_the_backtick_reason_at_its_line() {
+    let q = '"';
+    assert_eq!(
+        no_table(&[(
+            "crates/a/src/x.rs",
+            &format!("// one\n// {DOC}, {q}The gate{q}\n")
+        )]),
+        [format!(
+            "crates/a/src/x.rs:2: unlisted cite {q}{DOC}, {q}The gate{q}{q}: {WRAP}"
+        )]
+    );
+}
+
+#[test]
+fn each_missing_backtick_alone_fails_with_the_one_reason() {
+    let q = '"';
+    let closing_only = format!("// {DOC}`, {q}The gate{q}\n");
+    let opening_only = format!("// `{DOC}, {q}The gate{q}\n");
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &closing_only)]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`, {q}The gate{q}{q}: {WRAP}"
+        )]
+    );
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &opening_only)]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}, {q}The gate{q}{q}: {WRAP}"
+        )]
+    );
+}
+
+#[test]
+fn a_line_cite_reports_the_backtick_reason_only_when_unwrapped() {
+    let q = '"';
+    let use_gate = format!("use {DOC}, {q}The gate{q}");
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("// {DOC}:4\n"))]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:4{q}: {WRAP}"
+        )]
+    );
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("// `{DOC}`:4\n"))]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}`:4{q}: {use_gate}"
+        )]
+    );
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("// {DOC} line 7\n"))]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC} line 7{q}: {WRAP}"
+        )]
+    );
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("// `{DOC}` line 7\n"))]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}` line 7{q}: {use_gate}"
+        )]
+    );
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("// `{DOC}:4`\n"))]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}:4{q}: {WRAP}"
+        )]
+    );
+}
+
+#[test]
+fn a_plain_cite_of_a_missing_heading_or_file_reports_the_backtick_reason() {
+    let q = '"';
+    assert_eq!(
+        no_table(&[(
+            "crates/a/src/x.rs",
+            &format!("// {DOC}, {q}Not a heading{q}\n")
+        )]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}, {q}Not a heading{q}{q}: {WRAP}"
+        )]
+    );
+    assert_eq!(
+        no_table(&[(
+            "crates/a/src/x.rs",
+            &format!("// {GONE}, {q}A{q}\n// {GONE}:3\n")
+        )]),
+        [
+            format!("crates/a/src/x.rs:1: unlisted cite {q}{GONE}, {q}A{q}{q}: {WRAP}"),
+            format!("crates/a/src/x.rs:2: unlisted cite {q}{GONE}:3{q}: {WRAP}"),
+        ]
+    );
+}
+
+#[test]
+fn a_research_cite_needs_its_backticks_too() {
+    let q = '"';
+    let dir = TempDir::new("xtask-doc-citations-research-wrap");
+    dir.write("docs/target.md", TARGET);
+    dir.write(RESEARCH, RESEARCH_MD);
+    dir.write(
+        "crates/a/src/x.rs",
+        &format!("// {RESEARCH}, {q}Findings{q}\n"),
+    );
+    assert_eq!(
+        check(dir.path()).unwrap(),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{RESEARCH}, {q}Findings{q}{q}: {WRAP}"
+        )]
+    );
+    dir.write(
+        "crates/a/src/x.rs",
+        &format!("// `{RESEARCH}`, {q}Findings{q}\n"),
+    );
+    assert_eq!(check(dir.path()).unwrap(), Vec::<String>::new());
+}
+
+#[test]
+fn a_lone_path_is_quiet_wrapped_or_not() {
+    for content in [
+        format!("// see {DOC} here\n"),
+        format!("// see `{DOC}` here\n"),
+    ] {
+        assert_eq!(
+            no_table(&[("crates/a/src/x.rs", &content)]),
+            Vec::<String>::new(),
+            "{content}"
+        );
+    }
+}
+
+#[test]
+fn a_cite_split_over_comment_lines_needs_its_backticks() {
+    let q = '"';
+    assert_eq!(
+        no_table(&[(
+            "crates/a/src/x.rs",
+            &format!("// {DOC},\n// {q}The gate{q}\n")
+        )]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC},\n// {q}The gate{q}{q}: {WRAP}"
+        )]
+    );
+    assert_eq!(
+        no_table(&[(
+            "crates/a/src/x.rs",
+            &format!("// `{DOC}`,\n// {q}The gate{q}\n")
+        )]),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_path_at_offset_zero_is_unwrapped_and_one_at_offset_one_is_wrapped() {
+    let q = '"';
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("{DOC}, {q}The gate{q}\n"))]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite {q}{DOC}, {q}The gate{q}{q}: {WRAP}"
+        )]
+    );
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("`{DOC}`, {q}The gate{q}\n"))]),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_backtick_that_ends_the_text_right_after_the_path_is_not_a_panic() {
+    // The closing-backtick lookup runs past the last byte of the text.
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("`{DOC}"))]),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        no_table(&[("crates/a/src/x.rs", &format!("`{DOC}:4"))]),
+        [format!(
+            "crates/a/src/x.rs:1: unlisted cite \"{DOC}:4\": {WRAP}"
+        )]
     );
 }

@@ -4843,6 +4843,8 @@ fn delegate_models_omits_logged_out_provider_references() {
     );
     assert!(!references.contains("fiber:pb/m"), "{text}");
     assert!(text.contains("deep: fiber:pb/m (unavailable)"), "{text}");
+    assert!(text.starts_with("Session model: fiber:pa/m\n"), "{text}");
+    assert!(references.contains("pa (1):"), "{text}");
     for model in ["fiber:pb/m", "deep"] {
         let requested = lines
             .iter()
@@ -4924,7 +4926,7 @@ fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_nei
     let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
     assert_eq!(
         text,
-        "Roles:\ndeep: fiber:pb/m\nReferences:\nfiber:pa/m\nfiber:pb/m\nQuota: loading"
+        "Session model: fiber:pa/m\nRoles:\ndeep: fiber:pb/m\nReferences:\npa (1):\nfiber:pa/m\npb (1):\nfiber:pb/m\nQuota: loading"
     );
     let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
     let tools = first["tools"].as_array().unwrap();
@@ -4984,6 +4986,56 @@ fn the_first_delegate_models_call_reads_quota_loading_with_two_credential_labels
         text.ends_with("\nQuota: loading"),
         "the first call answers loading: {text:?}"
     );
+}
+
+/// A `delegate_models` call with a `filter` keeps only the matching
+/// provider group: the session line, the roles and the quota pass through.
+#[test]
+fn delegate_models_filter_returns_only_matching_references() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[function_call(
+            "call_models",
+            "delegate_models",
+            &json!({"filter": "pb"}),
+        )]),
+        support::hello(),
+    ])
+    .unwrap();
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "session": {"idle_exit_ms": 3600000},
+            "roles": {"deep": "fiber:pb/m"}}),
+    );
+
+    let output = support::run_to_exit(
+        setup.deadline,
+        "fiber ask",
+        setup.fiber(&["ask", "list the models"]),
+    );
+    let lines: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8(output.stderr).unwrap()
+    );
+    let completed = completed_for(&lines, "delegate_models");
+    assert_eq!(completed["payload"]["status"], "completed");
+    let text = completed["payload"]["content"][0]["text"].as_str().unwrap();
+    assert!(text.starts_with("Session model: fiber:pa/m\n"), "{text}");
+    assert!(text.contains("deep: fiber:pb/m"), "{text}");
+    let references = text.split_once("References:\n").unwrap().1;
+    let references = references.split_once("\nQuota:").unwrap().0;
+    assert_eq!(references, "pb (1):\nfiber:pb/m");
 }
 
 /// A role run's parent durable kinds, in order, pinned from a real run:
@@ -7416,6 +7468,53 @@ fn a_delegate_started_with_a_role_runs_on_the_role_label() {
     assert_eq!(preamble["credential"], "default");
     let completed = completed_for(&lines, "delegate_spawn");
     assert_eq!(completed["payload"]["status"], "completed");
+}
+
+/// A spawn with the session's own bare `provider/model` string, the form
+/// the system prompt reports, starts the delegate on `fiber:provider/model`.
+/// The child shares the parent's provider server, whose script answers in
+/// arrival order: the hold past the receipt and the verdict keeps the
+/// interleaved parent and child turns from racing the script.
+#[test]
+fn a_delegate_started_with_the_bare_session_model_runs() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start([
+        support::stream(&[spawn_call("pa/m")]),
+        text_reply("allow"),
+        support::hello(),
+        support::hello(),
+        support::hello(),
+        text_reply("done"),
+    ])
+    .unwrap();
+    parent.hold_from(3, fakes::deadline::BUDGET);
+    let child = ProviderServer::start([support::hello()]).unwrap();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    slow_idle(&setup);
+
+    let mut running = Running::spawn(&setup, &["ask", "scan the tree"]);
+    running.wait_line("the spawn receipt", |line| {
+        line["kind"] == "tool_call_completed"
+    });
+    // The receipt proves the first two answers went out, not that the
+    // third call arrived: the hold parks it, and only its acknowledgement
+    // releases the script. A missing third call fails here, naming the
+    // wait, instead of racing the script silently.
+    assert!(
+        parent.await_requests(3, setup.deadline),
+        "the third provider call is parked"
+    );
+    parent.release();
+    running.wait_line("the delegate to finish", |line| {
+        line["kind"] == "delegate_finished"
+    });
+    let (status, lines, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let completed = completed_for(&lines, "delegate_spawn");
+    assert_eq!(completed["payload"]["status"], "completed");
+    one(&lines, "delegate_started");
 }
 
 #[test]
@@ -10531,4 +10630,152 @@ fn killing_the_parent_backfills_unseen_usage() {
             .collect::<Vec<_>>(),
         "the resume reports exactly the appended lines"
     );
+}
+
+/// The ids of the delegates `workspace`'s sessions started, from every
+/// `delegate_started` line in their logs.
+fn started_delegates(setup: &support::Setup) -> Vec<String> {
+    let sessions = sessions_in(&setup.home(), &setup.workspace());
+    let Ok(entries) = fs::read_dir(&sessions) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        for line in read_lines(&entry.path().join("events.jsonl")) {
+            if line["kind"] == "delegate_started" {
+                ids.push(
+                    line["payload"]["delegate_session_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    ids
+}
+
+/// The delegate `id`'s event log.
+fn delegate_log(setup: &support::Setup, id: &str) -> PathBuf {
+    sessions_in(&setup.home(), &setup.workspace())
+        .join(id)
+        .join("events.jsonl")
+}
+
+/// Whether the log at `path` holds a line of `kind` that mentions
+/// `needle`: how a test knows a message reached the delegate's turn.
+fn log_has(path: &Path, kind: &str, needle: &str) -> bool {
+    read_lines(path)
+        .iter()
+        .any(|line| line["kind"] == kind && line.to_string().contains(needle))
+}
+
+/// Opens the delegate row that holds `row` from the typed `/delegates`
+/// view and waits for its live view's breadcrumb.
+fn open_delegate_view(run: &mut Run, row: &str, breadcrumb: &str) {
+    run.write(b"/delegates\r");
+    run.wait_screen("the delegates list", delegates_list_header);
+    focus_row(run, row);
+    run.write(b"\r");
+    run.wait_screen("the delegate's view", |grid| {
+        grid.contents.contains(breadcrumb)
+    });
+}
+
+/// The index of a row that draws a labelled rule whose label holds
+/// `label`, with `text` on a row below it and no other rule between.
+fn rule_over_text(grid: &Grid, label: &str, text: &str) -> Option<usize> {
+    // settled: only a `wait_screen` predicate calls this, so the wait is the check.
+    let rows = &grid.rows;
+    let rule = rows
+        .iter()
+        .position(|row| row.contains(label) && row.contains(" · ") && row.contains('─'))?;
+    let below = rows
+        .iter()
+        .skip(rule + 1)
+        .position(|row| row.contains(text))?;
+    rows[rule + 1..rule + 1 + below]
+        .iter()
+        .all(|row| !row.contains('─'))
+        .then_some(rule)
+}
+
+/// `docs/delegates.md`, "Talking to a delegate", and `docs/tui.md`,
+/// "Turns": a parent's `delegate_message` to a running delegate joins
+/// the delegate's turn and draws in the delegate's card as a `steer` rule
+/// over its text. The delegate's second model call is held while its view
+/// opens, so the card is folded from the live stream, not a replay.
+#[test]
+fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(answering(
+        support::stream(&[spawn_call("fiber:pb/m")]),
+        text_reply("allow"),
+        "call_message",
+        |job| {
+            support::stream(&[function_call(
+                "call_message",
+                "delegate_message",
+                &json!({"id": job, "message": MARK}),
+            )])
+        },
+        support::hello(),
+    ))
+    .unwrap();
+    let child = ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
+    child.hold();
+    // The message call (the parent's third request, after the spawn and its
+    // verdict) is held until the delegate's first model call is in flight:
+    // a steer queued before the delegate's first step drains with that
+    // step's request, and the delegate would make no second call.
+    parent.hold_from(3, fakes::deadline::BUDGET);
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    // The hub exits a second after its last client leaves, so the run's
+    // wait sees it go.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "hub": {"idle_exit_ms": 1000}}),
+    );
+
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(support::TRUECOLOUR)
+        .collect();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &env);
+    run.ready();
+    run.write(b"scan the tree\r");
+    assert!(
+        child.await_requests(1, setup.deadline),
+        "the delegate's first step is in flight"
+    );
+    assert!(
+        parent.await_requests(3, setup.deadline),
+        "the parent's message call is requested"
+    );
+    parent.release();
+    // The parent's turn ends once the message call is answered, and the
+    // answer comes after the steer is queued in the delegate's inbox.
+    run.wait_screen("the finished parent turn", |grid| {
+        grid.contents.contains("completed ·")
+    });
+    child.release_one();
+    assert!(
+        child.await_requests(2, setup.deadline),
+        "the delegate's second model call after the steer"
+    );
+    let delegate = started_delegates(&setup).remove(0);
+    let log = delegate_log(&setup, &delegate);
+    fakes::wait_until("the steering_applied line", setup.deadline, move || {
+        log_has(&log, "steering_applied", MARK)
+    });
+    open_delegate_view(&mut run, "◆ scan", "› ◆ scan");
+    run.wait_screen(
+        "the steer rule over its text, no Fiber rule beside it",
+        |grid| rule_over_text(grid, "steer", MARK).is_some() && !grid.contents.contains("Fiber ·"),
+    );
+    child.release();
+    quit(run);
 }

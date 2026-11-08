@@ -6,6 +6,9 @@ now, not a plan. It is settled by
 [The tool contract: what every tool shares](https://github.com/aakshintala/fiber/issues/14);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
+The first-party `codemode` extension adds one tool that runs a script calling
+the session's other tools (`docs/extensions.md`, "Code mode").
+
 Vocabulary is `GLOSSARY.md`. Tool call, effect, artifact, participant, seam,
 extension and event mean what it says there and nothing else. How effects are
 judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
@@ -1012,6 +1015,8 @@ The kinds are `docs/events.md`.
   `delegate_spawn` is sent with `strict: false`.
 - `delegate_fork`'s `timeout_ms` is optional and carries a `minimum` limit, so
   `delegate_fork` is sent with `strict: false`.
+- `delegate_models`'s `filter` is optional, so `delegate_models` is sent with
+  `strict: false`.
 - The model-facing tool is one `jobs` tool with actions `list`, `wait`,
   `stop` and `write`. `wait` blocks up to a timeout. Cancelling a wait (for
   example because the turn is cancelled) stops only the wait and leaves the
@@ -1038,6 +1043,11 @@ The kinds are `docs/events.md`.
   answer still reports the final state, without the delegate's final message.
   Its `delegate_finished` and `job_completed` are written with no turn, after
   the `after_tool` hooks (`docs/extensions.md`, "Host calls").
+- A `jobs wait` that returns a job's final state carries the same `output_tail`
+  as the completion notice, with the output path in the wait answer. A wait
+  that ends at its deadline with the job still running reports `still_running`
+  with no tail; a finished job whose output file is empty or missing carries
+  no tail either.
 - A monitor is a job running a watch command. The model starts one with a
   `shell` call that sets `monitor: true`, so the command goes through the
   shell's classifier, permissions and `workdir` like any other. Lines on its standard output
