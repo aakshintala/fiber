@@ -752,7 +752,7 @@ impl App {
                 Screen::Skills => self.open_config_view(ConfigView::Skills),
                 Screen::Mcp => self.open_config_view(ConfigView::Mcp),
             },
-            Some(Request::Model { .. }) => self.open_model_picker_over_settings(),
+            Some(Request::Model) => self.open_model_picker_over_settings(),
         };
         if matches!(effect, Effect::None) {
             asked

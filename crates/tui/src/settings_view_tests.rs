@@ -1302,25 +1302,18 @@ fn a_model_row_ends_in_an_arrow_and_asks_for_the_picker_with_its_key_and_layer()
         "› Default model a/b ›"
     );
     one(&mut settings, &fake, Key::Enter);
-    assert_eq!(
-        settings.take_request(),
-        Some(Request::Model {
-            key: "model".to_owned(),
-            layer: Layer::Global
-        })
-    );
+    assert_eq!(settings.take_request(), Some(Request::Model));
+    assert_eq!(settings.awaiting, Some(("model".to_owned(), Layer::Global)));
     assert!(settings.awaiting_model());
     // Nothing is written until the picker chooses.
     assert!(fake.writes().is_empty());
     // Space asks the same, on a key whose value is unset.
     let mut reviewer = at(&fake, "reviewer.model");
     one(&mut reviewer, &fake, Key::Char(' '));
+    assert_eq!(reviewer.take_request(), Some(Request::Model));
     assert_eq!(
-        reviewer.take_request(),
-        Some(Request::Model {
-            key: "reviewer.model".to_owned(),
-            layer: Layer::Global
-        })
+        reviewer.awaiting,
+        Some(("reviewer.model".to_owned(), Layer::Global))
     );
     assert!(settings.take_request().is_none());
 }
@@ -1460,6 +1453,29 @@ fn a_value_set_by_dash_c_is_read_only_whatever_opens_it() {
         assert!(settings.page.is_none(), "{key}");
         assert!(matches!(settings.mode, super::Mode::Rows), "{key}");
     }
+}
+
+#[test]
+fn a_theme_set_by_dash_c_opens_no_choices_under_slash_theme() {
+    let fake = Fake::new(with(
+        "tui.theme",
+        super::Shown::Value("\"dark\"".to_owned()),
+        "-c",
+    ));
+    let mut settings = Settings::open_theme(&ctx(&fake), vec!["tui.theme=dark".to_owned()]);
+    assert!(matches!(settings.mode, super::Mode::Rows));
+    assert!(settings.choices_entry().is_none());
+    assert_eq!(
+        settings.focus,
+        Some(super::Focus::Key("tui.theme".to_owned()))
+    );
+    assert!(screen(&settings).contains("set by -c for this run"));
+    for press_ in [Key::Enter, Key::Char(' '), Key::Tab] {
+        let act = one(&mut settings, &fake, press_.clone());
+        assert!(!matches!(act, Act::Theme(_)), "{press_:?}");
+    }
+    assert!(fake.writes().is_empty(), "wrote {:?}", fake.writes());
+    assert!(resets(&fake).is_empty());
 }
 
 #[test]
@@ -2205,13 +2221,24 @@ fn esc_closes_the_field_first_then_the_page_with_the_list_row_focused() {
 }
 
 #[test]
-fn an_empty_entry_is_not_saved() {
+fn an_empty_entry_is_the_schemas_to_judge() {
+    // `fiber config set` takes an empty string member, so the page sends it
+    // as typed instead of refusing it first.
     let fake = Fake::new(rows());
     let mut settings = page(&fake, "sandbox.allow_write");
     press(&mut settings, &fake, &[Key::Enter, Key::Enter]);
-    assert!(fake.writes().is_empty());
+    assert_eq!(
+        writes(&fake),
+        [w(Layer::Global, "sandbox.allow_write", r#"[""]"#)]
+    );
+    assert!(settings.page.as_ref().unwrap().field.is_none());
+    // A refusal from the schema keeps the field and says why.
+    let refused = Fake::new(rows());
+    let mut settings = page(&refused, "sandbox.allow_write");
+    *support::lock(&refused.refuse) = Some("sandbox.allow_write is refused".to_owned());
+    press(&mut settings, &refused, &[Key::Enter, Key::Enter]);
     assert!(settings.page.as_ref().unwrap().field.is_some());
-    assert_eq!(settings.said, ["Type the entry first; nothing was saved."]);
+    assert_eq!(settings.said, ["sandbox.allow_write is refused"]);
 }
 
 #[test]

@@ -163,13 +163,9 @@ impl Screen {
 pub(crate) enum Request {
     /// Open this screen.
     Screen(Screen),
-    /// Open the model picker; its choice saves to `key` in `layer`.
-    Model {
-        /// The row's key.
-        key: String,
-        /// The layer the value comes from, or the first the key allows.
-        layer: Layer,
-    },
+    /// Open the model picker; its choice saves to the key and layer the
+    /// view kept in `awaiting`.
+    Model,
 }
 
 /// The key the theme choice edits.
@@ -1175,10 +1171,7 @@ impl Settings {
             }
             (SettingControl::Model, _) => {
                 self.awaiting = Some((row.key.clone(), layer));
-                self.request = Some(Request::Model {
-                    key: row.key.clone(),
-                    layer,
-                });
+                self.request = Some(Request::Model);
                 Act::Stay
             }
             (SettingControl::Number | SettingControl::Text, value) => {
@@ -1367,8 +1360,13 @@ impl Settings {
 
     // The legacy theme choices.
 
-    /// Opens the theme choices over the `tui.theme` row.
+    /// Opens the theme choices over the `tui.theme` row. A theme the run's
+    /// `-c` sets is read-only, so the choices stay shut and the row says
+    /// where its value comes from.
     fn open_choices(&mut self, ctx: &Ctx<'_>) {
+        if self.rows.iter().any(|row| row.key == THEME && is_run(row)) {
+            return;
+        }
         let current = self
             .rows
             .iter()
@@ -1512,10 +1510,6 @@ impl Settings {
             return;
         };
         let typed = field.draft.expand();
-        if typed.is_empty() {
-            self.said = vec!["Type the entry first; nothing was saved.".to_owned()];
-            return;
-        }
         let mut candidate = page.entries.clone();
         let at = field.at;
         match at.and_then(|at| candidate.get_mut(at)) {

@@ -1606,7 +1606,9 @@ fn wheel_over_each_swapped_view_scrolls_that_view() {
             // The settings view: the tabbed rows. The wheel moves the
             // focused row, as for the picker, and leaves the conversation
             // where it was.
+            let settings_frame = run.output().len();
             run.write(b"/settings\r");
+            run.wait_bytes(settings_frame, FRAME_END, "the open settings frame");
             let pre = run.wait_screen("the open settings", |grid| {
                 shows(grid, "Settings") && shows(grid, "Appearance") && shows(grid, "Hover")
             });

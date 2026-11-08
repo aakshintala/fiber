@@ -385,27 +385,40 @@ fn the_settings_view_matches_the_doc() {
     let setup = tools_setup(json!({}));
     let mut run = turned(&setup);
     run.write(b"/settings\r");
+    let keys = "←→ tab · / search · Enter change · Tab layer · Delete reset";
+    // The wait checks every property the asserts below read, so a partial
+    // redraw cannot satisfy it.
     let mut grid = run.wait_screen("the settings tabs", |grid| {
-        find_row(grid, "Appearance").is_some()
-            && find_row(grid, "Changes save automatically").is_some()
-            && find_row(grid, "Delete reset").is_some()
+        let (Some(note), Some(bar), Some(footer)) = (
+            find_row(grid, "Changes save automatically"),
+            find_row(grid, "Appearance"),
+            find_row(grid, "Delete reset"),
+        ) else {
+            return false;
+        };
+        is_dim(grid, note, "Changes save automatically")
+            && bar == note + 2
+            && is_bold(grid, bar, "Appearance")
+            && col_at_or(grid, bar, "Models").is_some()
+            && !is_bold(grid, bar, "Models")
+            && grid.rows[usize::from(footer)].trim() == keys
+            && is_bold(grid, footer, "Enter")
+            && col_at_or(grid, footer, "change").is_some()
+            && !is_bold(grid, footer, "change")
     });
     // Under the name row: the dim note, then the tab bar with the open
     // tab bold.
     let note = row_with(&grid, "Changes save automatically");
     assert!(is_dim(&grid, note, "Changes save automatically"));
     let bar = row_with(&grid, "Appearance");
-    // settled: the grid the last wait_screen returned.
+    // settled: "the settings tabs" checked the bar row and the note.
     assert_eq!(bar, note + 2, "{}", grid.contents);
     assert!(is_bold(&grid, bar, "Appearance"));
     assert!(!is_bold(&grid, bar, "Models"));
     // The footer names its keys, the keys bold.
     let footer = row_with(&grid, "Delete reset");
-    assert_eq!(
-        // settled: the grid the last wait_screen returned.
-        grid.rows[usize::from(footer)].trim(),
-        "←→ tab · / search · Enter change · Tab layer · Delete reset"
-    );
+    // settled: "the settings tabs" checked the footer text.
+    assert_eq!(grid.rows[usize::from(footer)].trim(), keys);
     assert!(is_bold(&grid, footer, "Enter"));
     assert!(!is_bold(&grid, footer, "change"));
     // Two tabs right: the model's value draws unquoted, ending in " ›".
@@ -413,10 +426,13 @@ fn the_settings_view_matches_the_doc() {
         run.write(b"\x1b[C");
     }
     grid = run.wait_screen("the Models tab", |grid| {
-        find_row(grid, "Default model").is_some()
+        find_row(grid, "Default model").is_some_and(|y| {
+            let text = grid.rows[usize::from(y)].trim_end();
+            text.contains("scripted/s.json ›") && !text.contains("\"scripted/s.json\"")
+        }) && find_row(grid, "Models").is_some_and(|y| is_bold(grid, y, "Models"))
     });
     let model = row_with(&grid, "Default model");
-    // settled: the grid the last wait_screen returned.
+    // settled: "the Models tab" checked the row text.
     let text = grid.rows[usize::from(model)].trim_end().to_owned();
     assert!(text.contains("scripted/s.json ›"), "{text}");
     assert!(!text.contains("\"scripted/s.json\""), "unquoted: {text}");
@@ -437,33 +453,51 @@ fn the_settings_view_matches_the_doc() {
         run.write(b"\x1b[B");
         grid = run.wait_screen("the gutter moved", |next| focused_label(next) != on);
     }
-    assert_eq!(focused_label(&grid).as_deref(), Some("Handoff tokens"));
-    let handoff = row_with(&grid, "Handoff tokens");
-    assert!(
-        // settled: the grid the last wait_screen returned.
-        grid.rows[usize::from(handoff)].contains("400000"),
-        "{}",
-        // settled: the grid the last wait_screen returned.
-        grid.contents
-    );
-    assert!(is_plain_of_reverse(&grid, handoff, "Handoff tokens"));
     // Under the list: the description, then the key's path, where it is
     // set and what a change costs, dim, ahead of the footer.
     let reload =
         "handoff.tokens · using the default · changing handoff.tokens needs a reload (~84k tokens)";
+    // No input is pending: this wait checks every property read below, so
+    // the frame the gutter moved onto is whole.
+    grid = run.wait_screen("the Handoff tokens row whole", |grid| {
+        let (Some(handoff), Some(detail), Some(footer)) = (
+            find_row(grid, "Handoff tokens"),
+            find_row(grid, "handoff.tokens ·"),
+            find_row(grid, "Delete reset"),
+        ) else {
+            return false;
+        };
+        focused_label(grid).as_deref() == Some("Handoff tokens")
+            && grid.rows[usize::from(handoff)].contains("400000")
+            && is_plain_of_reverse(grid, handoff, "Handoff tokens")
+            && grid.rows[usize::from(detail)].trim() == reload
+            && is_dim(grid, detail, reload)
+            && detail + 1 == footer
+            && !grid.contents.contains("Ctrl+G opens the file")
+    });
+    assert_eq!(focused_label(&grid).as_deref(), Some("Handoff tokens"));
+    let handoff = row_with(&grid, "Handoff tokens");
+    assert!(
+        // settled: "the Handoff tokens row whole" checked the value.
+        grid.rows[usize::from(handoff)].contains("400000"),
+        "{}",
+        // settled: "the Handoff tokens row whole" checked the value.
+        grid.contents
+    );
+    assert!(is_plain_of_reverse(&grid, handoff, "Handoff tokens"));
     let detail = row_with(&grid, "handoff.tokens ·");
     assert_eq!(
-        // settled: the grid the last wait_screen returned.
+        // settled: "the Handoff tokens row whole" checked the detail row.
         grid.rows[usize::from(detail)].trim(),
         reload,
         "{}",
-        // settled: the grid the last wait_screen returned.
+        // settled: "the Handoff tokens row whole" checked the detail row.
         grid.contents
     );
     assert!(is_dim(&grid, detail, reload));
-    // settled: the grid the last wait_screen returned.
+    // settled: "the Handoff tokens row whole" checked both rows and the text.
     assert_eq!(detail + 1, footer, "{}", grid.contents);
-    // settled: the grid the last wait_screen returned.
+    // settled: "the Handoff tokens row whole" checked the text is absent.
     assert!(!grid.contents.contains("Ctrl+G opens the file"));
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
