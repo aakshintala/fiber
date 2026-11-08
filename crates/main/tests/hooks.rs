@@ -637,8 +637,8 @@ fn a_hook_rewrite_shows_in_the_ledger_row() {
                 && row.trim_end().ends_with("\u{b7} via fiber.test/guard")
         })
     });
-    // settled: the wait checked this row's path and mark.
     let row = screen
+        // settled: the wait checked this row's path and mark.
         .rows
         .iter()
         .find(|row| row.contains("\u{2713} read"))
