@@ -10583,24 +10583,6 @@ fn open_delegate_view(run: &mut Run, row: &str, breadcrumb: &str) {
     });
 }
 
-/// The terminal's environment: a fake key and truecolour.
-fn terminal_env() -> Vec<(&'static str, &'static str)> {
-    [("FIBER_TEST_FAKE_KEY", "sk-test")]
-        .into_iter()
-        .chain(support::TRUECOLOUR)
-        .collect()
-}
-
-/// A config where the hub exits a second after its last client leaves, so
-/// the run's wait sees it go.
-fn short_hub_idle(setup: &support::Setup) {
-    support::write_json(
-        &setup.home().join("config.json"),
-        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
-            "hub": {"idle_exit_ms": 1000}}),
-    );
-}
-
 /// The index of a row that draws a labelled rule whose label holds
 /// `label`, with `text` on a row below it and no other rule between.
 fn rule_over_text(grid: &Grid, label: &str, text: &str) -> Option<usize> {
@@ -10619,8 +10601,8 @@ fn rule_over_text(grid: &Grid, label: &str, text: &str) -> Option<usize> {
         .then_some(rule)
 }
 
-/// `docs/delegates.md`, "Talking to a delegate", and `docs/tui.md`, the
-/// turn card: a parent's `delegate_message` to a running delegate joins
+/// `docs/delegates.md`, "Talking to a delegate", and `docs/tui.md`,
+/// "Turns": a parent's `delegate_message` to a running delegate joins
 /// the delegate's turn and draws in the delegate's card as a `steer` rule
 /// over its text. The delegate's second model call is held while its view
 /// opens, so the card is folded from the live stream, not a replay.
@@ -10646,9 +10628,19 @@ fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
     child.hold();
     providers(&setup, &parent, &child);
     standing_allow(&setup);
-    short_hub_idle(&setup);
+    // The hub exits a second after its last client leaves, so the run's
+    // wait sees it go.
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "hub": {"idle_exit_ms": 1000}}),
+    );
 
-    let mut run = Run::spawn(&setup, 160, 48, &[], &terminal_env());
+    let env: Vec<(&str, &str)> = [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(support::TRUECOLOUR)
+        .collect();
+    let mut run = Run::spawn(&setup, 160, 48, &[], &env);
     run.ready();
     run.write(b"scan the tree\r");
     assert!(
