@@ -611,7 +611,11 @@ impl Turn {
                 | Entry::Answers(_)
                 | Entry::Message(_) => None,
             }),
-            Target::Login | Target::Image(_) | Target::Copy { .. } | Target::CallView(_) => None,
+            Target::Login
+            | Target::Image(_)
+            | Target::Copy { .. }
+            | Target::CallView(_)
+            | Target::Shell(_) => None,
         }
     }
 

@@ -2668,7 +2668,7 @@ fn shell_cap_screen_more_row() {
     let stops = app.targets();
     assert_eq!(stops.len(), 1, "the more row is the one focus stop");
     let (at, target) = stops[0];
-    assert!(matches!(target, Target::Group(_)));
+    assert!(matches!(target, Target::Shell(_)));
     assert_eq!(
         texts(&app).get(at).map(String::as_str),
         Some("5 more lines")

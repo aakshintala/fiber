@@ -5553,8 +5553,10 @@ fn shell_cap_toggle() {
         shell_expect(SENT, 20, &tail)
     );
     assert_eq!(pages.index().total(), total, "closing recounts");
-    // A target no run names opens nothing.
-    assert!(!pages.open(&Target::Group(target_id("shell 9"))));
+    // A target no run names opens nothing, and the old group key for a
+    // run names no group.
+    assert!(!pages.open(&Target::Shell(9)));
+    assert!(!pages.open(&Target::Group(target_id("shell 0"))));
 }
 
 /// Each run in a bucket caps and toggles on its own.
@@ -5579,8 +5581,7 @@ fn shell_cap_runs_toggle_independently() {
     assert!(!texts.contains(&"2 more lines".to_owned()));
 }
 
-/// The more-row key is `shell {slot}` hashed as every group key is, so
-/// no minted `a_` action id can collide with it.
+/// The more row's target is the run's own variant, numbered by slot.
 #[test]
 fn shell_cap_key_prefix() {
     let mut pages = Pages::new(80);
@@ -5593,10 +5594,7 @@ fn shell_cap_key_prefix() {
         .collect();
     assert_eq!(
         targets,
-        vec![
-            Some(Target::Group(target_id("shell 0"))),
-            Some(Target::Group(target_id("shell 1")))
-        ]
+        vec![Some(Target::Shell(0)), Some(Target::Shell(1))]
     );
 }
 
@@ -5683,6 +5681,77 @@ fn shell_cap_cut_notice() {
             .collect::<Vec<_>>(),
         vec!["tail 1", "tail 2", "tail 3", "show less", "exit 0"]
     );
+}
+
+/// A run whose 1 MiB cut notice sits past line 20 shows no path while
+/// collapsed, with the notice not promoted into the shown lines; opening
+/// the run shows the notice and its path (RULING-4367-2).
+#[test]
+fn shell_cap_cut_notice_path_past_the_cap() {
+    let path = "/tmp/fiber/artifacts/o_9.txt";
+    let notice = format!("[1048577 bytes cut. The full output is in {path}; read it with `read`.]");
+    let mut item = shell_item(SENT, 30, "");
+    item.push_str(&format!("\n{notice}\nexit 0"));
+    let mut pages = shell_pages(item);
+    let closed = shell_texts(&pages, Draw::Shown);
+    assert_eq!(
+        closed,
+        shell_expect(SENT, 20, &["11 more lines", "exit 0"]),
+        "the notice is the 31st output line: not promoted past the cap"
+    );
+    assert!(!closed.iter().any(|text| text.contains(path)));
+    let more = shell_drawn(&pages, Draw::Shown)
+        .into_iter()
+        .find_map(|(_, target)| target)
+        .expect("a more row");
+    assert!(pages.open(&more));
+    let open = shell_texts(&pages, Draw::Shown);
+    assert!(open.iter().any(|text| text == &notice), "{open:?}");
+    assert_eq!(
+        shell_expect(SENT, 30, &[notice.as_str(), "show less", "exit 0"]),
+        open
+    );
+}
+
+/// A more row's target follows its run when `carry_chain` prepends runs:
+/// the slot moves, the run is found again by page, turn-after and text
+/// (equal runs in order), and a run the fold lacks maps to nothing.
+#[test]
+fn shell_cap_target_follows_the_run_across_carry() {
+    let (mut preview, mut fold, len, _) = carry_edge();
+    for (page, after, text) in [
+        (len, 1, "own, not carried"),
+        (0, 0, "ancestor"),
+        (1, 0, "twin"),
+        (1, 0, "twin"),
+    ] {
+        preview
+            .shell_index
+            .entry((page, after))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shells.push((page, after, text.to_owned(), false));
+    }
+    fold.shell_index.entry((0, 0)).or_default().push(0);
+    fold.shells.push((0, 0, "fold".to_owned(), false));
+    preview.carry_chain(&mut fold);
+    let moved: Vec<Option<Target>> = (0..5)
+        .map(|slot| preview.same_target(Target::Shell(slot), &fold))
+        .collect();
+    assert_eq!(
+        moved,
+        vec![
+            None,
+            Some(Target::Shell(0)),
+            Some(Target::Shell(1)),
+            Some(Target::Shell(2)),
+            None
+        ],
+        "the carried runs move down one slot; the first twin keeps the first"
+    );
+    assert!(fold.toggle_shell(&Target::Shell(2)), "the second twin");
+    assert_eq!(fold.shells.get(2).map(|run| run.3), Some(true));
+    assert_eq!(fold.shells.get(1).map(|run| run.3), Some(false));
 }
 
 /// Reveal opens a closed run, never closes an open one, reports whether

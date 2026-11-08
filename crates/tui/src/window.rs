@@ -1028,7 +1028,10 @@ impl Pages {
 
     /// The slot of the run whose more row `target` names.
     fn shell_slot(&self, target: &Target) -> Option<usize> {
-        (0..self.shells.len()).find(|slot| shell_target(*slot) == *target)
+        match target {
+            Target::Shell(slot) if *slot < self.shells.len() => Some(*slot),
+            _ => None,
+        }
     }
 
     /// Opens a run's output past the cap, or closes it. The state lives
@@ -1181,9 +1184,30 @@ impl Pages {
                         .copied()
                 })
                 .map(Target::Image),
+            Target::Shell(slot) => self.find_shell(slot, fold).map(Target::Shell),
             Target::Login => Some(Target::Login),
             Target::Note(_) | Target::Orphans(_) => None,
         }
+    }
+
+    /// The slot the fold gives run `slot`: the run with the same page,
+    /// turn-after and text, counting equal runs in order. A slot moves
+    /// when `carry_chain` prepends runs, so the number is no identity.
+    fn find_shell(&self, slot: usize, fold: &Pages) -> Option<usize> {
+        let same = |a: &(usize, usize, String, bool), b: &(usize, usize, String, bool)| {
+            a.0 == b.0 && a.1 == b.1 && a.2 == b.2
+        };
+        let run = self.shells.get(slot)?;
+        let nth = self.shells[..slot]
+            .iter()
+            .filter(|other| same(other, run))
+            .count();
+        fold.shells
+            .iter()
+            .enumerate()
+            .filter(|(_, other)| same(other, run))
+            .nth(nth)
+            .map(|(at, _)| at)
     }
 
     /// Carries the preview's closed ancestor-segment runs into the fold
@@ -2077,10 +2101,9 @@ impl Pages {
     }
 }
 
-/// What clicking run `slot`'s more row opens. The key is outside the
-/// grammar of minted action ids, so it names no group.
+/// What clicking run `slot`'s more row opens.
 fn shell_target(slot: usize) -> Target {
-    Target::Group(target_id(&format!("shell {slot}")))
+    Target::Shell(slot)
 }
 
 /// The note line of a `!` or `!!` run's row (`crate::shell::row`).
