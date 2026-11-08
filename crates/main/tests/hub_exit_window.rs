@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use fakes::ProviderServer;
 use serde_json::{Value, json};
+use support::pty::Run as PtyRun;
 use support::{
     HubProc, SessionGuard, Setup, Socket, bounded, connect_hub, run_to_exit, subscribe_as, until,
     until_after, until_replayed,
@@ -1104,4 +1105,229 @@ fn a_test_that_ends_early_leaves_no_session_running() {
         "waited until the deadline for the session process {running:?} to exit after the drop"
     );
     drop((first, writer));
+}
+
+/// Reads the sole session directory created by this terminal's workspace.
+fn sole_session_directory(setup: &Setup) -> PathBuf {
+    let projects = setup.home().join("projects");
+    let sessions = fs::read_dir(&projects)
+        .unwrap_or_else(|error| panic!("session discovery: reading {projects:?}: {error}"))
+        .flat_map(|project| {
+            let path = project.unwrap().path().join("sessions");
+            fs::read_dir(path)
+                .into_iter()
+                .flatten()
+                .map(|entry| entry.unwrap().path())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sessions.len(),
+        1,
+        "session discovery: one session directory"
+    );
+    let path = sessions.into_iter().next().unwrap();
+    let id = path.file_name().unwrap().to_string_lossy();
+    let canonical = support::session_dir(setup, &id);
+    assert_eq!(
+        path, canonical,
+        "session discovery uses the canonical helper"
+    );
+    canonical
+}
+
+#[test]
+fn an_exited_multi_window_session_keeps_its_transcript_and_quits() {
+    let setup = Setup::new();
+    let markers: Vec<_> = (0..41).map(|turn| format!("seed-{turn:02}")).collect();
+    let steps: Vec<_> = markers
+        .iter()
+        .map(|marker| {
+            json!({"text": format!("{marker}\n{}", (0..7).map(|line| format!("{marker}-body-{line}")).collect::<Vec<_>>().join("\n"))})
+        })
+        .collect();
+    support::write_json(&setup.workspace().join("s.json"), &json!({"steps": steps}));
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "session": {"idle_exit_ms": 2000}, "hub": {"idle_exit_ms": 200}}),
+    );
+    let mut run = PtyRun::spawn(&setup, 160, 48, &[], &[]);
+    run.ready();
+
+    for (turn, marker) in markers.iter().enumerate() {
+        let from = run.output().len();
+        run.write(format!("prompt-{turn:02}\r").as_bytes());
+        run.wait_screen_leading(
+            "seeded reply on the alternate screen",
+            |grid| grid.alternate_screen && grid.contents.contains(marker),
+            || format!("stage=seed turn={turn}; hub trace:\n{}", setup.hub_log()),
+        );
+        run.turn_finished(from);
+    }
+
+    let session_dir = sole_session_directory(&setup);
+    let events = session_dir.join("events.jsonl");
+    let events_for_wait = events.clone();
+    fakes::wait_until(
+        "stage=idle exit after 41 turns",
+        setup.deadline,
+        move || {
+            fs::read_to_string(&events_for_wait).is_ok_and(|text| {
+                let lines = support::complete_lines(&text);
+                lines
+                    .iter()
+                    .filter(|line| line["kind"] == "turn_completed")
+                    .count()
+                    == 41
+                    && lines.iter().any(|line| line["kind"] == "fiber_exited")
+            })
+        },
+    );
+    let id = session_dir
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let socket = setup.session_socket(&id);
+    support::wait_for_path_gone(setup.deadline, &socket, "stage=idle exit socket removal");
+    support::wait_for_lock_released(setup.deadline, &session_dir, "stage=idle exit log unlock");
+    let before = fs::read(&events).expect("stage=idle exit: completed log bytes remain");
+    let before_text = String::from_utf8_lossy(&before);
+    let before_lines = support::complete_lines(&before_text);
+    assert!(
+        before_lines.len() > 256,
+        "stage=history seed log exceeds 256 lines: {}",
+        before_lines.len()
+    );
+    assert_eq!(
+        before_lines
+            .iter()
+            .filter(|line| line["kind"] == "turn_completed")
+            .count(),
+        41,
+        "stage=history seed completed all turns: {before_text}"
+    );
+    for marker in &markers {
+        assert!(
+            before_text.contains(marker),
+            "stage=history seed log contains {marker}"
+        );
+    }
+    assert!(
+        before_lines
+            .iter()
+            .any(|line| line["kind"] == "fiber_exited"),
+        "stage=idle exit durable event: {before_text}"
+    );
+
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [{"text": "resumed-answer\\nresumed-body"}]}),
+    );
+    let from = run.output().len();
+    run.write(b"after-exit\r");
+    run.wait_screen_leading(
+        "stage=resumed answer on the alternate screen",
+        |grid| grid.alternate_screen && grid.contents.contains("resumed-answer"),
+        || {
+            format!(
+                "session trace:\n{}\nhub trace:\n{}",
+                fs::read_to_string(&events).unwrap_or_default(),
+                setup.hub_log()
+            )
+        },
+    );
+    run.turn_finished(from);
+    let events_for_wait = events.clone();
+    fakes::wait_until(
+        "stage=resumed prompt turn completes",
+        setup.deadline,
+        move || {
+            fs::read_to_string(&events_for_wait).is_ok_and(|text| {
+                let lines = support::complete_lines(&text);
+                lines.iter().any(|line| {
+                    line["kind"] == "turn_started" && line.to_string().contains("after-exit")
+                }) && lines
+                    .iter()
+                    .filter(|line| line["kind"] == "turn_completed")
+                    .count()
+                    == 42
+                    && lines.iter().any(|line| {
+                        line["kind"] == "fiber_started" && line["payload"]["resumed"] == true
+                    })
+            })
+        },
+    );
+    let after = fs::read(&events).expect("stage=resumed log remains");
+    assert!(
+        after.starts_with(&before),
+        "stage=resume preserves the exact pre-exit log prefix"
+    );
+    let log_text = String::from_utf8_lossy(&after);
+    assert!(
+        log_text.contains("after-exit"),
+        "stage=resumed prompt is durable: {log_text}"
+    );
+
+    let mut seen = std::collections::BTreeSet::new();
+    let tail = run.wait_screen("stage=history resumed tail", |grid| {
+        grid.alternate_screen
+            && grid.contents.contains("resumed-answer")
+            && grid.contents.contains(&markers[40])
+    });
+    for marker in &markers {
+        if tail.contents.contains(marker) {
+            seen.insert(marker.clone());
+        }
+    }
+    // Eight controlled reply rows per turn, one page is 47 rows, plus slack for cards/headings.
+    let page_cap = (41_usize * 9).div_ceil(47) + 4;
+    for page in 0..page_cap {
+        if seen.contains(&markers[0]) {
+            break;
+        }
+        run.write(b"\x1b[5~");
+        let grid = run.wait_screen_leading(
+            "stage=history PageUp reveals an earlier seeded reply",
+            |grid| {
+                grid.alternate_screen
+                    && markers
+                        .iter()
+                        .any(|marker| !seen.contains(marker) && grid.contents.contains(marker))
+            },
+            || {
+                format!(
+                    "page={page}; session trace:\n{}\nhub trace:\n{}",
+                    fs::read_to_string(&events).unwrap_or_default(),
+                    setup.hub_log()
+                )
+            },
+        );
+        for marker in &markers {
+            if grid.contents.contains(marker) {
+                seen.insert(marker.clone());
+            }
+        }
+    }
+    assert_eq!(
+        seen,
+        markers.iter().cloned().collect(),
+        "stage=history every seeded reply remains reachable"
+    );
+    run.write(b"\x1b[F");
+    run.wait_screen("stage=history returned to resumed tail", |grid| {
+        grid.alternate_screen && grid.contents.contains("resumed-answer")
+    });
+
+    run.write(b"\x03\x03\r");
+    run.wait_screen(
+        "stage=quit restored primary screen and visible cursor",
+        |grid| !grid.alternate_screen && !grid.hide_cursor,
+    );
+    let exited = run.wait();
+    assert_eq!(
+        exited.status.code(),
+        Some(0),
+        "stage=quit terminal exit code; output: {}",
+        String::from_utf8_lossy(&exited.terminal)
+    );
 }
