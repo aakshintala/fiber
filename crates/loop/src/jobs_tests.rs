@@ -6578,11 +6578,19 @@ fn a_completed_wait_on_a_real_registry_returns_the_stored_tail() {
         })
         .unwrap();
     let id = opened.started.job_id.0.clone();
-    let printed = std::process::Command::new("sh")
-        .arg("-c")
-        .arg("printf 'one\\ntwo\\nthree\\n'")
-        .output()
-        .unwrap();
+    use std::os::unix::process::CommandExt;
+    use std::process::Stdio;
+
+    let printed = fakes::wait_output(
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg("printf 'one\\ntwo\\nthree\\n'")
+            .stdout(Stdio::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap(),
+        "three-line wait-tail process",
+    );
     assert!(printed.status.success());
     let output_path = dir.path().join(&opened.path);
     std::fs::write(&output_path, &printed.stdout).unwrap();
