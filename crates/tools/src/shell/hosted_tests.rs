@@ -487,6 +487,26 @@ fn an_adopted_end_reads_the_output_tail_a_kept_end_leaves_out() {
 }
 
 #[test]
+fn a_flooded_adopted_end_fails_with_the_flooded_code_and_keeps_the_tail() {
+    let dir = fakes::TempDir::new("fiber-hosted-flooded-end");
+    let output = dir.path().join("job.log");
+    std::fs::write(&output, "noise\n").unwrap();
+    let exit = Exit {
+        code: None,
+        signal: Some(15),
+        timed_out: false,
+        output_cap: false,
+    };
+    let flooded = super::adopted_flooded_end(JobId("j_one".into()), &output, &exit);
+    assert_eq!(flooded.status, Outcome::Failed);
+    assert_eq!(
+        flooded.error.as_ref().map(|error| &error.code),
+        Some(&ErrorCode::Flooded)
+    );
+    assert_eq!(flooded.output_tail.as_deref(), Some("noise\n"));
+}
+
+#[test]
 fn a_hosted_background_receipt_names_the_kept_timeout_stop() {
     // The fake clock's wall starts at 2023-11-14T22:13:20Z, so a keeper-held
     // 60 s timeout stops the job at 2023-11-14T22:14:20Z. The drive keeps no

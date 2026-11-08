@@ -44,8 +44,9 @@ pub use session_list::SessionList;
 pub use session_message::SessionMessage;
 pub use session_search::SessionSearch;
 pub use shell::Shell;
-pub use shell::hosted::adopted_end;
+pub use shell::hosted::{adopted_end, adopted_flooded_end};
 pub use shell::hosted::{keeper_spawn, kept_end};
+pub use shell::monitor::Feed as MonitorFeed;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use shell::sandbox::Prepared;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -89,6 +89,22 @@ fn line(peer: &UnixStream) -> serde_json::Value {
         .recv_or_fail(&recv, "keeper control line")
         .unwrap()
 }
+/// What `peer` receives until the session closes the connection, read on a
+/// worker so the wait has a deadline.
+fn rest_of(peer: &UnixStream) -> String {
+    let mut peer = peer.try_clone().unwrap();
+    let (send, rest) = mpsc::channel();
+    thread::spawn(move || {
+        let mut text = String::new();
+        let read = peer.read_to_string(&mut text);
+        match send.send(read.map(|_| text)) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    deadline()
+        .recv_or_fail(&rest, "the end of the connection")
+        .unwrap()
+}
 fn reply(peer: &mut UnixStream, value: serde_json::Value) {
     serde_json::to_writer(&mut *peer, &value).unwrap();
     peer.write_all(b"\n").unwrap();
@@ -402,8 +418,7 @@ fn a_mismatched_identity_releases_nothing() {
     identity(&mut peer, &SessionId("s_ffffffffffffffff".into()));
     assert!(deadline().recv(&result).unwrap().is_err());
     // The session closed the connection without asking for the handover.
-    let mut rest = String::new();
-    peer.read_to_string(&mut rest).unwrap();
+    let rest = rest_of(&peer);
     assert!(rest.is_empty(), "sent {rest:?} after a mismatch");
 }
 
@@ -420,9 +435,7 @@ fn a_reply_that_is_not_an_identity_releases_nothing() {
         line(&peer);
         reply(&mut peer, answer);
         assert!(deadline().recv(&result).unwrap().is_err());
-        let mut rest = String::new();
-        peer.read_to_string(&mut rest).unwrap();
-        assert!(rest.is_empty());
+        assert!(rest_of(&peer).is_empty());
     }
 }
 
@@ -568,8 +581,7 @@ fn ready_sends_adopted_once_and_waits_for_the_acknowledgement() {
 
 #[test]
 fn ready_times_out_at_the_deadline_and_the_drop_ends_the_connection() {
-    let (host, clock, _peers, mut peer, attached) =
-        attached_host(vec![kept("call_0", "j_one")], b"");
+    let (host, clock, _peers, peer, attached) = attached_host(vec![kept("call_0", "j_one")], b"");
     assert_eq!(host.handover_peers(), vec![Pid(std::process::id())]);
     let until = clock.now() + KEEPER_START;
     let (send, result) = mpsc::channel();
@@ -594,8 +606,7 @@ fn ready_times_out_at_the_deadline_and_the_drop_ends_the_connection() {
     );
     // The attachment dropped with the failed wait: the keeper sees the end of
     // the connection and takes the log back, and the host forgets it.
-    let mut rest = String::new();
-    peer.read_to_string(&mut rest).unwrap();
+    rest_of(&peer);
     assert!(host.handover_peers().is_empty());
 }
 
@@ -778,7 +789,6 @@ fn dropping_the_host_sends_no_shutdown_to_a_retained_keeper() {
     attached.keep();
     drop(host);
     peer.shutdown(std::net::Shutdown::Write).unwrap();
-    let mut rest = String::new();
-    BufReader::new(peer).read_to_string(&mut rest).unwrap();
+    let rest = rest_of(&peer);
     assert!(rest.is_empty(), "Drop must not write a shutdown");
 }

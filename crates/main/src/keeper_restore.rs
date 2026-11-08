@@ -10,22 +10,18 @@ use std::fs::{File, OpenOptions};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use contract::JobId;
+use contract::clock::Clock;
 use contract::emit::Emit;
-use contract::events::{Event, EventKind, JobDelta, JobLine, JobStarted, Progress};
-use contract::jobs::{End, Input, Lines, Stop};
+use contract::events::{Event, EventKind, JobDelta, JobStarted, Progress};
+use contract::jobs::{End, Input, Stop};
 use contract::keeper::{HostEvent, Stream};
+use support::lock;
 
 use crate::keeper::{Adopted, Attached, Handover, Host};
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
 
 /// What the session's append handles are, shared with whoever may have to
 /// close them while the runner is blocked waiting for its next event.
@@ -33,6 +29,66 @@ struct Sinks {
     /// `None` once the handover was abandoned.
     output: Option<File>,
     errors: Option<File>,
+}
+
+/// What the session decided about the handover, once it has: runners that
+/// find the connection closed before then wait for it. A connection ends
+/// with no exit when the keeper is lost, and also when this session gave the
+/// handover up and dropped it, which a runner can see first. Reporting the
+/// job lost in that second case would write a completion for a job the
+/// keeper still runs, so the runner leaves its report here.
+struct Verdict(Mutex<Decision>);
+
+enum Decision {
+    /// Not decided; the reports of runners that lost the connection wait.
+    Pending(Vec<End>),
+    /// The session owns the jobs for good.
+    Kept,
+    /// The session gave the handover up.
+    Abandoned,
+}
+
+impl Verdict {
+    fn pending() -> Arc<Self> {
+        Arc::new(Self(Mutex::new(Decision::Pending(Vec::new()))))
+    }
+
+    /// A runner's connection closed with no ending: the registry records
+    /// the job failed `indeterminate` if the session keeps the handover,
+    /// and nothing if it gave it up.
+    fn lost(&self, end: End) {
+        let mut decision = lock(&self.0);
+        match &mut *decision {
+            Decision::Pending(ends) => ends.push(end),
+            Decision::Kept => {
+                drop(decision);
+                drop(end);
+            }
+            Decision::Abandoned => {
+                drop(decision);
+                std::mem::forget(end);
+            }
+        }
+    }
+
+    /// The session decided. Reports held for the answer are made, or not.
+    fn settle(&self, kept: bool) {
+        let next = if kept {
+            Decision::Kept
+        } else {
+            Decision::Abandoned
+        };
+        let Decision::Pending(ends) = std::mem::replace(&mut *lock(&self.0), next) else {
+            return;
+        };
+        for end in ends {
+            if kept {
+                drop(end);
+            } else {
+                std::mem::forget(end);
+            }
+        }
+    }
 }
 
 struct Runner {
@@ -45,7 +101,10 @@ struct Runner {
     /// handover: reporting is the registry's to make, never a teardown's.
     end: Option<End>,
     emit: Arc<dyn Emit>,
-    lines: Option<Lines>,
+    /// A monitor's deliveries under the rate budget and flood stop.
+    feed: Option<tools::MonitorFeed>,
+    clock: Arc<dyn Clock>,
+    verdict: Arc<Verdict>,
 }
 
 impl Drop for Runner {
@@ -65,6 +124,7 @@ impl Drop for Runner {
 pub(crate) struct Restored {
     ids: Vec<JobId>,
     runners: Vec<Runner>,
+    verdict: Arc<Verdict>,
 }
 
 impl Restored {
@@ -81,10 +141,16 @@ impl Restored {
             .iter()
             .map(|runner| Arc::clone(&runner.sinks))
             .collect();
-        for runner in runners {
-            thread::spawn(move || runner.run());
+        let threads = runners
+            .into_iter()
+            .map(|runner| thread::spawn(move || runner.run()))
+            .collect();
+        Active {
+            sinks,
+            threads,
+            verdict: Arc::clone(&self.verdict),
+            armed: true,
         }
-        Active { sinks, armed: true }
     }
 }
 
@@ -92,6 +158,10 @@ impl Restored {
 /// handle at once, so the keeper can take the files back.
 pub(crate) struct Active {
     sinks: Vec<Arc<Mutex<Sinks>>>,
+    /// The runners' threads, for a test to learn each one finished.
+    #[cfg_attr(not(test), expect(dead_code, reason = "only a test joins the runners"))]
+    threads: Vec<thread::JoinHandle<()>>,
+    verdict: Arc<Verdict>,
     armed: bool,
 }
 
@@ -99,6 +169,7 @@ impl Active {
     /// The handover is complete: the runners own their files for good.
     pub(crate) fn keep(mut self) {
         self.armed = false;
+        self.verdict.settle(true);
     }
 }
 
@@ -112,6 +183,9 @@ impl Drop for Active {
             sinks.output = None;
             sinks.errors = None;
         }
+        // After the handles: a runner that held its report for the answer
+        // finds the handover given up and reports nothing.
+        self.verdict.settle(false);
     }
 }
 
@@ -131,10 +205,11 @@ pub(crate) fn take(
     registry: &jobs::Registry,
     dir: &log::SessionDir,
     handover: Handover,
+    clock: &Arc<dyn Clock>,
     folded: &mut r#loop::Resumed,
 ) -> io::Result<Handed> {
     let mut attached = keeper.attach_handover(handover)?;
-    let restored = restore(registry, dir, attached.take_jobs())?;
+    let restored = restore(registry, dir, clock, attached.take_jobs())?;
     folded.keep_jobs(restored.job_ids());
     Ok(Handed { restored, attached })
 }
@@ -145,8 +220,15 @@ impl Handed {
     /// once the registry's inbox is wired. A failure closes the append
     /// handles first and the connection second.
     pub(crate) fn finish(self) -> io::Result<()> {
+        self.finish_after_start(|_| {})
+    }
+
+    /// [`Handed::finish`], with `started` run once the runners are going and
+    /// before the keeper is asked to acknowledge: a test's pause point.
+    fn finish_after_start(self, started: impl FnOnce(&mut Active)) -> io::Result<()> {
         let Self { restored, attached } = self;
-        let active = restored.activate();
+        let mut active = restored.activate();
+        started(&mut active);
         match attached.ready() {
             Ok(()) => {
                 active.keep();
@@ -207,6 +289,7 @@ fn errors_beside(output: &Path) -> PathBuf {
 pub(crate) fn restore(
     registry: &jobs::Registry,
     dir: &log::SessionDir,
+    clock: &Arc<dyn Clock>,
     handed: Vec<Adopted>,
 ) -> io::Result<Restored> {
     let open = outstanding(dir.path())?;
@@ -243,6 +326,7 @@ pub(crate) fn restore(
     let mut restored = Restored {
         ids: Vec::new(),
         runners: Vec::new(),
+        verdict: Verdict::pending(),
     };
     for (started, adopted) in checked {
         let Adopted { job, events, owner } = adopted;
@@ -253,7 +337,7 @@ pub(crate) fn restore(
             .as_ref()
             .map(|path| OpenOptions::new().append(true).open(path))
             .transpose()?;
-        let stop = {
+        let stop = || {
             let (owner, id) = (owner.clone(), job.id.clone());
             Stop(Box::new(move || {
                 owner.stop(&id);
@@ -272,8 +356,12 @@ pub(crate) fn restore(
             }))
         });
         let opened = registry
-            .restore(started, stop, input, job.lines)
+            .restore(started, stop(), input, job.lines)
             .map_err(|failure| io::Error::other(failure.to_string()))?;
+        // The monitor's own stop, which a flood sends.
+        let feed = opened
+            .lines
+            .map(|lines| tools::MonitorFeed::new(job.job_id.clone(), lines, stop(), clock.now()));
         restored.ids.push(job.job_id.clone());
         restored.runners.push(Runner {
             job_id: job.job_id,
@@ -285,7 +373,9 @@ pub(crate) fn restore(
             })),
             end: Some(opened.end),
             emit: opened.emit,
-            lines: opened.lines,
+            feed,
+            clock: Arc::clone(clock),
+            verdict: Arc::clone(&restored.verdict),
         });
     }
     Ok(restored)
@@ -296,7 +386,7 @@ impl Runner {
     /// monitor's lines, and reports the ending once. Everything that
     /// arrived while the runner was not yet running is waiting in `events`.
     fn run(mut self) {
-        let mut feed = self.lines.is_some().then(Feed::default);
+        let mut feed = self.feed.take();
         let mut text = Text::default();
         loop {
             let Ok(first) = self.events.recv() else {
@@ -306,11 +396,14 @@ impl Runner {
                 if lock(&self.sinks).output.is_none() {
                     return;
                 }
-                drop(self.end.take());
+                if let Some(end) = self.end.take() {
+                    self.verdict.lost(end);
+                }
                 return;
             };
             // What is already queued goes out together: one delta per burst
-            // keeps a flood from becoming one event per frame.
+            // keeps a flood from becoming one event per frame, and one
+            // delivery per burst spends one token of a monitor's budget.
             let mut burst = vec![first];
             while !matches!(burst.last(), Some(HostEvent::Exit(_)))
                 && let Ok(more) = self.events.try_recv()
@@ -318,14 +411,15 @@ impl Runner {
                 burst.push(more);
             }
             let mut shown = String::new();
+            let mut fresh = Vec::new();
             for event in burst {
                 match event {
                     HostEvent::Output { stream, bytes } => {
                         let Some(output) = self.append(stream, &bytes) else {
                             return;
                         };
-                        if let Some(feed) = &mut feed {
-                            feed.push(&output);
+                        if feed.is_some() {
+                            fresh.extend_from_slice(&output);
                         }
                         shown.push_str(&text.decode(&output));
                     }
@@ -336,20 +430,28 @@ impl Runner {
                             return;
                         }
                         self.show(&shown);
-                        self.deliver(feed.as_mut(), true);
+                        let flooded = feed.as_mut().is_some_and(|feed| {
+                            let now = self.clock.now();
+                            feed.deliver(&fresh, now, false);
+                            feed.end(now);
+                            feed.flooded()
+                        });
                         if let Some(end) = self.end.take() {
-                            (end.0)(tools::adopted_end(
-                                self.job_id.clone(),
-                                &self.output_path,
-                                &exit,
-                            ));
+                            let ended = if flooded {
+                                tools::adopted_flooded_end
+                            } else {
+                                tools::adopted_end
+                            };
+                            (end.0)(ended(self.job_id.clone(), &self.output_path, &exit));
                         }
                         return;
                     }
                 }
             }
             self.show(&shown);
-            self.deliver(feed.as_mut(), false);
+            if let Some(feed) = &mut feed {
+                feed.deliver(&fresh, self.clock.now(), true);
+            }
         }
     }
 
@@ -388,24 +490,6 @@ impl Runner {
             },
         }));
     }
-
-    /// Sends the monitor's complete lines, and at the ending the incomplete
-    /// last line too, before the job's end.
-    fn deliver(&self, feed: Option<&mut Feed>, last: bool) {
-        let (Some(feed), Some(lines)) = (feed, &self.lines) else {
-            return;
-        };
-        let batch = feed.take(last);
-        if batch.is_empty() {
-            return;
-        }
-        (lines.0)(JobLine {
-            job_id: self.job_id.clone(),
-            lines: cut(&batch),
-            suppressed: None,
-            changed_by: None,
-        });
-    }
 }
 
 /// The newest 64 KiB of a delta, from a character boundary
@@ -438,72 +522,6 @@ impl Text {
         self.carry = rest;
         text
     }
-}
-
-/// A monitor's lines: the bytes of a line wait here until its newline.
-// debt: no rate budget or flood stop, one batch per burst of frames, until the monitor feed in tools can be reused by a restored job
-#[derive(Default)]
-struct Feed {
-    carry: Vec<u8>,
-}
-
-impl Feed {
-    fn push(&mut self, bytes: &[u8]) {
-        self.carry.extend_from_slice(bytes);
-    }
-
-    /// The complete lines so far, or at the ending every line left.
-    fn take(&mut self, last: bool) -> Vec<String> {
-        let end = if last {
-            self.carry.len()
-        } else {
-            match self.carry.iter().rposition(|byte| *byte == b'\n') {
-                Some(at) => at.saturating_add(1),
-                None => return Vec::new(),
-            }
-        };
-        if end == 0 {
-            return Vec::new();
-        }
-        let rest = self.carry.split_off(end);
-        let mut done = std::mem::replace(&mut self.carry, rest);
-        // The last newline ends the last line; it starts no empty one.
-        if done.last() == Some(&b'\n') {
-            done.pop();
-        }
-        done.split(|byte| *byte == b'\n')
-            .map(|line| String::from_utf8_lossy(line).into_owned())
-            .collect()
-    }
-}
-
-/// One delivery: each line cut at 500 characters and the whole at 3,000,
-/// each with a marker (`docs/tools.md`, "Background jobs").
-fn cut(lines: &[String]) -> String {
-    const LINE_LIMIT: usize = 500;
-    const DELIVERY_LIMIT: usize = 3_000;
-    let joined = lines
-        .iter()
-        .map(|line| {
-            if line.chars().count() <= LINE_LIMIT {
-                return line.clone();
-            }
-            let mut cut: String = line.chars().take(LINE_LIMIT).collect();
-            cut.push_str(" [cut]");
-            cut
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let total = joined.chars().count();
-    if total <= DELIVERY_LIMIT {
-        return joined;
-    }
-    let mut cut: String = joined.chars().take(DELIVERY_LIMIT).collect();
-    cut.push_str(&format!(
-        "\n[cut: {} more characters]",
-        total.saturating_sub(DELIVERY_LIMIT)
-    ));
-    cut
 }
 
 #[cfg(test)]

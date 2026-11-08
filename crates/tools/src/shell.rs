@@ -31,7 +31,7 @@ mod process_group;
 pub(crate) mod sandbox;
 mod spawn;
 
-mod monitor;
+pub(crate) mod monitor;
 
 mod output;
 

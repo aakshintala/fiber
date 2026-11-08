@@ -659,7 +659,10 @@ fn hear(peer: &Peer, what: &str) -> Option<FromKeeper> {
     Deadline::after(Duration::from_secs(10)).recv_or_fail(&peer.frames, what)
 }
 
-/// What a keeper does when the test says nothing: every wait on it ends.
+/// Whether a keeper stays silent for a bounded receive while the test holds
+/// the condition it waits on false with a real signal, such as the log mutex
+/// (`docs/testing.md`, "Waits and timeouts": a test that proves a wait has
+/// not answered yet). Never a stand-in for a wait on code the test does not hold.
 fn hearing_nothing(peer: &Peer) -> bool {
     peer.frames.recv_timeout_for_test().is_none()
 }
@@ -1233,7 +1236,8 @@ fn a_candidate_negotiation_ends_at_its_deadline() {
     clock
         .mark_parked(until, deadline())
         .expect("the negotiation parks again");
-    assert!(hearing_nothing(&peer));
+    // Parked at the clock, the negotiation can send nothing until it moves.
+    assert!(peer.frames.try_recv().is_err());
     // At the deadline the connection ends and nothing was taken.
     clock.advance_when_parked(
         Some(until),

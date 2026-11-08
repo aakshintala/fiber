@@ -316,3 +316,25 @@ fn a_flood_found_after_a_stop_began_is_not_marked() {
     assert!(!fed.feed.flooded());
     assert_eq!(*fed.stops.lock().unwrap(), 0);
 }
+
+#[test]
+fn frames_fed_by_bytes_are_batched_budgeted_and_flushed_as_a_pass_would() {
+    let mut fed = fed();
+    let now = fed.clock.now();
+    fed.feed.deliver(b"a\nb\nc", now, true);
+    fed.feed.deliver(b"d\n", now, true);
+    for _ in 0..8 {
+        fed.feed.deliver(b"x\n", now, true);
+    }
+    // Ten batches in all spend the budget: the next two drop,
+    // one of them the incomplete line the end flushes.
+    fed.feed.deliver(b"dropped\n", now, true);
+    fed.feed.deliver(b"tail", now, true);
+    fed.feed.end(now);
+    let sent = fed.sent();
+    assert_eq!(sent[0], line("a\nb", None));
+    assert_eq!(sent[1], line("cd", None));
+    assert_eq!(sent.len(), 11);
+    assert_eq!(sent[10], line("", Some(2)));
+    assert!(!fed.feed.flooded());
+}

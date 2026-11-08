@@ -895,7 +895,14 @@ pub(crate) fn assemble_session(
             // for `orphaned`. Their runners start just before the first turn.
             let handed = match handover {
                 Some(handover) if !handover.running().is_empty() => {
-                    match crate::keeper_restore::take(&keeper, &jobs, &dir, handover, &mut folded) {
+                    match crate::keeper_restore::take(
+                        &keeper,
+                        &jobs,
+                        &dir,
+                        handover,
+                        &clock,
+                        &mut folded,
+                    ) {
                         Ok(handed) => Some(handed),
                         Err(error) => {
                             session_servers.servers.stop();

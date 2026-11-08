@@ -7,13 +7,13 @@
     reason = "test assertions"
 )]
 
-use std::io::{Read as _, Write as _};
+use std::io::{BufRead as _, Read as _, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::{Duration, Instant, SystemTime};
 
-use contract::clock::Clock;
+use contract::clock::{Clock, Wake};
 use contract::events::{Event, JobStarted, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::Jobs as _;
@@ -22,11 +22,44 @@ use contract::{ErrorCode, JobId, SessionId};
 use fakes::Deadline;
 use fakes::clock::FakeClock;
 
-use super::{Restored, restore};
+use super::{Active, Restored, restore};
 use crate::keeper::{Attached, Host, handover_over, host_without_keeper};
 
 fn deadline() -> Deadline {
     Deadline::after(Duration::from_secs(10))
+}
+
+/// The fake clock, telling the test each time the code under test reads it:
+/// a read is the signal that the runner has its time for the burst in hand.
+struct ProbeClock {
+    inner: Arc<FakeClock>,
+    reads: Mutex<mpsc::Sender<()>>,
+}
+
+impl Clock for ProbeClock {
+    fn now(&self) -> Instant {
+        let now = self.inner.now();
+        match support::lock(&self.reads).send(()) {
+            Ok(()) | Err(_) => {}
+        }
+        now
+    }
+
+    fn wall(&self) -> SystemTime {
+        self.inner.wall()
+    }
+
+    fn sleep(&self, d: Duration) {
+        self.inner.sleep(d);
+    }
+
+    fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        self.inner.wait_until(until, wait);
+    }
+
+    fn subscribe(&self, waker: std::sync::Weak<dyn Wake>) {
+        self.inner.subscribe(waker);
+    }
 }
 
 /// A session directory with its log, the registry over its artifacts, the
@@ -40,6 +73,11 @@ struct World {
     host: Arc<Host>,
     keeper: UnixStream,
     session_end: Option<UnixStream>,
+    /// The clock the runners read, and the fake behind it.
+    clock: Arc<dyn Clock>,
+    fake: Arc<FakeClock>,
+    /// One signal per read of `clock`.
+    reads: mpsc::Receiver<()>,
 }
 
 fn world() -> World {
@@ -53,7 +91,15 @@ fn world() -> World {
     let as_clock: Arc<dyn Clock> = clock.clone();
     let registry = jobs::Registry::new(dir.artifacts(), Arc::clone(&as_clock), recorder.clone());
     let (session_end, keeper) = UnixStream::pair().unwrap();
+    let (read, reads) = mpsc::channel();
+    let probe: Arc<dyn Clock> = Arc::new(ProbeClock {
+        inner: Arc::clone(&clock),
+        reads: Mutex::new(read),
+    });
     World {
+        clock: probe,
+        fake: clock,
+        reads,
         host: host_without_keeper(as_clock),
         _root: root,
         dir,
@@ -105,6 +151,23 @@ impl World {
         self.keeper.write_all(b"\n").unwrap();
     }
 
+    /// Lets `by` pass on the fake clock. The runner only reads it, and the
+    /// caller has seen its read for the burst before this one.
+    fn advance(&self, by: Duration) {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "no code under test waits on the clock (ruling 6179406086)"
+        )]
+        self.fake.advance(by);
+    }
+
+    /// Sends one line as its own burst and waits for the runner to read the
+    /// clock for it, so the next send or advance cannot reach that burst.
+    fn burst(&mut self, call: &str, text: &str) {
+        self.send(output_frame(call, "out", text));
+        deadline().recv_or_fail(&self.reads, "the runner to read the clock for a burst");
+    }
+
     fn output(&self, id: &str) -> Vec<u8> {
         std::fs::read(self.dir.artifacts().join(format!("{id}.log"))).unwrap()
     }
@@ -129,7 +192,46 @@ fn inbox(world: &World) -> mpsc::Receiver<Delivery> {
 
 /// The restore of every job `attached` carries, activated.
 fn restored(world: &World, attached: &mut Attached) -> Restored {
-    restore(&world.registry, &world.dir, attached.take_jobs()).unwrap()
+    restore(
+        &world.registry,
+        &world.dir,
+        &world.clock,
+        attached.take_jobs(),
+    )
+    .unwrap()
+}
+
+/// The lines `stream` carries, read on a worker so a test waits for each
+/// one with a deadline.
+fn lines_of(stream: &UnixStream) -> mpsc::Receiver<String> {
+    let stream = stream.try_clone().unwrap();
+    let (send, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stream);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(read) if read > 0 && send.send(line).is_ok() => {}
+                Ok(_) | Err(_) => break,
+            }
+        }
+    });
+    lines
+}
+
+/// Signals once every runner of `active` has returned.
+fn finished(active: &mut Active) -> mpsc::Receiver<()> {
+    let threads = std::mem::take(&mut active.threads);
+    let (send, done) = mpsc::channel();
+    std::thread::spawn(move || {
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        match send.send(()) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    done
 }
 
 #[test]
@@ -143,6 +245,7 @@ fn monitor_lines_without_errors_path_restored() {
     let deliveries = inbox(&world);
     let restored = restored(&world, &mut attached);
     assert_eq!(restored.job_ids(), [JobId("j_mon".into())]);
+    let heard = lines_of(&world.keeper);
     let active = restored.activate();
     // The keeper has not acknowledged yet: `ready` waits behind this barrier.
     let (send, ready) = mpsc::channel();
@@ -151,15 +254,13 @@ fn monitor_lines_without_errors_path_restored() {
             Ok(()) | Err(_) => {}
         },
     );
-    let mut keeper = world.keeper.try_clone().unwrap();
-    let mut adopted = String::new();
-    std::io::BufRead::read_line(&mut std::io::BufReader::new(&mut keeper), &mut adopted).unwrap();
+    let dl = deadline();
+    let adopted = dl.recv_or_fail(&heard, "the adopted frame");
     assert_eq!(adopted.trim(), r#"{"adopted":true}"#);
     world.send(output_frame("call_0", "out", "hello\nwor"));
     world.send(output_frame("call_0", "out", "ld\n"));
     world.send(exit_frame("call_0", 0));
     // The lines arrive before the ending, and neither waits for the ack.
-    let dl = deadline();
     let mut text = Vec::new();
     let completed = loop {
         let delivery = dl.recv_or_fail(&deliveries, "a line or the ending");
@@ -285,6 +386,7 @@ fn the_stop_and_the_terminal_of_a_running_restored_job_reach_its_keeper() {
     let mut attached = world.attach(vec![job]);
     let _deliveries = inbox(&world);
     let restored = restored(&world, &mut attached);
+    let heard = lines_of(&world.keeper);
     let active = restored.activate();
     let (send, answer) = mpsc::channel();
     let registry = Arc::clone(&world.registry);
@@ -293,16 +395,13 @@ fn the_stop_and_the_terminal_of_a_running_restored_job_reach_its_keeper() {
             Ok(()) | Err(_) => {}
         },
     );
-    let mut reader = std::io::BufReader::new(world.keeper.try_clone().unwrap());
-    let mut line = String::new();
-    std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+    let line = deadline().recv_or_fail(&heard, "the terminal write");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&line).unwrap(),
         serde_json::json!({"write": {"id": "call_0", "text": "ls\n"}})
     );
     assert!(world.registry.stop(&JobId("j_run".into())));
-    line.clear();
-    std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+    let line = deadline().recv_or_fail(&heard, "the stop");
     assert_eq!(line.trim(), r#"{"stop":"call_0"}"#);
     world.send(exit_frame("call_0", 0));
     drop(deadline().recv(&answer));
@@ -311,7 +410,12 @@ fn the_stop_and_the_terminal_of_a_running_restored_job_reach_its_keeper() {
 
 fn refused(world: &mut World, running: Vec<KeptJob>) -> std::io::Error {
     let mut attached = world.attach(running);
-    match restore(&world.registry, &world.dir, attached.take_jobs()) {
+    match restore(
+        &world.registry,
+        &world.dir,
+        &world.clock,
+        attached.take_jobs(),
+    ) {
         Ok(_) => panic!("a restore of a job the log does not describe succeeded"),
         Err(error) => error,
     }
@@ -440,27 +544,21 @@ fn abandoning_active_runners_closes_their_handles_and_reports_nothing() {
     let (job, mut writers) = watched_job(&world, "j_job", "call_0");
     let mut attached = world.attach(vec![job]);
     let deliveries = inbox(&world);
-    let active = restored(&world, &mut attached).activate();
+    let mut active = restored(&world, &mut attached).activate();
     assert!(writers.open());
+    let done = finished(&mut active);
     // The acknowledgement never came: the handles close now, even though the
     // runner is still blocked waiting for its next event.
     drop(active);
     assert!(!writers.open());
-    // The keeper's last word reaches a runner that is no longer the owner.
+    // The keeper's last word reaches a runner that is no longer the owner;
+    // it has consumed it once it returns.
     world.send(exit_frame("call_0", 0));
-    assert!(deliveries.recv_timeout_for_test().is_none());
+    deadline().recv_or_fail(&done, "the runner to consume the exit");
+    assert!(deliveries.try_recv().is_err());
     drop(attached);
-    assert!(deliveries.recv_timeout_for_test().is_none());
+    assert!(deliveries.try_recv().is_err());
     assert_eq!(world.registry.running(), vec![JobId("j_job".into())]);
-}
-
-trait QuietFor<T> {
-    fn recv_timeout_for_test(&self) -> Option<T>;
-}
-impl<T> QuietFor<T> for mpsc::Receiver<T> {
-    fn recv_timeout_for_test(&self) -> Option<T> {
-        Deadline::after(Duration::from_millis(200)).recv(self).ok()
-    }
 }
 
 #[test]
@@ -476,13 +574,19 @@ fn a_kept_handover_keeps_its_handles_open() {
 }
 
 #[test]
-fn a_keeper_that_vanishes_leaves_its_job_failed_indeterminate() {
+fn a_keeper_that_vanishes_leaves_its_job_failed_indeterminate_once_the_handover_is_kept() {
     let mut world = world();
     let job = world.job("j_job", "call_0", b"");
     let mut attached = world.attach(vec![job]);
     let deliveries = inbox(&world);
-    let active = restored(&world, &mut attached).activate();
+    let mut active = restored(&world, &mut attached).activate();
+    let done = finished(&mut active);
     world.keeper.shutdown(std::net::Shutdown::Both).unwrap();
+    deadline().recv_or_fail(&done, "the runner to see the closed connection");
+    // Until the session says it keeps the handover, the loss is not a
+    // completion: it may still give the handover up.
+    assert!(deliveries.try_recv().is_err());
+    active.keep();
     let delivery = deadline().recv_or_fail(&deliveries, "the ending");
     let Delivery::Job(notice) = delivery else {
         panic!("expected the ending, got {delivery:?}")
@@ -492,7 +596,25 @@ fn a_keeper_that_vanishes_leaves_its_job_failed_indeterminate() {
         notice.completed.error.map(|error| error.code),
         Some(ErrorCode::Indeterminate)
     );
+}
+
+#[test]
+fn a_keeper_that_vanishes_after_the_handover_was_kept_fails_its_job_at_once() {
+    let mut world = world();
+    let job = world.job("j_job", "call_0", b"");
+    let mut attached = world.attach(vec![job]);
+    let deliveries = inbox(&world);
+    let active = restored(&world, &mut attached).activate();
     active.keep();
+    world.keeper.shutdown(std::net::Shutdown::Both).unwrap();
+    let delivery = deadline().recv_or_fail(&deliveries, "the ending");
+    let Delivery::Job(notice) = delivery else {
+        panic!("expected the ending, got {delivery:?}")
+    };
+    assert_eq!(
+        notice.completed.error.map(|error| error.code),
+        Some(ErrorCode::Indeterminate)
+    );
 }
 
 #[test]
@@ -502,28 +624,6 @@ fn text_decoding_holds_an_incomplete_character_for_the_next_bytes() {
     assert_eq!(text.decode(&euro[..2]), "");
     assert_eq!(text.decode(&euro[2..]), "€");
     assert_eq!(text.decode(b"a\xffb"), "a\u{fffd}b");
-}
-
-#[test]
-fn feed_takes_complete_lines_and_keeps_the_rest() {
-    let mut feed = super::Feed::default();
-    feed.push(b"one\ntw");
-    assert_eq!(feed.take(false), ["one"]);
-    assert!(feed.take(false).is_empty());
-    feed.push(b"o\n\nthree");
-    assert_eq!(feed.take(false), ["two", ""]);
-    assert_eq!(feed.take(true), ["three"]);
-    assert!(feed.take(true).is_empty());
-}
-
-#[test]
-fn cut_marks_a_long_line_and_a_long_delivery() {
-    let long = "x".repeat(501);
-    assert_eq!(super::cut(&[long]), format!("{} [cut]", "x".repeat(500)));
-    let many: Vec<String> = (0..400).map(|_| "y".repeat(9)).collect();
-    let text = super::cut(&many);
-    assert!(text.ends_with("more characters]"), "{text}");
-    assert!(text.contains("\n[cut: "));
 }
 
 #[test]
@@ -558,7 +658,36 @@ fn a_finish_that_fails_closes_the_writers_before_the_connection_ends() {
         !writers.open(),
         "every append handle closed with the failure"
     );
-    assert!(deliveries.recv_timeout_for_test().is_none());
+    assert!(deliveries.try_recv().is_err());
+}
+
+#[test]
+fn a_connection_closed_before_the_handover_fails_reports_no_completion() {
+    let mut world = world();
+    let job = world.job("j_job", "call_0", b"");
+    let mut attached = world.attach(vec![job]);
+    let deliveries = inbox(&world);
+    let restored = restored(&world, &mut attached);
+    let handed = super::Handed { restored, attached };
+    world.keeper.shutdown(std::net::Shutdown::Both).unwrap();
+    // The runner handles the closed connection before the failed
+    // acknowledgement is dealt with: the interleaving that once reported
+    // the job lost under a handover the session then gave up.
+    let error = handed
+        .finish_after_start(|active| {
+            let done = finished(active);
+            deadline().recv_or_fail(&done, "the runner to see the closed connection");
+        })
+        .unwrap_err();
+    assert!(
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::TimedOut
+        ),
+        "{error}"
+    );
+    assert!(deliveries.try_recv().is_err());
+    assert_eq!(world.registry.running(), vec![JobId("j_job".into())]);
 }
 
 #[test]
@@ -575,4 +704,114 @@ fn a_finish_the_keeper_acknowledges_keeps_the_writers() {
         writers.open(),
         "the session owns the file after the handover"
     );
+}
+
+/// A monitor job restored and running, the registry's inbox, the lines the
+/// keeper hears, and the attachment that keeps the connection open.
+fn monitor() -> (
+    World,
+    Active,
+    mpsc::Receiver<Delivery>,
+    mpsc::Receiver<String>,
+    Attached,
+) {
+    let mut world = world();
+    let mut job = world.job("j_mon", "call_0", b"");
+    job.lines = true;
+    let mut attached = world.attach(vec![job]);
+    let deliveries = inbox(&world);
+    let heard = lines_of(&world.keeper);
+    let restored = restored(&world, &mut attached);
+    // The feed read the clock to start its budget.
+    deadline().recv_or_fail(&world.reads, "the feed's first read of the clock");
+    let active = restored.activate();
+    (world, active, deliveries, heard, attached)
+}
+
+/// The lines of the next delivery, which must be a monitor's.
+fn delivered(deliveries: &mpsc::Receiver<Delivery>) -> contract::events::JobLine {
+    let delivery = deadline().recv_or_fail(deliveries, "a monitor delivery");
+    let Delivery::JobLine(line) = delivery else {
+        panic!("expected a monitor delivery, got {delivery:?}")
+    };
+    line
+}
+
+#[test]
+fn a_restored_monitor_spends_a_budget_of_ten_and_reports_what_it_suppressed() {
+    let (mut world, active, deliveries, _heard, _attached) = monitor();
+    for n in 0..10 {
+        world.burst("call_0", &format!("line {n}\n"));
+        let line = delivered(&deliveries);
+        assert_eq!(line.lines, format!("line {n}"));
+        assert_eq!(line.suppressed, None);
+    }
+    // The clock stands still: the next two are dropped, not delivered.
+    world.burst("call_0", "dropped one\n");
+    world.burst("call_0", "dropped two\n");
+    world.send(exit_frame("call_0", 0));
+    // The count arrives before the ending, with no lines of its own.
+    let count = delivered(&deliveries);
+    assert_eq!((count.lines.as_str(), count.suppressed), ("", Some(2)));
+    let delivery = deadline().recv_or_fail(&deliveries, "the ending");
+    let Delivery::Job(notice) = delivery else {
+        panic!("expected the ending, got {delivery:?}")
+    };
+    assert_eq!(notice.completed.status, Outcome::Completed);
+    // The file keeps what the model was not sent.
+    assert!(
+        String::from_utf8(world.output("j_mon"))
+            .unwrap()
+            .ends_with("dropped one\ndropped two\n")
+    );
+    active.keep();
+}
+
+#[test]
+fn a_restored_monitor_earns_a_delivery_every_two_seconds() {
+    let (mut world, active, deliveries, _heard, _attached) = monitor();
+    for n in 0..10 {
+        world.burst("call_0", &format!("line {n}\n"));
+        delivered(&deliveries);
+    }
+    world.advance(Duration::from_secs(2));
+    world.burst("call_0", "earned\n");
+    let line = delivered(&deliveries);
+    assert_eq!((line.lines.as_str(), line.suppressed), ("earned", None));
+    active.keep();
+}
+
+#[test]
+fn a_restored_monitor_that_floods_for_thirty_seconds_is_stopped_and_ends_flooded() {
+    let (mut world, active, deliveries, heard, _attached) = monitor();
+    for n in 0..10 {
+        world.burst("call_0", &format!("line {n}\n"));
+        delivered(&deliveries);
+    }
+    // Two bursts every 1.5 s: the refill earns less than one a step, so the
+    // second of each is dropped, and the run of suppression reaches 30 s at
+    // the 21st step.
+    for _ in 0..21 {
+        world.burst("call_0", "noise\n");
+        world.burst("call_0", "noise\n");
+        world.advance(Duration::from_millis(1_500));
+    }
+    let stop = deadline().recv_or_fail(&heard, "the stop of a flooded monitor");
+    assert_eq!(stop.trim(), r#"{"stop":"call_0"}"#);
+    world.send(exit_frame("call_0", 0));
+    // What the budget let through is delivered, then the ending.
+    let dl = deadline();
+    let notice = loop {
+        let delivery = dl.recv_or_fail(&deliveries, "the ending");
+        if let Delivery::Job(notice) = delivery {
+            break notice;
+        }
+        assert!(matches!(delivery, Delivery::JobLine(_)), "{delivery:?}");
+    };
+    assert_eq!(notice.completed.status, Outcome::Failed);
+    assert_eq!(
+        notice.completed.error.map(|error| error.code),
+        Some(ErrorCode::Flooded)
+    );
+    active.keep();
 }
