@@ -58,11 +58,6 @@ fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
-            .or_else(|| {
-                UnixStream::connect(&path)
-                    .err()
-                    .map(|error| error.to_string())
-            })
             .unwrap_or_else(|| "no connect error was observed".to_owned());
         let socket_state = match fs::metadata(&path) {
             Ok(metadata) => format!("present (file type: {:?})", metadata.file_type()),
@@ -370,8 +365,10 @@ fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
         .map(String::as_str)
         .or_else(|| panic.downcast_ref::<&str>().copied())
         .unwrap_or("non-string panic");
-    assert!(message.contains("last connect error: "), "{message}");
-    assert!(message.contains("No such file or directory"), "{message}");
+    assert!(
+        message.contains("last connect error: no connect error was observed"),
+        "{message}"
+    );
     assert!(message.contains("socket path "), "{message}");
     assert!(message.contains(": absent"), "{message}");
 }
