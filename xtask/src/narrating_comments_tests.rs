@@ -1,0 +1,271 @@
+use std::collections::BTreeMap;
+
+use super::check_diff;
+
+fn sources(entries: &[(&str, &str)]) -> BTreeMap<String, String> {
+    entries
+        .iter()
+        .map(|(path, source)| ((*path).to_owned(), (*source).to_owned()))
+        .collect()
+}
+
+fn added(path: &str, hunk: &str, source: &str) -> Result<Vec<String>, String> {
+    check_diff(
+        &format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n{hunk}"),
+        &sources(&[(path, source)]),
+    )
+}
+
+#[test]
+fn rejects_each_ruled_phrase_and_mixed_case() {
+    for line in [
+        "// changed from old",
+        "// Previously this path",
+        "// now uses the cache",
+        "// fixed the bug where it broke",
+        "// FiXeD the BUG where it broke",
+    ] {
+        let text = format!("{line}\n");
+        assert_eq!(
+            added(
+                "src/lib.rs",
+                "@@ -0,0 +1 @@\n+PLACEHOLDER\n"
+                    .replace("PLACEHOLDER", line)
+                    .as_str(),
+                &text
+            ),
+            Ok(vec!["src/lib.rs:1: comment narrates history".to_owned()]),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn phrase_word_edges_exclude_substrings_and_allow_punctuation() {
+    for line in [
+        "// unchanged from baseline",
+        "// know uses",
+        "// previously_named",
+        "// xpreviously",
+        "// used to",
+        "// was changed",
+        "// replaced, instead of",
+    ] {
+        assert!(
+            added(
+                "src/lib.rs",
+                &format!("@@ -0,0 +1 @@\n+{line}\n"),
+                &format!("{line}\n")
+            )
+            .unwrap()
+            .is_empty(),
+            "{line}"
+        );
+    }
+    for line in ["// (previously)", "// previously!", "// !previously "] {
+        assert_eq!(
+            added(
+                "src/lib.rs",
+                &format!("@@ -0,0 +1 @@\n+{line}\n"),
+                &format!("{line}\n")
+            )
+            .unwrap()
+            .len(),
+            1,
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn phrase_spacing_is_spaces_or_tabs_but_never_newlines() {
+    for line in [
+        "// now  uses",
+        "// now\tuses",
+        "// fixed the\tbug where",
+        "// fixed the \tbug where",
+    ] {
+        assert_eq!(
+            added(
+                "src/lib.rs",
+                &format!("@@ -0,0 +1 @@\n+{line}\n"),
+                &format!("{line}\n")
+            )
+            .unwrap()
+            .len(),
+            1,
+            "{line}"
+        );
+    }
+    let source = "// now\n// uses\n";
+    let diff = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -0,0 +1,2 @@\n+// now\n+// uses\n";
+    assert!(
+        check_diff(diff, &sources(&[("src/lib.rs", source)]))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn scans_only_added_comment_text_and_reports_each_line_once() {
+    let diff = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,2 +1,2 @@\n // previously old\n-fn f() {}\n+fn f() {} // now uses cache; previously was old\n";
+    assert_eq!(
+        check_diff(
+            diff,
+            &sources(&[(
+                "src/lib.rs",
+                "// previously old\nfn f() {} // now uses cache; previously was old\n"
+            )])
+        )
+        .unwrap(),
+        ["src/lib.rs:2: comment narrates history"]
+    );
+    assert!(
+        added(
+            "src/lib.rs",
+            "@@ -0,0 +1 @@\n+let s = \"// now uses cache\";\n",
+            "let s = \"// now uses cache\";\n"
+        )
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[test]
+fn recognizes_rust_line_doc_block_and_shell_comments() {
+    for (path, line, source) in [
+        (
+            "src/lib.rs",
+            "/// previously documented",
+            "/// previously documented\n",
+        ),
+        (
+            "src/lib.rs",
+            "/* previously documented */",
+            "/* previously documented */\n",
+        ),
+        (
+            "scripts/run.sh",
+            "echo ok # now uses cache",
+            "echo ok # now uses cache\n",
+        ),
+    ] {
+        assert_eq!(
+            added(path, &format!("@@ -0,0 +1 @@\n+{line}\n"), source)
+                .unwrap()
+                .len(),
+            1,
+            "{line}"
+        );
+    }
+    for (path, line) in [
+        ("src/lib.rs", "let s = r##\"// now uses cache\"##;"),
+        ("src/lib.rs", r"let c = '\u{7f}'; // ordinary note"),
+        ("src/lib.rs", "/* now */ let x = 1; /* uses */"),
+    ] {
+        let source = format!("{line}\n");
+        assert!(
+            added(path, &format!("@@ -0,0 +1 @@\n+{line}\n"), &source)
+                .unwrap()
+                .is_empty(),
+            "{line}"
+        );
+    }
+    let line = r"let c = '\u{7f}'; // now uses cache";
+    assert_eq!(
+        added(
+            "src/lib.rs",
+            &format!("@@ -0,0 +1 @@\n+{line}\n"),
+            &format!("{line}\n")
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    let source = "cat <<'EOF'\n# now uses cache\nEOF\n";
+    let diff = "diff --git a/scripts/check b/scripts/check\n--- a/scripts/check\n+++ b/scripts/check\n@@ -0,0 +1,3 @@\n+cat <<'EOF'\n+# now uses cache\n+EOF\n";
+    assert!(
+        check_diff(diff, &sources(&[("scripts/check", source)]))
+            .unwrap()
+            .is_empty()
+    );
+    let source = "cat <<-A <<B\n# now uses cache\n\tA\n# previously\nB\n";
+    let diff = "diff --git a/scripts/check b/scripts/check\n--- a/scripts/check\n+++ b/scripts/check\n@@ -0,0 +1,5 @@\n+cat <<-A <<B\n+# now uses cache\n+\tA\n+# previously\n+B\n";
+    assert!(
+        check_diff(diff, &sources(&[("scripts/check", source)]))
+            .unwrap()
+            .is_empty()
+    );
+    let line = "cat <<< '# now uses cache' # previously";
+    assert_eq!(
+        added(
+            "scripts/check",
+            &format!("@@ -0,0 +1 @@\n+{line}\n"),
+            &format!("{line}\n")
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+}
+
+#[test]
+fn patch_line_accounting_handles_context_deletions_and_multiple_hunks() {
+    let diff = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,2 +1,2 @@\n // previously old\n-old();\n+new();\n@@ -2,0 +3 @@\n+// now uses cache\ndiff --git a/src/b.rs b/src/b.rs\n--- /dev/null\n+++ b/src/b.rs\n@@ -0,0 +1 @@\n+// changed from old\n";
+    assert_eq!(
+        check_diff(
+            diff,
+            &sources(&[
+                ("src/a.rs", "// previously old\nnew();\n// now uses cache\n"),
+                ("src/b.rs", "// changed from old\n")
+            ])
+        )
+        .unwrap()
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>(),
+        [
+            "src/a.rs:3: comment narrates history".to_owned(),
+            "src/b.rs:1: comment narrates history".to_owned()
+        ]
+        .into_iter()
+        .collect()
+    );
+    let header_like = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -0,0 +1,2 @@\n++++ /dev/null\n+// previously\n";
+    assert_eq!(
+        check_diff(
+            header_like,
+            &sources(&[("src/a.rs", "+++ /dev/null\n// previously\n")])
+        )
+        .unwrap(),
+        ["src/a.rs:2: comment narrates history"]
+    );
+}
+
+#[test]
+fn zero_additions_deletions_no_newline_markers_and_raw_strings_are_clean() {
+    let source = "let text = r#\"\n// previously\n\"#;\n";
+    let raw_line = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,0 +2 @@\n+// previously\n";
+    assert!(
+        check_diff(raw_line, &sources(&[("src/a.rs", source)]))
+            .unwrap()
+            .is_empty()
+    );
+    let diff = "diff --git a/src/deleted.rs b/src/deleted.rs\n--- a/src/deleted.rs\n+++ /dev/null\n@@ -1 +0,0 @@\n-// previously\n\\ No newline at end of file\ndiff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -0,0 +1,2 @@\n+// clean\n+// ordinary\n\\ No newline at end of file\ndiff --git a/src/zero.rs b/src/zero.rs\n--- a/src/zero.rs\n+++ b/src/zero.rs\n@@ -1 +0,0 @@\n-// previously\n";
+    assert!(
+        check_diff(diff, &sources(&[("src/a.rs", "// clean\n// ordinary")]))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn malformed_patch_is_an_error_not_a_clean_result() {
+    let bad = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,2 +1,2 @@\n+// now uses cache\n";
+    assert!(check_diff(bad, &sources(&[("src/a.rs", "// now uses cache\n")])).is_err());
+    let missing_source = "diff --git a/src/missing.rs b/src/missing.rs\n--- a/src/missing.rs\n+++ b/src/missing.rs\n@@ -0,0 +1 @@\n+// previously\n";
+    assert!(
+        check_diff(missing_source, &BTreeMap::new())
+            .unwrap_err()
+            .contains("src/missing.rs: source unavailable")
+    );
+}

@@ -21,6 +21,13 @@ A doc table that mirrors the code has a check that fails when the two
 differ. The `unsafe` table below and the crate list in `docs/dependencies.md`
 are two. A new table of that kind comes with its check.
 
+`cargo xtask narrating-comments --base REV` checks only added source comment
+lines for the four literal phrases named in [`docs/code-quality.md`,
+"Comments"](../code-quality.md#comments). Matching is case-insensitive, uses
+word boundaries and allows spaces or tabs between words; it does not cross
+comment lines. Source strings and non-comment text do not count. A violation
+prints `narrating-comments: crates/a/src/lib.rs:7: comment narrates history`.
+
 What no tool can check is in "What a reviewer checks", and nowhere else.
 
 ## Formatting
