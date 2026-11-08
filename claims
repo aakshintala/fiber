@@ -389,3 +389,8 @@ docs/testing.md	fiber-4177	plan	2026-11-08T07:02:16Z	roundhouse-7010-plus-1:/hom
 docs/testing/screens.md	fiber-4177	plan	2026-11-08T07:02:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 docs/tools.md	fiber-4177	plan	2026-11-08T07:02:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 docs/workflow.md	fiber-4177	plan	2026-11-08T07:02:16Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/extensions/src/lua_provider.rs	fiber-4326	plan	2026-11-08T07:20:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/extensions/src/lua_provider_tests.rs	fiber-4326	plan	2026-11-08T07:20:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/reload.rs	fiber-4326	plan	2026-11-08T07:20:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/src/reload_tests.rs	fiber-4326	plan	2026-11-08T07:20:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/extensions.md	fiber-4326	plan	2026-11-08T07:20:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
