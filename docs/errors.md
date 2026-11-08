@@ -205,7 +205,7 @@ an overflow as a generic "invalid parameters" 400, so on muse it is
 "max_tokens exceeds …" would start a compaction whose note request fails the same
 way.
 
-Fiber also checks its own token estimate before sending, and hands off at
+Fiber also checks its own token estimate before sending, and compacts at
 the point `docs/compaction.md`, "Automatic", sets, so a provider-reported overflow is
 the exception.
 

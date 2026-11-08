@@ -79,7 +79,7 @@ fn a_compaction_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() 
     let third = fiber(&setup, &["ask", "--resume", &id, "Seven."]);
     assert_eq!(third.code, Some(0), "{}", third.stderr);
     lines.extend(third.lines);
-    let fourth = fiber(&setup, &["ask", "--resume", &id, "Please hand off now."]);
+    let fourth = fiber(&setup, &["ask", "--resume", &id, "Please compact now."]);
     assert_eq!(fourth.code, Some(0), "{}", fourth.stderr);
     lines.extend(fourth.lines);
 
@@ -137,7 +137,7 @@ fn a_compaction_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() 
     assert!(before.contains("Which color?"));
     assert!(before.contains("Blue."));
     assert!(before.contains("Seven."));
-    assert!(before.contains("Please hand off now."));
+    assert!(before.contains("Please compact now."));
     assert!(
         !before.contains("The person's earlier message:")
             && !before.contains("The person's new message:")
@@ -174,7 +174,7 @@ fn a_compaction_carries_two_reply_pairs_a_loaded_skill_and_labelled_new_input() 
     assert_eq!(earlier[0].as_str(), pair_one);
     // docs/compaction.md, "What the model sees after a compaction", item 4: "oldest first".
     assert_eq!(earlier[1].as_str(), pair_two);
-    let current = "The person's new message:\nPlease hand off now.";
+    let current = "The person's new message:\nPlease compact now.";
     let note = "The compaction note.";
     let skill = &resent["payload"]["skills"][0];
     let skill_block = format!(

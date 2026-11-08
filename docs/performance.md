@@ -180,7 +180,7 @@ The busy-or-resumed ceiling holds on three workloads:
 
 - a turn of 429 tool calls with the context window full to the compaction point
 - resuming a 20,000-token session
-- resuming a 2,000,000-token session that has handed off 7 times
+- resuming a 2,000,000-token session that has compacted 7 times
 
 `web_fetch` holds at most one whole copy of the 10 MiB page: an HTML page
 streams into its artifact and its converter in 64 KiB pieces, so only its

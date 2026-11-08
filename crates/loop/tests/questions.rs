@@ -48,7 +48,7 @@ fn asking(name: &'static str, texts: &[&str]) -> TestTool {
 
 /// A tool whose calls return `control.compact`.
 fn handing_off(name: &'static str) -> TestTool {
-    let mut tool = TestTool::reads(name, "Handed off.");
+    let mut tool = TestTool::reads(name, "Compacted.");
     tool.output.control = Some(Control {
         compact: Some("the note".into()),
         questions: None,

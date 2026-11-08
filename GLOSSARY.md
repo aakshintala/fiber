@@ -194,7 +194,7 @@ _Avoid_: branch, backtrack, checkpoint, undo
 
 Restarting the model's context from a compaction note, appended to the session log
 so nothing before it is lost. Started automatically, by a person, or by a tool.
-_Avoid_: compaction, summary, collapse, reset
+_Avoid_: summary, collapse, reset
 
 ### Compaction note
 

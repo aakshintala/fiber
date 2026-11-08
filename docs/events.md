@@ -1640,7 +1640,7 @@ earlier point. A person starts one from the terminal, a driver with the
 
 The model does not rewind. For planned speculative work it uses
 `delegate_fork`, with `isolation: worktree` where files matter. For an
-unplanned dead end it hands off: it restarts its own context from a note it
+unplanned dead end it compacts: it restarts its own context from a note it
 writes. How a compaction works is `docs/compaction.md`.
 
 ## Change workspace

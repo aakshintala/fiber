@@ -25,7 +25,7 @@ use crate::theme::{Role, style};
 
 /// What the trigger reads for a compaction the model started with its tool,
 /// which writes no `compaction_started`.
-const BY_MODEL: &str = "the model handed off";
+const BY_MODEL: &str = "the model compacted";
 
 /// How a compaction stands.
 #[derive(Debug, Clone)]

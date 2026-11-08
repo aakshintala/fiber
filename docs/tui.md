@@ -1496,7 +1496,7 @@ A compaction breaks the turn's card (`docs/compaction.md`). The card ends where 
 compaction ran, and a tinted band carries:
 
 - the trigger: "automatic at 400k", "you asked with /compact", "the request
-  did not fit" or "the model handed off"
+  did not fit" or "the model compacted"
 - the context size before and after ("402k → 32k"); the size after comes from
   the first request after the compaction that reports its input tokens, so it
   reads "…" until that returns

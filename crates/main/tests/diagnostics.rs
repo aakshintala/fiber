@@ -172,7 +172,7 @@ fn journey(sentinel: String) -> ProviderServer {
                 .iter()
                 .any(|item| item["type"] == "function_call" && item["name"] == name)
         };
-        // The compaction rewinds the conversation: the handed-off step's
+        // The compaction rewinds the conversation: the compacted step's
         // input holds the note, never the calls before it. The note
         // therefore marks the journey's second half.
         if !text.contains("Continue with the tests.") {

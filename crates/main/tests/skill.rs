@@ -119,7 +119,7 @@ fn denied_skill_kinds() -> Vec<&'static str> {
     ]
 }
 
-/// The event kinds of the resumed turn that hands off after one read call
+/// The event kinds of the resumed turn that compacts after one read call
 /// and refuses the credential-linked resend: the compaction completes, no
 /// `skills_resent` line is written, one notice names the skill, then the
 /// answer. A resume writes no `session_started`.
@@ -504,7 +504,7 @@ fn a_skill_that_became_a_credentials_link_is_not_sent_again_at_a_compaction() {
     fs::remove_dir_all(&link).unwrap();
     symlink(fs::canonicalize(&target).unwrap(), &link).unwrap();
 
-    // The resumed turn hands off after its first reply is measured, and
+    // The resumed turn compacts after its first reply is measured, and
     // the resend refuses the link.
     fs::write(setup.root.path().join("note.txt"), "a note\n").unwrap();
     let server = ProviderServer::start([

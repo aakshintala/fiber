@@ -332,8 +332,8 @@ fn an_unknown_key_is_a_notice_and_is_otherwise_ignored() {
     assert_eq!(
         messages,
         [
-            format!("{global}: ignored `frobnicate`, which this Fiber does not know."),
             format!("{global}: ignored `compaction.zap`, which this Fiber does not know."),
+            format!("{global}: ignored `frobnicate`, which this Fiber does not know."),
             "-c: ignored `future`, which this Fiber does not know.".to_owned(),
         ]
     );

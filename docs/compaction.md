@@ -8,6 +8,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 Vocabulary is `GLOSSARY.md`. Compaction, compaction note, session log, step, step
 boundary and artifact mean what it says there and nothing else. The events are
 `docs/events.md`; the tool result contract is `docs/tools.md`.
+Fiber called this a handoff until 2026-11-05; that name is kept for a future skill that hands the work to a new session.
 
 ## What a compaction is
 
@@ -39,7 +40,7 @@ reads the cached prefix. It is never a separate request to another model. The
 request after the compaction misses the prompt cache.
 
 At most one compaction runs per step. If the context is still over the trigger
-after a compaction, Fiber does not hand off again in that step.
+after a compaction, Fiber does not compact again in that step.
 
 Automatic compaction can be turned off in configuration. With it off, a turn that
 reaches the model's limit fails with `context_overflow`, and the overflow rule
@@ -149,7 +150,7 @@ The cut is the step boundary at which the compaction ran. Everything after that
 boundary in the log follows as usual. This is the rule `docs/prompt-cache.md`
 builds on.
 
-The reviewer hands off at the same boundary. It keeps the person's messages
+The reviewer compacts at the same boundary. It keeps the person's messages
 that still bind, word for word, each with the reply it answered, and starts again from them
 (`docs/permissions.md`, "At a compaction").
 
@@ -265,7 +266,7 @@ actions, and `compaction_completed`.
 ## Cost
 
 Every compaction makes the next request miss the prompt cache after the system
-prompt and tools. On token cost alone, handing off earlier is still cheaper,
+prompt and tools. On token cost alone, compacting earlier is still cheaper,
 down to a floor where a fresh context is already near the trigger
 ([research/compaction/cost.md](../research/compaction/cost.md)).
 
@@ -273,7 +274,7 @@ Cost therefore cannot choose T; quality does. The owner's experience is that
 current models with 1 million token windows decay around 400,000 tokens, and
 the owner ruled that point the default. The default f of 0.7 keeps the trigger
 clear of a smaller window's limit, with room for a large final step, and the
-cost model supports handing off at that point too.
+cost model supports compacting at that point too.
 
 ## Evidence
 
@@ -284,7 +285,7 @@ cost model supports handing off at that point too.
 - [research/compaction/thresholds.md](../research/compaction/thresholds.md):
   price cliffs, context anxiety, and the reference agents' triggers.
 - [research/compaction/cost.md](../research/compaction/cost.md): how often each
-  threshold hands off, and what it costs.
+  threshold compacts, and what it costs.
 
 ## Related
 

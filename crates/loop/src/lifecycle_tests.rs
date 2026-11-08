@@ -3363,7 +3363,7 @@ fn a_compaction_note_request_never_reaches_the_hook() {
         Some(hooks.clone()),
         vec![Arc::new(Probe) as Arc<dyn Tool>],
     );
-    // Any reply overflows the context, so the next step hands off first.
+    // Any reply overflows the context, so the next step compacts first.
     world.looped = world.looped.take().map(|looped| {
         looped.compaction(crate::CompactionSettings {
             enabled: true,

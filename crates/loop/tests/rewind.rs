@@ -3416,7 +3416,7 @@ fn handed_said(text: &str, tokens: u64) -> Scripted {
     support::with_tokens(Scripted::text(text), tokens, 0)
 }
 
-/// Session A after two turns: turn 1 calls `write_file`, hands off on
+/// Session A after two turns: turn 1 calls `write_file`, compacts on
 /// the trigger and answers "Done." from the new context; turn 2 answers
 /// "Again." with no compaction. Its tools match the ones `start_b` wires,
 /// so a rewound session's request tools equal the old session's.

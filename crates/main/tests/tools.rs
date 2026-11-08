@@ -1722,7 +1722,7 @@ fn tiny_trigger(setup: &Setup) {
     );
 }
 
-/// A turn whose first reply reads a file, then hands off on the five-token
+/// A turn whose first reply reads a file, then compacts on the five-token
 /// trigger and answers from the new context, to the end of the process.
 const COMPACTION_TURN: &[&str] = &[
     "turn_started",
@@ -1826,7 +1826,7 @@ fn compaction_configuration_reaches_a_resumed_session() {
     tiny_trigger(&setup);
     let first = setup.run(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
-    // One reply, and no second step: nothing handed off yet.
+    // One reply, and no second step: nothing compacted yet.
     assert_eq!(
         first.kinds(),
         [

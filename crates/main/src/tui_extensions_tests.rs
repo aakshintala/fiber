@@ -1292,7 +1292,7 @@ fn the_compaction_band_table_holds_trigger_ts_state_and_sizes() {
     use tui::ext::{CompactionBand, TurnBandState, TurnSizes};
     let band = |state: TurnBandState| {
         Input::CompactionBand(CompactionBand {
-            trigger: "the model handed off",
+            trigger: "the model compacted",
             ts: 1,
             state,
             flat: false,
@@ -1300,25 +1300,25 @@ fn the_compaction_band_table_holds_trigger_ts_state_and_sizes() {
     };
     assert_eq!(
         input_value(&band(TurnBandState::Writing)),
-        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "writing"}, "flat": false}),
+        json!({"trigger": "the model compacted", "ts": 1, "state": {"kind": "writing"}, "flat": false}),
     );
     assert_eq!(
         input_value(&band(TurnBandState::Done(TurnSizes {
             before: 1,
             after: Some(2),
         }))),
-        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "before": 1, "after": 2}, "flat": false}),
+        json!({"trigger": "the model compacted", "ts": 1, "state": {"kind": "done", "before": 1, "after": 2}, "flat": false}),
     );
     assert_eq!(
         input_value(&band(TurnBandState::Unchanged { cancelled: true })),
-        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "unchanged", "cancelled": true}, "flat": false}),
+        json!({"trigger": "the model compacted", "ts": 1, "state": {"kind": "unchanged", "cancelled": true}, "flat": false}),
     );
     assert_eq!(
         input_value(&band(TurnBandState::Done(TurnSizes {
             before: 1,
             after: None,
         }))),
-        json!({"trigger": "the model handed off", "ts": 1, "state": {"kind": "done", "before": 1, "after": null}, "flat": false}),
+        json!({"trigger": "the model compacted", "ts": 1, "state": {"kind": "done", "before": 1, "after": null}, "flat": false}),
     );
     // The band row reads no note and no open flag.
     let table = input_value(&band(TurnBandState::Writing));

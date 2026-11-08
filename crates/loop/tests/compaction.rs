@@ -425,7 +425,7 @@ fn a_failed_note_request_leaves_the_context_and_blocks_the_rest_of_the_turn() {
     assert_eq!(forgot.load(Ordering::SeqCst), 0);
     let requests = session.requests();
     // call, note, note retry, then the step's own request and the next: the
-    // later step is over the trigger and does not hand off.
+    // later step is over the trigger and does not compact.
     assert_eq!(requests.len(), 5);
     let asked = &requests[1].conversation;
     assert_eq!(requests[3].conversation[..], asked[..asked.len() - 1]);
@@ -804,7 +804,7 @@ fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
     // A trigger of one token is passed by any context. Before the first
     // reply nothing has measured the context, so the first request is sent;
     // after the compaction the new context is unmeasured again, so the request
-    // from the note is sent too, and the turn does not hand off twice.
+    // from the note is sent too, and the turn does not compact twice.
     let mut session = session(
         vec![called(5), Scripted::text("The note."), said("Done.", 5)],
         CompactionSettings {
@@ -1353,7 +1353,7 @@ fn a_person_compaction_between_turns_is_a_turn_of_its_own() {
     // No request after the note.
     let requests = session.requests();
     assert_eq!(requests.len(), 1);
-    // The opening message was all there was to hand off, and no reply
+    // The opening message was all there was to compact, and no reply
     // measured it: its size is estimated at a token to four bytes.
     let opening = text_of(&requests[0].conversation[0]);
     assert_eq!(
@@ -1785,7 +1785,7 @@ fn two_calls_that_set_control_compaction_join_their_notes_in_call_order() {
 
 #[test]
 fn the_loop_acts_on_the_field_and_never_on_the_tool_name() {
-    // A tool named `compact` that sets nothing does not hand off.
+    // A tool named `compact` that sets nothing does not compact.
     let mut session = tool_session(
         vec![calling(&["compact"], 500), said("Done.", 50)],
         vec![Arc::new(TestTool::reads("compact", "Not a note."))],
@@ -2344,7 +2344,7 @@ fn a_cancel_during_the_overflow_note_request_ends_the_turn_interrupted() {
 }
 
 /// A settings whose automatic trigger is twice the window, so an estimate
-/// over the window is not handed off at the step's start.
+/// over the window is not compacted at the step's start.
 fn beyond_the_window() -> CompactionSettings {
     CompactionSettings {
         tokens: 1_000_000,
@@ -2427,7 +2427,7 @@ fn automatic_compaction_off_skips_the_size_check() {
 
 #[test]
 fn an_estimate_over_the_window_after_a_compaction_in_the_step_fails_the_turn() {
-    // The window is 1,000, so the automatic trigger is 700: it hands off at
+    // The window is 1,000, so the automatic trigger is 700: it compacts at
     // the step's start, and the next request is still estimated over.
     let mut session = windowed(
         vec![called(WINDOW), Scripted::text(&"x".repeat(8_000))],
@@ -2645,7 +2645,7 @@ fn a_compaction_rebuilds_the_section_from_its_current_files() {
 
 #[test]
 fn a_tool_compaction_in_a_step_that_already_handed_off_is_an_ordinary_result() {
-    // The check hands off automatically, then the first reply in the new
+    // The check compacts automatically, then the first reply in the new
     // context calls a tool that sets `control.compact`: at most one compaction
     // runs per step, so the call's result stays as any result does.
     let mut session = tool_session(
@@ -3057,7 +3057,7 @@ fn a_blocking_session_start_failure_at_a_person_compaction_fails_the_compaction_
     hooks.answer(start_empty());
     hooks.answer(start_failed("fiber.test/guard", "boom"));
     // The context stays at the trigger past the failed compaction, so an
-    // unblocked turn would hand off again: one compaction names the block.
+    // unblocked turn would compact again: one compaction names the block.
     let mut session = injected(
         vec![
             called(TRIGGER - 1),

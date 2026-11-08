@@ -839,7 +839,7 @@ fn a_reviewed_call_then_a_compaction_marks_only_the_reviewer_lines() {
         &json!({"steps": [
             {"tool_calls": [{"name": "shell", "arguments": {"command": "touch made && echo ran"}}],
              "usage": {"input": 100, "output": 10}},
-            {"text": "Handing off."},
+            {"text": "Compacting."},
             {"text": "Done."}
         ]}),
     );

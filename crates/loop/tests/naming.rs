@@ -345,7 +345,7 @@ fn a_cancelled_call_names_nothing() {
 
 #[test]
 fn a_compaction_call_names_nothing() {
-    let mut tool = TestTool::reads("hand", "Handed off.");
+    let mut tool = TestTool::reads("hand", "Compacted.");
     tool.output.control = Some(Control {
         compact: Some("the note".into()),
         questions: None,

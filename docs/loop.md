@@ -35,7 +35,7 @@ A step is one round-trip to the model. Each step does this, in order:
    the conversation, in arrival order, each job notice after the
    `after_tool` hooks have run on it (`docs/extensions.md`, "Hooks"); each steering message is logged as its
    own `steering_applied`. Nothing is held back for a later step.
-2. Check how full the context is, and hand off if it is past the threshold
+2. Check how full the context is, and compact if it is past the threshold
    (`docs/compaction.md`, "Triggers").
 3. Build the request: the preamble (`docs/prompt-cache.md`) followed by the
    conversation ("What the model is sent"). Then check the budget and run

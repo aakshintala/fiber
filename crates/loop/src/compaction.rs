@@ -251,7 +251,7 @@ impl Loop {
         Ok(outcome)
     }
 
-    /// The check before each request (`docs/loop.md`, "One step"): hands off
+    /// The check before each request (`docs/loop.md`, "One step"): compacts
     /// at the trigger, or gives the nudge once per context. Returns the
     /// turn's end when the compaction was cancelled.
     pub(crate) fn check_context(&mut self, turn: &TurnId) -> Result<Option<TurnCompleted>, Error> {
@@ -349,7 +349,7 @@ impl Loop {
 
     /// The overflow rule (`docs/compaction.md`, "Overflow"): a request that
     /// does not fit, or that the provider rejected for size as `failed`,
-    /// hands off with the last step's tool results moved out, then sends the
+    /// compacts with the last step's tool results moved out, then sends the
     /// step's request from the new context. Once per step; with automatic
     /// compaction off, or when the compaction does not complete, the turn fails
     /// `context_overflow`.

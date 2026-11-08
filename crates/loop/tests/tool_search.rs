@@ -862,7 +862,7 @@ fn a_compaction_after_a_search_leaves_no_search_result_for_the_next_request() {
         support::kinds(&first),
         kinds_with(&["tool_call_started", "tool_call_completed"])
     );
-    // The second turn hands off on `wrap` with no search in the step: the
+    // The second turn compacts on `wrap` with no search in the step: the
     // compaction drops the earlier search with the turn's conversation.
     assert_eq!(harness.turn("again"), Some(TurnOutcome::Completed));
     let lines = harness.lines();

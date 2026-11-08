@@ -2123,7 +2123,7 @@ fn every_answers_field_is_in_the_key() {
 fn every_compaction_band_field_is_in_the_key() {
     use super::{CompactionBand, TurnBandState, TurnSizes};
     let band = || CompactionBand {
-        trigger: "the model handed off",
+        trigger: "the model compacted",
         ts: 1,
         state: TurnBandState::Done(TurnSizes {
             before: 1,

@@ -225,7 +225,7 @@ fn the_band_takes_its_time_from_the_started_envelope() {
         band(&app),
         full_row(
             &app,
-            " ⇄ compaction · the model handed off",
+            " ⇄ compaction · the model compacted",
             "402k → … · 14:20 "
         ),
     );
@@ -697,7 +697,7 @@ fn a_hooks_note_and_a_tool_started_compaction() {
         lines[at],
         full_row(
             &app,
-            " ⇄ compaction · the model handed off",
+            " ⇄ compaction · the model compacted",
             "300k → … · 14:20 "
         ),
     );
@@ -895,7 +895,7 @@ fn replaced() -> std::rc::Rc<crate::ext::tests::SlotRenderer> {
 
 /// A done band with its note open, for the band-row-only tests.
 fn done_with_note() -> super::Band {
-    let mut band = super::Band::new(1, "the model handed off".to_owned(), TEA);
+    let mut band = super::Band::new(1, "the model compacted".to_owned(), TEA);
     band.completed("a_1", "the plan".to_owned());
     band.state = super::State::Done {
         before: 1,
@@ -1102,7 +1102,7 @@ fn a_writing_compaction_band_replacement_spins_but_a_done_one_does_not() {
 
 #[test]
 fn set_open_reports_whether_the_note_matched() {
-    let mut band = super::Band::new(3, "the model handed off".to_owned(), TEA);
+    let mut band = super::Band::new(3, "the model compacted".to_owned(), TEA);
     // The matching target sets the flag and answers true, both ways.
     assert!(band.set_open(&Target::Note(3), true));
     assert!(band.open);

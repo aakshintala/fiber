@@ -1627,7 +1627,7 @@ fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
     prompt_turn(&mut session, &long);
     let lines = prompt_turn(&mut session, "second");
     // The second turn starts over the trigger: one compaction, and the
-    // context it starts is over the trigger too, which does not hand off again
+    // context it starts is over the trigger too, which does not compact again
     // in that step.
     assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
     assert_eq!(of_kind(&lines, "compaction_completed").len(), 1);

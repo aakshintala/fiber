@@ -2763,7 +2763,7 @@ fn replay_databricks_compaction_keeps_labelled_pairs() {
             replay_ask(&mut run, "Which color?", "Which color should I use?");
             replay_ask(&mut run, "Blue.", "Which number should I use?");
             replay_ask(&mut run, "Seven.", "The skill is loaded.");
-            replay_ask(&mut run, "Please hand off now.", "lovely human");
+            replay_ask(&mut run, "Please compact now.", "lovely human");
             // Confirm the reviewer, skill tool and compaction all ran before
             // inspecting the request bytes, so a broken setup cannot
             // masquerade as the regression.
@@ -2830,7 +2830,7 @@ fn replay_databricks_compaction_keeps_labelled_pairs() {
             assert!(before.contains("Which color?"));
             assert!(before.contains("Blue."));
             assert!(before.contains("Seven."));
-            assert!(before.contains("Please hand off now."));
+            assert!(before.contains("Please compact now."));
             assert!(
                 !before.contains("The person's earlier message:")
                     && !before.contains("The person's new message:")
@@ -2850,7 +2850,7 @@ fn replay_databricks_compaction_keeps_labelled_pairs() {
             );
             let pair_one = "The person's earlier message:\nThe agent: Which color should I use?\nThe person: Blue.";
             let pair_two = "The person's earlier message:\nThe agent: Which number should I use?\nThe person: Seven.";
-            let current = "The person's new message:\nPlease hand off now.";
+            let current = "The person's new message:\nPlease compact now.";
             let note = "The compaction note.";
             let skill = &resent["payload"]["skills"][0];
             let skill_block = format!(

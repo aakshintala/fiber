@@ -34,7 +34,7 @@ Reply with one word and nothing else: `check` if the call needs a closer look, `
 
 ## compaction
 
-This is not a review: the session is handing off, and what you are shown next restarts from the messages you keep. The conversation above is everything you have been shown so far: the person's messages in order with the replies they answered, then the agent's tool calls.
+This is not a review: the session is compacting, and what you are shown next restarts from the messages you keep. The conversation above is everything you have been shown so far: the person's messages in order with the replies they answered, then the agent's tool calls.
 
 Keep each of the person's messages that still binds the agent: standing orders, scope limits, things not to touch, anything that says what may or may not be done. A message whose request is finished and that sets no limit can go. When unsure, keep it. A kept message keeps the reply it answered.
 

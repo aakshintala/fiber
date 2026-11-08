@@ -1585,7 +1585,7 @@ fn each_new_slot_caches_by_input_and_width() {
         (
             "compaction_band",
             compaction_input("automatic"),
-            compaction_input("the model handed off"),
+            compaction_input("the model compacted"),
         ),
         ("error_line", error_input("down"), error_input("up")),
         ("notice", notice_input("down"), notice_input("up")),

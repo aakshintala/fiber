@@ -2130,7 +2130,7 @@ fn noting_hook(on_failure: &str, body: &str) -> String {
 }
 
 /// Runs `fiber ask` where the model reads a file, then the five-token
-/// trigger hands off, with `init` installed and `extra` configured.
+/// trigger compacts, with `init` installed and `extra` configured.
 fn compaction_run(
     setup: &Setup,
     init: &str,
