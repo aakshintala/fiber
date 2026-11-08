@@ -5598,6 +5598,20 @@ fn shell_cap_key_prefix() {
     );
 }
 
+/// A shell slot names a run only below the run count: the last slot is
+/// the run, the count itself and past it name none.
+#[test]
+fn shell_cap_slot_boundary() {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    let runs = pages.shells.len();
+    assert_eq!(runs, 2);
+    assert_eq!(pages.shell_slot(&Target::Shell(runs - 1)), Some(runs - 1));
+    assert_eq!(pages.shell_slot(&Target::Shell(runs)), None);
+    assert_eq!(pages.shell_slot(&Target::Shell(runs + 1)), None);
+}
+
 /// An error row (`! cmd` then `code: message`) has no kind note, so it
 /// draws whole whatever its length.
 #[test]
