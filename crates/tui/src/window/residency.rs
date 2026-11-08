@@ -13,6 +13,7 @@ use super::pins::Pins;
 use super::{Part, Seed, fold, restore_spans, set};
 use crate::app::Target;
 use crate::pages::Index;
+use crate::turn::Recipients;
 
 /// The closed pages' cards and what the dropped ones wait on: every
 /// kept page's cards, the set holding them, the dropped pages owed a
@@ -146,12 +147,13 @@ impl Residency {
         lines: &[&Envelope],
         seeds: &[Seed],
         overrides: &BTreeMap<Target, bool>,
+        recipients: &Recipients<'_>,
     ) -> bool {
         let Some(mut part) = self.begin(at, seeds) else {
             return false;
         };
         for line in lines {
-            fold(&mut part, line);
+            fold(&mut part, line, recipients);
         }
         self.keep(at, part, seeds, overrides);
         true
@@ -166,10 +168,11 @@ impl Residency {
         lines: &[Envelope],
         seeds: &[Seed],
         overrides: &BTreeMap<Target, bool>,
+        recipients: &Recipients<'_>,
     ) -> Option<Part> {
         let mut part = self.begin(at, seeds)?;
         for line in lines {
-            fold(&mut part, line);
+            fold(&mut part, line, recipients);
         }
         self.finish(at, &mut part, seeds, overrides);
         Some(part)

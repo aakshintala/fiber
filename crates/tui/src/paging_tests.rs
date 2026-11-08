@@ -15,14 +15,14 @@ use contract::{ActionId, Envelope, Seq, SessionId};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
-use super::{Draw, Folded, Pages, Part, fold};
+use super::{Draw, Folded, Pages, Part, fold as fold_with};
 use crate::app::{App, Effect, Target};
 use crate::ext::{Failure, Handle, Input, RawSpan, Renderer};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::local_time::new_york;
 use crate::rows::Rows;
-use crate::turn::{Entry, Row, Turn, target_id};
+use crate::turn::{Entry, Recipients, Row, Turn, target_id};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -236,6 +236,17 @@ fn history(lines: &[Envelope], range: &RangeInclusive<Seq>) -> Vec<Envelope> {
         .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
         .cloned()
         .collect()
+}
+
+/// One line folded into `part` with no session or delegate held.
+fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
+    fold_with(
+        part,
+        envelope,
+        &Recipients {
+            sessions: &HashMap::new(),
+        },
+    )
 }
 
 /// What one fold of every line draws, with the totals `pages` kept.
@@ -5380,4 +5391,117 @@ fn a_dropped_page_draw_keeps_the_frame_wall_time() {
     assert!(!rows.is_empty(), "the dropped page draws");
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(fake.nows.borrow().clone(), vec![1_000]);
+}
+
+/// One turn of message calls, `(action, name, id)` each, every one
+/// completed: the turn closes, so its calls sit in a ledger.
+fn message_turn(stream: &mut Stream, calls: &[(&str, &str, &str)]) {
+    stream.durable("turn_started", None, json!({"input": []}));
+    stream.durable("step_started", None, json!({}));
+    for &(action, name, id) in calls {
+        stream.durable(
+            "tool_call_requested",
+            Some(action),
+            json!({"name": name, "arguments": {"id": id, "message": "hi"}}),
+        );
+        stream.complete(action, false);
+    }
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+}
+
+/// Every drawn row of every resident page with the ledgers open.
+fn ledger_rows(pages: &mut Pages) -> Vec<String> {
+    pages.toggle_ledgers();
+    let mut out = Vec::new();
+    for at in 0..=pages.index().pages().len() {
+        let mut rows = Rows::default();
+        if let Some(part) = pages.part(at) {
+            pages.draw(at, part, &mut rows);
+        }
+        out.extend(rows.iter().map(|(line, _)| line.to_string()));
+    }
+    pages.toggle_ledgers();
+    out
+}
+
+fn labels(names: &[(&str, &str)]) -> std::sync::Arc<HashMap<SessionId, String>> {
+    std::sync::Arc::new(
+        names
+            .iter()
+            .map(|&(id, name)| (SessionId(id.to_owned()), name.to_owned()))
+            .collect(),
+    )
+}
+
+#[test]
+fn a_session_message_row_stores_its_recipient_name_when_folded() {
+    let mut pages = Pages::new(80);
+    pages.set_session_labels(labels(&[("s_other", "worker")]));
+    let mut stream = Stream::new(false);
+    message_turn(
+        &mut stream,
+        &[
+            ("a_1", "session_message", "s_other"),
+            ("a_2", "session_message", "s_unknown"),
+        ],
+    );
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(rows.iter().any(|row| row.contains("message  worker")));
+    assert!(rows.iter().any(|row| row.contains("message  s_unknown")));
+    assert!(!rows.iter().any(|row| row.contains("s_other")));
+}
+
+/// A rename redraws every resident page from its stored cards: the
+/// resident row keeps the name held when it folded, and a call folded
+/// after the rename takes the new one.
+#[test]
+fn a_rename_leaves_a_resident_recipient_row_as_folded() {
+    let mut pages = Pages::new(80);
+    pages.set_session_labels(labels(&[("s_other", "worker")]));
+    let mut stream = Stream::new(false);
+    message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    pages.set_session_labels(labels(&[("s_other", "renamed")]));
+    let before = ledger_rows(&mut pages);
+    assert!(before.iter().any(|row| row.contains("message  worker")));
+    assert!(!before.iter().any(|row| row.contains("renamed")));
+    let mut later = Stream::new(false);
+    later.seq = stream.seq;
+    message_turn(&mut later, &[("a_2", "session_message", "s_other")]);
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let after = ledger_rows(&mut pages);
+    assert!(after.iter().any(|row| row.contains("message  worker")));
+    assert!(after.iter().any(|row| row.contains("message  renamed")));
+}
+
+/// Only an empty name counts as not held: the row draws the id for it,
+/// and a name of only whitespace is held, so the row does not.
+#[test]
+fn an_empty_recipient_name_draws_the_id_and_a_blank_one_does_not() {
+    for (name, draws_id) in [("", true), (" ", false)] {
+        let mut pages = Pages::new(80);
+        pages.set_session_labels(labels(&[("s_other", name)]));
+        let mut stream = Stream::new(false);
+        message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+        for line in &stream.lines {
+            pages.apply(line);
+        }
+        let rows = ledger_rows(&mut pages);
+        assert!(
+            rows.iter().any(|row| row.contains("message")),
+            "{name:?}: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter().any(|row| row.contains("s_other")),
+            draws_id,
+            "{name:?}: {rows:?}"
+        );
+    }
 }

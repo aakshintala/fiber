@@ -2185,6 +2185,9 @@ fn answered_ask_call(id: usize) -> Call {
         },
         0,
         &mut fold,
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+        },
     );
     let mut turns = vec![turn];
     for (kind, payload) in [
@@ -2253,6 +2256,9 @@ fn outer_action_id_stored_from_ran_by() {
             },
             0,
             &mut fold,
+            &crate::turn::Recipients {
+                sessions: &Default::default(),
+            },
         );
         turn.groups()
             .flat_map(|group| group.sections.iter())

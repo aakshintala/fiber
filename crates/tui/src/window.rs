@@ -20,7 +20,7 @@ use crate::mouse::TargetId;
 use crate::pages::{Cut, Index};
 use crate::rows::{RowText, Rows};
 use crate::surface::Edges;
-use crate::turn::{DrawSummary, Entry, Fold, Row, Turn, target_id};
+use crate::turn::{DrawSummary, Entry, Fold, Recipients, Row, Turn, target_id};
 
 mod images;
 mod live;
@@ -419,11 +419,14 @@ impl Pages {
                 Cut::None | Cut::AtCandidate => {}
             }
         }
+        let recipients = Recipients {
+            sessions: &self.session_names,
+        };
         let mut pending_folded = None;
         if let Some(pending) = &mut self.pending {
-            pending_folded = Some(fold(&mut pending.next, envelope));
+            pending_folded = Some(fold(&mut pending.next, envelope, &recipients));
         }
-        let folded = fold(&mut self.open, envelope);
+        let folded = fold(&mut self.open, envelope, &recipients);
         if kind == EventKind::UsageRecorded {
             self.usage(envelope);
         }
@@ -757,9 +760,15 @@ impl Pages {
             }
             if folding.as_ref().is_none_or(|(page, _)| *page != at) {
                 if let Some((page, group)) = folding.take()
-                    && self
-                        .residency
-                        .load(page, &group, &self.seeds, &self.overrides)
+                    && self.residency.load(
+                        page,
+                        &group,
+                        &self.seeds,
+                        &self.overrides,
+                        &Recipients {
+                            sessions: &self.session_names,
+                        },
+                    )
                 {
                     self.count(page);
                 }
@@ -770,9 +779,15 @@ impl Pages {
             }
         }
         if let Some((page, group)) = folding.take()
-            && self
-                .residency
-                .load(page, &group, &self.seeds, &self.overrides)
+            && self.residency.load(
+                page,
+                &group,
+                &self.seeds,
+                &self.overrides,
+                &Recipients {
+                    sessions: &self.session_names,
+                },
+            )
         {
             self.count(page);
         }
@@ -799,9 +814,12 @@ impl Pages {
         at: usize,
         lines: &[Envelope],
     ) -> Option<(Vec<Row>, Vec<RowText>, TurnRanges, CallPaths)> {
+        let recipients = Recipients {
+            sessions: &self.session_names,
+        };
         let part = self
             .residency
-            .refold(at, lines, &self.seeds, &self.overrides)?;
+            .refold(at, lines, &self.seeds, &self.overrides, &recipients)?;
         let (rows, texts, _, turns) = self.draw_data(at, &part, Draw::AllOpen);
         Some((rows, texts, turns, call_paths(&part)))
     }
@@ -2094,10 +2112,10 @@ fn set(part: &mut Part, target: &Target, open: bool) -> bool {
 
 /// Folds one line into a page's cards and fold state using the turn's
 /// current rendering path.
-pub(crate) fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
+pub(crate) fn fold(part: &mut Part, envelope: &Envelope, recipients: &Recipients<'_>) -> Folded {
     let kind = envelope.kind();
     let was_open = part.turns.last().is_some_and(Turn::is_open);
-    let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope);
+    let changed = crate::turn::fold_line(&mut part.turns, &mut part.fold, envelope, recipients);
     if let Some(turn) = part.turns.last_mut() {
         turn.note_seq(envelope.seq);
     }

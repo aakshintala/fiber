@@ -11,13 +11,13 @@ use contract::events::EventKind;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use contract::Envelope;
 use contract::events::{
     Anchor, AssistantMessageCompleted, InputItem, MessageOutcome, ReasoningCompleted,
     RetryScheduled, SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta,
     ToolCallCompleted, ToolCallRequested, TurnCompleted, TurnStarted, UsageRecorded,
 };
 use contract::shapes::{Origin, Sender};
+use contract::{Envelope, SessionId};
 use ratatui::text::Line;
 use serde_json::Value;
 
@@ -407,6 +407,7 @@ impl Turn {
         requested: ToolCallRequested,
         ts: u64,
         fold: &mut Fold,
+        recipients: &Recipients<'_>,
     ) {
         self.calls = self.calls.saturating_add(1);
         let message = self.message.clone();
@@ -446,11 +447,13 @@ impl Turn {
             Anchor::OuterCall(id) => Some(id),
             Anchor::Command(_) => None,
         });
+        let recipient = recipients.of(&requested.name, &arguments);
         group.section(step).calls.push(Call {
             id: target_id(action),
             action: action.to_owned(),
             name: requested.name,
             arguments,
+            recipient,
             outer_action_id,
             ..Call::default()
         });
@@ -654,9 +657,35 @@ impl Turn {
     }
 }
 
+/// What the terminal holds about a message call's recipient, read when the
+/// call folds: the held name of each session. It reads no hub state and no
+/// `App`; the owner of the fold lends it.
+pub(crate) struct Recipients<'a> {
+    pub(crate) sessions: &'a HashMap<SessionId, String>,
+}
+
+impl Recipients<'_> {
+    /// The recipient's held name for a `session_message` call whose `id`
+    /// names a held session, else none. Only an empty name counts as not
+    /// held: a name of only whitespace is held and drawn as it is.
+    pub(crate) fn of(&self, name: &str, arguments: &Value) -> Option<String> {
+        let id = arguments.get("id")?.as_str()?;
+        let held = match format::kind(name, arguments) {
+            format::Kind::SessionMessage => self.sessions.get(&SessionId(id.to_owned()))?,
+            _ => return None,
+        };
+        (!held.is_empty()).then(|| held.clone())
+    }
+}
+
 /// Folds one line of the attached session's stream into `turns`; false
 /// when it changed no card.
-pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envelope) -> bool {
+pub(crate) fn fold_line(
+    turns: &mut Vec<Turn>,
+    fold: &mut Fold,
+    envelope: &Envelope,
+    recipients: &Recipients<'_>,
+) -> bool {
     let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
     let ts = envelope.ts;
     let kind = envelope.kind();
@@ -850,7 +879,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_) => {
-            action.is_some_and(|action| fold_action(turns, fold, envelope, action))
+            action.is_some_and(|action| fold_action(turns, fold, envelope, action, recipients))
         }
     };
     if let Some(turn) = open(turns) {
@@ -866,7 +895,13 @@ fn open(turns: &mut [Turn]) -> Option<&mut Turn> {
 
 /// Folds a line about one action into `turns`; false when it changed no
 /// card.
-fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action: &str) -> bool {
+fn fold_action(
+    turns: &mut [Turn],
+    fold: &mut Fold,
+    envelope: &Envelope,
+    action: &str,
+    recipients: &Recipients<'_>,
+) -> bool {
     let ts = envelope.ts;
     // Completions may follow their turn's end, so they search back
     // through every card; streaming goes only to the open one.
@@ -981,7 +1016,7 @@ fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action:
                     .is_some_and(|delta| turn.reasoning_delta(action, &delta.text, ts)),
                 EventKind::ToolCallRequested => {
                     read!(envelope, ToolCallRequested).is_some_and(|requested| {
-                        turn.call_requested(action, requested, ts, fold);
+                        turn.call_requested(action, requested, ts, fold, recipients);
                         true
                     })
                 }
