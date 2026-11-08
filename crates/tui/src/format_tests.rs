@@ -5,9 +5,10 @@ use serde_json::json;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 
+use super::via;
 use super::{
     Kind, Kinds, capitalise, content_text, count, cut, duration, heading, headline, kind, money,
-    seconds, spend_against_budget, summary, tokens, via, warning_line, wrap, wrap_joined,
+    seconds, spend_against_budget, summary, tokens, warning_line, wrap, wrap_joined,
 };
 use crate::theme::{Role, style};
 
