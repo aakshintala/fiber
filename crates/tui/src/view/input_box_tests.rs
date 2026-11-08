@@ -1339,7 +1339,7 @@ fn an_edit_selection_draws_the_editing_hint_in_an_item_view() {
     fold_delegate(&mut app);
     open_delegate(&mut app);
     app.on_line(session_line(
-        ITEM_SESSION,
+        ITEM_DELEGATE,
         "steering_queue",
         serde_json::json!({"messages": [
             {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},
@@ -1385,7 +1385,7 @@ fn steering_selected_hides_the_item_hint_itself() {
     fold_delegate(&mut app);
     open_delegate(&mut app);
     app.on_line(session_line(
-        ITEM_SESSION,
+        ITEM_DELEGATE,
         "steering_queue",
         serde_json::json!({"messages": [
             {"content": [{"type": "text", "text": "use the parser"}], "source": "driver", "command_id": "c_1"},

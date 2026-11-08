@@ -326,7 +326,9 @@ pub(crate) struct App {
     queue: Queue,
     /// The attached session's offer of its repository's code.
     offer: crate::offer::Offer,
-    /// The attached session's steering queue.
+    /// The steering queue the input box shows: the attached session's, or
+    /// the open fiber delegate's while its view is swapped in, the attached
+    /// session's queue parked in the open item meanwhile.
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
@@ -1069,6 +1071,11 @@ impl App {
         }
     }
 
+    /// Number of models currently held by the picker catalogue.
+    pub(crate) fn model_catalogue_len(&self) -> usize {
+        self.model_picker.catalogue.models.len()
+    }
+
     /// The terminal's size in columns and rows: what full-screen
     /// overlays clamp against.
     pub(crate) fn screen_size(&self) -> (u16, u16) {
@@ -1633,7 +1640,7 @@ impl App {
                             return lines;
                         }
                     }
-                    Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                    Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                         if self.image_answered(id, answer.payload.get("result")) {
                             return Vec::new();
                         }
@@ -1648,16 +1655,16 @@ impl App {
                     Some(Waiting::Sessions) => {}
                     Some(Waiting::Abandoned) => {}
                     Some(
-                        Waiting::Directories
-                        | Waiting::Subscribe
+                        Waiting::Directories(..)
+                        | Waiting::Subscribe { .. }
                         | Waiting::Stop
                         | Waiting::Delete
                         | Waiting::OfferImport
-                        | Waiting::DeleteDiscovery
-                        | Waiting::DeleteStop
-                        | Waiting::DeleteFinal
+                        | Waiting::DeleteDiscovery(..)
+                        | Waiting::DeleteStop { .. }
+                        | Waiting::DeleteFinal(..)
                         | Waiting::Feed
-                        | Waiting::Recent
+                        | Waiting::Recent(..)
                         | Waiting::Close,
                     ) => {}
                     Some(
@@ -1710,7 +1717,7 @@ impl App {
                             }
                         }
                         Some(Waiting::ClearClose) => self.clear_close_settled(id),
-                        Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                        Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                             if self.image_rejected(id, &message) {
                                 return Vec::new();
                             }
@@ -1755,16 +1762,16 @@ impl App {
                             self.outbox.settled(id);
                         }
                         Some(
-                            Waiting::Directories
-                            | Waiting::Subscribe
+                            Waiting::Directories(..)
+                            | Waiting::Subscribe { .. }
                             | Waiting::Stop
                             | Waiting::Delete
                             | Waiting::OfferImport
-                            | Waiting::DeleteDiscovery
-                            | Waiting::DeleteStop
-                            | Waiting::DeleteFinal
+                            | Waiting::DeleteDiscovery(..)
+                            | Waiting::DeleteStop { .. }
+                            | Waiting::DeleteFinal(..)
                             | Waiting::Feed
-                            | Waiting::Recent
+                            | Waiting::Recent(..)
                             | Waiting::Close,
                         ) => {}
                         None => {}
@@ -2019,20 +2026,20 @@ impl App {
             Some(Waiting::RewindSend) => None,
             Some(Waiting::ClearStart) => None,
             Some(Waiting::History) => None,
-            Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => None,
+            Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => None,
             Some(Waiting::Sessions) => None,
             Some(Waiting::Abandoned) => None,
             Some(
-                Waiting::Directories
-                | Waiting::Subscribe
+                Waiting::Directories(..)
+                | Waiting::Subscribe { .. }
                 | Waiting::Stop
                 | Waiting::Delete
                 | Waiting::OfferImport
-                | Waiting::DeleteDiscovery
-                | Waiting::DeleteStop
-                | Waiting::DeleteFinal
+                | Waiting::DeleteDiscovery(..)
+                | Waiting::DeleteStop { .. }
+                | Waiting::DeleteFinal(..)
                 | Waiting::Feed
-                | Waiting::Recent
+                | Waiting::Recent(..)
                 | Waiting::Close,
             ) => None,
             Some(
@@ -2387,7 +2394,7 @@ impl App {
             }
             EventKind::SteeringQueue => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {
-                    self.steering.fold(&queue, &mut self.draft);
+                    self.fold_attached_queue(&queue);
                 }
             }
             EventKind::FiberStarted
@@ -2614,6 +2621,9 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::Unknown(_) => false,
     }
 }
+
+#[cfg(test)]
+mod delegate_steering_tests;
 
 #[cfg(test)]
 #[path = "app_tests.rs"]

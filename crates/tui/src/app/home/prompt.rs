@@ -281,7 +281,7 @@ impl App {
         }
         let session = row.id.clone();
         let mut lines = Vec::new();
-        if self.home.subs.expected(&session).is_none() {
+        if self.subscribed_level(&session).is_none() {
             lines.push(self.subscribe(&session, Level::Summary));
         }
         let id = mint();

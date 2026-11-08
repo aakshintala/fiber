@@ -1,7 +1,10 @@
 //! Every key in `docs/configuration.md`, "Keys": its type, whether a
 //! repository may set it, and its built-in default. Checking a layer against
 //! this table is where unknown keys become notices and wrong types become
-//! errors.
+//! errors. The one exception is `providers.databricks.request_tags`, whose
+//! layers pass this check unjudged: its value is validated once, after the
+//! layers merge, and an invalid effective value is a notice
+//! (`docs/configuration.md`, "A provider's data").
 
 use std::time::Duration;
 
@@ -44,6 +47,11 @@ pub(crate) enum Kind {
     RepositoryExtensions,
     /// A duration string such as `"24h"`: `model_lists.refresh_after`.
     Duration,
+    /// Request tags: any layer value is admitted here because the merged
+    /// object is what must be an object of strings, and an invalid one is a
+    /// nonfatal notice rather than a wrong-type error
+    /// (`Config::databricks_request_tags`). No other kind defers.
+    RequestTags,
 }
 
 impl Kind {
@@ -97,6 +105,7 @@ impl Kind {
             Self::Duration => value
                 .as_str()
                 .is_some_and(|text| parse_duration(text).is_some()),
+            Self::RequestTags => true,
         }
     }
 
@@ -120,6 +129,7 @@ impl Kind {
                 "a list of objects, each with a string `path` and an optional true or false `required`".into()
             }
             Self::Duration => "a duration such as \"7d\"".into(),
+            Self::RequestTags => "an object of string values".into(),
         }
     }
 }
@@ -275,7 +285,7 @@ const fn entry_replaced(path: &'static str, kind: Kind, metadata: SettingsMetada
 
 use Kind::{
     Bool, BoolMap, Count, CountBelow, Credential, Duration as DurationKind, EnvMap, Number, OneOf,
-    RepositoryExtensions, Role, Str, StrList, StrOrStrList,
+    RepositoryExtensions, RequestTags, Role, Str, StrList, StrOrStrList,
 };
 
 /// Metadata for a key `/settings` lists on `tab`.
@@ -952,6 +962,17 @@ pub const KEYS: &[Key] = &[
         untabbed(
             "Provider credential source",
             "Where one credential label's key comes from, when it is not stored in Fiber home.",
+        ),
+    ),
+    key(
+        "providers.databricks.request_tags",
+        RequestTags,
+        NO,
+        None,
+        tabbed(
+            SettingsTab::Models,
+            "Databricks request tags",
+            "Tags sent with every Databricks model request, merged with the source tag Fiber sets.",
         ),
     ),
     key(

@@ -306,11 +306,7 @@ a seam and needs no change to the code under test. The test keeps its end open
 until the child has read the release: closing the last writer before the
 child opens the FIFO discards the line, and the child never returns.
 
-A test that needs an inbox command admitted mid-turn holds the turn where the
-loop reads its inbox, on a pending approval, and waits for that command's own
-line, such as `steering_queue` for a `steer` (`docs/loop.md`, "One step"). A
-held provider stream is not such a point: the loop reads nothing while it
-streams, so no line can follow the send.
+A test that needs an inbox command admitted mid-turn holds the turn where the loop reads its inbox, on a pending approval, and waits for that command's own line (`docs/loop.md`, "One step"). A held provider stream is not such a point: the loop reads nothing while it streams. A `steer` and a `steer_drop` are the exception: the thread reading the connection takes them at any point in the turn, so a held provider stream keeps a `steer` queued and its `steering_queue` still follows the send.
 
 A test does not execute a file it wrote in the same run. On macOS, the first
 run of a newly written executable can stall for seconds under load. The test
@@ -350,7 +346,7 @@ unless its fix PR names the journey that already covers the path. A provider
 bug a person finds adds its recorded gateway transcript, and its journey
 replays that transcript.
 
-The gate runs the screen journeys in `crates/main/tests/terminal.rs`,
-`crates/main/tests/journeys.rs` and `crates/main/tests/inline_images.rs`; the
+The gate runs the screen journeys in `crates/main/tests/screens/terminal.rs`,
+`crates/main/tests/screens/journeys.rs` and `crates/main/tests/screens/inline_images.rs`; the
 main journeys in `crates/main/tests/main_journeys.rs` run on `main`. To run
 them on a developer machine, see `docs/testing/running.md`, "Journey suite".

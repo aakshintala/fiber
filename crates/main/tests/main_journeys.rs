@@ -22,6 +22,9 @@
 
 mod support;
 
+#[path = "main_journeys/delegate_steering.rs"]
+mod delegate_steering;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};

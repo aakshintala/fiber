@@ -158,6 +158,7 @@ same key. A file that sets one key under both spellings is `config_invalid`.
 | `hooks.order."<hook point>"` | none | no | Extension names in the order their hooks run at that point (`docs/extensions.md`, "When several hooks share a point"). |
 | `providers."<name>".credential` | `default`; `fiber login` writes the first label it stores | no | The credential label a new session uses (`docs/model-routing.md`, "Which credential a session uses"). |
 | `providers."<name>".credentials."<label>"` | none | no | Where that label's key comes from, when it is not stored in Fiber home ("Secrets"). |
+| `providers.databricks.request_tags` | none | no | An object of string values merged into the `Databricks-Ai-Gateway-Request-Tags` header of the session's Databricks model calls, such as `{"run": "r1"}` ("A provider's data"). The person's global and project files and `-c` set it; a repository's value is ignored with a notice. |
 | `providers."<name>".reviewer_model` | the package's `reviewer_model` | no | The provider's saved reviewer pick, written by `fiber login` ("Secrets"). A reviewed call uses it after `reviewer.model` and before the package default; the stored ID is local and gains the provider's prefix once. |
 | `tui.panel.cards` | `["session", "changed_files", "delegates", "jobs", "quota"]` | no | The cards the terminal's panel shows, in order; an extension widget is listed as `"<extension>/<widget>"`, and a widget the list does not name shows after the listed cards (`docs/tui.md`, "The panel"). The input box's status line, shown while the panel is not, follows the same order. |
 | `tui.rail.shown` | `true` | no | Whether the terminal's rail shows; ⌥R and `/rail` write it (`docs/tui.md`, "The rail"). |
@@ -393,7 +394,7 @@ when (`docs/tui.md`, "Swapped views"):
 - `hub.port`, `hub.allowed_origins` and `hub.idle_exit_ms` when the hub starts again
 - `hub.default` and `hubs.*` at a client's next connection: the next `fiber` command, or the terminal's next start
 - `diagnostics.level` when each Fiber process starts again
-- `model`, `thinking`, `models."<provider/model>".thinking`, `providers."<name>".credential` and `providers."<name>".credentials` for sessions started after the write: a running session changes model, thinking level or credential only through a switch (`docs/model-routing.md`), never on `reload`
+- `model`, `thinking`, `models."<provider/model>".thinking`, `providers."<name>".credential`, `providers."<name>".credentials` and `providers.databricks.request_tags` for sessions started after the write: a running session changes model, thinking level or credential only through a switch (`docs/model-routing.md`), never on `reload`
 - `skills.disabled` at the next turn start
 - every other key on `/reload`, with the one prompt-cache miss it costs
 
@@ -404,7 +405,10 @@ A problem in a file is reported by file and key:
   session, such as `fiber config`, `fiber login` or `fiber models`, prints
   each notice as one line on stderr.
 - Invalid JSON, or a value of the wrong type, is a startup error. A headless
-  run fails with `config_invalid`.
+  run fails with `config_invalid`. The one exception is
+  `providers.databricks.request_tags`: a merged value that is not an object of
+  string values is ignored with one `config_invalid` notice that names the key,
+  and the default header is sent.
 
 ## When Fiber writes
 
@@ -619,6 +623,20 @@ declares") lists:
   providers in one package that share a key name the same directory. A provider
   whose token expires, such as an OAuth login, declares a Lua `credential()`
   function instead.
+- `headers` are sent on every request. For `databricks` the
+  `Databricks-Ai-Gateway-Request-Tags` header holds a JSON object of tags,
+  `{"source":"fiber"}` by default. The key `providers.databricks.request_tags`
+  adds to it for the session's model calls: an object of string values, set in
+  the global or project file or with `-c`, and read once when the session
+  starts. `fiber ask -c providers.databricks.request_tags='{"run":"r1"}'` and a
+  hub `start` with the override `providers.databricks.request_tags={"run":"r1"}`
+  both send `{"source":"fiber","run":"r1"}`. Objects merge key by key across
+  layers ("Layers"). `source` is always `fiber`: a `source` in the value is
+  dropped. A value that is not an object of string values, such as a bare
+  string, a number, a list, a nested object or an object with a non-string
+  entry, is ignored whole with one `config_invalid` notice naming the key
+  ("When Fiber reads configuration"), and the default header is sent. Model
+  discovery requests always send the default header.
 - `login` is `browser` for a provider whose `fiber login` runs its
   `credential()` login instead of reading a key. Absent means a key.
 - `credential_label` is for a provider whose `credential()` reads nothing
