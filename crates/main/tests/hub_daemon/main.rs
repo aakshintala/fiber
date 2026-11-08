@@ -8,7 +8,6 @@
 )]
 
 #[path = "../support/hub_start.rs"]
-#[allow(dead_code, reason = "each module of this binary uses part of it")]
 mod hub_start;
 #[path = "../support/mod.rs"]
 mod support;
