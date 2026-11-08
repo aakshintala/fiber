@@ -131,3 +131,14 @@ crates/tui/src/event_loop/hub.rs	fiber-4192	plan	2026-11-08T01:03:38Z	Amoghs-Mac
 crates/tui/src/window.rs	fiber-4192	plan	2026-11-08T01:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4360
 crates/tui/src/window/residency.rs	fiber-4192	plan	2026-11-08T01:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4360
 crates/tui/src/paging_tests.rs	fiber-4192	plan	2026-11-08T01:03:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4360
+crates/main/src/delegates.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/main/src/parts.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/main/src/reload.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/main/src/delegates_tests.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/main/src/reload_tests.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/main/tests/delegates.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/jobs/src/delegate/models.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/jobs/src/delegate/models_tests.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/jobs/src/delegate.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+crates/jobs/src/delegate/delegate_tests.rs	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
+docs/delegates.md	fiber-4242	plan	2026-11-08T01:05:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4357
