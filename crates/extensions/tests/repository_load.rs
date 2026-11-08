@@ -2434,7 +2434,6 @@ fn load_pinned_keeps_the_first_declared_copy_of_one_name_silently() {
 
 /// Backdates each source file and directory so age-only cache checks do not
 /// mistake the package installation time for a source change.
-
 /// Installs `fiber.test/mixed` with `init`: static `acme` data with
 /// `static_id`, a `providers/acme.lua` discovering `found_id`, and
 /// manifest-declared providers. `lazy` adds a manifest-declared lazy

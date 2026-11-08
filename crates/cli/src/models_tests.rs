@@ -995,8 +995,7 @@ fn no_spawn(providers: Vec<String>) -> std::io::Result<()> {
     )))
 }
 
-/// Sets every file and directory under an extension to one mtime.
-
+// Sets every file and directory under an extension to one mtime.
 /// Writes the cached list of `name` and backdates it, so its age reads
 /// against `now`.
 fn write_stale_cache(home: &std::path::Path, name: &str, list: &Value, now: std::time::SystemTime) {
