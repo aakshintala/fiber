@@ -2226,10 +2226,30 @@ fn reopened_history(older_ending: bool) {
     demand_top(&mut lp);
     let (history_tx, histories) = mpsc::channel();
     let (server_done_tx, server_done) = mpsc::channel();
+    let (taken_tx, taken) = mpsc::channel();
     let server_wire = Arc::clone(&wire);
     let input = tx.clone();
     let prefix = if older_ending { 3 } else { 1 };
-    let script = pool[..r].to_vec();
+    // A `full` subscribe folds the whole log from seq 0: the session's
+    // own lines, then the tail.
+    let mut script: Vec<Vec<u8>> = session()
+        .iter()
+        .map(|env| {
+            let mut b = serde_json::to_vec(env).unwrap();
+            b.push(b'\n');
+            b
+        })
+        .collect();
+    script.extend(pool[..r].iter().cloned());
+    let script_len = script.len();
+    // The hub answers `history` from the same log it replays.
+    let mut full = session();
+    full.extend(
+        pool[..r]
+            .iter()
+            .map(|bytes| serde_json::from_slice::<contract::Envelope>(bytes).unwrap()),
+    );
+    let (page_zero_tx, page_zero) = mpsc::channel();
     let server = std::thread::spawn(move || {
         let mut commands = std::io::BufReader::new(theirs);
         let mut text = String::new();
@@ -2306,18 +2326,33 @@ fn reopened_history(older_ending: bool) {
             let lines = if seen == 1 {
                 Vec::new()
             } else {
-                super::history(&session(), from, to)
+                super::history(&full, from, to)
             };
             let mut answer = serde_json::to_vec(&command_answer(id, lines)).unwrap();
             answer.push(b'\n');
             if !server_wire.push(answer) {
                 break;
             }
+            if seen == 1 {
+                // A read after the late answer proves the answer reached
+                // the loop's input before any key the test sends next.
+                let mut marker = serde_json::to_vec(&line("read_marker", None, None, json!({})))
+                    .unwrap_or_else(|err| panic!("encode: {err}"));
+                marker.push(b'\n');
+                assert!(server_wire.push(marker));
+                let wire_lines = prefix + script_len + 2;
+                let reads = Deadline::after(DEADLINE);
+                while reads.recv_or_fail(&hand_rx, "the reader to take the late answer")
+                    < wire_lines
+                {}
+                taken_tx.send(()).unwrap_or(());
+            }
         }
         server_done_tx.send(seen).unwrap_or(());
     });
     let (done_tx, done) = mpsc::channel();
     std::thread::spawn(move || {
+        pause::install_page_zero(b"\x1b[6~", page_zero_tx);
         let code = lp.run(&rx);
         done_tx.send((code, lp)).unwrap_or(());
     });
@@ -2329,20 +2364,35 @@ fn reopened_history(older_ending: bool) {
         wait.recv_or_fail(&histories, "the initial history request"),
         0
     );
+    Deadline::after(DEADLINE).recv_or_fail(&taken, "the reader to take the late answer");
+    // The fold held page zero, so the top owes nothing: a few pages down
+    // reach the page after it, which the landing dropped.
+    for _ in 0..12 {
+        tx.send(Input::Bytes(b"\x1b[6~".to_vec())).unwrap();
+    }
+    // Page 0 as the loop held it when the first PageDown arrived, after
+    // the landing and the late empty answer: the fold's first page.
+    let held_zero = Deadline::after(DEADLINE).recv_or_fail(&page_zero, "page 0 before the keys");
+    assert!(
+        held_zero.iter().any(|row| row.contains("first")),
+        "page zero holds the session's first prompt: {held_zero:?}"
+    );
+    assert!(
+        held_zero.iter().filter(|row| row.contains("read")).count() >= 100,
+        "page zero holds the first turn's {} tool steps: {} rows",
+        102,
+        held_zero.len()
+    );
     let second = wait.recv_or_fail(&histories, "history after the reopened fold");
     tx.send(quit_leaving_work()).unwrap();
     let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
     wire.close();
     assert!(
-        second >= prefix + r,
-        "history before the last fold line: {second}, prefix {prefix}, replay {r}"
+        second >= prefix + script_len,
+        "history before the last fold line: {second}, prefix {prefix}, replay {script_len}"
     );
     assert!(lp.hub.answer_stash_peak() <= K);
     assert!(!lp.app.pass_open());
-    assert!(
-        lp.app.pages().part(0).is_some(),
-        "the abandoned empty answer did not mark the page loaded"
-    );
     assert_eq!(code, 0);
     drop(lp);
     Deadline::after(DEADLINE).recv_or_fail(&reader_done, "the reader to end");
