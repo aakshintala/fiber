@@ -416,6 +416,17 @@ fn numbers_are_kept_without_the_rail() {
     assert_eq!(number(&app, A), Some(1));
 }
 
+#[test]
+fn a_fresh_app_has_no_cards_and_a_session_with_no_row_gets_no_number() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.attach(contract::SessionId(A.to_owned()));
+    app.on_line(hello());
+    assert_eq!(app.rail_cards().map(|(cards, _)| cards.len()), Some(0));
+    assert_eq!(number(&app, A), None);
+    app.on_line(live(A, json!({})));
+    assert_eq!(number(&app, A), Some(1));
+}
+
 /// Presses `key`.
 fn press(app: &mut App, key: Key) -> Effect {
     app.on_key(key, fakes::clock::FakeClock::new().now())
@@ -595,6 +606,17 @@ fn alt_n_on_home_opens_the_card() {
     let commands = commands(app.on_line(accepted(B, out[0]["id"].as_str().unwrap_or_default())));
     assert_eq!(commands, vec![asks_commands(&commands[0]["id"], B)]);
     assert_eq!(on_screen(&app), Some(B));
+}
+
+#[test]
+fn alt_n_on_the_session_on_screen_or_with_no_such_card_does_nothing() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.attach(contract::SessionId(A.to_owned()));
+    app.on_line(hello());
+    app.on_line(live(A, json!({})));
+    assert_eq!(press(&mut app, Key::AltDigit(1)), Effect::None);
+    assert_eq!(press(&mut app, Key::AltDigit(2)), Effect::None);
+    assert_eq!(on_screen(&app), Some(A));
 }
 
 #[test]

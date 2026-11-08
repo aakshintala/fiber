@@ -544,6 +544,55 @@ fn sized(app: &mut App, width: u16, height: u16) -> String {
     text(&buf)
 }
 
+/// The session column's bottom stack and conversation drawn into a
+/// `width` by `height` column, in `render_frame`'s order. The Chrome floor
+/// keeps a screen from being this small, so the pieces draw into the
+/// column directly: each still has to keep the input line last and clip
+/// to the rows it is given.
+fn column_stack(app: &App, width: u16, height: u16) -> (Buffer, Vec<crate::mouse::Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    let mut bottom = area.bottom();
+    if let Some(panel) = app.panel() {
+        bottom = super::request::draw_noted(app, &panel, area, bottom, &mut buf, &mut targets);
+    } else {
+        super::input_box::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    }
+    super::steering_queue::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    super::banner::draw(app, area, &mut buf, &mut bottom);
+    super::working_line::draw(app, area, &mut buf, &mut bottom, &mut targets);
+    super::notice_rows::draw(
+        app,
+        area,
+        &mut buf,
+        &mut bottom,
+        &mut targets,
+        &super::notice_rows::frame_bound(app),
+    );
+    if let Some(rect) = app
+        .badge()
+        .and_then(|badge| super::put_spans(&mut buf, area, &mut bottom, super::badge_spans(&badge)))
+    {
+        targets.push(crate::mouse::Target {
+            id: crate::mouse::TargetId::Badge,
+            rect,
+        });
+    }
+    if app.hint() {
+        super::put(
+            &mut buf,
+            area,
+            &mut bottom,
+            &app.hint_text(),
+            Style::default(),
+        );
+    }
+    let rows = Rect::new(0, 0, width, bottom);
+    super::conversation::draw(app, rows, &mut buf, &mut targets);
+    (buf, targets)
+}
+
 /// A whole-screen snapshot pins one `prompt` replacement alongside the
 /// built-in notice, working line, input box, status rows and a surviving target.
 #[test]
@@ -955,6 +1004,170 @@ fn a_screen_below_the_floor_draws_the_floor_line_alone() {
         );
         assert!(shown.contains(&line), "{width}x{height}: {shown}");
     }
+}
+
+#[test]
+fn a_short_column_keeps_the_input_line_last() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "one"));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "two"));
+    app.connect_failed("lost".to_owned());
+    app.on_key(Key::CtrlC, now);
+    // The input line wins the last row with its edges where they fit,
+    // then the notice; a column too short for them all drops the hint
+    // first, and the badge with the conversation. The edged input box
+    // takes the notice's row before the hint's.
+    let shown = |height| text(&column_stack(&app, 20, height).0);
+    assert_eq!(shown(1), "▌ › █\n");
+    assert_eq!(shown(2), "  ⚠ connection_fa… ✕\n▌ › █\n");
+    assert_eq!(
+        shown(3),
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+    );
+    assert_eq!(
+        shown(4),
+        "  ⚠ connection_fa… ✕\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+    );
+}
+
+#[test]
+fn the_overlay_never_covers_the_input_line() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "one"));
+    app.on_key(Key::PageUp, now);
+    app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "streamed"));
+    assert!(app.has_new());
+    assert_eq!(text(&column_stack(&app, 30, 1).0), "▌ › █\n");
+    assert_eq!(
+        text(&column_stack(&app, 30, 2).0),
+        " ▐ ↓ New messages below · End┃\n▌ › █\n"
+    );
+}
+
+#[test]
+fn a_short_column_drops_the_badge_after_the_hint() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    app.on_key(Key::Esc, now);
+    app.connect_failed("lost".to_owned());
+    app.on_key(Key::CtrlC, now);
+    let shown = |height| text(&column_stack(&app, 40, height).0);
+    assert_eq!(shown(1), "▌ › █\n");
+    assert_eq!(
+        shown(2),
+        "  ⚠ connection_failed · lost           ✕\n▌ › █\n"
+    );
+    // The input box's edges take the rows the hint and the badge lose.
+    assert_eq!(
+        shown(3),
+        format!("{}\n▌ › █\n{}\n", "▄".repeat(40), "▀".repeat(40))
+    );
+    assert_eq!(
+        shown(4),
+        format!(
+            "  ⚠ connection_failed · lost           ✕\n{}\n▌ › █\n{}\n",
+            "▄".repeat(40),
+            "▀".repeat(40)
+        )
+    );
+    // Taller, the badge returns above the notice.
+    assert_eq!(
+        shown(7),
+        format!(
+            "  ⚠ 1 approvals waiting · click to reope\n  ⚠ connection_failed · lost           ✕\n{}\n▌ › █\n▌{}\n▌auto                ctx ▆▆▆▆▆▆▆▆ — · —\n{}\n",
+            "▄".repeat(40),
+            "─".repeat(38),
+            "▀".repeat(40)
+        )
+    );
+}
+
+#[test]
+fn a_panel_taller_than_the_column_keeps_its_header() {
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    assert_eq!(
+        text(&column_stack(&app, 40, 2).0),
+        format!("▌ Approval 1 of 1 · {S_A}\n▌  Esc puts it aside\n")
+    );
+}
+
+#[test]
+fn the_cursor_stays_on_a_column_one_wide() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(40, 10);
+    type_draft(&mut app, "ab");
+    let area = Rect::new(0, 0, 1, 5);
+    assert_eq!(cursor(&app, area).map(|at| at.x), Some(0));
+}
+
+#[test]
+fn new_messages_below_is_a_target_over_the_cells_it_drew() {
+    use crate::mouse::{Target, TargetId};
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "one"));
+    app.on_key(Key::PageUp, now);
+    app.on_line(delta(S_A, "a_1", "streamed"));
+    // The pill is 30 cells, centred over the rows area: 28 columns
+    // past the gutter and the scroll bar, it clips at the right edge
+    // with no ▌.
+    let (buf, targets) = column_stack(&app, 30, 2);
+    let below = Target {
+        id: TargetId::NewBelow,
+        rect: Rect::new(1, 0, 28, 1),
+    };
+    assert_eq!(targets, vec![below]);
+    assert_eq!(buf[(1, 0)].symbol(), "▐");
+    assert!(row_text(&buf, 0).contains("↓ New messages below · End"));
+    let (_, targets) = column_stack(&app, 10, 2);
+    assert_eq!(
+        targets.first().map(|target| target.rect),
+        Some(Rect::new(1, 0, 8, 1))
+    );
+    // No conversation row, no overlay and no target.
+    let (_, targets) = column_stack(&app, 30, 1);
+    assert!(targets.is_empty());
+}
+
+#[test]
+fn the_pill_clips_at_a_narrow_conversation() {
+    use crate::mouse::TargetId;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    for n in 1..=14 {
+        app.on_line(turn_started(S_A, &format!("prompt {n}")));
+    }
+    app.on_key(Key::PageUp, now);
+    app.on_line(turn_started(S_A, "one more"));
+    // At 20 columns the rows are 18 wide past the gutter and the scroll
+    // bar: the pill starts at the rows' left edge and is cut at their
+    // right one, with no closing end.
+    let (buf, targets) = column_stack(&app, 20, HEIGHT);
+    let pill = text(&buf)
+        .lines()
+        .position(|row| row.contains("↓ New messages"))
+        .expect("the clipped pill");
+    let row = u16::try_from(pill).unwrap_or(u16::MAX);
+    assert_eq!(buf[(1, row)].symbol(), "▐");
+    assert!(
+        (0..20).all(|x| buf[(x, row)].symbol() != "▌"),
+        "{}",
+        row_text(&buf, row)
+    );
+    assert!(
+        targets.iter().any(
+            |target| target.id == TargetId::NewBelow && target.rect == Rect::new(1, row, 18, 1)
+        ),
+        "{targets:?}"
+    );
 }
 
 /// Types `text` into the draft, `\n` as Shift+Enter.

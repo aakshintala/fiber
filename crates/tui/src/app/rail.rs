@@ -665,13 +665,13 @@ impl App {
     /// (`docs/tui.md`, "Shedding"). ⌥P brings the panel back, and the
     /// rail sheds again.
     pub(super) fn show_rail(&mut self) -> Effect {
-        let home = Some(super::chrome::HomeState {
+        let home = super::chrome::HomeState {
             shares: crate::layout::Shares {
                 rail: self.home.launch.rail_share,
                 panel: self.home.launch.panel_share,
             },
             on_home: self.on_home(),
-        });
+        };
         let sheds_panel =
             self.chrome
                 .show_rail_and_sheds_panel(self.screen.width(), self.screen.height(), home);

@@ -701,11 +701,7 @@ pub(crate) fn cursor(app: &App, area: Rect) -> Option<Position> {
         return if app.results_open() {
             None
         } else {
-            // The bar draws in the conversation, past the gutter.
-            marks::bar_cursor(
-                &bar,
-                crate::layout::past_gutter(area, app.chrome().gutter()),
-            )
+            marks::bar_cursor(&bar, area)
         };
     }
     let (below, col) = input_box::cursor_row(app, area.width, usize::from(area.height));

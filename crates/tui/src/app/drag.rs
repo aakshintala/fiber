@@ -131,21 +131,12 @@ impl App {
             self.home.launch.rail_share = drag.before;
             return;
         }
-        if drag.edge == Edge::Grip {
-            return;
-        }
-        let share = match drag.edge {
-            Edge::Rail => Some(self.home.launch.rail_share),
-            Edge::Panel => Some(self.home.launch.panel_share),
-            Edge::Grip => None,
+        let (key, share) = match drag.edge {
+            Edge::Rail => ("tui.rail.width", self.home.launch.rail_share),
+            Edge::Panel => ("tui.panel.width", self.home.launch.panel_share),
+            Edge::Grip => return,
         };
-        let key = match drag.edge {
-            Edge::Rail | Edge::Grip => "tui.rail.width",
-            Edge::Panel => "tui.panel.width",
-        };
-        if let Some(share) = share
-            && share != drag.before
-        {
+        if share != drag.before {
             self.queue_save(key, format!("{share}"));
         }
     }
