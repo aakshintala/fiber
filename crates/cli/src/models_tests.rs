@@ -8,7 +8,6 @@
     reason = "test code; a failure is the test's"
 )]
 
-use crate::test_support::set_source_mtime;
 use crate::test_support::{
     approve_repo, declare_repo, never_repo, repo_data, repo_manifest, write_record,
 };
@@ -24,6 +23,26 @@ use serde_json::{Value, json};
 
 use super::{providers_and_config, refresh_named, refresh_run, run};
 use fakes::{Deadline, NoLock};
+
+pub(crate) fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            set_source_mtime(&entry.path(), mtime);
+        } else {
+            std::fs::File::options()
+                .write(true)
+                .open(entry.path())
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+    }
+    std::fs::File::open(dir)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
 
 #[test]
 fn catalogue_and_cached_model_lists_follow_project_configuration() {

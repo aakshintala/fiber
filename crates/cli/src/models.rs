@@ -453,4 +453,4 @@ pub fn refresh_model_lists(
 
 #[cfg(test)]
 #[path = "models_tests.rs"]
-mod tests;
+pub(crate) mod tests;

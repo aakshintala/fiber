@@ -6,7 +6,7 @@
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
-use crate::test_support::set_source_mtime;
+use crate::models::tests::set_source_mtime;
 use crate::test_support::write_record;
 use std::cell::Cell;
 use std::os::unix::fs::PermissionsExt;
