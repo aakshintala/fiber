@@ -10604,16 +10604,16 @@ fn short_hub_idle(setup: &support::Setup) {
 /// The index of a row that draws a labelled rule whose label holds
 /// `label`, with `text` on a row below it and no other rule between.
 fn rule_over_text(grid: &Grid, label: &str, text: &str) -> Option<usize> {
-    let rule = grid
-        .rows
+    // settled: only a `wait_screen` predicate calls this, so the wait is the check.
+    let rows = &grid.rows;
+    let rule = rows
         .iter()
         .position(|row| row.contains(label) && row.contains(" · ") && row.contains('─'))?;
-    let below = grid
-        .rows
+    let below = rows
         .iter()
         .skip(rule + 1)
         .position(|row| row.contains(text))?;
-    grid.rows[rule + 1..rule + 1 + below]
+    rows[rule + 1..rule + 1 + below]
         .iter()
         .all(|row| !row.contains('─'))
         .then_some(rule)
@@ -10671,13 +10671,9 @@ fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
         log_has(&log, "steering_applied", MARK)
     });
     open_delegate_view(&mut run, "◆ scan", "› ◆ scan");
-    let grid = run.wait_screen("the steer rule over its text", |grid| {
-        rule_over_text(grid, "steer", MARK).is_some()
-    });
-    assert!(
-        !grid.contents.contains("Fiber ·"),
-        "no labelled rule beside the steer: {}",
-        grid.contents
+    run.wait_screen(
+        "the steer rule over its text, no Fiber rule beside it",
+        |grid| rule_over_text(grid, "steer", MARK).is_some() && !grid.contents.contains("Fiber ·"),
     );
     child.release();
     quit(run);
