@@ -44,7 +44,8 @@ use contract::events::Notice;
 use serde_json::{Map, Value};
 
 pub use cache::{
-    cached_model_lists, model_cache_age, model_cache_lock_file, read_model_cache, write_model_cache,
+    cached_model_lists, model_cache_age, model_cache_file, model_cache_lock_file, read_model_cache,
+    write_model_cache,
 };
 pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};
