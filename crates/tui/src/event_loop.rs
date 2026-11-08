@@ -231,7 +231,7 @@ pub(crate) fn run_with(
     app.set_import_offer(pending);
     app.set_launch_overrides(launch_overrides);
     if pick_at_start {
-        app.start_model_pick();
+        app.defer_first_run();
     }
     // One cell's pixels, for the placeholder grid, from the tty the
     // first frame already sized (`docs/tui.md`, "Images"). The measured
