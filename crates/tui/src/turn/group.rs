@@ -354,6 +354,17 @@ impl Group {
                 Kind::Delegate => kinds.delegates = kinds.delegates.saturating_add(1),
                 Kind::Jobs => kinds.jobs = kinds.jobs.saturating_add(1),
                 Kind::Ask(questions) => kinds.asked = kinds.asked.saturating_add(questions),
+                Kind::Fetch => kinds.fetched = kinds.fetched.saturating_add(1),
+                Kind::Web => kinds.web = kinds.web.saturating_add(1),
+                Kind::Skill => kinds.skills = kinds.skills.saturating_add(1),
+                Kind::Tools => kinds.tool_lookups = kinds.tool_lookups.saturating_add(1),
+                Kind::DelegateMessage => {
+                    kinds.messaged_delegates = kinds.messaged_delegates.saturating_add(1);
+                }
+                Kind::SessionMessage => {
+                    kinds.messaged_sessions = kinds.messaged_sessions.saturating_add(1);
+                }
+                Kind::Session => kinds.sessions = kinds.sessions.saturating_add(1),
                 Kind::Other => kinds.called = kinds.called.saturating_add(1),
                 Kind::Edit => {
                     match call.arguments.get("path").and_then(Value::as_str) {
@@ -1161,6 +1172,13 @@ impl Group {
             | Kind::Delegate
             | Kind::Jobs
             | Kind::Ask(_)
+            | Kind::Fetch
+            | Kind::Web
+            | Kind::Skill
+            | Kind::Tools
+            | Kind::DelegateMessage
+            | Kind::SessionMessage
+            | Kind::Session
             | Kind::Other => vec![dim_span(completed.output.to_owned())],
         }
     }

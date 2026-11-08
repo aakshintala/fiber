@@ -583,7 +583,7 @@ const WHEEL_DOWN: &[u8] = b"\x1b[<65;21;41M";
 /// turn names it once.
 const THOUGHT: &str = "Ran 1 command";
 /// The fetch fixture's one-call thought-row marker.
-const FETCH_THOUGHT: &str = "Called 1 tool, thought once";
+const FETCH_THOUGHT: &str = "Fetched 1 page, thought once";
 
 /// The first filler line: it stays on screen while the conversation scrolls
 /// toward its thought row, so its downward motion proves a wheel step moved
@@ -835,7 +835,7 @@ fn a_head_only_fetch_cut_pages_with_one_marker() {
     // The inline call opens on its more row: the 90-line body exceeds the
     // 20-line cap, so the head lines may scroll off while the more row
     // at the bottom stays visible.
-    open_call(&mut run, gutter, "other", &url, "more lines");
+    open_call(&mut run, gutter, "fetch", &url, "more lines");
     // The more row opens the view with one click; following pages to the
     // end through `artifact_page`, where the tail lands with no resume
     // marker: only the head was kept.
@@ -843,7 +843,7 @@ fn a_head_only_fetch_cut_pages_with_one_marker() {
     let grid = run.wait_screen("the call's view", |grid| {
         grid.rows.iter().any(|row| row.contains("TAIL"))
     });
-    assert_view_chrome(&grid, "Other", &url, false);
+    assert_view_chrome(&grid, "Fetch", &url, false);
     assert_snapshot!(
         "call_view_one_end_open",
         snapshot_text(&setup, &grid, std::slice::from_ref(&url))
