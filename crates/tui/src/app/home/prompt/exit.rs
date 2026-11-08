@@ -372,11 +372,7 @@ impl App {
         let mut lines = Vec::new();
         let mut pairs = Vec::new();
         for session in sessions {
-            if self
-                .home
-                .as_ref()
-                .is_some_and(|home| home.subs.expected(session).is_none())
-            {
+            if self.home.is_some() && self.subscribed_level(session).is_none() {
                 lines.push(self.subscribe(session, Level::Summary));
             }
             let id = mint();

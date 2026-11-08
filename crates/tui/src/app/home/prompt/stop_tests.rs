@@ -260,12 +260,8 @@ fn an_idle_row_with_nothing_running_says_nothing() {
 /// Holds the session at `full` on this connection.
 fn hold_full(app: &mut App, session: &str) {
     if let Some(home) = app.home.as_mut() {
-        home.subs.sent(
-            "c_1".to_owned(),
-            SessionId(session.to_owned()),
-            crate::home::Level::Full,
-        );
-        home.subs.answered("c_1", true);
+        home.subs
+            .accept(SessionId(session.to_owned()), crate::home::Level::Full);
     }
 }
 

@@ -298,9 +298,7 @@ fn clients_two_held_full_is_open_elsewhere() {
     // This connection holds the session at `full`: one of the two.
     let session = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
     if let Some(home) = app.home.as_mut() {
-        home.subs
-            .sent("c_1".to_owned(), session, crate::home::Level::Full);
-        home.subs.answered("c_1", true);
+        home.subs.accept(session, crate::home::Level::Full);
     }
     assert_eq!(ctrl_c(&mut app), Effect::None);
     assert_eq!(app.quit_question(), Some((1, 1)));
@@ -319,9 +317,7 @@ fn clients_one_held_full_is_not() {
     ));
     let session = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
     if let Some(home) = app.home.as_mut() {
-        home.subs
-            .sent("c_1".to_owned(), session, crate::home::Level::Full);
-        home.subs.answered("c_1", true);
+        home.subs.accept(session, crate::home::Level::Full);
     }
     assert_eq!(ctrl_c(&mut app), Effect::None);
     assert_eq!(app.quit_question(), Some((1, 0)));
@@ -362,9 +358,7 @@ fn c_subscribes_where_needed_and_closes_each_now() {
     // subscribe goes out for it.
     let held = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     if let Some(home) = app.home.as_mut() {
-        home.subs
-            .sent("c_1".to_owned(), held, crate::home::Level::Full);
-        home.subs.answered("c_1", true);
+        home.subs.accept(held, crate::home::Level::Full);
     }
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
@@ -1364,9 +1358,7 @@ fn the_close_all_count_reads_sessions_working_and_elsewhere() {
     // less its own leaves none elsewhere.
     let held = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     if let Some(home) = app.home.as_mut() {
-        home.subs
-            .sent("c_1".to_owned(), held, crate::home::Level::Full);
-        home.subs.answered("c_1", true);
+        home.subs.accept(held, crate::home::Level::Full);
     }
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
@@ -1409,9 +1401,7 @@ fn the_close_all_elsewhere_boundary_holds_both_sides() {
     ));
     let held = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
     if let Some(home) = app.home.as_mut() {
-        home.subs
-            .sent("c_1".to_owned(), held, crate::home::Level::Full);
-        home.subs.answered("c_1", true);
+        home.subs.accept(held, crate::home::Level::Full);
     }
     // One client is this connection's own hold: nowhere else.
     app.on_line(live(
@@ -1423,9 +1413,7 @@ fn the_close_all_elsewhere_boundary_holds_both_sides() {
     ));
     let held = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
     if let Some(home) = app.home.as_mut() {
-        home.subs
-            .sent("c_2".to_owned(), held, crate::home::Level::Full);
-        home.subs.answered("c_2", true);
+        home.subs.accept(held, crate::home::Level::Full);
     }
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
