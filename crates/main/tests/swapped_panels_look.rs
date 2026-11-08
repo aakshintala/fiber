@@ -395,12 +395,14 @@ fn the_settings_view_matches_the_doc() {
     let note = row_with(&grid, "Changes save automatically");
     assert!(is_dim(&grid, note, "Changes save automatically"));
     let bar = row_with(&grid, "Appearance");
+    // settled: the grid the last wait_screen returned.
     assert_eq!(bar, note + 2, "{}", grid.contents);
     assert!(is_bold(&grid, bar, "Appearance"));
     assert!(!is_bold(&grid, bar, "Models"));
     // The footer names its keys, the keys bold.
     let footer = row_with(&grid, "Delete reset");
     assert_eq!(
+        // settled: the grid the last wait_screen returned.
         grid.rows[usize::from(footer)].trim(),
         "←→ tab · / search · Enter change · Tab layer · Delete reset"
     );
@@ -414,6 +416,7 @@ fn the_settings_view_matches_the_doc() {
         find_row(grid, "Default model").is_some()
     });
     let model = row_with(&grid, "Default model");
+    // settled: the grid the last wait_screen returned.
     let text = grid.rows[usize::from(model)].trim_end().to_owned();
     assert!(text.contains("scripted/s.json ›"), "{text}");
     assert!(!text.contains("\"scripted/s.json\""), "unquoted: {text}");
@@ -437,8 +440,10 @@ fn the_settings_view_matches_the_doc() {
     assert_eq!(focused_label(&grid).as_deref(), Some("Handoff tokens"));
     let handoff = row_with(&grid, "Handoff tokens");
     assert!(
+        // settled: the grid the last wait_screen returned.
         grid.rows[usize::from(handoff)].contains("400000"),
         "{}",
+        // settled: the grid the last wait_screen returned.
         grid.contents
     );
     assert!(is_plain_of_reverse(&grid, handoff, "Handoff tokens"));
@@ -448,13 +453,17 @@ fn the_settings_view_matches_the_doc() {
         "handoff.tokens · using the default · changing handoff.tokens needs a reload (~84k tokens)";
     let detail = row_with(&grid, "handoff.tokens ·");
     assert_eq!(
+        // settled: the grid the last wait_screen returned.
         grid.rows[usize::from(detail)].trim(),
         reload,
         "{}",
+        // settled: the grid the last wait_screen returned.
         grid.contents
     );
     assert!(is_dim(&grid, detail, reload));
+    // settled: the grid the last wait_screen returned.
     assert_eq!(detail + 1, footer, "{}", grid.contents);
+    // settled: the grid the last wait_screen returned.
     assert!(!grid.contents.contains("Ctrl+G opens the file"));
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));
