@@ -1630,7 +1630,10 @@ or stale list uses the same path; its VM is dropped after discovery unless
 another provider or the extension's hooks, tools or commands still hold it.
 Fresh cached lists are read without loading provider Lua and show models
 only for providers with credential presence (`docs/model-routing.md`,
-"Credentials"). Providers without presence never run discovery. Provider data
+"Credentials"). Providers without presence never run discovery. A cached list
+is stale when its age is past `model_cache_age` or its provider's extension
+source is newer than the cache; equal source and cache mtimes read fresh, and
+an unreadable source reads stale. Provider data
 and credentialed discovery ignore `extensions."<name>".enabled`; in a disabled
 mixed package, init, commands and hooks still stay off, even when its provider
 Lua starts later.
