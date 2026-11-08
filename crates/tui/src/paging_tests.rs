@@ -15,7 +15,7 @@ use contract::{ActionId, Envelope, Seq, SessionId};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
-use super::{Draw, Folded, Pages, Part, fold};
+use super::{Draw, Folded, Pages, Part, fold, shell_target};
 use crate::app::{App, Effect, Target};
 use crate::ext::{Failure, Handle, Input, RawSpan, Renderer};
 use crate::keys::Key;
@@ -5683,4 +5683,86 @@ fn shell_cap_cut_notice() {
             .collect::<Vec<_>>(),
         vec!["tail 1", "tail 2", "tail 3", "show less", "exit 0"]
     );
+}
+
+/// Reveal opens a closed run, never closes an open one, reports whether
+/// anything changed, and records no override.
+#[test]
+fn shell_cap_force_open() {
+    let mut item = shell_item(SENT, 25, "exit 0");
+    item = item.replace("out 24", "needle past the cap");
+    let mut pages = shell_pages(item);
+    let target = shell_target(0);
+    let texts = shell_texts(&pages, Draw::Shown);
+    assert!(!texts.iter().any(|text| text.contains("needle")));
+    assert!(pages.force_open(&target));
+    assert!(
+        shell_texts(&pages, Draw::Shown)
+            .iter()
+            .any(|text| text == "needle past the cap")
+    );
+    assert_eq!(pages.index().total(), 2 + 25 + 1 + 1, "the page recounts");
+    assert!(!pages.force_open(&target), "already open: nothing changed");
+    assert!(
+        shell_texts(&pages, Draw::Shown)
+            .iter()
+            .any(|text| text == "show less"),
+        "reveal never closes"
+    );
+    assert!(pages.overrides.is_empty(), "shell state is not an override");
+}
+
+/// A search draw shows every output line, as it does for an opened
+/// call, while the run stays closed for the person.
+#[test]
+fn shell_cap_all_open() {
+    let pages = shell_pages(shell_item(SENT, 25, "exit 0"));
+    let (rows, _, _, _) = pages.page_text_open_turns(0).expect("resident page");
+    let texts: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(
+        texts,
+        shell_expect(SENT, 25, &["5 more lines", "exit 0"]),
+        "all 25 lines, and the more row as an opened call keeps its own"
+    );
+    let shown = shell_texts(&pages, Draw::Shown);
+    assert!(!shown.iter().any(|text| text == "out 25"), "still closed");
+}
+
+/// `carry_chain` keeps each run's open state with the run and numbers
+/// the more-row keys by the run's new slot.
+#[test]
+fn shell_cap_carry() {
+    let (mut preview, mut fold, len, summaries) = carry_edge();
+    for (page, text, open) in [(0, "ancestor open", true), (1, "ancestor closed", false)] {
+        preview
+            .shell_index
+            .entry((page, 0))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shells.push((page, 0, text.to_owned(), open));
+    }
+    for (text, open) in [("fold open", true), ("fold closed", false)] {
+        fold.shell_index
+            .entry((1, 0))
+            .or_default()
+            .push(fold.shells.len());
+        fold.shells.push((1, 0, text.to_owned(), open));
+    }
+    preview.carry_chain(&mut fold);
+    assert_eq!(
+        fold.shells,
+        vec![
+            (0, 0, "ancestor open".to_owned(), true),
+            (1, 0, "ancestor closed".to_owned(), false),
+            (1 + len, summaries, "fold open".to_owned(), true),
+            (1 + len, summaries, "fold closed".to_owned(), false),
+        ]
+    );
+    // The more-row keys follow the new slots: the third run is slot 2.
+    assert_eq!(fold.shell_slot(&shell_target(2)), Some(2));
+    assert!(
+        fold.toggle_shell(&shell_target(2)),
+        "the carried run answers"
+    );
+    assert_eq!(fold.shells.get(2).map(|run| run.3), Some(false));
 }
