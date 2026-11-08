@@ -345,14 +345,6 @@ crates/main/tests/main_journeys.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-M
 crates/tui/src/app/delegate_steering_tests.rs	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
 crates/tui/src/app/snapshots/tui__app__delegate_steering_tests__queued_delegate_steering.snap	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
 crates/main/tests/main_journeys/delegate_steering.rs	fiber-4187	grant	2026-11-08T08:55:38Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4187-delegate-view-steering	
-crates/tools/src/shell.rs	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/shell/background.rs	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/shell/output.rs	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/shell/background_tests.rs	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/tests/shell.rs	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tools.md	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tools/src/job_timing_tests.rs	fiber-4238	plan	2026-11-08T10:19:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4425
-crates/tools/src/shell_tests.rs	fiber-4238	plan	2026-11-08T10:19:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4425
 crates/tui/src/app/answer_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/config_views.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
 crates/tui/src/app/home/open_at.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
