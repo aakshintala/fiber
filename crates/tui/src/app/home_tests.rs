@@ -2,6 +2,8 @@
 //! names.
 
 use super::{App, Effect};
+use crate::app::Waiting;
+use crate::app::outbox::RecentAsk;
 use crate::app::testkit::{SENDER, hello, home_with, sender_status};
 use crate::home::{Launch, ListLine, Spot};
 use crate::keys::{Edit, Key};
@@ -7161,6 +7163,179 @@ fn an_unscoped_recent_id_answered_by_a_scoped_payload_folds_unscoped() {
             .any(|line| line["command"] == "recent" && line["args"]["project"] == "-w"),
         "{out:?}"
     );
+}
+
+/// The tags out, as `(id, tag)` in send order.
+fn tags_out(app: &App) -> Vec<(String, crate::app::Waiting)> {
+    app.outbox
+        .tags()
+        .map(|(id, waiting)| (id.to_owned(), waiting.clone()))
+        .collect()
+}
+
+/// The ids of the scoped `recent` tags out for `project`.
+fn scoped_tag_ids(app: &App, project: &str) -> Vec<String> {
+    tags_out(app)
+        .into_iter()
+        .filter(|(_, tag)| {
+            matches!(tag, crate::app::Waiting::Recent(RecentAsk::Scoped(asked)) if asked == project)
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+#[test]
+fn the_feed_tag_is_the_only_record() {
+    // With its tag live, a refused feed folds as one notice.
+    let mut live = home_with(80, 24, launch());
+    let (feed, _) = linked(&mut live);
+    assert!(live.on_line(refused(&feed, "no feed")).is_empty());
+    assert!(live.notice().is_some());
+    // The tag settles out of band: the same answer changes nothing, with
+    // no row, no notice and no other feed state.
+    let mut gone = home_with(80, 24, launch());
+    let (feed, _) = linked(&mut gone);
+    gone.outbox.settled(&feed);
+    assert!(gone.on_line(refused(&feed, "no feed")).is_empty());
+    assert_eq!(gone.notice(), None);
+    assert!(rows(&gone).is_empty());
+    assert!(
+        gone.on_line(accepted(&feed, json!({"sessions": []})))
+            .is_empty()
+    );
+    assert_eq!(gone.notice(), None);
+}
+
+#[test]
+fn the_recent_tags_are_the_only_record() {
+    let mut app = home_with(80, 24, launch());
+    let (feed, recent) = linked(&mut app);
+    // `Recent` holds no id: the tags are one `Feed` and one first page.
+    assert_eq!(
+        tags_out(&app),
+        [
+            (feed, Waiting::Feed),
+            (recent.clone(), Waiting::Recent(RecentAsk::First)),
+        ]
+    );
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    let Some(Effect::Send(page)) = app.page_recent(key) else {
+        panic!("the last row asks the next page");
+    };
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    let page_id = line_id(&page).to_owned();
+    assert_eq!(
+        app.outbox.waiting(&page_id),
+        Some(Waiting::Recent(RecentAsk::Page))
+    );
+    // A page is out: no second one goes out beside it.
+    assert_eq!(app.page_recent(key), None);
+    // Its tag settles out of band, and the next ask goes out.
+    app.outbox.settled(&page_id);
+    assert!(matches!(app.page_recent(key), Some(Effect::Send(_))));
+}
+
+#[test]
+fn a_page_ask_is_not_a_first_ask() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    let Some(Effect::Send(page)) = app.page_recent(key) else {
+        panic!("the last row asks the next page");
+    };
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    app.on_line(accepted(
+        line_id(&page),
+        json!({"sessions": [exited_in("s_bbbbbbbbbbbbbbbb", "b", "/w", "-w")]}),
+    ));
+    // An older page appends; a first page would have replaced the rows.
+    assert_eq!(rows(&app), ["○  a", "○  b"]);
+}
+
+#[test]
+fn one_scoped_ask_per_project_comes_from_the_tags() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let ids = scoped_tag_ids(&app, "-w");
+    assert_eq!(ids.len(), 1);
+    // A second ask for the project marks it dirty and sends nothing.
+    assert!(app.scoped_first("-w").is_empty());
+    assert!(
+        app.home
+            .as_ref()
+            .is_some_and(|home| home.sessions.is_dirty("-w"))
+    );
+    assert_eq!(scoped_tag_ids(&app, "-w"), ids);
+    // The tag settles out of band: the project is asked again.
+    app.outbox.settled(&ids[0]);
+    let sent = commands(app.scoped_first("-w"));
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["args"]["project"], "-w");
+    assert_eq!(scoped_tag_ids(&app, "-w").len(), 1);
+}
+
+#[test]
+fn a_reconnect_settles_scoped_tags_and_keeps_the_unscoped_ones() {
+    let mut app = home_with(80, 24, launch());
+    let (feed, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let key = row_key(&app, "s_aaaaaaaaaaaaaaaa");
+    let Some(Effect::Send(page)) = app.page_recent(key) else {
+        panic!("the last row asks the next page");
+    };
+    let page: Value = serde_json::from_str(&page[0]).unwrap_or_else(|err| panic!("{err}"));
+    let page_id = line_id(&page).to_owned();
+    let old_scoped = scoped_tag_ids(&app, "-w");
+    assert_eq!(old_scoped.len(), 1);
+    app.home_reset();
+    // The old scoped tag is gone, a new one stands in its place, and the
+    // feed's and the page's tags stay.
+    assert_eq!(app.outbox.waiting(&old_scoped[0]), None);
+    let new_scoped = scoped_tag_ids(&app, "-w");
+    assert_eq!(new_scoped.len(), 1);
+    assert_ne!(new_scoped, old_scoped);
+    assert_eq!(app.outbox.waiting(&feed), Some(Waiting::Feed));
+    assert_eq!(
+        app.outbox.waiting(&page_id),
+        Some(Waiting::Recent(RecentAsk::Page))
+    );
+}
+
+#[test]
+fn a_stale_scoped_answer_after_reset_matches_nothing() {
+    let mut app = home_with(80, 24, launch());
+    let (_, recent) = linked(&mut app);
+    app.on_line(accepted(
+        &recent,
+        json!({"sessions": [exited_in("s_aaaaaaaaaaaaaaaa", "a", "/w", "-w")]}),
+    ));
+    let old = scoped_tag_ids(&app, "-w");
+    assert_eq!(old.len(), 1);
+    app.home_reset();
+    let before = rows(&app);
+    // The reconnect's own re-asks ride out on this pass; the stale
+    // answer folds nothing of its own.
+    app.on_line(accepted(
+        &old[0],
+        json!({"sessions": [exited_in("s_cccccccccccccccc", "c", "/w", "-w")], "total": 2}),
+    ));
+    assert_eq!(rows(&app), before);
+    assert_eq!(stored(&app, "-w"), None);
 }
 
 #[test]
