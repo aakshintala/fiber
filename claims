@@ -111,19 +111,6 @@ crates/tui/src/window.rs	fiber-4192	plan	2026-11-07T16:27:31Z	Amoghs-MacBook-Pro
 crates/tui/src/window/residency.rs	fiber-4192	plan	2026-11-07T16:27:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4360
 crates/tui/src/paging_tests.rs	fiber-4192	plan	2026-11-07T16:27:31Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4360
 crates/tui/examples/paging.rs	fiber-4059	plan	2026-11-07T17:44:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/format.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/format_tests.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/turn/group.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/turn/group_tests.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/turn/opened.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/turn/opened_tests.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/call_view.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/app/call_view_tests.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/turn_tests.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/call_view.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/snapshots/call_view__call_view_one_end_open.snap	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/tui.md	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/view_tests.rs	fiber-4181	plan	2026-11-07T18:48:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .config/nextest.toml	fiber-2465	plan	2026-11-07T20:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-2465	plan	2026-11-07T20:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/build-timings.yml	fiber-2465	plan	2026-11-07T20:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
