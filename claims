@@ -706,3 +706,4 @@ crates/tui/src/copy_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aa
 crates/tui/src/turn_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 crates/tui/src/view_tests.rs	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
 docs/tui.md	fiber-4179	plan	2026-11-08T16:42:52Z	HOST:/Users/aakshintala/work/fiber-worktrees/tui/4179-markdown-prompt-bubble	
+crates/tui/src/rebind_tests.rs	fiber-4188	plan	2026-11-08T16:45:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
