@@ -393,3 +393,34 @@ crates/tui/src/app/chrome.rs	fiber-4385	plan	2026-11-08T10:10:20Z	Amoghs-MacBook
 crates/tui/src/app/call_view_tests.rs	fiber-4385	plan	2026-11-08T10:10:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/src/job_timing_tests.rs	fiber-4238	plan	2026-11-08T10:19:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4425
 crates/tools/src/shell_tests.rs	fiber-4238	plan	2026-11-08T10:19:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4425
+crates/tui/src/app/answer_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/config_views.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/open_at.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/open_at_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/open.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/prompt/delete.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/prompt/delete/settlement.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/prompt/delete_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/prompt/exit.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/prompt/exit_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/prompt.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/prompt/stop_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/recent.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/reset.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/typed.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/typed_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/workspace.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/home/workspace_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/images.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/images_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/outbox.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/outbox_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/panel.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/reconnect_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/rewind/send.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/app/session_views.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/home.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
+crates/tui/src/home_tests.rs	fiber-4127	plan	2026-11-08T10:27:03Z	roundhouse-7010-plus-1:/home/aakshintala/work/fiber-worktrees/flywheel/run	
