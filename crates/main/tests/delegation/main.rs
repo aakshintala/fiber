@@ -14,6 +14,7 @@ mod support;
 
 mod ask;
 mod ask_worktree;
+mod delegate_final_message;
 mod delegate_provider_message;
 mod delegates;
 mod supervised;

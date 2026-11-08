@@ -11,7 +11,7 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-mod support;
+use crate::support;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
