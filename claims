@@ -691,3 +691,7 @@ crates/tui/src/view/snapshots/tui__view__item__tests__*.snap	fiber-4188	plan	202
 crates/tui/src/app/snapshots/tui__app__interrupt_tests__*.snap	fiber-4188	plan	2026-11-08T16:09:58Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4188-delegate-interrupt	0
 crates/main/tests/release_pack.rs	fiber-3556	plan	2026-11-08T16:13:02Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tests/3556-release-pack-flake	
 crates/main/tests/hub_exit_window.rs	fiber-4230	plan	2026-11-08T16:24:27Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/bubble.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/bubble_tests.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/markdown.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/markdown_tests.rs	fiber-4179	plan	2026-11-08T16:26:40Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
