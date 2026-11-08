@@ -296,31 +296,31 @@ fn file_text(file: &std::path::Path) -> String {
 #[test]
 fn a_reset_reveals_the_value_below_in_each_layer() {
     let setup = Setup::new();
-    setup.write(&setup.global(), r#"{"handoff": {"tokens": 1}}"#);
-    setup.write(&setup.project(), r#"{"handoff": {"tokens": 2}}"#);
-    setup.write(&setup.repository(), r#"{"handoff": {"tokens": 3}}"#);
+    setup.write(&setup.global(), r#"{"compaction": {"tokens": 1}}"#);
+    setup.write(&setup.project(), r#"{"compaction": {"tokens": 2}}"#);
+    setup.write(&setup.repository(), r#"{"compaction": {"tokens": 3}}"#);
     for (layer, file, was, then) in [
         (Layer::Repository, setup.repository(), 3, 2),
         (Layer::Project, setup.project(), 2, 1),
     ] {
         assert_eq!(
-            reset(&setup, layer, "handoff.tokens", json!(was)).unwrap(),
+            reset(&setup, layer, "compaction.tokens", json!(was)).unwrap(),
             config::Reset::Removed(file.clone())
         );
         assert!(!file_text(&file).contains("tokens"));
         let rows = setup.load(&[]).unwrap().settings();
         assert_eq!(
-            row(&rows, "handoff.tokens").value,
+            row(&rows, "compaction.tokens").value,
             SettingValue::Value(json!(then), then_source(&setup, then))
         );
     }
     assert_eq!(
-        reset(&setup, Layer::Global, "handoff.tokens", json!(1)).unwrap(),
+        reset(&setup, Layer::Global, "compaction.tokens", json!(1)).unwrap(),
         config::Reset::Removed(setup.global())
     );
     let rows = setup.load(&[]).unwrap().settings();
     assert_eq!(
-        row(&rows, "handoff.tokens").value,
+        row(&rows, "compaction.tokens").value,
         SettingValue::Value(json!(400_000), Source::Default)
     );
 }
@@ -337,7 +337,7 @@ fn then_source(setup: &Setup, then: i64) -> Source {
 fn resetting_an_absent_override_writes_and_creates_nothing() {
     let setup = Setup::new();
     for layer in [Layer::Global, Layer::Project, Layer::Repository] {
-        let got = reset(&setup, layer, "handoff.tokens", json!(5)).unwrap();
+        let got = reset(&setup, layer, "compaction.tokens", json!(5)).unwrap();
         let config::Reset::Absent(file) = got else {
             panic!("an absent override is reported as absent, not {got:?}");
         };
@@ -346,7 +346,7 @@ fn resetting_an_absent_override_writes_and_creates_nothing() {
     // A file that exists but lacks the key is left byte for byte.
     setup.write(&setup.global(), "{\"model\":   \"a/b\"}\n");
     assert_eq!(
-        reset(&setup, Layer::Global, "handoff.tokens", json!(5)).unwrap(),
+        reset(&setup, Layer::Global, "compaction.tokens", json!(5)).unwrap(),
         config::Reset::Absent(setup.global())
     );
     assert_eq!(file_text(&setup.global()), "{\"model\":   \"a/b\"}\n");
@@ -355,18 +355,18 @@ fn resetting_an_absent_override_writes_and_creates_nothing() {
 #[test]
 fn the_expected_value_must_equal_the_stored_one() {
     let setup = Setup::new();
-    setup.write(&setup.global(), r#"{"handoff": {"window_fraction": 0.5}}"#);
+    setup.write(&setup.global(), r#"{"compaction": {"window_fraction": 0.5}}"#);
     let before = file_text(&setup.global());
     // Just below and just above: nothing is removed.
     for other in [json!(0.499), json!(0.501)] {
         assert_eq!(
-            reset(&setup, Layer::Global, "handoff.window_fraction", other).unwrap(),
+            reset(&setup, Layer::Global, "compaction.window_fraction", other).unwrap(),
             config::Reset::Changed(setup.global())
         );
         assert_eq!(file_text(&setup.global()), before);
     }
     assert_eq!(
-        reset(&setup, Layer::Global, "handoff.window_fraction", json!(0.5)).unwrap(),
+        reset(&setup, Layer::Global, "compaction.window_fraction", json!(0.5)).unwrap(),
         config::Reset::Removed(setup.global())
     );
 }
@@ -403,7 +403,7 @@ fn a_reset_refuses_what_a_set_refuses_and_touches_nothing() {
         (Layer::Project, "diagnostics.level"),
         (Layer::Repository, "diagnostics.level"),
         (Layer::Repository, "reviewer.context"),
-        (Layer::Global, "handoff..tokens"),
+        (Layer::Global, "compaction..tokens"),
         (Layer::Global, "extensions.x.settings.y"),
     ] {
         assert!(
@@ -421,10 +421,10 @@ fn a_reset_refuses_what_a_set_refuses_and_touches_nothing() {
 #[test]
 fn a_reset_refuses_a_file_that_is_not_a_configuration_object() {
     let setup = Setup::new();
-    for text in ["[]", "{not json", r#"{"handoff": {"tokens": "x"}}"#] {
+    for text in ["[]", "{not json", r#"{"compaction": {"tokens": "x"}}"#] {
         setup.write(&setup.global(), text);
         assert!(
-            reset(&setup, Layer::Global, "handoff.tokens", json!("x")).is_err(),
+            reset(&setup, Layer::Global, "compaction.tokens", json!("x")).is_err(),
             "{text}"
         );
         assert_eq!(file_text(&setup.global()), text);
@@ -436,11 +436,11 @@ fn a_reset_does_not_follow_a_repository_link() {
     let setup = Setup::new();
     let outside = setup.root().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
-    std::fs::write(outside.join("config.json"), r#"{"handoff": {"tokens": 4}}"#).unwrap();
+    std::fs::write(outside.join("config.json"), r#"{"compaction": {"tokens": 4}}"#).unwrap();
     std::os::unix::fs::symlink(&outside, setup.workspace().join(".fiber")).unwrap();
-    assert!(reset(&setup, Layer::Repository, "handoff.tokens", json!(4)).is_err());
+    assert!(reset(&setup, Layer::Repository, "compaction.tokens", json!(4)).is_err());
     assert_eq!(
         file_text(&outside.join("config.json")),
-        r#"{"handoff": {"tokens": 4}}"#
+        r#"{"compaction": {"tokens": 4}}"#
     );
 }

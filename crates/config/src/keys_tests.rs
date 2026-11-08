@@ -448,7 +448,7 @@ fn string_lists_and_object_lists_have_different_controls() {
 fn scalar_keys_get_boolean_number_and_text_controls() {
     assert_eq!(control_of("sandbox.enabled"), SettingControl::Boolean);
     assert_eq!(
-        control_of("handoff.window_fraction"),
+        control_of("compaction.window_fraction"),
         SettingControl::Number
     );
     assert_eq!(control_of("hub.port"), SettingControl::Number);
