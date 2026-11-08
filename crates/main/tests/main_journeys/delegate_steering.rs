@@ -28,10 +28,12 @@ const DELEGATE_ROW: &str = "review the parser";
 /// The first column on row `y` where `needle` starts, cell by cell.
 fn col_of(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
     let want: Vec<char> = needle.chars().collect();
+    // settled: a finder run by `click_where` on the frame the click acts on.
     let width = u16::try_from(grid.rows.first().map_or(0, |row| row.chars().count())).ok()?;
     (0..width).find(|x| {
         want.iter().enumerate().all(|(dx, want)| {
             let at = x.saturating_add(u16::try_from(dx).unwrap_or(u16::MAX));
+            // settled: a finder run by `click_where` on the frame the click acts on.
             at < width && grid.cell(at, y).symbol == want.to_string()
         })
     })
@@ -39,6 +41,7 @@ fn col_of(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
 
 /// The row holding `needle`.
 fn row_of(grid: &Grid, needle: &str) -> Option<u16> {
+    // settled: a finder run by `click_where` on the frame the click acts on.
     grid.rows
         .iter()
         .position(|row| row.contains(needle))
@@ -55,8 +58,10 @@ fn find_text(grid: &Grid, needle: &str) -> Option<(u16, u16)> {
 /// of the row's text.
 fn find_cross(grid: &Grid, text: &str) -> Option<(u16, u16)> {
     let (from, y) = find_text(grid, text)?;
+    // settled: a finder run by `click_where` on the frame the click acts on.
     let width = u16::try_from(grid.rows.first()?.chars().count()).ok()?;
     (from..width)
+        // settled: a finder run by `click_where` on the frame the click acts on.
         .find(|x| grid.cell(*x, y).symbol == "✕")
         .map(|x| (x, y))
 }
