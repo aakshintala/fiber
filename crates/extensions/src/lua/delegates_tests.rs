@@ -36,6 +36,7 @@ fn finished(job_id: &JobId) -> DelegateFinished {
         job_id: job_id.clone(),
         text: "Done.".to_owned(),
         artifact: Some("artifact.txt".to_owned()),
+        artifact_absolute: None,
         questions: Some(vec![Question {
             header: "Deploy?".to_owned(),
             question: "Ship it?".to_owned(),

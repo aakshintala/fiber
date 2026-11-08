@@ -889,7 +889,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "instruction_file",
             json!({"path": "/h/data/fiber.test-notes/index.md", "reason": "changed",
-            "extension": "fiber.test/notes", "content": "- [[x]]", "sent": "full"}),
+            "extension": "fiber.test/notes", "content": "- [[x]]", "sent": "full",
+            "size": 7}),
         ),
         ("date_changed", json!({"date": "2026-09-30"})),
         (
@@ -987,6 +988,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "delegate_finished",
             json!({"job_id": "j", "text": "t", "artifact": "artifacts/f",
+            "artifact_absolute": "/s/artifacts/f",
             "questions": questions, "changed_by": ["e"],
             "usage": {"tokens": tokens, "cost": null, "subscription_cost": 0.0},
             "worktree": {"path": "/t", "branch": "b", "dirty": true}}),

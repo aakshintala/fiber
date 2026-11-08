@@ -103,8 +103,9 @@ fn role_of(style: &Style) -> Option<crate::theme::Role> {
 /// headline first, then the view its `details` choose. The inline
 /// ledger draws the first [`OPENED_LINES`] of these; the call's swapped
 /// view draws them all, and draws paged output between [`prefix`] and
-/// [`closing`] instead when the result has an artifact.
-pub(crate) fn uncapped(call: &Call) -> Vec<Body> {
+/// [`closing`] instead when the result has an artifact. `width` is the
+/// room a message's Markdown renders at.
+pub(crate) fn uncapped(call: &Call, width: u16) -> Vec<Body> {
     let mut bodies: Vec<Body> = Vec::new();
     if !call.headline().is_empty() {
         bodies.push(Body {
@@ -113,14 +114,16 @@ pub(crate) fn uncapped(call: &Call) -> Vec<Body> {
             line: dim(call.headline().to_owned()),
         });
     }
+    message_rows(call, width, &mut bodies);
     let parsed: Option<Value> = parsed_details(call);
     push_view(&parsed_view(call, &parsed), &mut bodies);
     bodies
 }
 
 /// The rows a swapped view draws around paged artifact output: the
-/// headline and a shell call's command rows, never the output itself.
-pub(crate) fn prefix(call: &Call) -> Vec<Body> {
+/// headline, a message call's recipient and text, and a shell call's
+/// command rows, never the output itself.
+pub(crate) fn prefix(call: &Call, width: u16) -> Vec<Body> {
     let mut bodies: Vec<Body> = Vec::new();
     if !call.headline().is_empty() {
         bodies.push(Body {
@@ -129,11 +132,66 @@ pub(crate) fn prefix(call: &Call) -> Vec<Body> {
             line: dim(call.headline().to_owned()),
         });
     }
+    message_rows(call, width, &mut bodies);
     let parsed: Option<Value> = parsed_details(call);
     if let View::Shell { command, .. } = parsed_view(call, &parsed) {
         push_command(command, &mut bodies);
     }
     bodies
+}
+
+/// A message call's recipient row, then its text rendered as a reply's
+/// Markdown is, read from the call's arguments (`id` and `message` for
+/// `delegate_message`, `id` and `text` for `session_message`). A part
+/// that is absent, not a string or empty draws no row; any other tool
+/// draws none. Every span passes `safe_line`, which the Markdown
+/// renderer does not.
+fn message_rows(call: &Call, width: u16, bodies: &mut Vec<Body>) {
+    use crate::format::Kind;
+    let text_key = match crate::format::kind(&call.name, &call.arguments) {
+        Kind::DelegateMessage => "message",
+        Kind::SessionMessage => "text",
+        Kind::Read
+        | Kind::Search
+        | Kind::List
+        | Kind::Edit
+        | Kind::Write
+        | Kind::Shell
+        | Kind::Delegate
+        | Kind::Jobs
+        | Kind::Ask(_)
+        | Kind::Fetch
+        | Kind::Web
+        | Kind::Skill
+        | Kind::Tools
+        | Kind::Session
+        | Kind::Other => return,
+    };
+    let argument = |key: &str| {
+        call.arguments
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+    };
+    if let Some(id) = argument("id") {
+        bodies.push(Body {
+            number: None,
+            gutter: false,
+            line: dim(format!("to {}", safe_line(id))),
+        });
+    }
+    if let Some(text) = argument(text_key) {
+        for mut line in crate::markdown::render(text, width.max(1)).lines {
+            for span in &mut line.spans {
+                span.content = safe_line(&span.content).into();
+            }
+            bodies.push(Body {
+                number: None,
+                gutter: false,
+                line,
+            });
+        }
+    }
 }
 
 /// The closing row a swapped view draws after paged artifact output:
@@ -187,6 +245,7 @@ pub(crate) struct CallSnapshot {
 pub(crate) fn snapshot<'a>(
     mut calls: impl Iterator<Item = &'a Call>,
     id: usize,
+    width: u16,
 ) -> Option<CallSnapshot> {
     let call = calls.find(|call| call.id == id)?;
     let kind = crate::format::kind(&call.name, &call.arguments);
@@ -200,8 +259,8 @@ pub(crate) fn snapshot<'a>(
         open: call.open,
         title,
         command: crate::format::summary(&call.name, &call.arguments),
-        plain: uncapped(call),
-        prefix: prefix(call),
+        plain: uncapped(call, width),
+        prefix: prefix(call, width),
         closing: closing(call),
         numbering: numbering(call),
         copy,
@@ -226,6 +285,7 @@ pub(crate) fn snapshot_completed(
     arguments: &Value,
     _action: &str,
     done: &contract::events::ToolCallCompleted,
+    width: u16,
 ) -> CallSnapshot {
     let content = crate::format::content_text(done);
     let headline = crate::format::headline(done);
@@ -268,8 +328,8 @@ pub(crate) fn snapshot_completed(
         open: call.open,
         title,
         command: crate::format::summary(&call.name, &call.arguments),
-        plain: uncapped(&call),
-        prefix: prefix(&call),
+        plain: uncapped(&call, width),
+        prefix: prefix(&call, width),
         closing: closing(&call),
         numbering: numbering(&call),
         copy,
@@ -310,7 +370,7 @@ pub(in crate::turn) fn rows(call: &Call, width: u16, out: &mut Rows) {
         return;
     }
     let room = width.saturating_sub(8);
-    let bodies = uncapped(call);
+    let bodies = uncapped(call, room);
     let shown = bodies.len().min(OPENED_LINES);
     let left = bodies.len().saturating_sub(shown);
     // The gutter fits the largest number among the rows drawn, after

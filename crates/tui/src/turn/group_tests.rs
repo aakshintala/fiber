@@ -346,7 +346,7 @@ fn nested_ledger_rows_keep_inner_status_glyphs() {
     let text: Vec<String> = rows.iter().map(ToString::to_string).collect();
     assert!(text[2].starts_with("        ✗ shell"), "{}", text[2]);
     assert!(text[2].contains("nonzero_exit: exit 101"), "{}", text[2]);
-    assert!(text[3].starts_with("        ✗ other"), "{}", text[3]);
+    assert!(text[3].starts_with("        ✗ fetch"), "{}", text[3]);
     assert!(text[3].contains("denied"), "{}", text[3]);
     assert!(text[4].starts_with("        ⊘ other"), "{}", text[4]);
     assert!(text[4].contains("cancelled"), "{}", text[4]);
@@ -3451,4 +3451,52 @@ fn the_card_entry_carries_the_opened_detail() {
     assert_eq!(entry.sections[0].failed.len(), 1);
     assert_eq!(entry.sections[0].failed[0].code, "rate_limited");
     assert_eq!(entry.sections[0].failed[0].attempt, 1);
+}
+
+/// Each built-in counts under its own kind: the four session tools
+/// share one count and `delegate_models` counts as a delegate.
+#[test]
+fn kinds_count_each_built_in_under_its_own_field() {
+    let call = |id: usize, name: &str, arguments: serde_json::Value| Call {
+        id,
+        action: format!("a_{id}"),
+        name: name.to_owned(),
+        arguments,
+        status: Some(CallStatus::Completed),
+        timing: Timing::Started(0),
+        ..Call::default()
+    };
+    let calls = vec![
+        call(1, "web_fetch", json!({"url": "u"})),
+        call(2, "web_search", json!({"query": "q"})),
+        call(3, "skill", json!({"name": "s"})),
+        call(4, "tool_search", json!({"query": "t"})),
+        call(5, "delegate_message", json!({"id": "j_1", "message": "m"})),
+        call(6, "session_message", json!({"id": "s_1", "text": "m"})),
+        call(7, "delegate_models", json!({})),
+        call(8, "session_list", json!({})),
+        call(9, "session_search", json!({"query": "q"})),
+        call(10, "handoff", json!({})),
+        call(11, "name_session", json!({"name": "n"})),
+        call(12, "ask_user", json!({"questions": [{}]})),
+    ];
+    let group = Group {
+        sections: vec![Section {
+            step: 1,
+            calls,
+            ..Section::default()
+        }],
+        ..Group::default()
+    };
+    let kinds = group.kinds();
+    assert_eq!(kinds.fetched, 1);
+    assert_eq!(kinds.web, 1);
+    assert_eq!(kinds.skills, 1);
+    assert_eq!(kinds.tool_lookups, 1);
+    assert_eq!(kinds.messaged_delegates, 1);
+    assert_eq!(kinds.messaged_sessions, 1);
+    assert_eq!(kinds.sessions, 4);
+    assert_eq!(kinds.delegates, 1);
+    assert_eq!(kinds.asked, 1);
+    assert_eq!(kinds.called, 0);
 }

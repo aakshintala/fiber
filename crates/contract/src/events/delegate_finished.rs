@@ -7,6 +7,10 @@
 use super::{DelegateFinished, FiberExited};
 use crate::JobId;
 
+/// A Fiber delegate's final message file, relative to the delegate's own
+/// session directory (`docs/delegates.md`, "Results").
+pub const FINAL_MESSAGE: &str = "artifacts/final.md";
+
 impl FiberExited {
     /// The finish the exit line carries: the final message's text, the
     /// questions and usage copied through, no worktree and no artifact.
@@ -22,6 +26,7 @@ impl FiberExited {
                 .map(|message| message.text.clone())
                 .unwrap_or_default(),
             artifact: None,
+            artifact_absolute: None,
             questions: self.questions.clone(),
             usage: self.usage.clone(),
             worktree: None,

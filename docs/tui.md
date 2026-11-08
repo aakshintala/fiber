@@ -172,6 +172,33 @@ a person removed the provider they chose, home shows the same lines `fiber docto
 with its fix, above the input box (`docs/invocation.md`, "Commands and flags"). A person
 who runs `fiber` before reading anything is told what to do next.
 
+### First run
+
+`fiber setup` asks the questions a new install needs (`docs/invocation.md`,
+"Commands and flags"). A person who skipped it, or whose install ran without a
+terminal, opens the terminal with nothing configured. The terminal then does
+the missing steps itself, in this order, each one only if it is not done:
+
+1. **Signing in.** No installed provider has a usable credential, counting a
+   key read from the environment such as `OPENCODE_API_KEY`. The terminal
+   opens on home with the `/login` overlay up ("Logging in"). It opens this
+   way on every launch until a credential exists, and keeps no record of
+   having opened. A remote terminal reads the hub's credentials.
+2. **The model.** No model is configured ("Choosing the model" in
+   `docs/model-routing.md`). Once the login's last step saves, the overlay
+   closes and the model picker opens ("The model picker"), with no row
+   chosen for the person. Saving writes the config default.
+3. **The import offer** shows on home as above, once.
+
+A login opened this way closes when its last step saves. A `/login` the
+person typed goes back to the provider list as described in "Logging in".
+
+Esc on the login overlay leaves home with the blocker lines above the input
+box ("When a session cannot start", above). Clicking a credential blocker
+line opens `/login`. Enter on home while no provider has a credential keeps
+the draft in the box and opens `/login`. After the login, the draft is still
+there to send.
+
 ### The logo
 
 The logo is `⌇ fiber 0.0.1`: the ⌇ in the accent colour, the name in the
@@ -516,8 +543,8 @@ cut with "…". The cards draw:
   "+N" in `added` and "−N" in `removed` right-aligned. The last row is
   "… N more" dim, when there are more, and the totals.
 - **Delegates.** The title's figure is "N running", in `attention` while one
-  runs and dim otherwise. Each delegate is "●" in `attention` while it runs or
-  "✓" in `success` once done, then its description; under it, dim, its calls,
+  runs and dim otherwise. Each delegate is a spinner in `attention` while it runs
+  ("●" when still; "The working line") or "✓" in `success` once done, then its description; under it, dim, its calls,
   elapsed time and its last step, or "done", or "failed" or "cancelled"
   when it did not complete.
 - **Jobs.** "N running" in `attention` while one runs, then a dim "▸".
@@ -1280,11 +1307,16 @@ arrived after `sessions` was sent.
   status. Nothing is hoisted above the fold.
 
 The summary line is one row, whatever runs: "● " dim, then the kinds in a
-fixed order, each "<verb> N <noun>" dim: read files, searched patterns,
+fixed order, each clause dim, "<verb> N <noun>" or, where the table below
+says so, "<verb> once" and "<verb> N times": read files, searched patterns,
 listed directories, edited files, wrote files, ran commands, started
-delegates, checked jobs, asked questions, called tools. The first word is
-capitalised. Read, edited and written files count distinct paths, and asked
-questions count questions, not calls. An edit's totals follow it, "+N" in
+delegates, checked jobs, asked questions, fetched pages, searched the web,
+loaded skills, looked up tools, messaged delegates, messaged sessions,
+looked at sessions, called tools. The first word is capitalised. Read,
+edited and written files count distinct paths, and asked questions count
+questions, not calls. `delegate_models` counts as a delegate, and
+`handoff`, `name_session`, `session_list` and `session_search` count as
+one kind, looked at sessions. An edit's totals follow it, "+N" in
 `added` and "−N" in `removed`, both dim. Then ", thought N times" ("thought
 once"); while calls run, " · " and their targets, dim; while the model
 thinks, " · Thinking: <heading>" dim and italic. Right-aligned, dim, the
@@ -1316,6 +1348,37 @@ failure's "<code>: <message>" are dim. A thinking row is "○ Thinking:
       ○ shell    cargo test -p hub lock                      running
 ```
 
+Every built-in tool has a kind word and a summary phrase, so the word
+`other` and "called N tools" are for MCP and extension tools and for an
+`ask_user` call with no question list; an extension that replaces a
+built-in name keeps that name's kind. A shell
+call whose command starts with `grep` or `rg` is a search, and one that
+starts with `find`, `ls` or `fd` a listing; the `shell` row is for any
+other command. Each word fits the nine-column pad. A test reads this table and
+fails when it differs from the code.
+
+| Tool | Kind word | Summary, many | Summary, one |
+| --- | --- | --- | --- |
+| `ask_user` | ask | asked N questions | asked 1 question |
+| `delegate_fork` | delegate | started N delegates | started 1 delegate |
+| `delegate_message` | message | messaged delegates N times | messaged delegates once |
+| `delegate_models` | delegate | started N delegates | started 1 delegate |
+| `delegate_spawn` | delegate | started N delegates | started 1 delegate |
+| `edit` | edit | edited N files | edited 1 file |
+| `handoff` | session | looked at sessions N times | looked at sessions once |
+| `jobs` | jobs | checked N jobs | checked 1 job |
+| `name_session` | session | looked at sessions N times | looked at sessions once |
+| `read` | read | read N files | read 1 file |
+| `session_list` | session | looked at sessions N times | looked at sessions once |
+| `session_message` | message | messaged sessions N times | messaged sessions once |
+| `session_search` | session | looked at sessions N times | looked at sessions once |
+| `shell` | shell | ran N commands | ran 1 command |
+| `skill` | skill | loaded N skills | loaded 1 skill |
+| `tool_search` | tools | looked up tools N times | looked up tools once |
+| `web_fetch` | fetch | fetched N pages | fetched 1 page |
+| `web_search` | web | searched the web N times | searched the web once |
+| `write` | write | wrote N files | wrote 1 file |
+
 An opened call is drawn under its row, indented eight columns, at most 20
 lines, then "… N more lines (Enter to view)" dim when there is more. A
 failed call shows "<code>: <message>" first. An opened thought shows its
@@ -1334,6 +1397,14 @@ call's `details` (`docs/tools.md`, "What a result carries"); a call whose
 - **A shell call** shows the full command, "$ " and the command wrapped,
   then the output, then one closing line: "exit N", in `removed` when N is
   not 0 and dim when it is, or "killed by <signal>".
+- **A message call** (`delegate_message`, `session_message`) shows "to
+  <id>" dim, then the message text rendered as a reply's Markdown is, at the
+  width of the view it is drawn in, then the result. They come from the
+  call's arguments (`id` and `message`, or `id` and `text`), not its
+  `details`, so a running or failed call shows them too; a failed call's
+  "<code>: <message>" still comes first. A part that is absent, not text or
+  empty draws no row. The ledger row's target is the id. When the result has
+  an artifact, the swapped view draws these rows before the paged output.
 - **An MCP call, an extension's tool, or any tool whose `details` the
   terminal does not recognise** shows `content` as plain text. Text that is
   JSON is indented two columns per level.

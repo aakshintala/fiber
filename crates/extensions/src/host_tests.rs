@@ -166,6 +166,130 @@ fn json_round_trips_through_lua() {
     assert!(lua.load("return json.decode('{')").exec().is_err());
 }
 
+/// What a `pcall` of a Rust-raised callback error prints: the callback's
+/// `RuntimeError` message, not a Lua string. `tostring` prefixes it with
+/// `runtime error: ` and appends the traceback, so this returns the first
+/// line with the prefix stripped: the exact `json.decode: ...` text.
+#[track_caller]
+fn pcall_message_of(lua: &Lua, code: &str) -> String {
+    let message: String = lua
+        .load(format!(
+            "local ok, e = pcall(function() {code} end); assert(not ok); return tostring(e)"
+        ))
+        .eval()
+        .unwrap();
+    message
+        .lines()
+        .next()
+        .unwrap()
+        .strip_prefix("runtime error: ")
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn json_decode_strict_rejects_a_raw_tab() {
+    let lua = lua();
+    let message = pcall_message_of(
+        &lua,
+        r#"return json.decode('"a' .. string.char(9) .. 'b"')"#,
+    );
+    assert_eq!(
+        message,
+        r"json.decode: control character (\u0000-\u001F) found while parsing a string at line 1 column 3"
+    );
+}
+
+#[test]
+fn json_decode_lenient_escapes_raw_controls_inside_strings() {
+    let lua = lua();
+    // Each short form plus \u00XX cases, byte-exact through re-encoding.
+    // Byte 26 exercises the hex low nibble 10, which no short arm takes.
+    for (byte, escaped) in [
+        (8, r"\b"),
+        (9, r"\t"),
+        (10, r"\n"),
+        (12, r"\f"),
+        (13, r"\r"),
+        (0, r"\u0000"),
+        (26, r"\u001a"),
+        (31, r"\u001f"),
+    ] {
+        let code = format!(
+            r#"return json.encode(json.decode('"a' .. string.char({byte}) .. 'b"', {{ lenient = true }}))"#
+        );
+        let encoded: String = lua.load(&code).eval().unwrap();
+        assert_eq!(encoded, format!(r#""a{escaped}b""#), "byte {byte}");
+        // The default stays strict, and so do an empty options table and
+        // an explicit false.
+        for strict in [
+            format!(r#"return json.decode('"a' .. string.char({byte}) .. 'b"')"#),
+            format!(r#"return json.decode('"a' .. string.char({byte}) .. 'b"', {{}})"#),
+            format!(
+                r#"return json.decode('"a' .. string.char({byte}) .. 'b"', {{ lenient = false }})"#
+            ),
+        ] {
+            assert!(lua.load(&strict).exec().is_err(), "byte {byte}: {strict}");
+        }
+    }
+}
+
+#[test]
+fn json_decode_lenient_tracks_escaped_quotes_and_backslashes() {
+    let lua = lua();
+    // The raw tab follows an escaped quote and precedes an escaped
+    // backslash; neither escape may flip the sanitizer's string tracking.
+    let decoded: String = lua
+        .load(
+            r#"local tab = string.char(9)
+               return json.decode('"a\\"b' .. tab .. 'c\\\\d"', { lenient = true })"#,
+        )
+        .eval()
+        .unwrap();
+    assert_eq!(decoded, "a\"b\tc\\d");
+}
+
+#[test]
+fn json_decode_lenient_still_rejects_beyond_controls() {
+    let lua = lua();
+    // A raw control outside a string raises under lenient exactly as strict.
+    // Byte 11 is no JSON whitespace, so it cannot parse as a separator.
+    let code = r#"return json.decode('[' .. string.char(11) .. '1]', { lenient = true })"#;
+    let lenient = pcall_message_of(&lua, code);
+    let strict = pcall_message_of(
+        &lua,
+        r#"return json.decode('[' .. string.char(11) .. '1]')"#,
+    );
+    assert_eq!(lenient, strict);
+    // The cut-marker text is not valid JSON, so lenient raises on it too.
+    let marker =
+        "return json.decode('[12 bytes cut. The full output is in /tmp/x.]', { lenient = true })";
+    let lenient = pcall_message_of(&lua, marker);
+    let strict = pcall_message_of(
+        &lua,
+        "return json.decode('[12 bytes cut. The full output is in /tmp/x.]')",
+    );
+    assert_eq!(lenient, strict);
+    // Malformed-beyond-controls raises under lenient exactly as strict.
+    let lenient = pcall_message_of(&lua, "return json.decode('{', { lenient = true })");
+    let strict = pcall_message_of(&lua, "return json.decode('{')");
+    assert_eq!(lenient, strict);
+}
+
+#[test]
+fn json_decode_options_must_be_a_table() {
+    let lua = lua();
+    assert_eq!(
+        pcall_message_of(&lua, r#"return json.decode('"a"', "lenient")"#),
+        "json.decode: options must be a table"
+    );
+    // Unknown option keys are ignored.
+    assert_eq!(
+        eval(&lua, r#"return json.decode('"a"', { bogus = 1 })"#),
+        "a"
+    );
+}
+
 #[test]
 fn the_hashes_match_their_published_test_vectors() {
     let lua = lua();
@@ -181,6 +305,68 @@ fn the_hashes_match_their_published_test_vectors() {
         eval(&lua, hex),
         "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
     );
+}
+
+#[test]
+fn escape_raw_controls_escapes_only_raw_controls_inside_strings() {
+    // Byte-exact pins for the lenient sanitizer: each short form, generic
+    // cases covering both hex nibbles, and everything that must pass
+    // through untouched.
+    for (input, expected) in [
+        (&b"\"a\x08b\""[..], &b"\"a\\bb\""[..]),
+        (&b"\"a\x09b\""[..], &b"\"a\\tb\""[..]),
+        (&b"\"a\x0ab\""[..], &b"\"a\\nb\""[..]),
+        (&b"\"a\x0cb\""[..], &b"\"a\\fb\""[..]),
+        (&b"\"a\x0db\""[..], &b"\"a\\rb\""[..]),
+        (&b"\"a\x00b\""[..], &b"\"a\\u0000b\""[..]),
+        (&b"\"a\x1ab\""[..], &b"\"a\\u001ab\""[..]),
+        (&b"\"a\x1fb\""[..], &b"\"a\\u001fb\""[..]),
+        // A space inside a string is no control: it passes through.
+        (&b"\"a b\""[..], &b"\"a b\""[..]),
+        // Controls outside strings pass through, so structural text still
+        // parses or raises exactly as strict.
+        (&b"{\x09\"a\":1}"[..], &b"{\x09\"a\":1}"[..]),
+        // An escaped quote and an escaped backslash keep the string
+        // tracking honest around the raw tab between them.
+        (&b"\"a\\\"\x09b\\\\c\""[..], &b"\"a\\\"\\tb\\\\c\""[..]),
+    ] {
+        assert_eq!(escape_raw_controls(input), expected, "{input:?}");
+    }
+}
+
+#[test]
+fn utf8_lossy_replaces_each_invalid_sequence_with_one_replacement() {
+    let lua = lua();
+    // Valid text, empty included, passes through byte-identical.
+    for valid in ["", "hello", "héllo", "😀ab"] {
+        lua.globals().set("valid", valid).unwrap();
+        let out: String = lua.load("return host.utf8_lossy(valid)").eval().unwrap();
+        assert_eq!(out, valid, "{valid:?}");
+    }
+    // One U+FFFD per invalid sequence: a lone byte, two lone bytes, a
+    // truncated sequence, an overlong and a surrogate.
+    for (bytes, expected) in [
+        (vec![0xFF], "�"),
+        (vec![0xFF, 0xFE], "��"),
+        (vec![0xE2, 0x82], "�"),
+        (vec![0xC0, 0xAF], "��"),
+        (vec![0xED, 0xA0, 0x80], "���"),
+    ] {
+        let input = lua.create_string(&bytes).unwrap();
+        let out: String = lua
+            .load("return host.utf8_lossy(...)")
+            .call::<String>(input)
+            .unwrap();
+        assert_eq!(out, expected, "{bytes:?}");
+    }
+    // Mixed valid and invalid: the valid prefix survives around the one
+    // replacement, as codemode's capture needs it.
+    let input = lua.create_string([b'a', 0xFF, b'b']).unwrap();
+    let out: String = lua
+        .load("return host.utf8_lossy(...)")
+        .call::<String>(input)
+        .unwrap();
+    assert_eq!(out, "a�b");
 }
 
 #[test]

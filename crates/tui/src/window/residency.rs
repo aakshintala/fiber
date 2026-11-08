@@ -175,11 +175,22 @@ impl Residency {
         Some(part)
     }
 
-    /// The page holding segment `session`'s `seq` could not be loaded:
-    /// it is not asked for again until the width changes. An unknown
-    /// `seq` changes nothing.
-    pub(crate) fn fail(&mut self, session: &SessionId, seq: Seq, index: &Index) {
-        if let Some(at) = index.page_of(session, seq) {
+    /// The page holding exactly `range` of `session` could not be
+    /// loaded: it is not asked for again until the width changes. The
+    /// lookup walks the same index `needs` enumerates, so a range
+    /// `needs` yields always resolves — unlike the seq lookup, which
+    /// misses a page whose bounds the seq no longer falls in.
+    pub(crate) fn fail_range(
+        &mut self,
+        session: &SessionId,
+        range: &RangeInclusive<Seq>,
+        index: &Index,
+    ) {
+        if let Some(at) = index.pages().iter().position(|page| {
+            &page.session == session
+                && page.first_seq == *range.start()
+                && page.last_seq == *range.end()
+        }) {
             self.failed.insert(at);
         }
     }

@@ -284,6 +284,15 @@ impl Connection {
                 Answer::Reopened => return Ok(Vec::new()),
             };
             let Some(last) = answer.last().and_then(|line| line.seq) else {
+                // An empty answer ends the fetch as a failed range
+                // instead of returning nothing that would leave the need
+                // uncleared: with no last seq the cursor cannot advance
+                // past the window, so a seqless answer breaks with the
+                // lines kept so far, and an empty answer with none kept
+                // would re-request the same window forever.
+                if answer.is_empty() && lines.is_empty() {
+                    return Err("the answer held none of its lines".to_owned());
+                }
                 break;
             };
             // The cursor always moves past the requested window's start:

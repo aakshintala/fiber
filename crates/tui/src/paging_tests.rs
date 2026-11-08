@@ -4932,7 +4932,7 @@ fn a_failed_ancestor_page_keeps_every_count() {
     );
     drop_all(&mut pages);
     // Failing the ancestor's last page forgets its ask, nothing else.
-    pages.fail(&failed.session, failed.first_seq);
+    pages.fail_range(&failed.session, &(failed.first_seq..=failed.last_seq));
     let top = pages.index().total();
     let needs = pages.needs(0, top);
     assert!(
@@ -4974,7 +4974,7 @@ fn page_failed_names_only_a_closed_page_failure() {
     assert!(open > 0, "the chain closes a page");
     let failed = pages.index().pages()[0].clone();
     drop_all(&mut pages);
-    pages.fail(&failed.session, failed.first_seq);
+    pages.fail_range(&failed.session, &(failed.first_seq..=failed.last_seq));
     assert!(pages.page_failed(0), "a closed page's failure reports");
     // The open page never loads: even with its index in the failed set
     // it reports nothing, as does an unknown page.
@@ -5001,7 +5001,7 @@ fn a_width_change_asks_for_a_failed_page_again() {
         .expect("the own run starts past a seam");
     let failed = pages.index().pages()[seam - 1].clone();
     drop_all(&mut pages);
-    pages.fail(&failed.session, failed.first_seq);
+    pages.fail_range(&failed.session, &(failed.first_seq..=failed.last_seq));
     assert!(
         pages.page_failed(seam - 1),
         "the failure reports before the width change"
@@ -5232,9 +5232,8 @@ fn carry_chain_carries_only_stale_below_the_carried_count() {
 fn carry_chain_carries_only_failed_below_the_carried_count() {
     use std::collections::BTreeSet;
     let (mut preview, mut fold, len, _summaries) = carry_edge();
-    preview.fail(&SessionId(ANCESTOR.to_owned()), Seq(0));
-    preview.fail(&SessionId(SESSION.to_owned()), Seq(2));
-    fold.fail(&SessionId(SESSION.to_owned()), Seq(64));
+    preview.residency.failed_mut().extend([0, len]);
+    fold.residency.failed_mut().insert(1);
     preview.carry_chain(&mut fold);
     assert_eq!(
         fold.residency.failed(),

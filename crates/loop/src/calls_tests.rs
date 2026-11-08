@@ -771,6 +771,7 @@ fn delegate_finished_line(id: &str) -> contract::jobs::JobRecord {
         job_id: JobId(id.into()),
         text: "Done.".into(),
         artifact: None,
+        artifact_absolute: None,
         questions: None,
         usage: contract::shapes::Usage {
             tokens: contract::shapes::Tokens {

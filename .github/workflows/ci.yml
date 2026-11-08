@@ -1238,10 +1238,10 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: ubuntu-24.04
-    # Linux leg of run 41604713733 (2026-11-03) took 8m19s; 17 minutes is
-    # twice that, matching bug_red_macos. Interim until the cold-run
-    # measurement (#4082 follow-up).
-    timeout-minutes: 17
+    # Linux leg of run 42403359939 (2026-11-07, a red commit touching ten
+    # packages) took 10m48s; 30 minutes is about twice the slower leg's
+    # need, matching bug_red_macos.
+    timeout-minutes: 30
     outputs:
       status: ${{ steps.red.outputs.status }}
     env:
@@ -1262,8 +1262,10 @@ jobs:
     needs: select
     if: fromJSON(needs.select.outputs.jobs).bug_red
     runs-on: macos-26
-    # PR run 40989874631 took 8m10s; 17 minutes covers about twice that.
-    timeout-minutes: 17
+    # Run 42403359939 (2026-11-07, a red commit touching ten packages) was
+    # cancelled at 17m22s against the old 17-minute limit; 30 minutes gives
+    # that red commit room to finish.
+    timeout-minutes: 30
     outputs:
       status: ${{ steps.red.outputs.status }}
     env:

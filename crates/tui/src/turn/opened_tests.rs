@@ -1036,7 +1036,7 @@ fn a_search_snapshot_copies_raw_content_not_rendered_matches() {
         "",
         content,
     );
-    let snapshot = super::snapshot(std::iter::once(&call), call.id).expect("the call draws");
+    let snapshot = super::snapshot(std::iter::once(&call), call.id, 80).expect("the call draws");
     assert_eq!(snapshot.copy, content);
 }
 
@@ -1055,4 +1055,269 @@ fn json_array_indents() {
             "        ]"
         ]
     );
+}
+
+/// A message call named `name` with `arguments`; `result` is its
+/// headline and content, or none while it runs.
+fn message_call(name: &str, arguments: Value, result: Option<(&str, &str)>) -> Call {
+    Call {
+        name: name.to_owned(),
+        arguments,
+        result: result.map(|(headline, content)| {
+            Box::new(CallResult {
+                headline: headline.to_owned(),
+                content: content.to_owned(),
+                ..CallResult::default()
+            })
+        }),
+        ..Call::default()
+    }
+}
+
+#[test]
+fn a_delegate_message_shows_recipient_text_then_result() {
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": "line one\n\n- a\n- b"}),
+        Some(("", "delivered")),
+    );
+    let parts = drawn(&call, 76);
+    indented_and_narrow(&parts, 76);
+    let texts = lines(&parts);
+    assert_eq!(texts[0], "        to j_1");
+    assert_eq!(texts[1].trim(), "line one");
+    let list: Vec<&String> = texts[2..]
+        .iter()
+        .filter(|row| row.contains('a') || row.contains('b'))
+        .collect();
+    assert_eq!(list.len(), 2, "{texts:?}");
+    assert!(
+        list[0].trim_start().len() > 1 && list[0].contains("a"),
+        "{texts:?}"
+    );
+    assert_eq!(texts.last().map(String::as_str), Some("        delivered"));
+}
+
+#[test]
+fn a_session_message_reads_its_text_argument() {
+    let call = message_call(
+        "session_message",
+        json!({"id": "s_1", "text": "hi", "message": "wrong key"}),
+        Some(("", "sent")),
+    );
+    assert_eq!(
+        lines(&drawn(&call, 76)),
+        vec!["        to s_1", "        hi", "        sent"]
+    );
+    // `message` is the delegate tool's key, not this one's.
+    let call = message_call(
+        "session_message",
+        json!({"id": "s_1", "message": "wrong key"}),
+        Some(("", "sent")),
+    );
+    assert_eq!(
+        lines(&drawn(&call, 76)),
+        vec!["        to s_1", "        sent"]
+    );
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "text": "wrong key"}),
+        Some(("", "sent")),
+    );
+    assert_eq!(
+        lines(&drawn(&call, 76)),
+        vec!["        to j_1", "        sent"]
+    );
+}
+
+#[test]
+fn a_running_message_shows_recipient_and_text_and_no_empty_row() {
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": "stop"}),
+        None,
+    );
+    assert_eq!(
+        lines(&drawn(&call, 76)),
+        vec!["        to j_1", "        stop"]
+    );
+}
+
+#[test]
+fn a_failed_message_keeps_its_error_first() {
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": "stop"}),
+        Some(("not_found: no such job", "")),
+    );
+    assert_eq!(
+        lines(&drawn(&call, 76)),
+        vec![
+            "        not_found: no such job",
+            "        to j_1",
+            "        stop",
+        ]
+    );
+}
+
+#[test]
+fn a_message_call_missing_a_part_draws_the_other() {
+    for message in [json!(""), json!(null), json!(7)] {
+        let call = message_call(
+            "delegate_message",
+            json!({"id": "j_1", "message": message}),
+            Some(("", "ok")),
+        );
+        assert_eq!(
+            lines(&drawn(&call, 76)),
+            vec!["        to j_1", "        ok"]
+        );
+    }
+    for id in [json!(null), json!(""), json!(7)] {
+        let call = message_call(
+            "delegate_message",
+            json!({"id": id, "message": "hi"}),
+            Some(("", "ok")),
+        );
+        assert_eq!(lines(&drawn(&call, 76)), vec!["        hi", "        ok"]);
+    }
+    let call = message_call(
+        "delegate_message",
+        json!({"id": 1, "message": 2}),
+        Some(("", "ok")),
+    );
+    assert_eq!(lines(&drawn(&call, 76)), vec!["        ok"]);
+}
+
+#[test]
+fn another_tool_with_the_same_arguments_draws_no_message_rows() {
+    let call = message_call(
+        "custom",
+        json!({"id": "j_1", "message": "hi"}),
+        Some(("", "ok")),
+    );
+    assert_eq!(lines(&drawn(&call, 76)), vec!["        ok"]);
+}
+
+#[test]
+fn a_long_message_is_cut_at_the_line_cap_and_hides_the_result() {
+    let text: Vec<String> = (1..=30).map(|n| format!("row {n}")).collect();
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": text.join("\n\n")}),
+        Some(("", "delivered")),
+    );
+    let texts = lines(&drawn(&call, 76));
+    assert_eq!(texts.len(), super::OPENED_LINES + 1, "{texts:?}");
+    assert_eq!(texts[0], "        to j_1");
+    assert!(texts.iter().all(|row| !row.contains("delivered")));
+    // 1 recipient, 59 text rows (30 paragraphs and 29 blanks) and the
+    // result row make 61; 20 are shown.
+    assert_eq!(
+        texts[super::OPENED_LINES],
+        "        … 41 more lines (Enter to view)"
+    );
+}
+
+#[test]
+fn a_message_of_exactly_the_cap_draws_no_more_row() {
+    // The recipient and 19 text rows fill the 20 lines exactly.
+    let text: Vec<String> = (1..=10).map(|n| format!("row {n}")).collect();
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": text.join("\n\n")}),
+        None,
+    );
+    let texts = lines(&drawn(&call, 76));
+    assert_eq!(texts.len(), 20, "{texts:?}");
+    assert!(
+        texts.iter().all(|row| !row.contains("more line")),
+        "{texts:?}"
+    );
+    let text: Vec<String> = (1..=11).map(|n| format!("row {n}")).collect();
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": text.join("\n\n")}),
+        None,
+    );
+    let texts = lines(&drawn(&call, 76));
+    assert_eq!(texts.len(), 21, "{texts:?}");
+    assert_eq!(texts[20], "        … 2 more lines (Enter to view)");
+}
+
+#[test]
+fn message_text_renders_at_the_room_of_the_view() {
+    // One 81-character word-spaced paragraph: no break before column 81.
+    let paragraph = format!("{} {}", "a".repeat(40), "b".repeat(40));
+    assert_eq!(paragraph.len(), 81);
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": paragraph}),
+        None,
+    );
+    // Room 92: the paragraph stays one row.
+    let wide = lines(&drawn(&call, 100));
+    assert_eq!(wide.len(), 2, "{wide:?}");
+    assert_eq!(wide[1], format!("        {paragraph}"));
+    // Width 40: every row fits.
+    let narrow = drawn(&call, 40);
+    indented_and_narrow(&narrow, 40);
+    assert!(lines(&narrow).len() > 2);
+}
+
+#[test]
+fn a_message_prefix_holds_recipient_and_text_and_no_result_rows() {
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": "hello"}),
+        Some(("", "delivered")),
+    );
+    let prefix: Vec<String> = super::prefix(&call, 76)
+        .iter()
+        .map(|body| body.cells().iter().map(|(text, _)| text.as_str()).collect())
+        .collect();
+    assert_eq!(prefix, vec!["to j_1", "hello"]);
+}
+
+#[test]
+fn message_rows_strip_control_characters() {
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j\u{1b}[31m_1\u{7}", "message": "\u{1b}[31mhello\u{7}"}),
+        Some(("", "ok")),
+    );
+    let inline = lines(&drawn(&call, 76));
+    let swapped: Vec<String> = super::prefix(&call, 76)
+        .iter()
+        .map(|body| body.cells().iter().map(|(text, _)| text.as_str()).collect())
+        .collect();
+    assert!(!swapped.is_empty());
+    for row in inline.iter().chain(swapped.iter()) {
+        assert!(!row.contains('\u{1b}') && !row.contains('\u{7}'), "{row:?}");
+    }
+    assert!(
+        inline.iter().any(|row| row.contains("[31mhello")),
+        "{inline:?}"
+    );
+}
+
+#[test]
+fn a_message_view_never_panics_on_a_tiny_width() {
+    let call = message_call(
+        "delegate_message",
+        json!({"id": "j_1", "message": "hello world"}),
+        None,
+    );
+    // Width 0 draws nothing; a width past the indent reaches the message
+    // rows, so the recipient row shows at the width that fits it.
+    assert!(lines(&drawn(&call, 0)).is_empty());
+    for width in 1..12 {
+        let _ = drawn(&call, width);
+    }
+    let narrow = drawn(&call, 14);
+    indented_and_narrow(&narrow, 14);
+    let rows = lines(&narrow);
+    assert_eq!(rows[0], "        to j_1", "{rows:?}");
+    let text = rows[1..].join(" ");
+    assert!(text.contains("hello") && text.contains("world"), "{rows:?}");
 }
