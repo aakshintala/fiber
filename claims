@@ -391,3 +391,5 @@ crates/tui/src/turn/opened.rs	fiber-4385	plan	2026-11-08T10:10:20Z	Amoghs-MacBoo
 crates/tui/src/swapped.rs	fiber-4385	plan	2026-11-08T10:10:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/chrome.rs	fiber-4385	plan	2026-11-08T10:10:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/app/call_view_tests.rs	fiber-4385	plan	2026-11-08T10:10:20Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tools/src/job_timing_tests.rs	fiber-4238	plan	2026-11-08T10:19:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4425
+crates/tools/src/shell_tests.rs	fiber-4238	plan	2026-11-08T10:19:37Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4425
