@@ -262,3 +262,4 @@ crates/tui/src/snapshots/*	fiber-3745	plan	2026-11-08T03:34:05Z	Amoghs-MacBook-P
 crates/tui/src/app/snapshots/*	fiber-3745	plan	2026-11-08T03:34:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/turn/snapshots/*	fiber-3745	plan	2026-11-08T03:34:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/view/snapshots/*	fiber-3745	plan	2026-11-08T03:34:05Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src	fiber-3745	grant	2026-11-08T03:35:35Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/3745-app-home-required	
