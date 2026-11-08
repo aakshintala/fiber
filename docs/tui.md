@@ -172,6 +172,33 @@ a person removed the provider they chose, home shows the same lines `fiber docto
 with its fix, above the input box (`docs/invocation.md`, "Commands and flags"). A person
 who runs `fiber` before reading anything is told what to do next.
 
+### First run
+
+`fiber setup` asks the questions a new install needs (`docs/invocation.md`,
+"Commands and flags"). A person who skipped it, or whose install ran without a
+terminal, opens the terminal with nothing configured. The terminal then does
+the missing steps itself, in this order, each one only if it is not done:
+
+1. **Signing in.** No installed provider has a usable credential, counting a
+   key read from the environment such as `OPENCODE_API_KEY`. The terminal
+   opens on home with the `/login` overlay up ("Logging in"). It opens this
+   way on every launch until a credential exists, and keeps no record of
+   having opened. A remote terminal reads the hub's credentials.
+2. **The model.** No model is configured ("Choosing the model" in
+   `docs/model-routing.md`). Once the login's last step saves, the overlay
+   closes and the model picker opens ("The model picker"), with no row
+   chosen for the person. Saving writes the config default.
+3. **The import offer** shows on home as above, once.
+
+A login opened this way closes when its last step saves. A `/login` the
+person typed goes back to the provider list as described in "Logging in".
+
+Esc on the login overlay leaves home with the blocker lines above the input
+box ("When a session cannot start", above). Clicking a credential blocker
+line opens `/login`. Enter on home while no provider has a credential keeps
+the draft in the box and opens `/login`. After the login, the draft is still
+there to send.
+
 ### The logo
 
 The logo is `⌇ fiber 0.0.1`: the ⌇ in the accent colour, the name in the
