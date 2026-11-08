@@ -2801,3 +2801,70 @@ fn a_message_wraps_at_the_width_of_the_view() {
     assert_eq!(rows[0], "to j_abc", "{rows:?}");
     assert_eq!(rows[1], paragraph, "{rows:?}");
 }
+
+/// About 90 characters of distinct short words ending in a unique word:
+/// one row at width 100, several at width 40.
+const MESSAGE: &str =
+    "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november zulu9";
+
+/// A completed `delegate_message` call carrying [`MESSAGE`], opened as a
+/// view on an app `width` wide.
+fn open_message_view(width: u16) -> (App, usize) {
+    let mut app = attached(width, 24);
+    turn_started(&mut app);
+    requested(
+        &mut app,
+        "delegate_message",
+        json!({"id": "j_abc", "message": MESSAGE}),
+        ACTION,
+    );
+    completed(&mut app, ACTION, "delivered", json!(null), None, None);
+    let id = crate::turn::target_id(ACTION);
+    open_inline(&mut app, id);
+    app.open_call_view(id);
+    (app, id)
+}
+
+/// The drawn rows holding the message's words, in order.
+fn message_rows(shown: &str) -> Vec<&str> {
+    let words: Vec<&str> = MESSAGE.split(' ').collect();
+    shown
+        .lines()
+        .filter(|row| words.iter().any(|word| row.contains(word)))
+        .collect()
+}
+
+#[test]
+fn a_call_view_message_wraps_at_the_new_width_after_a_resize() {
+    let (mut app, _) = open_message_view(100);
+    let wide = screen(&app, 100, 24);
+    assert_eq!(message_rows(&wide).len(), 1, "{wide}");
+    assert!(wide.contains("zulu9"), "{wide}");
+    app.set_size(40, 24);
+    let narrow = screen(&app, 40, 24);
+    let rows = message_rows(&narrow);
+    assert!(rows.len() > 1, "the message wraps: {narrow}");
+    assert!(
+        narrow.contains("zulu9"),
+        "the last word is cut off: {narrow}"
+    );
+    // Every word shows whole, in order, across the wrapped rows.
+    let joined = rows
+        .iter()
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(joined.contains(MESSAGE), "{narrow}");
+}
+
+#[test]
+fn a_call_view_widens_after_a_narrow_open() {
+    let (mut app, _) = open_message_view(40);
+    let narrow = screen(&app, 40, 24);
+    assert!(message_rows(&narrow).len() > 1, "{narrow}");
+    app.set_size(100, 24);
+    let wide = screen(&app, 100, 24);
+    let rows = message_rows(&wide);
+    assert_eq!(rows.len(), 1, "the message re-flows to one row: {wide}");
+    assert!(rows[0].contains(MESSAGE), "{wide}");
+}
