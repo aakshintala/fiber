@@ -133,6 +133,8 @@ pub use open_at::OpenAt;
 
 pub use look::ThemeSetting;
 
+pub use settings_view::{SCREEN_ROWS, ScreenRow};
+
 pub use keyset::{KeysSetup, canonical_key, check_action, person_bound_keys};
 
 pub use layout::{DEFAULT_PANEL_SHARE, DEFAULT_RAIL_SHARE, session_columns};

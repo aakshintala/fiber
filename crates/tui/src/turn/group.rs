@@ -14,7 +14,7 @@ use crate::ext::{
     CallState, GroupLine, Input, LedgerResult, LedgerRow, PromptImage, RowError, TurnCall,
     TurnCallResult, TurnFailed, TurnGroup, TurnGroupState, TurnSection, TurnStreaming, TurnThought,
 };
-use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary, via};
+use crate::format::{Kind, Kinds, count, dim, heading, kind, label, oneline, opened, summary, via};
 use crate::rows::{RowText, Rows};
 use crate::theme::{Role, style};
 
@@ -62,6 +62,10 @@ pub(crate) struct Call {
     pub(crate) action: String,
     pub(crate) name: String,
     pub(crate) arguments: Value,
+    /// The recipient's description, for a `delegate_message`, or name, for a
+    /// `session_message`, as the terminal held it when the call folded;
+    /// `None` when it held none or the call is no message call.
+    pub(crate) recipient: Option<String>,
     /// The extensions whose `before_tool` hooks rewrote `arguments`, in
     /// the order they ran; `Some` only with a non-empty list, and only
     /// once `arguments` holds a rewrite.
@@ -916,6 +920,7 @@ impl Group {
             changed_by: row.changed_by,
             state,
             answer: row.answer,
+            recipient: row.recipient,
             open: call.open,
             asking: call.asking,
         }
@@ -1069,6 +1074,7 @@ impl Group {
             changed_by: call.changed_by.as_deref(),
             state,
             answer,
+            recipient: call.recipient.as_deref(),
             flat,
         }
     }
@@ -1108,10 +1114,12 @@ impl Group {
             Span::styled(format!("{:<9}", kind.word()), style(Role::Info)),
         ];
         if room >= 1 {
-            out.push(Span::raw(pad_target(
-                &summary(row.name, row.arguments),
-                room,
-            )));
+            // A message call names its recipient when the terminal held
+            // one, else the id `summary` reads.
+            let target = row
+                .recipient
+                .map_or_else(|| summary(row.name, row.arguments), oneline);
+            out.push(Span::raw(pad_target(&target, room)));
             out.push(Span::raw("  "));
             out.extend(result);
         } else {

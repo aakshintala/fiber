@@ -649,7 +649,13 @@ a click on it returns too. The mouse wheel over a view moves its visible rows 3 
   that delegate. The breadcrumb is bold. The status card is a `surface`
   slab: "harness <name>", then " · model <model> · <level>" dim; under it,
   dim, the calls, "elapsed <time>" and "session <id>"; then "■ stop <session id>" in
-  `error`. The input box's hint reads "steering goes to ◆ <description>",
+  `error`. While the delegate's turn runs, "⏸ interrupt" in `attention`
+  comes before the stop target, and the working line shows in the view as it
+  does in the conversation, ending " · ⌥I or click to interrupt" (the first
+  key bound to `interrupt_turn`, or " · click to interrupt" with none): a
+  click on either interrupts the delegate's turn, not the delegate. Both
+  disappear while the delegate is idle or finished. Esc still closes the view.
+  The input box's hint reads "steering goes to ◆ <description>",
   dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
   again every 500 ms. A delegate or job that has finished opens the same
@@ -1022,9 +1028,14 @@ install still running.
     dim, then the tab bar: Appearance, Notifications, Models, Permissions,
     Sessions, Advanced. The open tab is bold on the `surface` tint, and ←→
     moves between tabs. The view opens on Appearance.
-  - **Tabs:** each key belongs to exactly one tab, named in its `KEYS`
-    entry with its label and one-line description. A test fails when an
-    entry lacks any of the three. Advanced holds what a person rarely
+  - **Tabs:** each key with no `*` in its path belongs to exactly one tab,
+    named in its `KEYS` entry, unless a screen row covers it: then that row
+    draws it, and the key has no row of its own. Every `KEYS` entry has a
+    label and a one-line description. The six screen rows are not `KEYS`
+    entries; each has its own label, one-line description and tab. A test
+    fails when an entry lacks its label or description, when a key with no
+    `*` lacks its tab and no screen row covers it, or when a screen row
+    lacks any of the three. Advanced holds what a person rarely
     changes (`hub.*`, `session.idle_exit_ms`, `cache.*`, `retry.*`,
     `diagnostics.level`). Permissions holds the reviewer keys first, then
     the sandbox keys.
@@ -1032,10 +1043,12 @@ install still running.
     line apart on terminals tall enough, with "› " marking the focused row.
     A value set anywhere but global is followed by its layer, dim
     (`project`, `repository`, `-c`); a global or default value shows no
-    layer. A key with `*` in its path is a row that opens its own screen:
-    Key bindings (`/keys`), Credentials (`/credential`), Rules (`/rules`),
-    Tools (`/tools`), Skills (`/skills`) and MCP servers (`/mcp`). Its
-    value reads "Open /keys ›".
+    layer. A key with `*` in its path has no row of its own; six rows
+    open a screen instead: Key bindings (`/keys`), Credentials
+    (`/credential`), Rules (`/rules`), Tools (`/tools`), Skills (`/skills`)
+    and MCP servers (`/mcp`). Such a row's value reads "Open /keys ›". Key
+    bindings ends Appearance, Credentials ends Models, Rules then Tools end
+    Permissions, and Skills then MCP servers end Sessions.
   - **Controls:** Enter or Space changes the focused value, by its type.
     - A boolean shows `[x] On` or `[ ] Off`, and the key flips it.
     - A key with a fixed set of values (`thinking`, `cache.lifetime`,
@@ -1410,7 +1423,9 @@ call's `details` (`docs/tools.md`, "What a result carries"); a call whose
   call's arguments (`id` and `message`, or `id` and `text`), not its
   `details`, so a running or failed call shows them too; a failed call's
   "<code>: <message>" still comes first. A part that is absent, not text or
-  empty draws no row. The ledger row's target is the id. When the result has
+  empty draws no row. The ledger row's target is the recipient's description, for a delegate, or its
+  name, for a session, else the id. The row shows the name held when it was
+  folded, and a page loaded again is folded again. When the result has
   an artifact, the swapped view draws these rows before the paged output.
 - **An MCP call, an extension's tool, or any tool whose `details` the
   terminal does not recognise** shows `content` as plain text. Text that is
@@ -1475,7 +1490,12 @@ and dim, "editing a queued message · Enter amends · ⌥X drops · Esc stops".
 
 ### Interrupts
 
-Esc interrupts the turn when nothing is open ("Keys"). The interrupt shows only
+Esc interrupts the turn when nothing is open ("Keys"). `interrupt_turn`, ⌥I,
+interrupts the turn of the conversation on screen, whatever is open over it,
+except the `/keys` screen: in a delegate's view, the delegate's turn, and
+elsewhere the attached session's, leaving the overlay open. In a delegate's view a click on the
+working line or on "⏸ interrupt" does the same, and Esc keeps closing the view.
+The interrupt shows only
 on the ▣ line that closes the card; there is no separate "Interrupted" line. A
 call it stopped reads `cancelled` in its ledger row. With steering messages queued, they start
 the next turn at once (`docs/architecture.md`, "Cancellation"), so Esc means
@@ -2157,6 +2177,7 @@ through the `input_status` slot ("Extension seams").
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
 | Delete the selected exited, or a live one with Delete session in the session list | `delete_session` | Delete, or Shift+Backspace, on the row | click a live row's ✕ |
+| Interrupt the turn on screen, whatever is open over it, except the `/keys` screen | `interrupt_turn` | ⌥I | click a delegate's "⏸ interrupt" or its working line; click "Esc to interrupt" |
 | Archive the selected exited session in the session list | `archive_session` | Backspace on the row | click an exited row's ✕; `/archive` |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
@@ -2247,7 +2268,7 @@ of them when a key arrives:
 
 A global action acts in all six. The rest act only where they are listed:
 
-- Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
+- Global: `close_or_interrupt`, `clear_then_quit`, `interrupt_turn`, `rail_row_n`,
   `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
   `next_request`, `key_map`.
 - Picker: `session_only`, `show_all`, `refresh_lists`.
@@ -2941,7 +2962,8 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   ends. Scrolling, recounting at a new width, search and copy wait.
   The one exception: rows that depend on turns before the held pages (an
   orphaned job's completion, an automatic handoff's trigger, a ledger
-  toggled earlier: only rows of these kinds) may change in the frame where
+  toggled earlier, a message call to a delegate started or named before the
+  held pages: only rows of these kinds) may change in the frame where
   the pass ends. An opening that fills only after crossing `seq 0` draws
   through the chain root, so the landing rewrites nothing across the seam.
   If the own segment fills first, the count phase adds ancestors above the
@@ -3095,7 +3117,9 @@ I/O failure. Chrome slots may also read outside the stream: the branch comes
 from `git status`, the cards follow the panel's configuration, and `spend`
 falls back to the attached spend when the session reports none. A ledger row, for example, receives the call's name,
 arguments, `changed_by`, status, exit code, duration, line count, `changes` and
-error, folded from its `tool_call_*` and `permission_resolved` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
+error, folded from its `tool_call_*` and `permission_resolved` events, and a
+message call's `recipient`: the recipient's description or name as the terminal
+held it when the call folded, absent when it held none. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
 
 Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style. Timestamps come as source values, never as elapsed strings. The person's own interaction state (selection, open or closed) is included only where the built-in draws it. An optional key is absent when it does not apply, never `null`. The terminal's internals stay out: no layout, width fit, cache, spinner glyph or motion clock.
 
@@ -3215,8 +3239,9 @@ failure raises the same input an extension draws.
 The `extension_failed` switched-off notice always draws built-in: a
 notice extension cannot hide its own switch-off failure.
 
-**`working_line`** draws the working line. It reads the attached session,
-even with a delegate transcript on screen.
+**`working_line`** draws the working line. It reads the session whose
+conversation is on screen: the attached session, or in a delegate's view the
+delegate.
 
 | Field | What it holds |
 |---|---|

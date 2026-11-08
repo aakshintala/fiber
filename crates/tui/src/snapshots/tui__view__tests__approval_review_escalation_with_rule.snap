@@ -2,15 +2,15 @@
 source: crates/tui/src/view_tests.rs
 expression: shown
 ---
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
-▌ Approval 1 of 1 · s_aaaaaaaaaaaaaaaa                         Esc puts it aside
-▌ shell npm test --watch
-▌ runs a command · the reviewer blocked the last calls: it blocked three in a
-▌ row
-▌
-▌ ▸ 1 Allow once
-▌   2 Allow for this session npm test *
-▌   3 Always allow in this project npm test *
-▌   4 Deny  type to add feedback
-▌
-▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀┃
+ ▌ Approval 1 of 1 · s_aaaaaaaaaaaaaaaa                        Esc puts it aside
+ ▌ shell npm test --watch
+ ▌ runs a command · the reviewer blocked the last calls: it blocked three in a
+ ▌ row
+⋮▌
+⋮▌ ▸ 1 Allow once
+⋮▌   2 Allow for this session npm test *
+ ▌   3 Always allow in this project npm test *
+ ▌   4 Deny  type to add feedback
+ ▌
+ ▌ ↑↓ choose · Enter confirms · typing goes to the feedback · click a choice

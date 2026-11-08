@@ -3,7 +3,7 @@
 //! its feed and `recent` again and subscribes afresh. The rows, the stop
 //! asks, the quit question's closes, the launch and the picker stay.
 
-use super::super::App;
+use super::super::{App, Waiting};
 
 impl App {
     /// Clears the old connection's subscription state and open gate, and
@@ -15,11 +15,10 @@ impl App {
     /// outbox for the next outgoing pass beside the sessions request.
     /// Rows stay for those answers.
     pub(in crate::app) fn home_reset(&mut self) {
-        let Some(home) = self.home.as_mut() else {
-            return;
-        };
+        let home = &mut self.home;
         home.subs.reset();
-        self.outbox.forget(&crate::app::outbox::Waiting::Subscribe);
+        self.outbox
+            .settle_where(|waiting| matches!(waiting, Waiting::Subscribe { .. }));
         // Every held total goes with the old connection, with the scoped
         // ids waiting and their dirty flags: a stale scoped answer
         // matches nothing afterwards.

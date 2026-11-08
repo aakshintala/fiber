@@ -69,8 +69,22 @@ fn banner_above_the_steering_queue() {
     insta::assert_snapshot!("banner_above_the_steering_queue", screen(&app, 60));
 }
 
+/// The input box, the steering queue and the banner drawn into a column
+/// `width` wide, as the screen's draw stacks them: the column is narrower
+/// than the screen's floor, so the screen cannot hold it.
+fn column(app: &App, width: u16) -> String {
+    let area = Rect::new(0, 0, width, 12);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    crate::view::input_box::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    crate::view::steering_queue::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    super::draw(app, area, &mut buf, &mut bottom);
+    crate::view::text(&buf)
+}
+
 #[test]
 fn banner_cut_at_the_column() {
-    let app = dropped(24);
-    insta::assert_snapshot!("banner_cut_at_the_column", screen(&app, 24));
+    let app = dropped(60);
+    insta::assert_snapshot!("banner_cut_at_the_column", column(&app, 24));
 }

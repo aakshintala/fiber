@@ -883,8 +883,8 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
     assert_eq!(rows(&app), ["○  old work"]);
     assert_eq!(
         app.home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&contract::SessionId(S_B.to_owned())))
+            .sessions
+            .row(&contract::SessionId(S_B.to_owned()))
             .and_then(|row| row.note.as_deref()),
         Some(UNANSWERED)
     );
@@ -1127,10 +1127,10 @@ fn a_reset_after_reconnect_leaves_no_untagged_feature_id() {
         .find(|line| line["command"] == "recent")
         .map(id_of)
         .unwrap_or_else(|| panic!("a scoped ask: {live_out:?}"));
-    assert_eq!(
+    assert!(matches!(
         app.outbox.waiting(&old_scoped),
-        Some(crate::app::Waiting::Recent)
-    );
+        Some(crate::app::Waiting::Recent(_))
+    ));
     let after = parsed(&reconnect(&mut app));
     // The replaced entries' tags are gone, so their late answers match
     // nothing.
@@ -1142,12 +1142,15 @@ fn a_reset_after_reconnect_leaves_no_untagged_feature_id() {
         let id = id_of(line);
         match line["command"].as_str().unwrap_or_default() {
             "feed" => assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Feed)),
-            "recent" => assert_eq!(app.outbox.waiting(&id), Some(crate::app::Waiting::Recent)),
+            "recent" => assert!(matches!(
+                app.outbox.waiting(&id),
+                Some(crate::app::Waiting::Recent(_))
+            )),
             "subscribe" => {
-                assert_eq!(
+                assert!(matches!(
                     app.outbox.waiting(&id),
-                    Some(crate::app::Waiting::Subscribe)
-                )
+                    Some(crate::app::Waiting::Subscribe { .. })
+                ))
             }
             _ => {}
         }

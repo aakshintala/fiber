@@ -2004,7 +2004,7 @@ pub(crate) fn assert_one_continued_log(lines: &[Value], started: usize) {
 
 /// A `session_status` line: ephemeral, and written by an observer thread, so
 /// where it falls among the loop's own lines is not what these tests pin.
-/// `tests/socket.rs` reads it.
+/// `tests/hub_daemon/socket.rs` reads it.
 pub(crate) fn is_status(line: &str) -> bool {
     line.contains(r#""kind":"session_status""#)
 }
@@ -2050,7 +2050,7 @@ pub(crate) const HELLO_KINDS: [&str; 15] = [
 ];
 
 /// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
-/// for byte (as in `tests/tools.rs`).
+/// for byte (as in `tests/tool_calls/tools.rs`).
 pub(crate) const PIXEL: [u8; 69] = [
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,

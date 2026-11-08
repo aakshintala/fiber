@@ -231,12 +231,13 @@ follow-up can drop pull-request CI and keep the post-merge run.
 A failed binary-level test retries once. A pass on retry does not fail the
 run, except for a test the pull request touched (below): CI opens a flake
 issue for the test's file, or comments on the open one
-(`docs/testing.md`, "Flaky tests"). The aggregate `main` integration binary
-is keyed by its first test-module segment, as in `Flaky tests:
-main::reviewer_setup`; a root-level `main` test falls back to `Flaky tests:
-main`, while a unit-test binary is keyed per file, as in
-`Flaky tests: extensions::host::exec`, and a single-file integration binary
-keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
+(`docs/testing.md`, "Flaky tests"). An area binary in `crates/main/tests/<area>/`
+is keyed by its first test-module segment, the file the test lives in, as in
+`Flaky tests: main::reviewer_setup` for
+`main::extension_host reviewer_setup::the_setup_saves`; a root-level test in
+an area binary falls back to `Flaky tests: main::<area>`, while a unit-test
+binary is keyed per file, as in `Flaky tests: extensions::host::exec`, and a
+single-file integration binary keeps `Flaky tests: <binary>`. The retry is nextest's `ci` profile over
 the `crates/main/tests` binaries, and two report jobs file the issue. The
 read-only `flake_decide` job holds only `contents: read` and `issues: read`:
 it downloads each selected test leg's exact `flaky-tests-<runner>.txt`

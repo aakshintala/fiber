@@ -23,7 +23,7 @@ fn attached() -> App {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    app.on_line(Line::Hub(hello));
     app.attach(contract::SessionId(S_A.to_owned()));
     app
 }
@@ -264,6 +264,25 @@ fn reconnect_closes_source_and_replay_shows_the_offer_list() {
     assert!(resent.contains(&lines[0]));
     assert!(!app.offer.source_open());
     assert!(!app.offer_open());
+    // The hub takes the resubscription at `summary`, then at `full`, and
+    // replays the session.
+    let subscribe: Value = serde_json::from_str(&resent[0]).unwrap();
+    assert_eq!(subscribe["command"], "subscribe");
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": subscribe["id"], "result": {}}),
+        None,
+    ));
+    // The reopened session is gated until the `full` raise is accepted.
+    let raise: Value = serde_json::from_str(&app.take_raise().expect("the raise is due")).unwrap();
+    assert_eq!(raise["command"], "subscribe");
+    app.on_line(session_line(
+        S_A,
+        "command_accepted",
+        json!({"command_id": raise["id"], "result": {}}),
+        None,
+    ));
     app.on_line(session_line(S_A, "repository_code_offered", json!({"request_id": "r_1", "items": [{"kind": "hook", "name": "db", "hash": "h", "required": false, "summary": "hook", "files": ["tools/db.sh", "tools/b.sh"]}]}), None));
     assert!(app.offer_open());
     assert!(!app.offer.source_open());
@@ -751,8 +770,10 @@ fn wheel_over_offer_wins_over_open_results() {
     let content_height = u16::try_from(app.conversation_area_height())
         .unwrap_or(u16::MAX)
         .min(height);
+    // The grip's column is no part of the conversation.
+    let column = app.conversation_area().x;
     let (col, row) = (0..content_height)
-        .flat_map(|row| (0..width).map(move |col| (col, row)))
+        .flat_map(|row| (column..width).map(move |col| (col, row)))
         .find(|&(col, row)| {
             !search.is_some_and(|slab| slab.contains(ratatui::layout::Position::new(col, row)))
                 && !completion

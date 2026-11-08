@@ -141,7 +141,7 @@ fn hide_rail(app: &mut App) {
 
 /// The launch shares: the rail's and the panel's.
 fn shares(app: &App) -> (f64, f64) {
-    let home = app.home.as_ref().expect("home");
+    let home = &app.home;
     (home.launch.rail_share, home.launch.panel_share)
 }
 

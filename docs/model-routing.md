@@ -650,6 +650,16 @@ For each model:
 - output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 
+The `databricks` provider's `headers` carry `Databricks-Ai-Gateway-Request-Tags`,
+a JSON object of request tags whose `source` is always `fiber`. The configuration
+key `providers.databricks.request_tags` merges more tags into that header for the
+session's model calls only, and only for the provider named `databricks`; the
+discovery requests keep the source-only header. The header is built when the
+session connects from the configuration read at startup, so a `reload` never
+changes it (`docs/configuration.md`, "When Fiber reads configuration"). The key,
+its layers and its handling of an invalid value are in `docs/configuration.md`,
+"A provider's data".
+
 A first-party package's `models` list is generated, except `openrouter`'s and `databricks`'s, which their `models()` functions read from their vendors ("Model discovery"): `openrouter`'s takes each model's `name` from OpenRouter's list, and `databricks`'s matches the workspace's model services to its catalog rows. `cargo xtask models-dev` reads models.dev (`https://models.dev/api.json`) and keeps each source's models that call tools and output text, leaving out Gemini models before Gemini 3 ("Google Generative AI wire facts") and any model with no context window. It derives each model's name, protocol, context window, output token limit, input kinds and cost from models.dev, and takes every other field, such as `base_url`, `compat`, `web_search`, `thinking_levels` and the provider's `credential` and `reviewer_model`, from a table it keeps per package. A gateway package's model (`opencode-go`, `opencode-zen`) whose id a vendor package also lists takes that vendor's `thinking` row unless its own table names one; every other gateway model names its own `thinking` row, with levels and a default, or an explicit empty row for a model that takes none. A `databricks` model found by discovery takes the `thinking` row of the vendor model its bare service name matches, looked up by the same match key discovery routes it with, overlaid by `providers/databricks/thinking-overlay.json`, which wins on a shared key over the four thinking-vendor packages' rows; a service neither names a row for keeps no levels. The table also lists the ids a package keeps when its models are a subset of the source's (`codex` keeps four of models.dev's `openai` models; `bedrock` keeps its Claude models' inference profiles and the other models that answered a probe through ConverseStream, "Protocols and providers"), names a model's protocol where models.dev cannot (`bedrock`'s Claude models speak `anthropic-messages`, its others `bedrock-converse`), and pins a derived field the vendor's endpoint differs on (`codex`'s `context_window` is the ChatGPT backend's 272000, where models.dev lists the API's 1050000). A rerun on an unchanged models.dev changes nothing. It runs only when someone runs it: CI never fetches, and a test regenerates the lists from a checked-in copy of models.dev and fails when a committed file differs.
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
@@ -828,9 +838,10 @@ every surface that shows a model list draws from that copy at once: the
 terminal's model picker, `fiber models`, and anything an agent reads. A refresh
 runs in the background and never holds a list back. The generator leaves out ids a package's table skips because the vendor rejects them, and a gateway model no probe reaches is skipped.
 
-- **At start,** Fiber refreshes each provider that has a credential and whose
-  cached list is older than `model_lists.refresh_after` (`docs/configuration.md`),
-  one day by default. Each provider that ran is unloaded once its list is
+- **At start,** Fiber refreshes each provider that has a credential when its
+  cached list is older than `model_lists.refresh_after` (`docs/configuration.md`)
+  or its extension source is newer than the cached copy. The default age is one day.
+  Each provider that ran is unloaded once its list is
   written. Only the extensions the session uses stay loaded, among them each
   provider whose quota a client asked for (`docs/tools.md`, "Fetching"), and
   a provider with no credential never runs.
@@ -841,7 +852,7 @@ runs in the background and never holds a list back. The generator leaves out ids
   while a declared placeholder has no value or a value that is not a host,
   so the key goes only to a host the person set.
 - **The model picker** refreshes, in the background, any provider whose list
-  is older than `model_lists.refresh_after`, and updates the list when the result
+  is older than `model_lists.refresh_after` or whose extension source is newer than the cached copy, and updates the list when the result
   arrives. Its refresh button refreshes every provider with a credential,
   whatever the age of its list.
 

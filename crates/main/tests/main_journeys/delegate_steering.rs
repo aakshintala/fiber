@@ -1,0 +1,346 @@
+//! The delegate steering journey (#4187): a running fiber delegate's view
+//! draws the steering card for its own queue and edits it through the same
+//! keys and targets as the conversation (`docs/tui.md`, "Swapped views"
+//! and "Steering"). The test holds the delegate's model response on the
+//! fake provider, so the delegate's turn stays open and its queue
+//! persists on screen until the test releases the response.
+
+use fakes::ProviderServer;
+use serde_json::{Value, json};
+
+use super::support::pty::{Grid, Run};
+use super::support::{
+    Setup, Socket, Subscribed, TRUECOLOUR, accepted, recv, subscribe, text_reply, until_after,
+    write_json,
+};
+use super::{dismiss_first_run_offer, journey_bin, quit_journey, run_journey, shows};
+
+/// Alt+Up in its CSI form.
+const ALT_UP: &[u8] = b"\x1b[1;3A";
+/// Alt+Down in its CSI form.
+const ALT_DOWN: &[u8] = b"\x1b[1;3B";
+/// Alt+X in its CSI-u form.
+const ALT_X: &[u8] = b"\x1b[120;3u";
+/// The panel row of the running delegate: its description, which follows
+/// a status glyph that animates while the delegate holds no status.
+const DELEGATE_ROW: &str = "review the parser";
+
+/// Where the `✕` of the queued row holding `text` is: the first `✕` right
+/// of the row's text.
+fn find_cross(grid: &Grid, text: &str) -> Option<(u16, u16)> {
+    let (from, y) = grid.text_at(text)?;
+    let (width, _) = grid.size();
+    (from..width)
+        // settled: a finder run by `click_where` on the frame the click acts on.
+        .find(|x| grid.cell(*x, y).symbol == "✕")
+        .map(|x| (x, y))
+}
+
+/// The delegate's session id: the `delegate_session_id` of the
+/// `delegate_started` line in the parent's log, once that log also holds
+/// the parent's `turn_completed`. The delegate's response is held, so
+/// that line is the last data the parent folds into the panel row; the
+/// wait runs under one deadline.
+fn delegate_session(setup: &Setup) -> String {
+    let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
+    let found = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+    let seen = std::sync::Arc::clone(&found);
+    fakes::wait_until("the delegate_started line", setup.deadline, move || {
+        let Ok(entries) = std::fs::read_dir(&sessions) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let Ok(text) = std::fs::read_to_string(entry.path().join("events.jsonl")) else {
+                continue;
+            };
+            let lines = super::support::complete_lines(&text);
+            let id = lines.iter().find_map(|line| {
+                (line["kind"] == "delegate_started")
+                    .then(|| line["payload"]["delegate_session_id"].as_str())
+                    .flatten()
+            });
+            if let Some(id) = id
+                && lines.iter().any(|line| line["kind"] == "turn_completed")
+            {
+                *seen.lock().unwrap() = Some(id.to_owned());
+                return true;
+            }
+        }
+        false
+    });
+    let id = found.lock().unwrap().clone();
+    id.unwrap_or_else(|| panic!("a delegate session id"))
+}
+
+/// The texts of a `steering_queue` line's messages, oldest first.
+fn queued(line: &Value) -> Vec<String> {
+    line["payload"]["messages"]
+        .as_array()
+        .map(|messages| {
+            messages
+                .iter()
+                .map(|message| {
+                    message["content"][0]["text"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The `command_id` of the queued message holding `text` in `line`.
+fn id_of(line: &Value, text: &str) -> String {
+    line["payload"]["messages"]
+        .as_array()
+        .and_then(|messages| {
+            messages
+                .iter()
+                .find(|message| message["content"][0]["text"] == text)
+        })
+        .and_then(|message| message["command_id"].as_str())
+        .unwrap_or_else(|| panic!("{text:?} queued in {line}"))
+        .to_owned()
+}
+
+/// The first live `steering_queue` after `since` whose texts equal `texts`.
+fn queue_after(control: &Socket, since: &Subscribed, what: &str, texts: &[&str]) -> Value {
+    let lines = until_after(control, since, what, |line| {
+        line["kind"] == "steering_queue" && queued(line) == texts
+    });
+    lines.last().cloned().unwrap_or_default()
+}
+
+/// The subscription bound just after `line`: later waits skip every
+/// replayed line at or before it. An ephemeral line, such as a
+/// `steering_queue`, carries no `seq` and keeps `prev`; the socket hands
+/// lines over in order, so a wait after it never sees an earlier copy.
+fn fence_after(prev: Subscribed, line: &Value, delegate: &str) -> Subscribed {
+    match line["seq"].as_u64() {
+        Some(seq) => accepted(
+            json!({"payload": {"result": {"last_seq": seq}}}),
+            Some(delegate.to_owned()),
+        ),
+        None => prev,
+    }
+}
+
+/// The parent's script and the config: the parent and the reviewer run
+/// scripted, `delegate_spawn` goes to the reviewer, and the delegate runs
+/// on the fake provider `server` installed as `fake/m`.
+fn write_setup(setup: &Setup, server: &ProviderServer) {
+    setup.provider(server);
+    write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "delegate_spawn", "arguments": {
+                "description": "review the parser", "prompt": "go",
+                "model": "fiber:fake/m"}}]},
+            {"text": ["Done."]},
+            {"text": ["Noted."]},
+            {"text": ["Calm."]},
+        ]}),
+    );
+    write_json(
+        &setup.workspace().join("r.json"),
+        &json!({"steps": [{"text": ["allow"]}, {"text": ["allow"]}]}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({
+            "model": "scripted/s.json",
+            "reviewer": {"model": "scripted/r.json"},
+            "roles": {"delegate": "fiber:fake/m"},
+            "hub": {"idle_exit_ms": 1000}
+        }),
+    );
+    std::fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "delegate_spawn", "prefix": ""}),
+        ),
+    )
+    .unwrap();
+}
+
+#[test]
+fn queued_delegate_steering_journey() {
+    run_journey(
+        "delegate_steering::queued_delegate_steering_journey",
+        std::panic::AssertUnwindSafe(|| {
+            let setup = Setup::new();
+            let server =
+                ProviderServer::start([text_reply("Reviewed."), text_reply("Steered.")]).unwrap();
+            write_setup(&setup, &server);
+            let bin = journey_bin();
+            let env: Vec<(&str, &str)> = TRUECOLOUR
+                .iter()
+                .copied()
+                .chain([("FIBER_TEST_FAKE_KEY", "sk-test")])
+                .collect();
+            let mut run = Run::spawn_journey(&setup, 160, 48, &bin, &[], &env);
+            // Owned after the run, so a failure drops the server first:
+            // its drop releases the held response before the teardown.
+            let delegate_provider = server;
+            delegate_provider.hold();
+            run.ready();
+            dismiss_first_run_offer(&mut run);
+            run.write(b"go\r");
+            // The delegate's model request is recorded and unanswered:
+            // its turn is open for as long as the test holds it.
+            assert!(
+                delegate_provider.await_requests(1, setup.deadline.start_wait()),
+                "the held delegate model request"
+            );
+            let requests = delegate_provider.requests();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, "POST");
+            let body = String::from_utf8_lossy(&requests[0].body).into_owned();
+            assert!(body.contains("go"), "the delegate's prompt in {body}");
+            // The parent's last data is its `turn_completed`; the panel
+            // row is clicked only once the grid shows the `▣ completed`
+            // closing row that only the fold of that line draws.
+            let delegate = delegate_session(&setup);
+            run.wait_screen("the running delegate row", |grid| {
+                shows(grid, "1 running") && shows(grid, DELEGATE_ROW) && shows(grid, "▣ completed")
+            });
+            run.click_where("the delegate row", |grid| grid.text_at(DELEGATE_ROW));
+            run.wait_screen("the delegate view", |grid| {
+                shows(grid, "Delegate  ◆ review the parser")
+                    && shows(grid, "› ◆ review the parser")
+                    && shows(grid, "steering goes to ◆ review the parser")
+            });
+            // A second client on the delegate hears its lines; each wait
+            // below starts after the latest durable line the test consumed.
+            let control = Socket::connect(setup.deadline, &setup.hub_socket());
+            assert_eq!(recv(&control, "hub_hello")["kind"], "hub_hello");
+            let mut fence = subscribe(&control, &delegate);
+
+            // Enter on a typed message queues it in the delegate's card
+            // above the cleared input.
+            run.write(b"use the parser\r");
+            let line = queue_after(
+                &control,
+                &fence,
+                "the first queue echo",
+                &["use the parser"],
+            );
+            let first = id_of(&line, "use the parser");
+            fence = fence_after(fence, &line, &delegate);
+            run.wait_screen("the first queued row", |grid| {
+                shows(grid, "Delegate  ◆ review the parser")
+                    && shows(grid, "Steering")
+                    && shows(grid, "1 queued")
+                    && shows(grid, "↳ use the parser")
+                    && shows(grid, "⌥↑ edit")
+                    && shows(grid, "✕")
+                    && shows(grid, "steering goes to ◆ review the parser")
+            });
+            run.write(b"and the tests\r");
+            let line = queue_after(
+                &control,
+                &fence,
+                "the second queue echo",
+                &["use the parser", "and the tests"],
+            );
+            let second = id_of(&line, "and the tests");
+            assert_ne!(first, second);
+            fence = fence_after(fence, &line, &delegate);
+            run.wait_screen("two queued rows", |grid| {
+                shows(grid, "2 queued")
+                    && shows(grid, "↳ use the parser")
+                    && shows(grid, "↳ and the tests")
+            });
+
+            // Alt+Up selects the newest row, then the older one; Alt+Down
+            // goes back to the newer.
+            run.write(ALT_UP);
+            run.wait_screen("the newest row selected", |grid| {
+                shows(grid, "▸ and the tests")
+                    && shows(grid, "↳ use the parser")
+                    && shows(grid, "editing a queued message")
+            });
+            run.write(ALT_UP);
+            run.wait_screen("the older row selected", |grid| {
+                shows(grid, "▸ use the parser") && shows(grid, "↳ and the tests")
+            });
+            run.write(ALT_DOWN);
+            run.wait_screen("the newer row selected again", |grid| {
+                shows(grid, "▸ and the tests") && shows(grid, "↳ use the parser")
+            });
+
+            // Alt+X drops the selected row from the delegate's queue.
+            run.write(ALT_X);
+            let line = queue_after(&control, &fence, "the drop echo", &["use the parser"]);
+            assert_eq!(id_of(&line, "use the parser"), first);
+            fence = fence_after(fence, &line, &delegate);
+            run.wait_screen("the selected row dropped", |grid| {
+                shows(grid, "1 queued")
+                    && shows(grid, "↳ use the parser")
+                    && !shows(grid, "and the tests")
+                    && !shows(grid, "editing a queued message")
+            });
+
+            // Another message, then its ✕ drops it.
+            run.write(b"third thing\r");
+            let line = queue_after(
+                &control,
+                &fence,
+                "the third queue echo",
+                &["use the parser", "third thing"],
+            );
+            assert_ne!(id_of(&line, "third thing"), first);
+            fence = fence_after(fence, &line, &delegate);
+            run.wait_screen("the third row", |grid| {
+                shows(grid, "2 queued") && shows(grid, "↳ third thing")
+            });
+            run.click_where("the third row's cross", |grid| {
+                find_cross(grid, "↳ third thing")
+            });
+            let line = queue_after(&control, &fence, "the cross drop echo", &["use the parser"]);
+            assert_eq!(id_of(&line, "use the parser"), first);
+            fence = fence_after(fence, &line, &delegate);
+            run.wait_screen("the third row dropped", |grid| {
+                shows(grid, "1 queued")
+                    && shows(grid, "↳ use the parser")
+                    && !shows(grid, "third thing")
+            });
+
+            // Releasing the response lets the delegate's turn reach its
+            // step boundary: the kept message joins it.
+            delegate_provider.release();
+            let (mut applied, mut emptied) = (false, false);
+            until_after(
+                &control,
+                &fence,
+                "the applied message and the empty queue",
+                |line| {
+                    match line["kind"].as_str() {
+                        Some("steering_applied") => {
+                            applied |= line["payload"]["content"][0]["text"] == "use the parser";
+                        }
+                        Some("steering_queue") => emptied |= queued(line).is_empty(),
+                        _ => {}
+                    }
+                    applied && emptied
+                },
+            );
+            run.wait_screen("the joined steer rule and no card", |grid| {
+                grid.rows.iter().any(|row| row.contains("steer ·"))
+                    && shows(grid, "use the parser")
+                    && !shows(grid, "Steering")
+                    && !shows(grid, "queued")
+            });
+
+            // Back in the conversation the delegate's queue is gone.
+            run.write(b"\x1b[27u");
+            run.wait_screen("the conversation again", |grid| {
+                !shows(grid, "Delegate  ◆ review the parser") && !shows(grid, "Steering")
+            });
+            drop(control);
+            quit_journey(run);
+        }),
+    );
+}

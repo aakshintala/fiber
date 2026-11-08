@@ -40,11 +40,13 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::{Map, Value};
 
 pub use cache::{
-    cached_model_lists, model_cache_age, model_cache_lock_file, read_model_cache, write_model_cache,
+    cached_model_lists, model_cache_age, model_cache_file, model_cache_lock_file, read_model_cache,
+    write_model_cache,
 };
 pub use contract::Secret;
 pub use contract::provider::{Cost, Tier};
@@ -101,6 +103,7 @@ pub use write::{
     validate_read_only_entry, version, write_atomic,
 };
 
+pub use keys::{KEYS as SETTINGS_SCHEMA, Key as SettingsKey};
 pub use keys::{WriteScope, diagnostics_debug, parse_duration, refresh_after};
 
 use home::{parse, plain, read, read_bytes};
@@ -169,6 +172,7 @@ pub struct Config {
     notices: Vec<Notice>,
     extensions: ExtensionSettings,
     credentials: Credentials,
+    request_tags: Option<BTreeMap<String, String>>,
 }
 
 /// Shows where the configuration came from, never a value: a `-c` value, a
@@ -196,6 +200,9 @@ enum Fast {
 impl Config {
     /// Reads every layer. An unknown key, or a key a repository may not set,
     /// becomes a notice; invalid JSON or a wrongly typed value is an error.
+    /// The exception is `providers.databricks.request_tags`: it is judged
+    /// once, as the merged object, and a value that is not an object of
+    /// strings is a `config_invalid` notice and no tags.
     /// A repository's file that is a symbolic link or not a regular file is
     /// refused, since a repository is someone else's text.
     pub fn load(sources: Sources) -> Result<Self, ConfigError> {
@@ -261,7 +268,25 @@ impl Config {
             run_settings,
             settings_files,
         );
-        let providers = merge_layers(&layers, None)
+        let merged = merge_layers(&layers, None);
+        let request_tags = match merged.pointer("/providers/databricks/request_tags") {
+            None => None,
+            Some(value) => {
+                let tags = string_map(value);
+                if tags.is_none() {
+                    notices.push(Notice {
+                        code: ErrorCode::ConfigInvalid,
+                        message: format!(
+                            "ignored `{REQUEST_TAGS}`, which is not an object of string values: \
+                             the default request-tags header is used."
+                        ),
+                        extension: None,
+                    });
+                }
+                tags
+            }
+        };
+        let providers = merged
             .get("providers")
             .cloned()
             .unwrap_or_else(|| Value::Object(Map::new()));
@@ -270,7 +295,17 @@ impl Config {
             notices,
             extensions,
             credentials: Credentials::new(home, providers, credential::CommandRuns::default()),
+            request_tags,
         })
+    }
+
+    /// The `providers.databricks.request_tags` object as the merged layers
+    /// left it, when it is an object of string values. `None` when no layer
+    /// sets it and when the merged value is invalid (one notice in
+    /// [`Self::notices`]); an empty object is `Some` and empty. Read once at
+    /// load: it never changes afterwards.
+    pub fn databricks_request_tags(&self) -> Option<&BTreeMap<String, String>> {
+        self.request_tags.as_ref()
     }
 
     /// The keys that were ignored, one `config_key_ignored` notice each,
@@ -539,6 +574,18 @@ impl Config {
             .collect::<Vec<_>>()
             .join("\n\n")
     }
+}
+
+const REQUEST_TAGS: &str = "providers.databricks.request_tags";
+
+/// An object whose values are all strings, as a map; `None` for anything
+/// else.
+fn string_map(value: &Value) -> Option<BTreeMap<String, String>> {
+    value
+        .as_object()?
+        .iter()
+        .map(|(name, item)| Some((name.clone(), item.as_str()?.to_owned())))
+        .collect()
 }
 
 /// Whether `key` names a row of `docs/configuration.md`, "Keys", as

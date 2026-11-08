@@ -95,7 +95,7 @@ mod tests {
     }
 
     /// The failure exit code, and nothing else, is pinned here: output
-    /// and landed files are pinned by `crates/main/tests/import.rs`. What
+    /// and landed files are pinned by `crates/main/tests/commands/import.rs`. What
     /// only a child proves is the branch `run` takes before any import:
     /// no `HOME` in the environment.
     #[test]

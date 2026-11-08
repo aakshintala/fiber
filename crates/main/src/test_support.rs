@@ -6,6 +6,26 @@ use std::path::{Path, PathBuf};
 
 pub(crate) use fakes::write_record;
 
+pub(crate) fn set_source_mtime(dir: &Path, mtime: std::time::SystemTime) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            set_source_mtime(&entry.path(), mtime);
+        } else {
+            std::fs::File::options()
+                .write(true)
+                .open(entry.path())
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+    }
+    std::fs::File::open(dir)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
 /// Loads the configuration for `home` and `workspace` under `project`,
 /// with `overrides` as `-c key=value` reads them. The one configuration
 /// read in this crate's unit tests: every test reaches it through here, so

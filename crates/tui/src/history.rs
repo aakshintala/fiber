@@ -309,7 +309,7 @@ impl App {
     /// Names home's project for `prompt_history`: set at `set_home` and
     /// at each workspace choice.
     pub(crate) fn sync_project(&mut self) {
-        let project = self.home.as_ref().and_then(|home| home.history_project());
+        let project = self.home.history_project();
         if self.history.set_project(project) {
             self.outbox.forget(&crate::app::Waiting::History);
         }

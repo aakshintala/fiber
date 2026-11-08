@@ -89,6 +89,10 @@ pub(super) struct Inner {
     /// The job's output file, after a move.
     pub(super) file: Option<File>,
     pub(super) discard: bool,
+    /// `file` is the artifact `background::finish_inline` installed for a
+    /// shell that exited with leftovers: `finish` keeps the reader writing to
+    /// it instead of discarding. False for a background job's own file.
+    pub(super) artifact_sink: bool,
     pub(super) seq: u64,
     /// Bytes in the job's file: the copy at the move, then what the reader
     /// wrote.
@@ -171,6 +175,7 @@ impl Default for Inner {
             stream: Pending::default(),
             file: None,
             discard: false,
+            artifact_sink: false,
             seq: 0,
             written: 0,
             cap: OUTPUT_CAP,

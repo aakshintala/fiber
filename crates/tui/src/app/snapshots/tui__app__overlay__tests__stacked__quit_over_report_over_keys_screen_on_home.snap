@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/app/overlay_tests.rs
-assertion_line: 4238
 expression: text
 ---
  Keys  /key▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄ Esc returns
@@ -18,12 +17,12 @@ expression: text
   Delete,    ser    c      close all                                or a live
   Backspace  ser    Esc    stay                                     he session
              ser
-  ↑          ser  click a choice · they keep running meanwhile      m the
-             ser                                                    reen
-  ←          ser▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    ut box into
-             server12
-  Ctrl+R     server13
+  ⌥I         ser  click a choice · they keep running meanwhile      , whatever
+             ser                                                    /keys screen
+  ↑          ser▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀    m the
+             server12                                               reen
+  ←          server13                                               ut box into
+
+  Ctrl+R     Imported items apply on the next /reload · Esc closes
   ⌥← ⌥→, Ct
-  Ctrl+→, ⌥  Imported items apply on the next /reload · Esc closes
-  ⌥Backspac
 ↑↓ move · E▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

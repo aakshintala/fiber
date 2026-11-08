@@ -119,14 +119,31 @@ fn rewind_lost_forgets_the_rewind_history_tag() {
     assert_eq!(app.outbox.waiting("c_reopened"), None);
 }
 
+/// An image fetch tag for a viewer open.
+fn image_fetch() -> Waiting {
+    Waiting::ImageFetch {
+        id: 1,
+        session: "s_a".to_owned(),
+        path: "a.png".to_owned(),
+    }
+}
+
+/// An image tag for an inline display.
+fn image_display() -> Waiting {
+    Waiting::ImageDisplay {
+        session: "s_a".to_owned(),
+        path: "a.png".to_owned(),
+    }
+}
+
 #[test]
 fn images_disconnected_forgets_fetch_tags_and_keeps_display_tags() {
     let mut app = crate::app::commands::commands_testkit::attached();
-    app.outbox.wait("c_fetch", Waiting::ImageFetch);
-    app.outbox.wait("c_display", Waiting::ImageDisplay);
+    app.outbox.wait("c_fetch", image_fetch());
+    app.outbox.wait("c_display", image_display());
     app.images_disconnected();
     assert_eq!(app.outbox.waiting("c_fetch"), None);
-    assert_eq!(app.outbox.waiting("c_display"), Some(Waiting::ImageDisplay));
+    assert_eq!(app.outbox.waiting("c_display"), Some(image_display()));
     app.forget_images();
     assert_eq!(app.outbox.waiting("c_display"), None);
 }
@@ -202,7 +219,7 @@ fn clear_start_declined_still_reaches_started() {
 
 #[test]
 fn image_and_history_declined_still_reach_generic_settlement() {
-    for tag in [Waiting::ImageFetch, Waiting::ImageDisplay, Waiting::History] {
+    for tag in [image_fetch(), image_display(), Waiting::History] {
         let mut app = crate::app::commands::commands_testkit::attached();
         app.outbox.wait("c_stale", tag);
         app.outbox.insert(

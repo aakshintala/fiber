@@ -117,8 +117,8 @@ fn press(app: &mut App, key: Key) -> Effect {
 fn focus_row(app: &mut App, session: &str) {
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&SessionId(session.to_owned())))
+        .sessions
+        .row(&SessionId(session.to_owned()))
         .map(|row| row.key)
         .unwrap_or_else(|| panic!("a row for {session}"));
     app.focus = Some(TargetId::Home(Spot::Entry(key)));
@@ -140,33 +140,25 @@ fn delete(app: &mut App) -> Effect {
 
 /// Whether the foot's question is the stop question.
 fn stop_open(app: &App) -> bool {
-    app.home
-        .as_ref()
-        .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Stop { .. })))
+    matches!(app.home.questions.prompt(), Some(Prompt::Stop { .. }))
 }
 
 /// Whether the foot's question is the delete question.
 fn delete_open(app: &App) -> bool {
-    app.home
-        .as_ref()
-        .is_some_and(|home| matches!(home.questions.prompt(), Some(Prompt::Delete { .. })))
+    matches!(app.home.questions.prompt(), Some(Prompt::Delete { .. }))
 }
 
 /// The stops waiting for their answers.
 fn stops(app: &App) -> Vec<String> {
     app.home
-        .as_ref()
-        .map(|home| {
-            home.questions
-                .asks
-                .values()
-                .filter_map(|ask| match ask {
-                    Ask::Stop(session) => Some(session.0.clone()),
-                    Ask::Delete(_) | Ask::Import { .. } => None,
-                })
-                .collect()
+        .questions
+        .asks
+        .values()
+        .filter_map(|ask| match ask {
+            Ask::Stop(session) => Some(session.0.clone()),
+            Ask::Delete(_) | Ask::Import { .. } => None,
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 #[test]
@@ -259,14 +251,9 @@ fn an_idle_row_with_nothing_running_says_nothing() {
 
 /// Holds the session at `full` on this connection.
 fn hold_full(app: &mut App, session: &str) {
-    if let Some(home) = app.home.as_mut() {
-        home.subs.sent(
-            "c_1".to_owned(),
-            SessionId(session.to_owned()),
-            crate::home::Level::Full,
-        );
-        home.subs.answered("c_1", true);
-    }
+    app.home
+        .subs
+        .accept(SessionId(session.to_owned()), crate::home::Level::Full);
 }
 
 #[test]
@@ -417,8 +404,8 @@ fn delete_on_an_exited_or_crashed_row_still_asks_to_delete() {
         // The exited section is open once its row is focused.
         let key = app
             .home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&SessionId(A.to_owned())))
+            .sessions
+            .row(&SessionId(A.to_owned()))
             .map(|row| row.key)
             .unwrap_or_default();
         app.focus = Some(TargetId::Home(Spot::Entry(key)));
@@ -665,8 +652,8 @@ fn delete_answers_register_a_tag_and_settle_it() {
     app.on_line(accepted(&recent, json!({"sessions": [row]})));
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&SessionId(A.to_owned())))
+        .sessions
+        .row(&SessionId(A.to_owned()))
         .map(|row| row.key)
         .unwrap_or_default();
     app.focus = Some(TargetId::Home(Spot::Entry(key)));
@@ -695,8 +682,8 @@ fn a_refused_delete_settles_its_tag() {
     app.on_line(accepted(&recent, json!({"sessions": [row]})));
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&SessionId(A.to_owned())))
+        .sessions
+        .row(&SessionId(A.to_owned()))
         .map(|row| row.key)
         .unwrap_or_default();
     app.focus = Some(TargetId::Home(Spot::Entry(key)));

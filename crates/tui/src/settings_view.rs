@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use std::fmt;
 
+use contract::settings::{SettingsMetadata, SettingsTab};
 use serde_json::Value;
 
 use crate::ThemeSetting;
@@ -23,6 +24,104 @@ pub(crate) const THEME: &str = "tui.theme";
 /// The themes offered before the theme files: following the terminal,
 /// then the built-ins.
 pub(crate) const BUILT_IN_THEMES: [&str; 3] = ["auto", "dark", "light"];
+
+/// A screen the `/settings` view lists as a row of its own, because the
+/// keys it stands for have a `*` in their path or are not keys at all
+/// (`docs/tui.md`, "Swapped views", `/settings`, "Rows").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenRow {
+    /// The row's label, its description and the tab it ends.
+    pub metadata: SettingsMetadata,
+    /// The slash command that opens the screen.
+    pub command: &'static str,
+    /// The schema entries this row stands for, spelled as in the schema
+    /// (`tools.*.deferred`, never the family `tools.*`). Such an entry has
+    /// no tab of its own, so the view draws it once, here.
+    pub covers: &'static [&'static str],
+}
+
+const fn screen(
+    tab: SettingsTab,
+    label: &'static str,
+    description: &'static str,
+    command: &'static str,
+    covers: &'static [&'static str],
+) -> ScreenRow {
+    ScreenRow {
+        metadata: SettingsMetadata {
+            tab: Some(tab),
+            label,
+            description,
+        },
+        command,
+        covers,
+    }
+}
+
+/// The screens, in the order they end their tab: Key bindings ends
+/// Appearance, Credentials ends Models, Rules then Tools end Permissions,
+/// and Skills then MCP servers end Sessions.
+pub const SCREEN_ROWS: [ScreenRow; 6] = [
+    screen(
+        SettingsTab::Appearance,
+        "Key bindings",
+        "Rebind the terminal's keys, one action at a time.",
+        "/keys",
+        &["keys.*"],
+    ),
+    screen(
+        SettingsTab::Models,
+        "Credentials",
+        "Choose which stored credential each provider's sessions use.",
+        "/credential",
+        &["providers.*.credential"],
+    ),
+    screen(
+        SettingsTab::Permissions,
+        "Rules",
+        "Review and revoke the standing rules that allow a call without asking.",
+        "/rules",
+        &[],
+    ),
+    screen(
+        SettingsTab::Permissions,
+        "Tools",
+        "Switch an MCP server's or extension's tools on or off, and see which are deferred.",
+        "/tools",
+        &[
+            "tools.*.max_result_bytes",
+            "tools.*.deferred",
+            "extensions.*.tools.enabled",
+            "extensions.*.tools.disabled",
+        ],
+    ),
+    screen(
+        SettingsTab::Sessions,
+        "Skills",
+        "Switch skills on or off.",
+        "/skills",
+        &["skills.disabled"],
+    ),
+    screen(
+        SettingsTab::Sessions,
+        "MCP servers",
+        "See each MCP server's state and tool count, and reconnect or log in.",
+        "/mcp",
+        &[
+            "mcp.servers.*.command",
+            "mcp.servers.*.args",
+            "mcp.servers.*.env",
+            "mcp.servers.*.url",
+            "mcp.servers.*.required",
+            "mcp.servers.*.startup_timeout_ms",
+            "mcp.servers.*.timeout_ms",
+            "mcp.servers.*.declare_in_full",
+            "mcp.servers.*.tools.enabled",
+            "mcp.servers.*.tools.disabled",
+            "mcp.servers.*.tools.*.hints",
+        ],
+    ),
+];
 
 /// The widest key column; a longer key pushes its value right.
 const KEY_COLUMN: usize = 36;

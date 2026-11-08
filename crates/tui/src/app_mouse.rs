@@ -233,9 +233,9 @@ impl App {
             TargetId::Rail(spot) => self.rail_click(spot),
             TargetId::Token(number) => self.open_token(number),
             TargetId::Turn(_) => Effect::None,
-            // The working line's interrupt clicks like Esc: `cancel`,
-            // only when busy and connected.
-            TargetId::Interrupt => self.on_esc(),
+            // The interrupt targets click like ⌥I: `cancel` of the turn on
+            // screen, only while it runs and the terminal is connected.
+            TargetId::Interrupt => self.interrupt_turn(),
         }
     }
 
@@ -380,22 +380,13 @@ impl App {
         // conversation it is drawn in, so testing the slab adds only
         // equivalent mutants on equality (removed).
         if self.keymap_top().is_some() {
-            // Each arm swallows alike, so no compound condition remains
-            // to mutate: on home the whole screen is the map's, attached
-            // its conversation column is (removed: the `home ||`
-            // disjunction's arms share one outcome).
-            if self.home.is_some() {
-                return Some(Effect::None);
-            }
-            if self.over_conversation(at) {
-                return Some(Effect::None);
-            }
-            return None;
+            // The whole screen is the map's, on home and attached alike.
+            return Some(Effect::None);
         }
         // Attached, a swapped view takes the conversation area; on home
-        // it takes the whole screen. Home is set with no session, even
-        // while a covering surface makes `on_home` false.
-        let home = self.home.is_some() && self.session().is_none();
+        // it takes the whole screen. No session is attached, even while
+        // a covering surface makes `on_home` false.
+        let home = self.session().is_none();
         let panel_covers_home = home && self.frames().slab_of(Surface::Panel).is_some();
         let over_swapped = if panel_covers_home {
             self.over_conversation(at)

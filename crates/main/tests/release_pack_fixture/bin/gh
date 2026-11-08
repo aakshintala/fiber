@@ -1,5 +1,5 @@
 #!/bin/sh
-# Stands in for gh in crates/main/tests/release_pack.rs: the test drives
+# Stands in for gh in crates/main/tests/commands/release_pack.rs: the test drives
 # the draft-publish-last flow against a state directory instead of the
 # GitHub API, so no request reaches the network. RELEASE_PACK_STATE names
 # the directory; every invocation is appended to calls.log there. Like the
