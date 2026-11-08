@@ -1176,8 +1176,22 @@ impl App {
         }
         let draft = std::mem::take(&mut self.draft);
         let line = line.to_string();
+        // A `!!` run has no line on the session stream: its row starts
+        // here, where the terminal sends it, and its answer ends it.
+        let show_only = match (&self.phase, shell) {
+            (Phase::Attached { session, .. }, Some((command, false))) => {
+                Some((session.clone(), shell::live_head(command, false)))
+            }
+            (Phase::Starting | Phase::Pending { .. } | Phase::Attached { .. }, _) => None,
+        };
+        let run = id.clone();
         match self.outbox.send(id, kind, draft, line) {
-            Some(line) => Effect::Send(vec![line]),
+            Some(line) => {
+                if let Some((session, head)) = show_only {
+                    self.fold_pages(&session).start_shell(&run, head);
+                }
+                Effect::Send(vec![line])
+            }
             None => Effect::None,
         }
     }

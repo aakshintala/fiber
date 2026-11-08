@@ -2139,6 +2139,13 @@ through the `input_status` slot ("Extension seams").
   notice. A run's output shows at most 20 lines, then a "N more lines"
   row; clicking it, or Enter on it, opens the rest in place, and again
   closes it.
+  While it runs, the row shows the output so far, then `running`, dim in
+  `attention`, where the ending will go; the ending replaces it. A `!`
+  row appears once the session records the command's start, which comes
+  before the command runs: at once, during a turn's tool calls too, and
+  as a model response ends when one is streaming. A `!!` row appears
+  when it is sent. A run whose session ended before its end was written
+  shows no ending.
 
 ### Bindings
 

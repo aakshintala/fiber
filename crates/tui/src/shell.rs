@@ -88,6 +88,18 @@ pub(crate) fn row(command: &str, note: &str, output: &str, process: &Process) ->
     text
 }
 
+/// The first two lines of a run's row while it runs: `! <command>` and the
+/// note of its kind. The row draws the output so far after them, then
+/// `running` where the ending will go.
+pub(crate) fn live_head(command: &str, send: bool) -> String {
+    let note = if send {
+        "sent with your next prompt"
+    } else {
+        "only you see this"
+    };
+    format!("! {command}\n{note}")
+}
+
 /// The transcript row for a command that could not start: `! <command>`
 /// then `<code>: <message>` exactly as it arrived.
 pub(crate) fn error_row(command: &str, code: &ErrorCode, message: &str) -> String {

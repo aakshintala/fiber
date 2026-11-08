@@ -76,6 +76,18 @@ fn quit(mut run: Run) {
     assert_eq!(finished.status.code(), Some(0));
 }
 
+/// Quits two terminals that share one hub. The hub exits when its last
+/// client leaves, and each `wait` waits for it, so both are told to quit
+/// before either is waited on.
+fn quit_both(mut first: Run, mut second: Run) {
+    first.write(b"\x03\x03\r");
+    second.write(b"\x03\x03\r");
+    for run in [first, second] {
+        let finished = run.wait();
+        assert_eq!(finished.status.code(), Some(0));
+    }
+}
+
 #[test]
 fn bang_marks_shell_mode_until_backspace_clears_it() {
     let setup = Setup::new();
@@ -485,8 +497,7 @@ fn bang_run_during_a_held_tool_call_streams_and_a_second_terminal_sees_it() {
     });
     release(&mut agent_gate);
     run.turn_finished(from);
-    quit(late);
-    quit(run);
+    quit_both(late, run);
 }
 
 #[test]

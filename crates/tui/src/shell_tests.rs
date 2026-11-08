@@ -1,6 +1,6 @@
 //! Tests for `!` commands.
 
-use super::{answered, error_row, item, parse, ran, row};
+use super::{answered, error_row, item, live_head, parse, ran, row};
 use contract::ErrorCode;
 use contract::events::{CommandResult, ShellCommand};
 use contract::shapes::Process;
@@ -148,4 +148,49 @@ fn a_stop_answer_is_never_a_shell_item() {
         sessions_stopped: 2,
     });
     assert_eq!(answered("!!ls", stopped), None);
+}
+
+#[test]
+fn a_live_head_is_the_command_and_the_note_of_its_kind() {
+    assert_eq!(live_head("ls", true), "! ls\nsent with your next prompt");
+    assert_eq!(live_head("ls", false), "! ls\nonly you see this");
+}
+
+/// A run that could not start ends with `<code>: <message>` and neither
+/// an exit code nor a signal: its row names no ending, not even `exit 0`.
+#[test]
+fn a_spawn_failure_end_line_is_a_row_with_no_ending() {
+    let line = ShellCommand {
+        command_id: Some(contract::CommandId("c_1".to_owned())),
+        command: "cmd".to_owned(),
+        output: "invalid_arguments: x".to_owned(),
+        artifact: None,
+        process: Process {
+            exit_code: None,
+            signal: None,
+            timed_out: false,
+        },
+    };
+    assert_eq!(
+        ran(&line),
+        "! cmd\nsent with your next prompt\ninvalid_arguments: x"
+    );
+}
+
+/// The exit line is `exit 0` only for a zero exit code with no signal.
+#[test]
+fn the_exit_zero_line_needs_a_zero_exit_code_and_no_signal() {
+    let signalled = Process {
+        exit_code: Some(0),
+        signal: Some("SIGKILL".to_owned()),
+        timed_out: false,
+    };
+    assert_eq!(
+        row("cmd", "sent with your next prompt", "", &signalled),
+        "! cmd\nsent with your next prompt\nsignal SIGKILL"
+    );
+    assert_eq!(
+        row("cmd", "sent with your next prompt", "", &exited(1)),
+        "! cmd\nsent with your next prompt\nexit 1"
+    );
 }
