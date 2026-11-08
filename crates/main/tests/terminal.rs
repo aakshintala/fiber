@@ -61,6 +61,34 @@ fn provider_with_panel(setup: &support::Setup, server: &ProviderServer, panel_wi
     );
 }
 
+fn provider_with_env_key(setup: &support::Setup, server: &ProviderServer, env: &str) {
+    let source = setup.root.path().join("src");
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+    );
+    write_json(
+        &source.join("providers/fake.json"),
+        &json!({"name": "fake", "credential": {"env": env}, "models": [{
+            "id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000
+        }]}),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+    );
+}
+
 fn provider_full(
     setup: &support::Setup,
     model_extra: &Value,
@@ -3616,4 +3644,77 @@ fn two_shadowed_skills_show_one_row_once_per_terminal_run() {
         "no repeat in a second session"
     );
     quit_live(run);
+}
+
+#[test]
+fn first_run_completed_setup_skips_login_and_model_picker() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&setup, &server);
+    fs::remove_file(setup.home().join("config.json")).unwrap();
+    let configured = ask(
+        &setup,
+        &["setup", "--model", "fake/m", "--no-hub", "--no-completions"],
+    );
+    assert_eq!(configured.status.code(), Some(0), "{configured:?}");
+    let mut config: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    config["hub"]["idle_exit_ms"] = json!(200);
+    write_json(&setup.home().join("config.json"), &config);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    let grid = run.wait_screen("configured home", |grid| grid.contents.contains("›"));
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    assert!(!grid.contents.contains("Choose a model"), "{grid:?}");
+    run.write(b"\x03\x03\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+}
+
+#[test]
+fn first_run_remote_uses_hub_credential_without_client_key() {
+    let hub = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider(&hub, &server);
+    let served = installed_hub(&hub);
+    let client = paired_client(&hub, &served, false);
+    let mut run = terminal(
+        &client,
+        120,
+        32,
+        &["--hub", "box"],
+        &[("FIBER_TEST_FAKE_KEY", "")],
+    );
+    let grid = run.wait_screen("remote home with hub credential", |grid| {
+        grid.contents.contains("›")
+    });
+    assert!(!grid.contents.contains("Log in"), "{grid:?}");
+    run.write(b"\x03\x03\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    reap_served(served);
+}
+
+#[test]
+fn first_run_remote_ignores_client_environment_key() {
+    let hub = support::Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    provider_with_env_key(&hub, &server, "OPENCODE_API_KEY");
+    let served = installed_hub(&hub);
+    let client = paired_client(&hub, &served, false);
+    let mut run = terminal(
+        &client,
+        120,
+        32,
+        &["--hub", "box"],
+        &[("OPENCODE_API_KEY", "client-only")],
+    );
+    let grid = run.wait_screen("remote login from hub catalogue", |grid| {
+        grid.contents.contains("Log in")
+    });
+    assert!(grid.contents.contains("Log in"), "{grid:?}");
+    run.write(b"\x03\x03\r");
+    let output = run.wait();
+    assert_eq!(output.status.code(), Some(0));
+    reap_served(served);
 }
