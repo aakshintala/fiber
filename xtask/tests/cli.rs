@@ -1995,7 +1995,7 @@ fn the_docs_check_fails_a_line_number_cite_in_code() {
         (
             1,
             format!(
-                "check-docs: crates/b/src/cite.rs:1: unlisted cite \"{doc}:7\": use {doc}, \"Y\"\n"
+                "check-docs: crates/b/src/cite.rs:1: unlisted cite \"{doc}:7\": wrap the path in backticks\n"
             )
         )
     );
@@ -2029,7 +2029,7 @@ fn doc_citations_print_lists_the_table() {
     dir.write("crates/b/src/cite.rs", &format!("// {doc}:{}\n", 7));
     dir.write("docs/x.md", "# X\n\n## Y\nt\nt\nt\nt\nt\nt\nt\n");
     dir.write("xtask/doc-citations.allow", "bad table\n");
-    let header = "# Code citations still allowed a line number or a missing heading.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
+    let header = "# Code citations still allowed a line number, a missing heading, or a doc path not in backticks.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
     assert_eq!(
         xtask(&dir, &["doc-citations", "--print"], &[], ""),
         (0, format!("{header}crates/b/src/cite.rs\t1\t{doc}:7\n"))

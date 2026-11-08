@@ -1,5 +1,6 @@
-//! Code citations (docs/code-quality.md, "What a reviewer checks"): line-number
-//! cites and dangling heading cites in code.
+//! Code citations (`docs/code-quality.md`, "What a reviewer checks"):
+//! line-number cites, dangling heading cites and cites whose path is not in
+//! backticks, in code.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -210,8 +211,17 @@ fn parse_span(text: &str) -> Option<(usize, usize)> {
 }
 
 enum CiteKind {
-    Line { target: String, line_no: usize },
-    Heading { target: String, heading: String },
+    /// A cite whose path lacks a backtick on either side. It reports one reason
+    /// whatever else is wrong with the cite.
+    Unwrapped,
+    Line {
+        target: String,
+        line_no: usize,
+    },
+    Heading {
+        target: String,
+        heading: String,
+    },
 }
 
 struct Found {
@@ -276,6 +286,7 @@ fn find_cites(original: &str, blanked: &str) -> Vec<Found> {
         }
         let target = blanked[i..p + 3].to_owned();
         let path_end = p + 3;
+        let wrapped = i > 0 && bytes[i - 1] == b'`' && byte_at(bytes, path_end) == Some(b'`');
         let mut tail = path_end;
         if byte_at(bytes, tail) == Some(b'`') {
             tail += 1;
@@ -285,9 +296,13 @@ fn find_cites(original: &str, blanked: &str) -> Vec<Found> {
                 offset: i,
                 line: line_of(blanked, i),
                 key: original[i..end].to_owned(),
-                kind: CiteKind::Line {
-                    target,
-                    line_no: first,
+                kind: if wrapped {
+                    CiteKind::Line {
+                        target,
+                        line_no: first,
+                    }
+                } else {
+                    CiteKind::Unwrapped
                 },
             });
             i = end;
@@ -301,7 +316,11 @@ fn find_cites(original: &str, blanked: &str) -> Vec<Found> {
                 offset: i,
                 line: line_of(blanked, i),
                 key: original[i..end].to_owned(),
-                kind: CiteKind::Heading { target, heading },
+                kind: if wrapped {
+                    CiteKind::Heading { target, heading }
+                } else {
+                    CiteKind::Unwrapped
+                },
             });
             i = end;
             continue;
@@ -347,7 +366,7 @@ fn walk_files(root: &Path, out: &mut Vec<String>) -> Result<(), String> {
     Ok(())
 }
 
-const HEADER: &str = "# Code citations still allowed a line number or a missing heading.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
+const HEADER: &str = "# Code citations still allowed a line number, a missing heading, or a doc path not in backticks.\n# Printed by `cargo xtask doc-citations --print`; check-docs fails what this file does not list.\n";
 
 fn cached_index(
     root: &Path,
@@ -418,6 +437,10 @@ fn collect_failing(root: &Path) -> Result<Vec<Failing>, String> {
     let mut failing: Vec<(String, usize, usize, String, String)> = Vec::new();
     for (file, offset, line, key, kind) in &found_all {
         match kind {
+            CiteKind::Unwrapped => {
+                let reason = "wrap the path in backticks".to_owned();
+                failing.push((file.clone(), *offset, *line, key.clone(), reason));
+            }
             CiteKind::Line { target, line_no } => {
                 let reason = match heading_above(root, &mut cached, target, *line_no)? {
                     None if !cached_index(root, &mut cached, target)? => "no such file".to_owned(),
