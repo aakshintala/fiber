@@ -326,7 +326,9 @@ pub(crate) struct App {
     queue: Queue,
     /// The attached session's offer of its repository's code.
     offer: crate::offer::Offer,
-    /// The attached session's steering queue.
+    /// The steering queue the input box shows: the attached session's, or
+    /// the open fiber delegate's while its view is swapped in, the attached
+    /// session's queue parked in the open item meanwhile.
     steering: Steering,
     /// The session's name, from the latest `session_named`.
     name: Option<String>,
@@ -2392,7 +2394,7 @@ impl App {
             }
             EventKind::SteeringQueue => {
                 if let Some(queue) = read!(envelope, SteeringQueue) {
-                    self.steering.fold(&queue, &mut self.draft);
+                    self.fold_attached_queue(&queue);
                 }
             }
             EventKind::FiberStarted
@@ -2619,6 +2621,9 @@ fn is_block(envelope: &Envelope) -> bool {
         | EventKind::Unknown(_) => false,
     }
 }
+
+#[cfg(test)]
+mod delegate_steering_tests;
 
 #[cfg(test)]
 #[path = "app_tests.rs"]
