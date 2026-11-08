@@ -1,5 +1,7 @@
 use super::*;
 
+use contract::settings::SettingsTab;
+
 #[test]
 fn cache_diagnostics_defaults_to_off() {
     // Opt-in: with the setting unset, no prefix hash or cache-use field
@@ -194,4 +196,146 @@ fn only_a_server_env_accepts_a_secret_reference() {
         panic!("a secret hint is {error:?}, not WrongType");
     };
     assert_eq!(key, "mcp.servers.x.tools.t.hints");
+}
+
+/// A tab's plain keys, in the order `docs/tui.md`, "Swapped views",
+/// `/settings` draws them.
+const TABBED: &[(SettingsTab, &[&str])] = &[
+    (
+        SettingsTab::Appearance,
+        &[
+            "tui.panel.cards",
+            "tui.rail.shown",
+            "tui.rail.width",
+            "tui.panel.width",
+            "tui.theme",
+            "tui.reduced_motion",
+            "tui.screen_reader",
+            "tui.hover",
+            "tui.inline_images",
+            "tui.logo_glyph",
+        ],
+    ),
+    (
+        SettingsTab::Notifications,
+        &[
+            "tui.attention.notification",
+            "tui.attention.bell",
+            "tui.attention.title",
+            "quota.notice_at",
+        ],
+    ),
+    (
+        SettingsTab::Models,
+        &[
+            "model_lists.refresh_after",
+            "model",
+            "scoped_models",
+            "thinking",
+            "web_search.backend",
+        ],
+    ),
+    (
+        SettingsTab::Permissions,
+        &[
+            "reviewer.model",
+            "reviewer.block_limits.consecutive",
+            "reviewer.block_limits.session",
+            "reviewer.context",
+            "sandbox.enabled",
+            "sandbox.allow_write",
+            "sandbox.deny_read",
+        ],
+    ),
+    (
+        SettingsTab::Sessions,
+        &[
+            "handoff.enabled",
+            "handoff.tokens",
+            "handoff.window_fraction",
+            "handoff.nudge",
+            "budget.usd",
+            "repository_extensions",
+        ],
+    ),
+    (
+        SettingsTab::Advanced,
+        &[
+            "hub.idle_exit_ms",
+            "hub.port",
+            "hub.default",
+            "hub.allowed_origins",
+            "session.idle_exit_ms",
+            "cache.lifetime",
+            "cache.warm_idle",
+            "cache.warm_cap",
+            "cache.diagnostics",
+            "retry.attempts",
+            "retry.initial_delay_ms",
+            "retry.max_delay_ms",
+            "diagnostics.level",
+        ],
+    ),
+];
+
+/// The one plain key a screen row covers (`/skills`): it has no tab so it
+/// is drawn once.
+const COVERED_PLAIN: &str = "skills.disabled";
+
+#[test]
+fn settings_metadata_text_is_complete() {
+    for key in KEYS {
+        for (name, text) in [
+            ("label", key.metadata.label),
+            ("description", key.metadata.description),
+        ] {
+            assert!(!text.trim().is_empty(), "`{}` has no {name}", key.path);
+            assert_eq!(
+                text.trim(),
+                text,
+                "`{}` {name} has spaces around it",
+                key.path
+            );
+            assert!(
+                !text.contains('\n'),
+                "`{}` {name} is more than one line",
+                key.path
+            );
+        }
+    }
+}
+
+#[test]
+fn settings_metadata_tabs_follow_key_classification() {
+    let tab_of = |path: &str| {
+        TABBED
+            .iter()
+            .find(|(_, paths)| paths.contains(&path))
+            .map(|(tab, _)| *tab)
+    };
+    // A typo in the table above would otherwise leave a key unchecked.
+    for (_, paths) in TABBED {
+        for path in *paths {
+            let key = KEYS.iter().find(|key| key.path == *path);
+            assert!(key.is_some(), "`{path}` is not a schema key");
+            assert!(!path.contains('*'), "`{path}` has a `*`, so no tab");
+        }
+    }
+    for key in KEYS {
+        let want = tab_of(key.path);
+        assert_eq!(
+            key.metadata.tab, want,
+            "the tab of `{}` (a key with a `*`, or the key a screen row covers, has none)",
+            key.path
+        );
+        if want.is_none() {
+            // No blanket fallback: a new plain key must be classified
+            // above, or named as the covered one.
+            assert!(
+                key.path.contains('*') || key.path == COVERED_PLAIN,
+                "`{}` has no tab: add it to a tab, or have a screen row cover it",
+                key.path
+            );
+        }
+    }
 }

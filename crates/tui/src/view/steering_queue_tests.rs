@@ -68,6 +68,20 @@ fn buffer(app: &App, width: u16, height: u16) -> Buffer {
     buf
 }
 
+/// Draws the steering card and the input box into a `width` by `height`
+/// column of its own, with no chrome beside it: the widths below the
+/// Chrome floor (40 by 10), which the whole screen cannot draw, and the
+/// click targets drawn.
+fn column(app: &App, width: u16, height: u16) -> (Buffer, Vec<crate::mouse::Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    crate::view::input_box::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    super::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    (buf, targets)
+}
+
 /// An app `width` by `height` with three queued steering rows, each
 /// droppable, the last long enough to wrap.
 fn three_wrapping(width: u16, height: u16) -> App {
@@ -149,7 +163,7 @@ fn a_replacement_sees_the_builtin_wrap_and_cross_at_its_width() {
     let mut app = queued(21, 12);
     let fake = Rc::new(BuiltinEcho::default());
     app.install_renderer(fake.clone());
-    let wide = screen(&app, 21, 12);
+    let wide = crate::view::text(&column(&app, 21, 12).0);
     // The built-in title, rows and hint all draw through the
     // replacement (`docs/tui.md`, "What a renderer returns").
     assert!(wide.contains("queued"), "{wide}");
@@ -170,7 +184,7 @@ fn a_replacement_sees_the_builtin_wrap_and_cross_at_its_width() {
         ..BuiltinEcho::default()
     });
     short_app.install_renderer(short_fake.clone());
-    let short = screen(&short_app, 21, 12);
+    let short = crate::view::text(&column(&short_app, 21, 12).0);
     assert!(short.contains("queued"), "{short}");
     let wrapped = queue_row(&short, "use the");
     assert!(wrapped.contains("use the"), "{wrapped:?}");
@@ -223,28 +237,28 @@ fn wide_and_combining_marks_draw_whole() {
     // the text colour and the `✕` dim at the text's right edge. Blank
     // continuations of wide glyphs carry no style.
     let buf = buffer(&app, 60, 12);
-    assert_eq!(buf[(4, wide)].symbol(), "界");
-    assert_eq!(buf[(6, wide)].symbol(), "界");
+    assert_eq!(buf[(5, wide)].symbol(), "界");
+    assert_eq!(buf[(7, wide)].symbol(), "界");
     let combining = shown
         .lines()
         .position(|row| row.contains("e\u{301}cole"))
         .and_then(|at| u16::try_from(at).ok())
         .expect("the combining row");
-    for (y, text_end) in [(wide, 4 + 4), (combining, 4 + 5)] {
-        assert_eq!(buf[(0, y)].symbol(), "▌");
+    for (y, text_end) in [(wide, 5 + 4), (combining, 5 + 5)] {
+        assert_eq!(buf[(1, y)].symbol(), "▌");
         assert_eq!(
-            buf[(0, y)].style().fg,
+            buf[(1, y)].style().fg,
             Role::Attention.color().into(),
             "the stripe"
         );
-        for x in [2, 3] {
+        for x in [3, 4] {
             assert_eq!(
                 buf[(x, y)].style().fg,
                 Role::Attention.color().into(),
                 "the mark, cell {x}"
             );
         }
-        for x in 4..text_end {
+        for x in 5..text_end {
             if buf[(x, y)].symbol() == " " {
                 continue;
             }
@@ -318,7 +332,7 @@ fn three_entries_wrap_with_continuations_under_the_text() {
         .position(|row| row.contains("rewrite the parser loop"))
         .expect("the long entry's first row");
     let cont = rows.get(first + 1).expect("its continuation");
-    assert!(cont.starts_with("▌   "), "{cont:?}");
+    assert!(cont.starts_with(" ▌   "), "{cont:?}");
     assert!(!cont.contains('↳') && !cont.contains('▸'), "{cont:?}");
     // docs/tui.md, "Steering": card; docs/tui.md, "The slots": oldest-first; docs/tui.md, "The panel": panel.
     insta::assert_snapshot!(
@@ -335,9 +349,9 @@ fn the_cards_title_marks_text_and_count_keep_their_styles() {
     let shown = screen(&app, 80, 24);
     // The title bold in `attention`.
     let title = text_row(&shown, "Steering");
-    let name: String = (2..2 + 8).map(|x| buf[(x, title)].symbol()).collect();
+    let name: String = (3..3 + 8).map(|x| buf[(x, title)].symbol()).collect();
     assert_eq!(name, "Steering", "the title");
-    for x in 2..2 + 8 {
+    for x in 3..3 + 8 {
         assert_eq!(
             buf[(x, title)].style().fg,
             Role::Attention.color().into(),
@@ -377,15 +391,15 @@ fn the_cards_title_marks_text_and_count_keep_their_styles() {
     // dim, every `✕` dim at the text's right edge.
     for needle in ["use the parser", "and test it", "rewrite the parser loop"] {
         let y = text_row(&shown, needle);
-        assert_eq!(buf[(2, y)].symbol(), "↳", "the mark");
-        for x in [2, 3] {
+        assert_eq!(buf[(3, y)].symbol(), "↳", "the mark");
+        for x in [3, 4] {
             assert_eq!(
                 buf[(x, y)].style().fg,
                 Role::Attention.color().into(),
                 "the mark, cell {x}"
             );
         }
-        for x in 4..4 + 8 {
+        for x in 5..5 + 8 {
             assert_eq!(
                 buf[(x, y)].style().fg,
                 Role::Text.color().into(),
@@ -411,9 +425,9 @@ fn the_cards_title_marks_text_and_count_keep_their_styles() {
         .position(|row| row.contains("rewrite the parser loop"))
         .expect("the long entry's first row");
     let y = u16::try_from(first + 1).expect("its continuation");
-    assert_eq!(buf[(4, y)].style().fg, Role::Text.color().into());
+    assert_eq!(buf[(5, y)].style().fg, Role::Text.color().into());
     assert!(
-        !buf[(4, y)].style().add_modifier.contains(Modifier::DIM),
+        !buf[(5, y)].style().add_modifier.contains(Modifier::DIM),
         "the continuation is not dim"
     );
 }
@@ -428,15 +442,15 @@ fn a_selected_entry_shows_its_mark_and_bold_text() {
     // The selected entry reads "▸ " in `attention` with its text bold
     // in the text colour.
     let y = text_row(&shown, "rewrite the parser loop");
-    assert_eq!(buf[(2, y)].symbol(), "▸", "the mark");
-    for x in [2, 3] {
+    assert_eq!(buf[(3, y)].symbol(), "▸", "the mark");
+    for x in [3, 4] {
         assert_eq!(
             buf[(x, y)].style().fg,
             Role::Attention.color().into(),
             "the mark, cell {x}"
         );
     }
-    for x in 4..4 + 8 {
+    for x in 5..5 + 8 {
         assert_eq!(
             buf[(x, y)].style().fg,
             Role::Text.color().into(),
@@ -469,9 +483,9 @@ fn the_card_has_its_attention_stripe() {
         .expect("the hint row");
     for y in title..=hint {
         let y = u16::try_from(y).expect("a drawn row");
-        assert_eq!(buf[(0, y)].symbol(), "▌", "row {y}");
+        assert_eq!(buf[(1, y)].symbol(), "▌", "row {y}");
         assert_eq!(
-            buf[(0, y)].style().fg,
+            buf[(1, y)].style().fg,
             Role::Attention.color().into(),
             "row {y}"
         );
@@ -485,9 +499,7 @@ fn a_long_entry_wraps_with_its_cross_right_aligned() {
     // edge; at 20 the text wraps under itself and the `✕` stays on the
     // first row's right edge (`docs/tui.md`, "Steering").
     let app = queued(21, 12);
-    let area = Rect::new(0, 0, 21, 12);
-    let mut buf = Buffer::empty(area);
-    let targets = crate::view::render(&app, area, &mut buf, None);
+    let (buf, targets) = column(&app, 21, 12);
     let cross = targets
         .iter()
         .find(|target| matches!(target.id, TargetId::DropSteering(_)))
@@ -500,9 +512,7 @@ fn a_long_entry_wraps_with_its_cross_right_aligned() {
         .collect();
     assert!(row.trim_end().ends_with("↳ use the parser ✕"), "{row:?}");
     let short = queued(20, 12);
-    let area = Rect::new(0, 0, 20, 12);
-    let mut buf = Buffer::empty(area);
-    let targets = crate::view::render(&short, area, &mut buf, None);
+    let (buf, targets) = column(&short, 20, 12);
     let cross = targets
         .iter()
         .find(|target| matches!(target.id, TargetId::DropSteering(_)))
@@ -514,7 +524,7 @@ fn a_long_entry_wraps_with_its_cross_right_aligned() {
     assert!(row.trim_end().ends_with('✕'), "{row:?}");
     assert!(row.contains("↳ use the"), "{row:?}");
     // The continuation sits under the text, not under the mark.
-    let shown = screen(&short, 20, 12);
+    let shown = crate::view::text(&column(&short, 20, 12).0);
     assert!(
         shown.lines().any(|row| row.trim_end() == "▌   parser"),
         "{shown}"
@@ -525,9 +535,7 @@ fn a_long_entry_wraps_with_its_cross_right_aligned() {
 fn a_droppable_rows_cross_sits_at_the_texts_right_edge() {
     for width in [30, 80] {
         let app = queued(width, 12);
-        let area = Rect::new(0, 0, width, 12);
-        let mut buf = Buffer::empty(area);
-        let targets = crate::view::render(&app, area, &mut buf, None);
+        let (buf, targets) = column(&app, width, 12);
         // The droppable row is the oldest: the top steering entry, its
         // ✕ on the text's last column.
         let drops: Vec<u16> = targets
@@ -659,9 +667,7 @@ fn rows_draw_at_the_areas_top_row() {
 fn narrow_widths_clip_rows_safely() {
     for width in [1, 2, 5] {
         let app = queued(width, 12);
-        let area = Rect::new(0, 0, width, 12);
-        let mut buf = Buffer::empty(area);
-        let targets = crate::view::render(&app, area, &mut buf, None);
+        let (buf, targets) = column(&app, width, 12);
         // Both rows still draw as targets, clipped without panic.
         assert_eq!(
             targets
@@ -707,14 +713,14 @@ fn a_selected_row_shows_its_mark_and_bold_text() {
     // gap in attention, its text bold in the text colour, and its ✕ dim
     // at the text's right edge.
     let y = text_row(&shown, "use the parser");
-    for x in [2, 3] {
+    for x in [3, 4] {
         assert_eq!(
             buf[(x, y)].style().fg,
             Role::Attention.color().into(),
             "the mark, cell {x}"
         );
     }
-    for x in 4..4 + 14 {
+    for x in 5..5 + 14 {
         assert_eq!(
             buf[(x, y)].style().fg,
             Role::Text.color().into(),
@@ -738,14 +744,14 @@ fn a_selected_row_shows_its_mark_and_bold_text() {
     // The unselected entry keeps its mark in attention and its text in
     // the text colour, neither dim nor bold.
     let plain = text_row(&shown, "and test it");
-    for x in [2, 3] {
+    for x in [3, 4] {
         assert_eq!(
             buf[(x, plain)].style().fg,
             Role::Attention.color().into(),
             "the mark, cell {x}"
         );
     }
-    for x in 4..4 + 11 {
+    for x in 5..5 + 11 {
         assert_eq!(
             buf[(x, plain)].style().fg,
             Role::Text.color().into(),
@@ -778,9 +784,9 @@ fn without_a_selection_the_stripe_stays_accent() {
     // The input box's stripe cell: accent, with no editing hint on its
     // rows.
     let y = input_stripe_row(&shown);
-    assert_eq!(buf[(0, y)].symbol(), "▌");
+    assert_eq!(buf[(1, y)].symbol(), "▌");
     assert_eq!(
-        buf[(0, y)].style().fg,
+        buf[(1, y)].style().fg,
         Role::Accent.color().into(),
         "the input box stripe"
     );
@@ -789,17 +795,25 @@ fn without_a_selection_the_stripe_stays_accent() {
 
 #[test]
 fn while_editing_the_stripe_is_attention_with_its_hint() {
+    use contract::clock::Clock;
+
     let mut app = queued(80, 12);
     app.select_steering(0);
-    // One step left: the caret leaves the hint's first cell free.
+    // The column is one cell narrower than the screen, so the draft
+    // gives up a character to leave the hint its whole width. One step
+    // left: the caret leaves the hint's first cell free.
+    app.on_key(
+        crate::keys::Key::Backspace,
+        fakes::clock::FakeClock::new().now(),
+    );
     app.on_edit(crate::keys::Edit::Left);
     let buf = buffer(&app, 80, 12);
     let shown = screen(&app, 80, 12);
     // The input box's stripe cell: attention while a message is edited.
     let y = input_stripe_row(&shown);
-    assert_eq!(buf[(0, y)].symbol(), "▌");
+    assert_eq!(buf[(1, y)].symbol(), "▌");
     assert_eq!(
-        buf[(0, y)].style().fg,
+        buf[(1, y)].style().fg,
         Role::Attention.color().into(),
         "the input box stripe"
     );
@@ -842,7 +856,7 @@ fn the_hint_never_covers_the_draft_or_the_caret() {
     let buf = buffer(&app, 40, 12);
     // The draft's last shown row, the caret's row and column, and where
     // the box draws them, as the input box lays them out.
-    let inner = crate::surface::inset(40);
+    let inner = crate::surface::inset(39);
     let shown = app.input().rows(inner);
     let (cursor_row, cursor_col) = app.input().cursor(inner);
     let last = shown.last().expect("a draft row");
@@ -891,10 +905,10 @@ fn the_hint_starts_at_the_drafts_end() {
         })
         .expect("the hint row");
     // The caret keeps its covered `s`, drawn by the cursor.
-    assert_eq!(buf[(15, y)].symbol(), "s");
+    assert_eq!(buf[(16, y)].symbol(), "s");
     // The cell exactly at the draft's end takes the hint; one past it
     // takes the next character.
-    for (x, ch) in [(18, "e"), (19, "s")] {
+    for (x, ch) in [(19, "s"), (20, "s")] {
         assert_eq!(buf[(x, y)].symbol(), ch);
         assert_eq!(
             buf[(x, y)].style().fg,
@@ -913,6 +927,9 @@ fn the_hint_clips_at_a_narrow_right_edge() {
     // "use": the hint's cells past the draft draw to the last column,
     // and the cells at and past the edge never draw, without panicking.
     let mut app = queued(20, 12);
+    // The floor hides the cursor below 40 columns; the area sets the
+    // box's width.
+    app.set_size(40, 12);
     app.select_steering(0);
     assert!(app.steering_selected().is_some());
     let now = fakes::clock::FakeClock::new().now();
@@ -920,7 +937,7 @@ fn the_hint_clips_at_a_narrow_right_edge() {
         app.on_key(Key::Backspace, now);
     }
     assert_eq!(app.input().expand(), "use");
-    let buf = buffer(&app, 20, 12);
+    let (buf, _) = column(&app, 20, 12);
     let y = (0..12)
         .find(|y| {
             (0..20)

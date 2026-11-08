@@ -1254,7 +1254,7 @@ fn no_color_code_slabs_draw_their_own_sides_in_the_conversation() {
         let left = u16::try_from(at).expect("a column").saturating_sub(7);
         assert_side(&buf, left, y);
         assert!(left > 0, "the slab nests inside the turn's side");
-        assert_eq!(buf[(0, y)].symbol(), "│", "{row:?}");
+        assert_eq!(buf[(2, y)].symbol(), "│", "{row:?}");
         // The slab's trailing side ends the code row before the turn's
         // own right side: the last box side inside it.
         let right = glyphs[..78]
@@ -1290,9 +1290,9 @@ fn no_color_code_slabs_draw_their_own_sides_in_the_conversation() {
         if markdown.starts_with('>') {
             // The quote bars stay outside the slab's own sides: the
             // turn's side, the bar, then the slab's side.
-            assert!(row.starts_with("││ │"), "{row:?}");
+            assert!(row.starts_with("  ││ │"), "{row:?}");
         } else {
-            assert!(row.starts_with("││   1  "), "{row:?}");
+            assert!(row.starts_with("  ││   1  "), "{row:?}");
         }
     }
 }

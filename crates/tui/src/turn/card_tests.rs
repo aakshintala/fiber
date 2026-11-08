@@ -1711,20 +1711,23 @@ fn no_color_boxes_a_turn_card_and_leaves_the_prompt_bare() {
     // bar's column blank.
     let top = u16::try_from(
         text.iter()
-            .position(|row| row.starts_with('┌'))
+            .position(|row| row.trim_start().starts_with('┌'))
             .expect("the card's top edge"),
     )
     .expect("a row");
-    assert_eq!(text[usize::from(top)], format!("┌{}┐ ", "─".repeat(77)));
+    assert_eq!(text[usize::from(top)], format!("  ┌{}┐ ", "─".repeat(75)));
     let bottom = u16::try_from(
         text.iter()
-            .position(|row| row.starts_with('└'))
+            .position(|row| row.trim_start().starts_with('└'))
             .expect("the card's bottom edge"),
     )
     .expect("a row");
     assert!(bottom > top);
-    assert_eq!(text[usize::from(bottom)], format!("└{}┘ ", "─".repeat(77)));
-    for x in 0..79u16 {
+    assert_eq!(
+        text[usize::from(bottom)],
+        format!("  └{}┘ ", "─".repeat(75))
+    );
+    for x in 2..79u16 {
         for y in [top, bottom] {
             let cell = &buf[(x, y)];
             assert_eq!(
@@ -1745,7 +1748,7 @@ fn no_color_boxes_a_turn_card_and_leaves_the_prompt_bare() {
     for y in top + 1..bottom {
         // A card cut across pages draws no edge at the cut, and the
         // paint keeps the sides dim on the default colours.
-        for x in [0, 78] {
+        for x in [2, 78] {
             let row: String = (0..80u16).map(|x| buf[(x, y)].symbol()).collect();
             if row.trim().is_empty() {
                 continue;

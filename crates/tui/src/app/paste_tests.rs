@@ -36,7 +36,7 @@ fn type_text(app: &mut App, text: &str) {
 /// An app connected to the hub and attached to [`S_A`].
 fn attached() -> App {
     let mut app = App::new(PathBuf::from("/w"));
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     app.attach(contract::SessionId(S_A.to_owned()));
     app
 }

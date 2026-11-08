@@ -2,10 +2,10 @@
 source: crates/tui/src/changed_files_view_tests.rs
 expression: screen(&app_with_diff())
 ---
- Changed files › src/a.rs · diff against HEAD  diff against HEAD     Esc returns
-  @@ -1 +1 @@
-1 -old
-1 +new
+  Changed files › src/a.rs · diff against HEAD  diff against HEAD    Esc returns
+   @@ -1 +1 @@
+ 1 -old
+ 1 +new
 
 
 
@@ -13,16 +13,16 @@ expression: screen(&app_with_diff())
 
 
 
+⋮
+⋮
+⋮
 
 
 
 
-
-
-
-↑↓ scroll · Ctrl+G edits · ← files · Esc close
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ ›
-▌──────────────────────────────────────────────────────────────────────────────
-▌auto                                                        ctx ▆▆▆▆▆▆▆▆ — · —
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+ ↑↓ scroll · Ctrl+G edits · ← files · Esc close
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -1706,7 +1706,7 @@ fn choosing_on_home_writes_at_once_and_sets_the_chips() {
         ]
     );
     // The home chips and the catalogue's configured level follow.
-    let launch = &app.home.as_ref().expect("home").launch;
+    let launch = &app.home.launch;
     assert_eq!(launch.model.as_deref(), Some("acme/m1"));
     assert_eq!(launch.thinking.as_deref(), Some("low"));
     assert_eq!(
@@ -1722,7 +1722,7 @@ fn choosing_on_home_writes_at_once_and_sets_the_chips() {
 #[test]
 fn a_home_choice_with_nothing_to_save_needs_no_configure_seam() {
     let mut app = home();
-    app.home.as_mut().expect("home").launch.model = Some("acme/m2".to_owned());
+    app.home.launch.model = Some("acme/m2".to_owned());
     app.on_models(Ok(three()));
 
     assert_eq!(
@@ -1735,7 +1735,7 @@ fn a_home_choice_with_nothing_to_save_needs_no_configure_seam() {
     assert!(!app.model_picker_open());
     assert!(app.model_picker.awaiting.is_empty());
     assert!(app.model_picker.start_model.is_none());
-    let launch = &app.home.as_ref().expect("home").launch;
+    let launch = &app.home.launch;
     assert_eq!(launch.model.as_deref(), Some("acme/m2"));
     assert_eq!(launch.thinking, None);
 }
@@ -2404,7 +2404,7 @@ fn enter_after_s_on_home_forgets_the_session_only_choice() {
     assert_eq!(app.on_key(Key::Down, now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
     assert!(app.model_picker.start_model.is_none());
-    let launch = &app.home.as_ref().expect("home").launch;
+    let launch = &app.home.launch;
     assert_eq!(launch.model.as_deref(), Some("acme/m2"));
     // The next `start` carries neither a model nor an override: the
     // forgotten choice leaves no trace, and the saved default stands
@@ -2430,7 +2430,7 @@ fn enter_on_home_supersedes_a_pending_choice_for_the_same_model() {
     assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
 
     assert!(app.model_picker.start_model.is_none());
-    let launch = &app.home.as_ref().expect("home").launch;
+    let launch = &app.home.launch;
     assert_eq!(launch.model.as_deref(), Some("acme/m1"));
     assert_eq!(launch.thinking.as_deref(), Some("low"));
     assert_eq!(
@@ -2513,7 +2513,7 @@ fn enter_on_home_with_no_model_opens_the_picker_and_keeps_the_draft() {
     assert_eq!(app.input().expand(), "hi");
     // With a model on the chip Enter starts instead.
     let mut app = home();
-    app.home.as_mut().expect("home").launch.model = Some("p/m".to_owned());
+    app.home.launch.model = Some("p/m".to_owned());
     app.on_line(hello());
     type_draft(&mut app, "hi");
     let effect = app.on_key(Key::Enter, now());
@@ -2617,7 +2617,7 @@ fn with_no_entry_attached_the_session_decides() {
 #[test]
 fn with_no_entry_on_home_it_asks_for_a_read() {
     let mut app = home();
-    app.home.as_mut().expect("home").launch.model = Some("gone/x".to_owned());
+    app.home.launch.model = Some("gone/x".to_owned());
     assert_eq!(run_draft(&mut app, "/thinking high"), Effect::None);
     assert_eq!(
         app.notice(),
@@ -2721,7 +2721,7 @@ fn thinking_uses_the_pending_home_choice() {
     // model.
     open(&mut app);
     assert_eq!(ctrl_s(&mut app), Effect::None);
-    assert_eq!(app.home.as_ref().expect("home").launch.model, None);
+    assert_eq!(app.home.launch.model, None);
     // Bare `/thinking` opens on the pending choice's chips, not as an
     // ordinary choose.
     assert_eq!(run_draft(&mut app, "/thinking"), Effect::None);
@@ -2917,8 +2917,8 @@ fn a_busy_level_only_choice_names_the_level_for_the_status_model() {
 #[test]
 fn the_picker_marks_the_pending_home_choice_current() {
     let mut app = home();
-    app.home.as_mut().expect("home").launch.model = Some("zeta/z1".to_owned());
-    app.home.as_mut().expect("home").launch.thinking = Some("low".to_owned());
+    app.home.launch.model = Some("zeta/z1".to_owned());
+    app.home.launch.thinking = Some("low".to_owned());
     app.on_models(Ok(three()));
     // `s` holds `acme/m1` for the next `start`, over the chips' `zeta/z1`.
     open(&mut app);
@@ -3274,12 +3274,7 @@ fn saving_on_home_writes_at_once_and_sets_the_saved_list() {
     assert_eq!(ctrl_s(&mut app), Effect::None);
     assert!(!app.model_picker_open());
     assert_eq!(app.model_picker.scoped, vec!["acme/m1".to_owned()]);
-    assert_eq!(
-        app.home
-            .as_ref()
-            .map(|home| home.launch.scoped_models.clone()),
-        Some(vec!["acme/m1".to_owned()])
-    );
+    assert_eq!(app.home.launch.scoped_models, vec!["acme/m1".to_owned()]);
 }
 
 #[test]

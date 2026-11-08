@@ -26,9 +26,20 @@ impl App {
     }
 }
 
-/// Creates an app in `/w`.
+/// Creates an app in `/w` whose home has a model chosen, so Enter sends a
+/// `start` instead of opening the model picker.
 fn app() -> App {
-    App::new(PathBuf::from("/w"))
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
 }
 
 /// Connects the app to the hub.
@@ -39,7 +50,7 @@ fn connect(app: &mut App) {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    app.on_line(Line::Hub(hello));
 }
 
 /// Types `text` and presses Enter, returning the effect.
@@ -294,10 +305,19 @@ fn enter_before_connect_holds_start_until_hub_hello() {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
+    // The held `start` goes first, then home's startup reads.
     let lines = app.on_line(Line::Hub(hello));
-    assert_eq!(lines.len(), 1);
+    let commands: Vec<String> = lines
+        .iter()
+        .map(|line| {
+            parse(line)["command"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(commands, ["start", "feed", "recent"]);
     let value = parse(&lines[0]);
-    assert_eq!(value["command"], "start");
     assert!(value["args"].get("content").is_none());
 }
 
@@ -320,7 +340,11 @@ fn a_failed_connect_returns_a_held_start_to_the_draft() {
         schema_version: contract::SCHEMA_VERSION,
         payload: Default::default(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    assert!(
+        app.on_line(Line::Hub(hello))
+            .iter()
+            .all(|line| parse(line)["command"] != "start")
+    );
     // Back to no session: the next Enter sends `start` again.
     let line = one_line(app.on_key(Key::Enter, now));
     assert_eq!(parse(&line)["command"], "start");
@@ -676,12 +700,12 @@ fn turn_started_sets_busy_and_completed_clears_it() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
-            " steer · 00:00 ───────────────────────────────────────────────────────────────",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            " steer · 00:00 ─────────────────────────────────────────────────────────────",
             " more",
             "",
             " ▣ completed",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
             "",
             "▄▄▄▄▄▄▄",
             " next ▐",
@@ -702,10 +726,10 @@ fn failed_turn_says_why_before_it_closes() {
     assert_eq!(
         texts(&app)[6..],
         [
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " ✗ boom · io_failed",
             " ▣ failed",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -761,11 +785,11 @@ fn each_action_streams_its_own_reply() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " one more",
             "",
             " two",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
 }
@@ -782,7 +806,7 @@ fn steering_applied_is_a_line() {
         serde_json::json!({"content": [{"type": "text", "text": "use x"}], "source": "driver"}),
         None,
     ));
-    assert!(texts(&app).contains(&format!(" steer · 00:00 {}", "─".repeat(63))));
+    assert!(texts(&app).contains(&format!(" steer · 00:00 {}", "─".repeat(61))));
     assert!(texts(&app).contains(&" use x".to_owned()));
 }
 
@@ -807,6 +831,7 @@ fn the_conversation_gives_up_a_row_each_for_input_hint_and_steering() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
+    app.attach(contract::SessionId(S_A.to_owned()));
     assert_eq!(app.conversation_height(), 7);
     app.on_key(Key::CtrlC, now);
     assert_eq!(app.conversation_height(), 6);
@@ -1511,6 +1536,7 @@ fn the_input_box_grows_to_a_third_of_the_screen() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = app();
     app.set_size(60, 12);
+    app.attach(contract::SessionId(S_A.to_owned()));
     assert_eq!(app.input_height(), 1);
     assert_eq!(app.conversation_height(), 7);
     for _ in 0..2 {
@@ -1770,7 +1796,10 @@ fn shell_box_rows(shown: &str) -> (String, String) {
         .lines()
         .nth(rule - 1)
         .expect("a first draft row")
-        .to_owned();
+        .chars()
+        // Past the grip's column.
+        .skip(1)
+        .collect();
     (edge, draft)
 }
 

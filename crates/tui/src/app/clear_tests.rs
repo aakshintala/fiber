@@ -740,7 +740,7 @@ fn clear_close_refused_stays_on_the_new_session_with_one_notice() {
     // row, never marked closing.
     assert_eq!(app.session().map(|session| session.0.as_str()), Some(NEW));
     assert_eq!(app.notice(), Some("Busy."));
-    let home = app.home.as_ref().unwrap_or_else(|| panic!("home"));
+    let home = &app.home;
     let old = home
         .sessions
         .row(&contract::SessionId(SESSION.to_owned()))
@@ -804,7 +804,7 @@ fn clear_close_lost_before_write_names_the_lost_link() {
         app.notice(),
         Some("The link to the old session was lost before its `close` went out.")
     );
-    let home = app.home.as_ref().unwrap_or_else(|| panic!("home"));
+    let home = &app.home;
     let old = home
         .sessions
         .row(&contract::SessionId(SESSION.to_owned()))
@@ -843,8 +843,6 @@ fn clear_confirmation_without_wait_row_closes_prompt_without_sending_start() {
     assert_eq!(enter(&mut app, "/clear"), Effect::None);
     assert!(app.clear_open());
     app.home
-        .as_mut()
-        .expect("home")
         .sessions
         .remove(&contract::SessionId(SESSION.to_owned()));
 
@@ -863,7 +861,7 @@ fn clear_confirmation_without_status_closes_prompt_without_sending_start() {
     assert_eq!(enter(&mut app, "/clear"), Effect::None);
     assert!(app.clear_open());
     let id = contract::SessionId(SESSION.to_owned());
-    let sessions = &mut app.home.as_mut().expect("home").sessions;
+    let sessions = &mut app.home.sessions;
     let mut row = sessions.row(&id).expect("the waiting row").clone();
     sessions.remove(&id);
     row.status = None;

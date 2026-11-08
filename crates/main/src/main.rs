@@ -71,6 +71,9 @@ mod reviewer_tests;
 #[path = "scripted_session_tests.rs"]
 mod scripted_session_tests;
 #[cfg(test)]
+#[path = "settings_metadata_tests.rs"]
+mod settings_metadata_tests;
+#[cfg(test)]
 mod test_support;
 #[cfg(test)]
 #[path = "timing_tests.rs"]

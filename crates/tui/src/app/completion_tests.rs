@@ -206,6 +206,7 @@ fn the_approvals_row_opens_the_waiting_queue() {
 fn the_slash_panel_reserves_no_rows() {
     let mut app = connected();
     app.set_size(80, 24);
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     assert_eq!(app.conversation_height(), 19);
     // The `/` panel draws over the conversation, reserving nothing,
     // however many rows match (`docs/tui.md`, "Look", "Overlays").
@@ -1091,7 +1092,9 @@ fn closing_the_panels_leaves_the_next_slash_panel_able_to_open() {
     // and the `/` panel still opens after the search closes.
     let mut app = attached();
     type_text(&mut app, "/");
-    assert_eq!(app.on_key(Key::CtrlR, now()), Effect::None);
+    // The panel asks the hub for the project's prompt history.
+    assert!(matches!(app.on_key(Key::CtrlR, now()), Effect::Send(lines)
+            if lines.iter().any(|line| line.contains("prompt_history"))));
     assert!(app.search_panel().is_some());
     app.close_completion_panels();
     assert!(app.search_panel().is_some());

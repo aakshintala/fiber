@@ -71,11 +71,13 @@ fn history_refusal_reaches_its_handler_and_drops_the_tag() {
     assert!(sent(press(&mut app, Key::Up)).is_empty());
 }
 
-/// An app in `/w` with the project key, 60 columns wide.
+/// An app in `/w` with the project key, 60 columns wide, on a session:
+/// prompt recall is the conversation's, not home's.
 fn app() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_project(KEY.to_owned());
     app.set_size(60, 12);
+    app.attach(contract::SessionId(S_A.to_owned()));
     app
 }
 
@@ -92,7 +94,7 @@ fn hub(kind: &str, payload: Value) -> Line {
 /// An app connected to the hub.
 fn connected() -> App {
     let mut app = app();
-    assert!(app.on_line(hub("hub_hello", json!({}))).is_empty());
+    app.on_line(hub("hub_hello", json!({})));
     app
 }
 
@@ -641,6 +643,8 @@ fn a_rejection_shows_its_message_and_ends_paging() {
 #[test]
 fn attaching_moves_that_sessions_hub_lines_out() {
     let mut app = connected();
+    // Recall starts on another session, so `S_A`'s hub lines still show.
+    app.attach(contract::SessionId("s_cccccccccccccccc".to_owned()));
     let request = asks(&mut app, Key::Up);
     answer(
         &mut app,
@@ -1003,17 +1007,17 @@ fn the_steering_keys_do_nothing_while_the_search_panel_is_open() {
 
 #[test]
 fn up_moves_within_a_recalled_entry_wrapped_at_the_inset() {
-    // Attached at 60 the draft wraps at the inset width of 58, past the
-    // box's stripe and gap: 56 characters take two rows, 55 one
+    // Attached at 60 the draft wraps at the inset width of 57, past the
+    // box's stripe and gap: 55 characters take two rows, 54 one
     // (`docs/tui.md`, "Look", "The input box").
-    for (len, stays) in [(56, true), (55, false)] {
+    for (len, stays) in [(55, true), (54, false)] {
         let mut app = app();
         let long: String = std::iter::repeat_n('d', len).collect();
         with_own(&mut app, &["old", &long]);
         press(&mut app, Key::Up);
         assert_eq!(app.draft(), long, "len {len}");
         let width = app.draft_width();
-        assert_eq!(width, 58, "len {len}");
+        assert_eq!(width, 57, "len {len}");
         press(&mut app, Key::Up);
         if stays {
             assert_eq!(app.draft(), long, "len {len}");

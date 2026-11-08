@@ -4,8 +4,8 @@
 use super::super::hub::Connection;
 use super::super::pause;
 use super::{
-    DEADLINE, answers_all, counted, counting, line, opened, quit, run_queued, serve, session,
-    shown, turn_lines,
+    DEADLINE, answers_all, counted, counting, line, opened, quit, quit_leaving_work, run_queued,
+    serve, session, shown, turn_lines,
 };
 use crate::Input;
 use crate::link::{Credits, Feed, Line, answers, read_lines};
@@ -2133,7 +2133,9 @@ fn a_session_left_before_the_boundary_allows_history_on_demand() {
 
 /// A mouse report against the targets drawn for the app's current view.
 fn select_report(app: &mut crate::app::App, kind: crate::keys::MouseKind, col: u16, row: u16) {
-    let area = ratatui::layout::Rect::new(0, 0, 60, 12);
+    // The app's own size: the layout draws to its height.
+    let (width, height) = app.screen_size();
+    let area = ratatui::layout::Rect::new(0, 0, width, height);
     let mut buffer = ratatui::buffer::Buffer::empty(area);
     let targets = crate::view::render(app, area, &mut buffer, None);
     app.on_select(&crate::keys::Mouse { kind, col, row }, &targets);
@@ -2185,7 +2187,7 @@ fn a_copy_pins_its_dropped_page_without_loading_during_a_pass() {
         .expect("the log names its session");
     lp.app.load(&piece, first.clone());
     assert!(lp.app.pages().part(0).is_some());
-    select_report(&mut lp.app, MouseKind::Press(Button::Left), 0, 0);
+    select_report(&mut lp.app, MouseKind::Press(Button::Left), 2, 0);
     select_report(&mut lp.app, MouseKind::Drag(Button::Left), 59, 2);
     lp.app.on_key(Key::End, lp.clock.now());
     assert!(lp.app.pages().part(0).is_none());
@@ -2328,7 +2330,7 @@ fn reopened_history(older_ending: bool) {
         0
     );
     let second = wait.recv_or_fail(&histories, "history after the reopened fold");
-    tx.send(quit()).unwrap();
+    tx.send(quit_leaving_work()).unwrap();
     let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit after paging");
     wire.close();
     assert!(
@@ -2440,7 +2442,7 @@ fn a_history_waits_for_the_opening_pass_at_the_opening_window() {
                 break;
             }
         }
-        tx.send(quit()).unwrap();
+        tx.send(quit_leaving_work()).unwrap();
         let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit");
         wire.close();
         let peak = lp.hub.answer_stash_peak();
@@ -2598,7 +2600,8 @@ fn attach_stash_peak_at_the_ten_mib_fixture() {
         }
         // Quit is ordered after the answer is received by the loop, so
         // it cannot meet the stash arm in `answer`.
-        tx.send(quit()).unwrap_or_else(|err| panic!("send: {err}"));
+        tx.send(quit_leaving_work())
+            .unwrap_or_else(|err| panic!("send: {err}"));
         release_tx
             .send(())
             .unwrap_or_else(|err| panic!("release: {err}"));

@@ -135,6 +135,17 @@ fn new_loop_at<B: Backend + crate::screen::SyncEmit>(
     let attached = Arc::new(Mutex::new(Vec::new()));
     let seen = Arc::clone(&attached);
     let mut app = App::new(PathBuf::from("/w"));
+    // A home with a model chosen, so Enter sends a `start` instead of
+    // opening the model picker.
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
     app.set_size(width, height);
     let screen = Screen::new(backend, width, height).unwrap_or_else(|err| panic!("screen: {err}"));
     let mut lp = Loop::for_test(app, screen);
@@ -270,6 +281,25 @@ pub(super) fn command(
     (reader, value)
 }
 
+/// [`command`], past the startup reads (`feed`, `recent`, `directories`)
+/// that home sends on `hub_hello`, ahead of whatever the test sent.
+#[track_caller]
+pub(super) fn command_past_reads(
+    mut reader: BufReader<UnixStream>,
+    what: &str,
+) -> (BufReader<UnixStream>, serde_json::Value) {
+    loop {
+        let (back, value) = command(reader, what);
+        if !matches!(
+            value["command"].as_str(),
+            Some("feed" | "recent" | "directories")
+        ) {
+            return (back, value);
+        }
+        reader = back;
+    }
+}
+
 #[test]
 fn inputs_wake_the_loop_once_each_and_no_ops_write_nothing() {
     let sink = Sink::default();
@@ -397,7 +427,7 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
             Input::Connected(ours, hello()),
         ],
     );
-    let (reader, start) = command(reader, "the start command");
+    let (reader, start) = command_past_reads(reader, "the start command");
     assert_eq!(start["command"], "start");
     assert_eq!(start["args"]["workspace"], "/w");
     assert!(start["args"].get("content").is_none());
@@ -416,13 +446,13 @@ fn the_hub_connection_starts_attaches_and_subscribes() {
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
     assert_eq!(seen(), vec!["s_aaaaaaaaaaaaaaaa".to_owned()]);
-    let (reader, subscribe) = command(reader, "the subscribe command");
+    let (reader, subscribe) = command_past_reads(reader, "the subscribe command");
     assert_eq!(subscribe["command"], "subscribe");
     assert_eq!(subscribe["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(subscribe["args"]["level"], "full");
-    let (reader, asked) = command(reader, "the commands command");
+    let (reader, asked) = command_past_reads(reader, "the commands command");
     assert_eq!(asked["command"], "commands");
-    let (_, prompt) = command(reader, "the first prompt");
+    let (_, prompt) = command_past_reads(reader, "the first prompt");
     assert_eq!(prompt["command"], "prompt");
     assert_eq!(prompt["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(prompt["args"]["content"][0]["text"], "hi");
@@ -474,12 +504,19 @@ fn a_failed_write_hangs_up_and_returns_the_draft() {
     let reader = reader_of(&ours);
     ours.shutdown(std::net::Shutdown::Write)
         .unwrap_or_else(|err| panic!("shutdown: {err}"));
-    feed(&mut lp, vec![Input::Connected(ours, hello())]);
-    assert!(lp.hub.has_stream());
-    feed(&mut lp, vec![Input::Bytes(b"hi\r".to_vec())]);
+    // Enter before the hub connects: the `start` goes out with the
+    // hello's reads, and the write that fails hangs the stream up.
+    feed(
+        &mut lp,
+        vec![
+            Input::Bytes(b"hi\r".to_vec()),
+            Input::Connected(ours, hello()),
+        ],
+    );
     assert!(!lp.hub.has_stream());
     sees_the_end(reader, "the reader to see the hang-up");
     assert_eq!(lp.app.notice(), Some("Connection lost."));
+    assert_eq!(lp.app.input().expand(), "hi");
     assert_eq!(lp.app.draft(), "hi");
     // Enter on a lost connection keeps the draft.
     feed(
@@ -545,16 +582,19 @@ fn resize_redraws_at_the_new_size() {
     )
     .unwrap_or_else(|err| panic!("winsize: {err}"));
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), Some(pair.slave));
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, vec![Input::Bytes(b"hi".to_vec()), Input::Resize]);
     // The input line draws one row above the new last row, under its top
     // edge; the test backend keeps its 60x12 buffer, cleared by the
     // resize.
     let shown = crate::view::text(lp.screen.backend().buffer());
     let rows: Vec<&str> = shown.lines().collect();
-    assert_eq!(rows.get(6).copied(), Some("▌ › hi█"));
+    // The first column is the grip's.
+    assert_eq!(rows.get(6).copied(), Some("⋮▌ › hi█"), "{rows:?}");
     assert!(
         rows.get(9)
-            .is_some_and(|row| row.chars().all(|ch| ch == '▀')),
+            .is_some_and(|row| row.chars().skip(1).all(|ch| ch == '▀')),
         "{rows:?}"
     );
     assert!(rows.iter().skip(10).all(|row| row.is_empty()));
@@ -958,7 +998,7 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
             Input::Bytes(b"hi\r".to_vec()),
         ],
     );
-    let (reader, start) = command(reader, "the start command");
+    let (reader, start) = command_past_reads(reader, "the start command");
     let accepted = contract::HubLine {
         kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
@@ -969,10 +1009,10 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
             .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
-    let (reader, _) = command(reader, "the subscribe command");
-    let (reader, asked) = command(reader, "the commands command");
+    let (reader, _) = command_past_reads(reader, "the subscribe command");
+    let (reader, asked) = command_past_reads(reader, "the commands command");
     assert_eq!(asked["command"], "commands");
-    let (mut reader, _) = command(reader, "the first prompt");
+    let (mut reader, _) = command_past_reads(reader, "the first prompt");
     feed(
         &mut lp,
         ["r_1", "r_2", "r_3", "r_4"]
@@ -996,7 +1036,7 @@ fn each_approval_choice_goes_to_the_hub_as_a_reply() {
         serde_json::json!({"request_id": "r_4", "decision": "deny", "feedback": "no"}),
     ];
     for args in expected {
-        let (next, reply) = command(reader, "a reply");
+        let (next, reply) = command_past_reads(reader, "a reply");
         reader = next;
         assert_eq!(reply["command"], "reply");
         assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
@@ -1017,7 +1057,7 @@ fn connected_loop() -> (Loop<TestBackend>, BufReader<UnixStream>) {
             Input::Bytes(b"hi\r".to_vec()),
         ],
     );
-    let (reader, start) = command(reader, "the start command");
+    let (reader, start) = command_past_reads(reader, "the start command");
     let accepted = contract::HubLine {
         kind: contract::HubEventKind::CommandAccepted,
         ts: 0,
@@ -1029,10 +1069,10 @@ fn connected_loop() -> (Loop<TestBackend>, BufReader<UnixStream>) {
         .unwrap_or_default(),
     };
     feed(&mut lp, vec![Input::Hub(Line::Hub(accepted))]);
-    let (reader, _) = command(reader, "the subscribe command");
-    let (reader, commands) = command(reader, "the commands command");
+    let (reader, _) = command_past_reads(reader, "the subscribe command");
+    let (reader, commands) = command_past_reads(reader, "the commands command");
     assert_eq!(commands["command"], "commands");
-    let (reader, prompt) = command(reader, "the first prompt");
+    let (reader, prompt) = command_past_reads(reader, "the first prompt");
     assert_eq!(prompt["command"], "prompt");
     (lp, reader)
 }
@@ -1077,7 +1117,7 @@ fn each_one_question_kind_goes_to_the_hub_as_a_reply() {
         serde_json::json!({"request_id": "r_t", "text": "hi"}),
     ];
     for args in expected {
-        let (next, reply) = command(reader, "a one-question reply");
+        let (next, reply) = command_past_reads(reader, "a one-question reply");
         reader = next;
         assert_eq!(reply["command"], "reply");
         assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
@@ -1112,7 +1152,7 @@ fn esc_on_each_one_question_kind_declines_to_the_hub() {
         (0..4).map(|_| Input::Bytes(b"\x1b".to_vec())).collect(),
     );
     for request_id in ["r_c", "r_s", "r_m", "r_t"] {
-        let (next, reply) = command(reader, "a declined one-question reply");
+        let (next, reply) = command_past_reads(reader, "a declined one-question reply");
         reader = next;
         assert_eq!(reply["command"], "reply");
         assert_eq!(reply["session_id"], "s_aaaaaaaaaaaaaaaa");
@@ -1211,7 +1251,7 @@ fn command_after_decline(
         );
         // The turn asks `commands` again: answer with no rows so the
         // decline's reply stays next on the socket.
-        let (next, asked) = command(reader, "the turn's commands");
+        let (next, asked) = command_past_reads(reader, "the turn's commands");
         reader = next;
         assert_eq!(asked["command"], "commands");
         feed(
@@ -1234,7 +1274,7 @@ fn command_after_decline(
     }
     feed(&mut lp, vec![one_question(payload)]);
     feed(&mut lp, vec![Input::Bytes(keys.to_vec())]);
-    let (reader, reply) = command(reader, "the declined reply");
+    let (reader, reply) = command_past_reads(reader, "the declined reply");
     assert_eq!(reply["command"], "reply");
     assert_eq!(
         reply["args"],
@@ -1242,7 +1282,7 @@ fn command_after_decline(
     );
     feed(&mut lp, vec![session_accepted(&reply["id"])]);
     feed(&mut lp, vec![Input::Bytes(b"next\r".to_vec())]);
-    let (_, after) = command(reader, "the command after the decline");
+    let (_, after) = command_past_reads(reader, "the command after the decline");
     after
 }
 
@@ -1272,10 +1312,12 @@ fn a_decline_of_a_question_no_tool_call_raised_sends_no_cancel() {
 #[test]
 fn the_screen_shows_the_cursor_at_the_draft() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, vec![Input::Bytes(b"ab\x1b[D".to_vec())]);
     let backend = lp.screen.backend_mut();
     assert!(backend.cursor_visible());
-    backend.assert_cursor_position((5, 8));
+    backend.assert_cursor_position((6, 8));
 }
 
 #[test]
@@ -2731,7 +2773,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
     let origin = clock.origin();
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     lp.clock = clock.clone();
-    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app.on_line(Line::Hub(hello()));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     for envelope in search_session() {
@@ -2840,7 +2882,7 @@ fn the_pause_thread_sends_find_due_on_the_fake_clock() {
 #[test]
 fn keys_typed_while_a_reveal_loads_its_page_are_handled_after_in_order() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
-    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app.on_line(Line::Hub(hello()));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let log = search_session();

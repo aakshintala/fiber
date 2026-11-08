@@ -25,7 +25,7 @@ fn attached() -> App {
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    app.on_line(Line::Hub(hello));
     app.attach(contract::SessionId(S_A.to_owned()));
     app
 }
@@ -144,8 +144,8 @@ fn header(app: &App) -> String {
     panel(app).first().cloned().unwrap_or_default()
 }
 
-/// The form's title at the app's default width: the column is 80 wide
-/// and the panel pads to its inset of 78. `questions` is `None` on a
+/// The form's title at the app's default width: the column is 79 wide
+/// past the grip and the panel pads to its inset of 77. `questions` is `None` on a
 /// one-question panel, `place` only when more than one request waits.
 fn form_title(session: &str, questions: Option<usize>, place: Option<(usize, usize)>) -> String {
     let mut left = format!("Question from {session}");
@@ -155,17 +155,17 @@ fn form_title(session: &str, questions: Option<usize>, place: Option<(usize, usi
     if let Some((k, n)) = place {
         left.push_str(&format!(" · {k} of {n}"));
     }
-    let pad = 78_usize
+    let pad = 77_usize
         .saturating_sub(crate::format::width(&left).saturating_add("Esc: chat about this".len()))
         .max(1);
     format!("{left}{}{}", " ".repeat(pad), "Esc: chat about this")
 }
 
 /// An approval's header for `k` of `n` at the app's default width: the
-/// column is 80 wide and the panel pads to its inset of 78.
+/// column is 79 wide past the grip and the panel pads to its inset of 77.
 fn approval_header(k: usize, n: usize) -> String {
     let left = format!("Approval {k} of {n} · {S_A}");
-    let pad = 78_usize
+    let pad = 77_usize
         .saturating_sub(crate::format::width(&left).saturating_add("Esc puts it aside".len()))
         .max(1);
     format!("{left}{}{}", " ".repeat(pad), "Esc puts it aside")
@@ -498,13 +498,13 @@ fn the_form_keys_go_through_the_keyset() {
     assert_eq!(tab_line(&app), "←  ✔ Base    ☐ Name    ✔ Submit  →");
     // Nine panel lines on the bottom rows: the words row is the seventh,
     // inset two columns with the bottom edge below.
-    assert_eq!(caret(&app), Some((8, 8)));
+    assert_eq!(caret(&app), Some((9, 8)));
     for ch in "ab".chars() {
         press(&mut app, Key::Char(ch));
     }
-    assert_eq!(caret(&app), Some((10, 8)));
+    assert_eq!(caret(&app), Some((11, 8)));
     stroke(&mut app, "left");
-    assert_eq!(caret(&app), Some((9, 8)));
+    assert_eq!(caret(&app), Some((10, 8)));
     assert_eq!(tab_line(&app), "←  ✔ Base    ✔ Name    ✔ Submit  →");
     stroke(&mut app, "shift+tab");
     assert_eq!(tab_line(&app), "←  ✔ Base    ✔ Name    ✔ Submit  →");
