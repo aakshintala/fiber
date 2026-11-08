@@ -13,7 +13,7 @@ pub enum SettingsTab {
     Models,
     /// The reviewer and the sandbox.
     Permissions,
-    /// How a session runs, compacts and spends.
+    /// How a session runs, hands off and spends.
     Sessions,
     /// What a person rarely changes.
     Advanced,
