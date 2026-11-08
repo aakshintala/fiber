@@ -201,6 +201,7 @@ pub(crate) fn run_with(
     // The doctor report reader `main` injected: taken out beside the
     // writer, for the same reason.
     app.set_doctor(std::mem::take(&mut launch.doctor));
+    app.set_doctor_blocker(std::mem::take(&mut launch.doctor_blocker));
     // With no model configured the picker opens on home, before the
     // first frame: saving the choice writes the config default. It stays
     // shut when attaching to a session.

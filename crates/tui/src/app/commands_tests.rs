@@ -14,6 +14,34 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 #[test]
+fn first_run_enter_opens_login_and_preserves_the_draft() {
+    let mut app = connected();
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: "-w".to_owned(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    app.defer_first_run();
+    let mut catalogue = crate::catalogue::Catalogue::default();
+    catalogue
+        .logged_out
+        .push(crate::catalogue::LoggedOutProvider {
+            provider: "codex".to_owned(),
+            login: true,
+            hint: String::new(),
+        });
+    app.on_models(Ok(catalogue));
+    app.on_key(Key::Esc, now());
+    type_text(&mut app, "send after login");
+    assert_eq!(app.on_enter(), Effect::None);
+    assert!(app.config_view_open());
+    assert_eq!(app.draft(), "send after login");
+}
+
+#[test]
 fn remote_enter_needs_a_workspace_before_a_model_and_keeps_the_prompt() {
     for model in [None, Some("test/model".to_owned())] {
         let mut app = connected();

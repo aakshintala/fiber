@@ -21,6 +21,9 @@ pub type WriteFeedback =
 /// the headless door prints it.
 pub type ReadDoctor = Arc<dyn Fn() -> Result<String, String> + Send + Sync>;
 
+/// Reads only the first startup blocker line and whether its fix is a key.
+pub type ReadDoctorBlocker = Arc<dyn Fn() -> Option<(String, bool)> + Send + Sync>;
+
 /// What a feedback write returns: the report's path and its issue link.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeedbackDone {

@@ -81,6 +81,8 @@ pub(super) struct Home {
     /// A rejected `start`'s message, above the box until the next `start`
     /// goes out.
     blockers: Vec<String>,
+    /// Credential-fix metadata parallel to `blockers`.
+    blocker_keys: Vec<bool>,
     /// The workspace chooser: the picked workspace, the new worktree
     /// switch and the picker.
     chooser: Chooser,
@@ -203,6 +205,14 @@ fn home_foot(
 }
 
 impl App {
+    /// Replaces home blocker lines with a reader result and its click flags.
+    pub(crate) fn set_home_blockers(&mut self, lines: Vec<String>, keys: Vec<bool>) {
+        if let Some(home) = self.home.as_mut() {
+            home.blockers = lines;
+            home.blocker_keys = keys;
+        }
+    }
+
     /// Stores the launch description as home, keying prompt history by its
     /// project. It applies the launch's scope, rail, reduced-motion and
     /// image sizing, syncs the project, and opens the picker when there
@@ -233,6 +243,7 @@ impl App {
             list_scroll: Cell::new(0),
             last_chip: Spot::Workspace,
             blockers: Vec::new(),
+            blocker_keys: Vec::new(),
             chooser: Chooser::default(),
             questions: Questions::default(),
             left_after_attach: None,
@@ -600,6 +611,7 @@ impl App {
             },
             picker: home.picker_screen(),
             blockers: home.blockers.clone(),
+            blocker_keys: home.blocker_keys.clone(),
             foot,
             question,
             question_import: matches!(home.questions.prompt(), Some(Prompt::Import)),
@@ -751,6 +763,7 @@ impl App {
                                 && let Some(home) = self.home.as_mut()
                             {
                                 home.blockers = message.lines().map(str::to_owned).collect();
+                                home.blocker_keys = vec![false; home.blockers.len()];
                             }
                             return consumed.then(Vec::new);
                         }
@@ -851,6 +864,7 @@ impl App {
                             && let Some(home) = self.home.as_mut()
                         {
                             home.blockers = message.lines().map(str::to_owned).collect();
+                            home.blocker_keys = vec![false; home.blockers.len()];
                         }
                         return None;
                     }
@@ -1275,6 +1289,19 @@ impl App {
             Spot::Model => self.open_model_picker(crate::model_picker::Mode::Choose),
             Spot::Thinking => self.open_thinking(),
             Spot::Pick(at) => self.pick(at),
+            Spot::Blocker(index) => {
+                if self
+                    .home
+                    .as_ref()
+                    .and_then(|home| home.blocker_keys.get(index))
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    self.open_config_view(super::ConfigView::Login)
+                } else {
+                    Effect::None
+                }
+            }
             Spot::More(key) => {
                 let project = self
                     .home
@@ -1430,6 +1457,7 @@ impl App {
             | Spot::Model
             | Spot::Thinking
             | Spot::Pick(_)
+            | Spot::Blocker(_)
             | Spot::Keep
             | Spot::Question
             | Spot::Quit(_)
@@ -1450,6 +1478,7 @@ impl App {
             Some(home) => {
                 home.prompted = true;
                 home.blockers = Vec::new();
+                home.blocker_keys = Vec::new();
                 // An empty pick or launch directory is none: no `workspace`
                 // key names a remote home, as the hub treats a missing key.
                 let workspace = home
