@@ -11,9 +11,10 @@ use crate::support;
 
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::Child;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
 use fakes::Watchdog;
@@ -35,6 +36,53 @@ fn configured() -> Setup {
     );
     setup
 }
+fn probe(
+    connect: impl FnOnce() -> std::io::Result<UnixStream>,
+    last: &Mutex<Option<String>>,
+) -> bool {
+    match connect() {
+        Ok(_) => true,
+        Err(error) => {
+            *last.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error.to_string());
+            false
+        }
+    }
+}
+
+fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf) -> String {
+    let connect_error = last_error.unwrap_or_else(|| "no connect error was observed".to_owned());
+    let socket_state = match fs::metadata(path) {
+        Ok(metadata) => format!("present (file type: {:?})", metadata.file_type()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "absent".to_owned(),
+        Err(error) => format!("metadata error: {error}"),
+    };
+    format!(
+        "last connect error: {connect_error}; socket path {}: {socket_state}",
+        path.display()
+    )
+}
+
+fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
+    let last_error = Arc::new(Mutex::new(None));
+    let error_slot = Arc::clone(&last_error);
+    let target = path.clone();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        fakes::wait_until("keeper refuse-only socket to accept", deadline, move || {
+            probe(|| UnixStream::connect(&target), &error_slot)
+        });
+    }));
+    if result.is_err() {
+        let diagnostic = timeout_diagnostic(
+            last_error
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+            &path,
+        );
+        panic!("waited until the deadline for keeper refuse-only socket to accept; {diagnostic}");
+    }
+}
+
 fn run(setup: &Setup, args: &[&str]) -> std::process::Output {
     let mut command = setup.fiber(args);
     command.current_dir(setup.workspace());
@@ -225,11 +273,7 @@ fn a_crash_leaves_the_job_to_the_keeper_and_the_resume_delivers_it() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    fakes::wait_until(
-        "keeper refuse-only socket to accept",
-        setup.deadline.start_wait(),
-        move || std::os::unix::net::UnixStream::connect(&socket).is_ok(),
-    );
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
     let dir = session_dir(&setup, id);
     let before = fs::read(dir.join("events.jsonl")).unwrap();
     let refused = run(&setup, &["ask", "--resume", id, "go"]);
@@ -321,6 +365,31 @@ fn a_crash_leaves_the_job_to_the_keeper_and_the_resume_delivers_it() {
 }
 
 #[test]
+fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
+    let setup = Setup::new();
+    let path = setup.workspace().join("missing-socket");
+    let last = Mutex::new(None);
+    assert!(!probe(
+        || Err(std::io::Error::other("probe failure")),
+        &last,
+    ));
+    assert_eq!(last.lock().unwrap().as_deref(), Some("probe failure"));
+    let diagnostic = timeout_diagnostic(last.into_inner().unwrap(), &path);
+    assert!(diagnostic.contains("socket path "), "{diagnostic}");
+    assert!(diagnostic.contains(": absent"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("last connect error: probe failure"),
+        "{diagnostic}"
+    );
+    let last = Mutex::new(None);
+    let no_observation = timeout_diagnostic(last.into_inner().unwrap(), &path);
+    assert!(
+        no_observation.contains("last connect error: no connect error was observed"),
+        "{no_observation}"
+    );
+}
+
+#[test]
 fn keeper_bound_timeout_resume_delivers_keeper_timeout() {
     let BoundFixture {
         setup,
@@ -365,11 +434,7 @@ fn keeper_bound_timeout_resume_delivers_keeper_timeout() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    fakes::wait_until(
-        "keeper refuse-only socket to accept",
-        setup.deadline.start_wait(),
-        move || std::os::unix::net::UnixStream::connect(&socket).is_ok(),
-    );
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
     let dir = session_dir(&setup, id);
     fakes::wait_until(
         "keeper-timeout job_completed to appear",
@@ -493,11 +558,7 @@ fn keeper_bound_holds_job_in_bound_without_resume() {
     // Observe the bind after the killed session has released its socket.
     // Do not subscribe: the keeper accepts and closes without protocol.
     let socket = setup.session_socket(id);
-    fakes::wait_until(
-        "keeper refuse-only socket to accept",
-        setup.deadline.start_wait(),
-        move || std::os::unix::net::UnixStream::connect(&socket).is_ok(),
-    );
+    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
     // Inside the bound, with no resume: the keeper still runs and still
     // holds its job, and no ending is written yet.
     assert!(
