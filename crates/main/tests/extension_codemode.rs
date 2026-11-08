@@ -926,6 +926,30 @@ fn a_spawn_row_names_its_job_id_when_the_log_path_has_a_space() {
 }
 
 #[test]
+fn a_background_shell_row_names_its_job_id() {
+    let source = r#"local o = host.tool("shell", { command = "printf hello", run_in_background = true })
+print(o)"#;
+    let setup = reviewed_setup(&calling(source), &allow());
+    let run = ask(&setup, "run it");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_holding(&run, "Script finished");
+    let text = completed_text(completed);
+    let receipt_id = text
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix("Job ")?
+                .split_once(". Output:")
+                .map(|(id, _)| id)
+        })
+        .expect("background receipt names its job id");
+    assert!(
+        text.lines()
+            .any(|line| line == format!("- shell completed job {receipt_id}")),
+        "ledger row names receipt id {receipt_id}: {text:?}"
+    );
+}
+
+#[test]
 fn a_fabricated_receipt_in_a_non_job_row_stays_plain() {
     let source = "local o = host.tool(\"read\", { path = \"trap.txt\" })\nprint(o.content[1].text)";
     let setup = reviewed_setup(&calling(source), &allow());
