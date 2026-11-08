@@ -287,149 +287,144 @@ fn comment_lines(path: &str, source: &str) -> Vec<String> {
 }
 
 fn shell_comment(line: &str, state: &mut LexState) -> String {
-    let bytes = line.as_bytes();
+    let mut remaining = line;
     let mut quote = state.shell_quote;
-    let mut i = 0;
-    while i < bytes.len() {
-        let b = bytes.get(i).copied().unwrap_or_default();
+    let mut previous_was_space = true;
+    while !remaining.is_empty() {
         if let Some(q) = quote {
-            if b == q {
+            let Some((ch, rest)) = take_char(remaining) else {
+                break;
+            };
+            remaining = rest;
+            if ch as u32 == u32::from(q) {
                 quote = None;
-            } else if b == b'\\' {
-                i += 1;
+            } else if ch == '\\' && q == b'"' {
+                remaining = take_char(remaining).map_or("", |(_, rest)| rest);
             }
-        } else if b == b'\'' || b == b'"' {
-            quote = Some(b);
-        } else if b == b'#' && (i == 0 || bytes.get(i - 1).is_some_and(u8::is_ascii_whitespace)) {
-            state.shell_quote = quote;
-            return line[i + 1..].to_owned();
-        } else if line[i..].starts_with("<<") && !line[i..].starts_with("<<<") {
-            let mut start = i + 2;
-            if bytes.get(start).copied() == Some(b'-') {
-                start += 1;
+            previous_was_space = ch.is_ascii_whitespace();
+        } else if let Some((ch, rest)) = take_char(remaining) {
+            if ch == '\'' || ch == '"' {
+                quote = Some(ch as u8);
+                remaining = rest;
+                previous_was_space = false;
+            } else if ch == '#' && previous_was_space {
+                state.shell_quote = quote;
+                return rest.to_owned();
+            } else if let Some(rest) = remaining.strip_prefix("<<<") {
+                remaining = rest;
+                previous_was_space = false;
+            } else if remaining.starts_with("<<") {
+                if let Some((delimiter, rest)) = heredoc_delimiter(remaining) {
+                    state.heredocs.push_back(delimiter);
+                    remaining = rest;
+                    previous_was_space = true;
+                } else {
+                    remaining = rest;
+                    previous_was_space = ch.is_ascii_whitespace();
+                }
+            } else {
+                remaining = rest;
+                previous_was_space = ch.is_ascii_whitespace();
             }
-            let delim = line.get(start..).unwrap_or_default().trim();
-            let delim = delim
-                .trim_matches(['\'', '"'])
-                .split_whitespace()
-                .next()
-                .unwrap_or("");
-            if !delim.is_empty() {
-                state.heredocs.push_back(delim.to_owned());
-            }
+        } else {
+            break;
         }
-        i += 1;
     }
     state.shell_quote = quote;
     String::new()
 }
 
+fn heredoc_delimiter(operator: &str) -> Option<(String, &str)> {
+    let mut rest = operator.strip_prefix("<<")?;
+    if let Some(after_dash) = rest.strip_prefix('-') {
+        rest = after_dash;
+    }
+    rest = rest.trim_start();
+    let first = rest.chars().next()?;
+    let (delimiter, suffix) = if first == '\'' || first == '"' {
+        let quoted = rest.strip_prefix(first)?;
+        let (delimiter, suffix) = quoted.split_once(first)?;
+        (delimiter, suffix)
+    } else {
+        let delimiter = rest.split_whitespace().next()?;
+        (delimiter, rest.get(delimiter.len()..).unwrap_or_default())
+    };
+    (!delimiter.is_empty()).then(|| (delimiter.to_owned(), suffix))
+}
+
 fn rust_comment(line: &str, state: &mut LexState) -> String {
-    let bytes = line.as_bytes();
+    let mut remaining = line;
     let mut out = String::new();
-    let mut i = 0;
-    while i < bytes.len() {
+    while !remaining.is_empty() {
         if state.block_depth > 0 {
-            if line[i..].starts_with("/*") {
+            if let Some(rest) = remaining.strip_prefix("/*") {
                 state.block_depth += 1;
                 out.push(' ');
-                i += 2;
-            } else if line[i..].starts_with("*/") {
+                remaining = rest;
+            } else if let Some(rest) = remaining.strip_prefix("*/") {
                 state.block_depth -= 1;
-                out.push('\0');
-                i += 2;
+                out.push(if state.block_depth == 0 { '\0' } else { ' ' });
+                remaining = rest;
             } else {
-                let ch = line[i..].chars().next().unwrap_or('\0');
-                out.push(ch);
-                i += ch.len_utf8();
+                remaining = push_next_char(remaining, &mut out);
             }
         } else if let Some(hashes) = state.raw_hashes {
             let close = format!("\"{}", "#".repeat(hashes));
-            if line[i..].starts_with(&close) {
+            if let Some(rest) = remaining.strip_prefix(&close) {
                 state.raw_hashes = None;
-                i += close.len();
+                remaining = rest;
             } else {
-                i += line[i..].chars().next().unwrap_or('\0').len_utf8();
+                remaining = take_char(remaining).map_or("", |(_, rest)| rest);
             }
         } else if state.string {
-            if bytes.get(i).copied() == Some(b'\\') {
-                i += 2;
-            } else if bytes.get(i).copied() == Some(b'"') {
+            if let Some(rest) = remaining.strip_prefix('\\') {
+                remaining = take_char(rest).map_or("", |(_, rest)| rest);
+            } else if let Some(rest) = remaining.strip_prefix('"') {
                 state.string = false;
-                i += 1;
+                remaining = rest;
             } else {
-                i += line[i..].chars().next().unwrap_or('\0').len_utf8();
+                remaining = take_char(remaining).map_or("", |(_, rest)| rest);
             }
-        } else if line[i..].starts_with("//") {
-            out.push_str(&line[i + 2..]);
+        } else if let Some(comment) = remaining.strip_prefix("//") {
+            out.push_str(comment);
             break;
-        } else if line[i..].starts_with("/*") {
+        } else if let Some(rest) = remaining.strip_prefix("/*") {
             state.block_depth = 1;
             out.push(' ');
-            i += 2;
-        } else if line[i..].starts_with('r') || line[i..].starts_with("br") {
-            let quote = if line[i..].starts_with("br") {
-                i + 2
-            } else {
-                i + 1
-            };
-            let hashes = bytes
-                .get(quote..)
-                .unwrap_or_default()
-                .iter()
-                .take_while(|b| **b == b'#')
-                .count();
-            let opening = quote + hashes;
-            if bytes.get(opening).copied() == Some(b'\"') {
-                state.raw_hashes = Some(hashes);
-                i = opening + 1;
-            } else {
-                i += 1;
-            }
-        } else if bytes.get(i).copied() == Some(b'"') {
+            remaining = rest;
+        } else if let Some((hashes, rest)) = raw_string_start(remaining) {
+            state.raw_hashes = Some(hashes);
+            remaining = rest;
+        } else if let Some(rest) = remaining.strip_prefix('"') {
             state.string = true;
-            i += 1;
-        } else if bytes.get(i).copied() == Some(b'\'') {
-            if let Some(end) = char_literal_end(bytes, i) {
-                i = end;
-            } else {
-                i += 1;
-            }
+            remaining = rest;
         } else {
-            i += line[i..].chars().next().unwrap_or('\0').len_utf8();
+            remaining = take_char(remaining).map_or("", |(_, rest)| rest);
         }
     }
     out
 }
 
-fn char_literal_end(bytes: &[u8], start: usize) -> Option<usize> {
-    let mut i = start.checked_add(1)?;
-    if bytes.get(i).copied() == Some(b'\\') {
-        i = i.checked_add(1)?;
-        match bytes.get(i).copied()? {
-            b'u' if bytes.get(i + 1).copied() == Some(b'{') => {
-                i = i.checked_add(2)?;
-                while bytes.get(i).copied()? != b'}' {
-                    i = i.checked_add(1)?;
-                }
-                i = i.checked_add(1)?;
-            }
-            b'x' => i = i.checked_add(3)?,
-            _ => i = i.checked_add(1)?,
-        }
-    } else {
-        let first = bytes.get(i)?;
-        i = i.checked_add(if first.is_ascii() {
-            1
-        } else if first & 0b1110_0000 == 0b1100_0000 {
-            2
-        } else if first & 0b1111_0000 == 0b1110_0000 {
-            3
-        } else {
-            4
-        })?;
-    }
-    (bytes.get(i).copied() == Some(b'\'')).then_some(i + 1)
+fn raw_string_start(source: &str) -> Option<(usize, &str)> {
+    let hashes_start = source
+        .strip_prefix("br")
+        .or_else(|| source.strip_prefix('r'))?;
+    let hashes = hashes_start.chars().take_while(|ch| *ch == '#').count();
+    let quote = hashes_start.get(hashes..)?.strip_prefix('"')?;
+    Some((hashes, quote))
+}
+
+fn push_next_char<'a>(source: &'a str, out: &mut String) -> &'a str {
+    let Some((ch, rest)) = take_char(source) else {
+        return "";
+    };
+    out.push(ch);
+    rest
+}
+
+fn take_char(source: &str) -> Option<(char, &str)> {
+    let ch = source.chars().next()?;
+    Some((ch, source.get(ch.len_utf8()..).unwrap_or_default()))
 }
 
 #[cfg(test)]
