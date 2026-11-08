@@ -21,8 +21,8 @@ fn motion(col: u16, row: u16) -> Input {
     Input::Bytes(format!("\x1b[<35;{};{}M", col + 1, row + 1).into_bytes())
 }
 
-/// Esc, which puts the request shown aside, so the badge shows on row 10
-/// of the 60x12 screen, at columns 0 to 40.
+/// Esc, which puts the request shown aside, so the badge shows on row 6
+/// of the 60x12 screen, at columns 1 to 41 (column 0 is the grip's).
 fn esc() -> Input {
     Input::Bytes(b"\x1b".to_vec())
 }
@@ -652,10 +652,12 @@ fn the_wheel_under_the_search_results_leaves_the_conversation() {
 #[test]
 fn a_click_on_the_badge_reopens_the_approval_queue() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, vec![offering("r_1"), esc()]);
     assert!(lp.app.panel().is_none());
     // A click beside the badge does nothing.
-    feed(&mut lp, vec![click(41, 6)]);
+    feed(&mut lp, vec![click(42, 6)]);
     assert!(lp.app.panel().is_none());
     feed(&mut lp, vec![click(29, 6)]);
     assert!(lp.app.panel().is_some());
@@ -664,12 +666,14 @@ fn a_click_on_the_badge_reopens_the_approval_queue() {
 #[test]
 fn a_press_and_release_split_across_reads_still_click() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, vec![offering("r_1"), esc()]);
     feed(
         &mut lp,
         vec![
-            Input::Bytes(b"\x1b[<0;1;7M".to_vec()),
-            Input::Bytes(b"\x1b[<0;2;7m".to_vec()),
+            Input::Bytes(b"\x1b[<0;2;7M".to_vec()),
+            Input::Bytes(b"\x1b[<0;3;7m".to_vec()),
         ],
     );
     assert!(lp.app.panel().is_some());
@@ -721,6 +725,8 @@ fn a_click_on_new_messages_below_jumps_to_the_end() {
 fn hover_writes_only_when_the_target_under_the_pointer_changes() {
     let sink = Sink::default();
     let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, vec![offering("r_1"), esc()]);
     let mut written = sink.len();
     let mut wrote = |lp: &mut super::Loop<_>, input: Input| {
@@ -734,25 +740,32 @@ fn hover_writes_only_when_the_target_under_the_pointer_changes() {
     assert!(wrote(&mut lp, motion(2, 6)) > 0, "onto the badge");
     assert_eq!(wrote(&mut lp, motion(2, 6)), 0, "the same cell");
     assert_eq!(wrote(&mut lp, motion(29, 6)), 0, "the same target");
-    assert!(wrote(&mut lp, motion(41, 6)) > 0, "off the badge");
-    assert_eq!(wrote(&mut lp, motion(42, 6)), 0, "still off");
+    assert!(wrote(&mut lp, motion(42, 6)) > 0, "off the badge");
+    assert_eq!(wrote(&mut lp, motion(43, 6)), 0, "still off");
 }
 
 #[test]
 fn hover_redraws_only_the_targets_row() {
     let (mut lp, _) = new_loop(Cells::default(), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     feed(&mut lp, vec![offering("r_1"), esc()]);
     lp.screen.backend_mut().drawn.clear();
     feed(&mut lp, vec![motion(2, 6)]);
     let drawn = &lp.screen.backend().drawn;
     assert_eq!(drawn.len(), 41);
-    assert!(drawn.iter().all(|&(x, y)| y == 6 && x < 41), "{drawn:?}");
+    assert!(
+        drawn.iter().all(|&(x, y)| y == 6 && (1..42).contains(&x)),
+        "{drawn:?}"
+    );
 }
 
 #[test]
 fn with_hover_off_motion_writes_nothing_and_clicks_still_work() {
     let sink = Sink::default();
     let (mut lp, _) = new_loop(CrosstermBackend::new(sink.clone()), None);
+    lp.app
+        .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     lp.hover = false;
     feed(&mut lp, vec![offering("r_1"), esc()]);
     let before = sink.len();
@@ -849,11 +862,15 @@ fn shown(lp: &super::Loop<TestBackend>) -> String {
     crate::view::text(lp.screen.backend().buffer())
 }
 
-/// The first row of `lp`'s screen whose text, trimmed, starts with `start`.
+/// The first row of `lp`'s screen whose text, past the grip's column and
+/// trimmed, starts with `start`.
 fn row_of(lp: &super::Loop<TestBackend>, start: &str) -> u16 {
     shown(lp)
         .lines()
-        .position(|row| row.trim_start().starts_with(start))
+        .position(|row| {
+            let past_grip: String = row.chars().skip(1).collect();
+            past_grip.trim_start().starts_with(start)
+        })
         .and_then(|at| u16::try_from(at).ok())
         .unwrap_or_else(|| panic!("no row starts {start:?} in\n{}", shown(lp)))
 }
@@ -918,11 +935,11 @@ fn clicks_open_the_ledger_then_a_call_then_the_thought() {
     assert!(shown(&lp).contains("fn body_of_a"), "{}", shown(&lp));
     let thought = row_of(&lp, "1 + Thought");
     assert!(!shown(&lp).contains("Read a.rs first."), "{}", shown(&lp));
-    feed(&mut lp, vec![click(0, thought)]);
+    feed(&mut lp, vec![click(2, thought)]);
     assert!(shown(&lp).contains("Read a.rs first."), "{}", shown(&lp));
     // A second click on the summary closes the ledger again.
     let group = row_of(&lp, "● Read");
-    feed(&mut lp, vec![click(0, group)]);
+    feed(&mut lp, vec![click(2, group)]);
     assert!(!shown(&lp).contains("src/a.rs"), "{}", shown(&lp));
 }
 
@@ -934,14 +951,15 @@ fn hover_over_a_group_line_tints_only_its_row() {
     lp.screen.backend_mut().drawn.clear();
     feed(&mut lp, vec![motion(5, group)]);
     let drawn = &lp.screen.backend().drawn;
-    assert_eq!(drawn.len(), 59);
+    assert_eq!(drawn.len(), 57);
     assert!(drawn.iter().all(|&(_, y)| y == group), "{drawn:?}");
     let mut lp = grouped(TestBackend::new(60, 12));
     feed(&mut lp, vec![motion(5, group)]);
     let buf = lp.screen.backend().buffer();
     for y in 0..12 {
-        // The rows' 59 columns: the bar's column keeps its background.
-        for x in 0..59 {
+        // The rows' 57 columns, past the grip and the gutter: the bar's
+        // column keeps its background.
+        for x in 2..59 {
             let bg = buf.cell((x, y)).map(|cell| cell.bg);
             // The written frame is painted: the group row sits on the
             // Turn tint, so the hover lifts it 0x14 per channel.
@@ -1021,7 +1039,7 @@ fn a_click_on_a_notice_shows_it_whole_and_its_cross_dismisses_it() {
         hit_at(&lp, 59, second),
         Some(crate::mouse::TargetId::DismissNotice(_))
     ));
-    feed(&mut lp, vec![click(0, second)]);
+    feed(&mut lp, vec![click(2, second)]);
     assert_eq!(lp.app.notice_overlay(), Some(vec!["Notice 2.".to_owned()]));
     feed(&mut lp, vec![esc()]);
     assert_eq!(lp.app.notice_overlay(), None);
@@ -1164,9 +1182,9 @@ fn the_open_notice_overlay_hides_the_conversation_targets() {
     let group = row_of(&lp, "● Read");
     feed(&mut lp, notices(1));
     let notice = row_of(&lp, "⚠ extension_failed · Notice 1.");
-    feed(&mut lp, vec![click(0, notice)]);
+    feed(&mut lp, vec![click(2, notice)]);
     assert!(lp.app.notice_overlay().is_some());
-    assert_eq!(hit_at(&lp, 0, group), None);
+    assert_eq!(hit_at(&lp, 2, group), None);
 }
 
 #[test]
@@ -1183,10 +1201,10 @@ fn a_click_on_a_failed_logins_line_opens_the_login_view() {
         session("turn_completed", failed, None),
     ]);
     let line = row_of(&lp, "✗ The key was refused.");
-    assert_eq!(hit_at(&lp, 0, line), Some(TargetId::Line(Target::Login)));
+    assert_eq!(hit_at(&lp, 2, line), Some(TargetId::Line(Target::Login)));
     // The seam is always installed, so the click opens the real Login
     // view: its footer names what Enter does.
-    feed(&mut lp, vec![click(0, line)]);
+    feed(&mut lp, vec![click(2, line)]);
     let shown = shown(&lp);
     assert!(shown.contains("Log in"), "{shown}");
     assert!(
@@ -1272,7 +1290,7 @@ fn a_click_on_the_orphaned_jobs_line_shows_each_jobs_message() {
     ]);
     assert!(!shown(&lp).contains("j_1 orphaned."), "{}", shown(&lp));
     let line = row_of(&lp, "Orphaned jobs: build the docs");
-    feed(&mut lp, vec![click(0, line)]);
+    feed(&mut lp, vec![click(2, line)]);
     assert!(
         shown(&lp).contains("build the docs: j_1 orphaned."),
         "{}",
@@ -1316,7 +1334,7 @@ fn a_click_on_a_steering_rows_cross_drops_it_and_its_text_still_selects() {
     // The oldest row's ✕ sits at its text's right edge: column 58,
     // one short of the card's right edge.
     feed(&mut lp, vec![click(58, 2)]);
-    let (_, dropped) = super::tests::command(BufReader::new(theirs), "the steer_drop");
+    let (_, dropped) = super::tests::command_past_reads(BufReader::new(theirs), "the steer_drop");
     assert_eq!(dropped["command"], "steer_drop");
     assert_eq!(dropped["session_id"], "s_aaaaaaaaaaaaaaaa");
     assert_eq!(dropped["args"], json!({"command_id": "c_1"}));
@@ -1730,16 +1748,12 @@ fn wheel_over_a_call_view_with_a_missing_page_sends_through_on_mouse() {
     let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
     // `hub_hello` brings the outbox link up, so the view's page asks go
     // out instead of stalling for a connection.
-    assert!(
-        lp.app
-            .on_line(Line::Hub(contract::HubLine {
-                kind: HubEventKind::HubHello,
-                ts: 0,
-                schema_version: contract::SCHEMA_VERSION,
-                payload: serde_json::Map::new(),
-            }))
-            .is_empty()
-    );
+    let _ = lp.app.on_line(Line::Hub(contract::HubLine {
+        kind: HubEventKind::HubHello,
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        payload: serde_json::Map::new(),
+    }));
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     let text: String = (0..150).map(|i| format!("L{i:03}\n")).collect();

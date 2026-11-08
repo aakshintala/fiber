@@ -52,11 +52,10 @@ impl App {
             self.attention.out.extend_from_slice(&bytes);
             self.attention.latest = Some(match line.reason {
                 crate::attention::Reason::Waiting { .. } => {
-                    let seen = self
-                        .home
-                        .as_ref()
-                        .and_then(|home| home.sessions.row(&line.session))
-                        .is_some_and(|row| row.left.is_none() && row.state == HomeState::Waiting);
+                    let seen =
+                        self.home.sessions.row(&line.session).is_some_and(|row| {
+                            row.left.is_none() && row.state == HomeState::Waiting
+                        });
                     Latest::Waiting {
                         session: line.session,
                         seen,
@@ -76,10 +75,7 @@ impl App {
     /// defaults without home state (`docs/tui.md`, "Getting the person's
     /// attention").
     fn attention_settings(&self) -> Attention {
-        self.home
-            .as_ref()
-            .map(|home| home.launch.attention)
-            .unwrap_or_default()
+        self.home.launch.attention
     }
 
     /// The window title for the latest `attention` line (`docs/tui.md`,
@@ -111,11 +107,7 @@ impl App {
         };
         // Whether a row is listed, and whether it still waits: copied out
         // so the row's borrow ends before the title clears below.
-        let (present, waiting) = match self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&session))
-        {
+        let (present, waiting) = match self.home.sessions.row(&session) {
             None => (false, false),
             Some(row) => (true, row.left.is_none() && row.state == HomeState::Waiting),
         };
@@ -147,11 +139,7 @@ impl App {
     /// already seen stays cleared, and only a new `attention` line brings
     /// the title back.
     fn waiting_title(&self, session: &SessionId, seen: bool) -> Option<String> {
-        let kind = match self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.row(session))
-        {
+        let kind = match self.home.sessions.row(session) {
             None if seen => return None,
             None => "waiting",
             Some(row) if row.left.is_none() && row.state == HomeState::Waiting => {

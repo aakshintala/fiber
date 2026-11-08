@@ -405,8 +405,8 @@ fn alt_0_goes_home_on_the_on_screen_sessions_row() {
     frame(&mut app);
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&contract::SessionId(SESSION.to_owned())))
+        .sessions
+        .row(&contract::SessionId(SESSION.to_owned()))
         .map(|row| row.key)
         .expect("SESSION row");
     assert_eq!(
@@ -743,9 +743,7 @@ fn back_keys_while_a_start_waits_are_a_no_op() {
     let mut app = backed();
     // With a model on the chip Enter starts instead of opening the
     // picker, as on a launch that names one.
-    if let Some(home) = app.home.as_mut() {
-        home.launch.model = Some("test/model".to_owned());
-    }
+    app.home.launch.model = Some("test/model".to_owned());
     type_text(&mut app, "hi");
     let Effect::Send(_) = app.on_key(Key::Enter, now()) else {
         panic!("Enter starts");
@@ -920,8 +918,8 @@ fn ctrl_n_with_the_rail_focused_leaves_nothing_focused() {
     app.on_line(live(contract::SessionId(SESSION.to_owned())));
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| home.sessions.row(&contract::SessionId(SESSION.to_owned())))
+        .sessions
+        .row(&contract::SessionId(SESSION.to_owned()))
         .map(|row| row.key)
         .expect("SESSION row");
     app.set_rail_focus(crate::app::rail::Spot::Card(key));
@@ -1340,7 +1338,7 @@ fn the_open_report_is_an_overlay() {
 #[test]
 fn paste_and_home_arrows_change_neither_the_draft_nor_the_report() {
     let mut app = home_with(80, 24, launch());
-    app.home.as_mut().expect("home").launch.model = Some("acme/m1".to_owned());
+    app.home.launch.model = Some("acme/m1".to_owned());
     type_text(&mut app, "ab");
     frame(&mut app);
     assert_eq!(press(&mut app, "down"), Effect::None);
@@ -1560,12 +1558,14 @@ fn an_unhandled_run_falls_through_to_the_home_line_edit() {
 #[test]
 fn an_unhandled_run_falls_through_and_drains_its_notice_once() {
     let canned = Keyed::canned();
+    let mut app = keyed_app(&canned);
+    type_text(&mut app, "ab");
+    // Queued after the typing: a settle between strokes drains the
+    // adapter's queue through the status row's slot.
     canned
         .pending
         .borrow_mut()
         .push(("extension_failed".into(), "keyed lost home".to_owned()));
-    let mut app = keyed_app(&canned);
-    type_text(&mut app, "ab");
     assert_eq!(press(&mut app, "home"), Effect::None);
     assert_eq!(app.input().position(), 0);
     assert_eq!(app.notice(), Some("keyed lost home"));
@@ -1578,12 +1578,14 @@ fn an_unhandled_run_falls_through_and_drains_its_notice_once() {
 fn a_handled_run_drains_its_notice_to_the_screen() {
     let canned = Keyed::canned();
     canned.run_handled.set(true);
+    let mut app = keyed_app(&canned);
+    type_text(&mut app, "ab");
+    // Queued after the typing: a settle between strokes drains the
+    // adapter's queue through the status row's slot.
     canned
         .pending
         .borrow_mut()
         .push(("extension_failed".into(), "keyed handled home".to_owned()));
-    let mut app = keyed_app(&canned);
-    type_text(&mut app, "ab");
     // `docs/tui.md`, "Input and focus": a handled `run` settles with nothing built in
     // running; its drained notices reach the screen with the handled stroke.
     assert_eq!(press(&mut app, "home"), Effect::None);

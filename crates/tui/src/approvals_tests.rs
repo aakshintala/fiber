@@ -1050,7 +1050,7 @@ mod through_the_app {
             schema_version: contract::SCHEMA_VERSION,
             payload: serde_json::Map::new(),
         };
-        assert!(app.on_line(Line::Hub(hello)).is_empty());
+        app.on_line(Line::Hub(hello));
         app.attach(contract::SessionId(S_A.to_owned()));
         app
     }
@@ -1143,10 +1143,10 @@ mod through_the_app {
         panel(app).first().cloned().unwrap_or_default()
     }
 
-    /// The expected header at the app's default width: the column is 80
-    /// wide and the panel pads to its inset of 78.
+    /// The expected header at the app's default width: the column is 79
+    /// wide past the grip and the panel pads to its inset of 77.
     fn app_header(k: usize, n: usize, session: &str) -> String {
-        super::header_at(k, n, session, 78)
+        super::header_at(k, n, session, 77)
     }
 
     /// The panel's line at `row`.

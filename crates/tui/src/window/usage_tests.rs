@@ -91,6 +91,10 @@ fn fold_work(lines: &[Envelope]) -> (crate::work::Work, usize) {
     let mut app = App::new(None);
     app.set_size(60, 12);
     app.attach(SessionId(SESSION.to_owned()));
+    // The seeded Home lays the column out beside the rail; a fold in the
+    // loop runs after that layout, so the batch's end finds the width the
+    // page was counted at.
+    app.settle();
     crate::work::take();
     app.begin_batch();
     for line in lines {

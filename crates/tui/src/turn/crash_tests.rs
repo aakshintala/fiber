@@ -170,7 +170,7 @@ fn a_resumed_process_closes_the_cut_short_turn() {
     open(&mut app, &summary);
     assert_eq!(
         texts(&app)[8],
-        "     1 ○ read     a.rs                                                 running"
+        "     1 ○ read     a.rs                                               running"
     );
     // Opening flips the toggle, so the row is read again to close it.
     let summary = texts(&app)[7].clone();
@@ -181,7 +181,7 @@ fn a_resumed_process_closes_the_cut_short_turn() {
         lines[lines.len() - 3..],
         [
             " ▣ cut short: Fiber stopped · 5s · 3 calls",
-            "▀".repeat(79).as_str(),
+            "▀".repeat(77).as_str(),
             "↺ resumed",
         ]
     );
@@ -189,9 +189,9 @@ fn a_resumed_process_closes_the_cut_short_turn() {
     assert_eq!(
         texts(&app)[8..11],
         [
-            "     1 ? read     a.rs                           ? may have run; not run again",
-            "       ○ read     b.rs                                                 running",
-            "       ✓ read     c.rs                                                 0 lines",
+            "     1 ? read     a.rs                         ? may have run; not run again",
+            "       ○ read     b.rs                                               running",
+            "       ✓ read     c.rs                                               0 lines",
         ]
     );
     // The rule fires once: a second resume finds no open turn.
@@ -379,7 +379,7 @@ fn a_turn_suspended_on_a_request_resumes_instead() {
         lines[lines.len() - 3..],
         [
             " ▣ cut short: Fiber stopped · 1m 00s · 3 calls",
-            "▀".repeat(79).as_str(),
+            "▀".repeat(77).as_str(),
             "↺ resumed",
         ]
     );
@@ -456,9 +456,9 @@ fn orphaned_jobs_are_one_line_naming_them_all() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " ▣ cut short: Fiber stopped",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
             "↺ resumed",
             "Orphaned jobs: build the docs, j_3",
         ]
@@ -496,9 +496,9 @@ fn orphans_found_while_a_turn_resumes_join_its_card() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " Orphaned jobs: j_1, j_2",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
         ]
     );
     feed(
@@ -530,9 +530,9 @@ fn each_orphaned_jobs_line_takes_and_opens_only_its_own_jobs() {
             "▀▀▀▀▀",
             "you 00:00 ",
             "",
-            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄",
             " ▣ cut short: Fiber stopped",
-            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀",
             "↺ resumed",
             "Orphaned jobs: j_1",
             "Orphaned jobs: j_2, j_3",

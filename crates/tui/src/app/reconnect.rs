@@ -189,18 +189,17 @@ impl App {
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(home) = self.home.as_mut() {
-            let stale: Vec<SessionId> = home
-                .sessions
-                .live()
-                .iter()
-                .map(|row| row.id.clone())
-                .filter(|session| !running.contains(session))
-                .filter(|session| !self.reconnect.fresh.contains(session))
-                .collect();
-            for session in stale {
-                home.sessions.remove(&session);
-            }
+        let stale: Vec<SessionId> = self
+            .home
+            .sessions
+            .live()
+            .iter()
+            .map(|row| row.id.clone())
+            .filter(|session| !running.contains(session))
+            .filter(|session| !self.reconnect.fresh.contains(session))
+            .collect();
+        for session in stale {
+            self.home.sessions.remove(&session);
         }
         self.reconnect.fresh.clear();
     }
