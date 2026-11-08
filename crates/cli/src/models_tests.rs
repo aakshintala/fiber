@@ -1065,6 +1065,10 @@ fn a_fresh_list_prints_at_once_and_spawns_nothing() {
                  "base_url": "http://127.0.0.1:1/v1", "context_window": 1000}]),
     )
     .unwrap();
+    set_source_mtime(
+        &setup.home().join("extensions").join("acme-lua"),
+        std::time::SystemTime::UNIX_EPOCH,
+    );
     let spawner = Recorder::fresh();
     let (result, out, err) = setup.run(None, false, &|providers| spawner.spawn(providers), clock);
     result.unwrap();

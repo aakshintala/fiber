@@ -125,6 +125,26 @@ fn signed(request: &Request) -> &str {
     request.header("x-fixture-content-sha256").unwrap()
 }
 
+fn set_source_mtime(dir: &std::path::Path, mtime: std::time::SystemTime) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            set_source_mtime(&entry.path(), mtime);
+        } else {
+            std::fs::File::options()
+                .write(true)
+                .open(entry.path())
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+    }
+    std::fs::File::open(dir)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
 #[test]
 fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed() {
     let root = fakes::TempDir::new("fiber-lua-warm");
@@ -196,6 +216,10 @@ fn a_lua_providers_session_refreshes_its_cache_signed_with_only_the_cap_changed(
         .recv(&setup)
         .expect("setup ended in time")
         .unwrap();
+    set_source_mtime(
+        &home.join("extensions").join("fiber.test-lua-fixture"),
+        std::time::SystemTime::UNIX_EPOCH,
+    );
 
     assert_eq!(parts.warm, Some(1), "the session warms for one lifetime");
     let log = Arc::new(

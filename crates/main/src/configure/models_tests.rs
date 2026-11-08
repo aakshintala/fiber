@@ -484,6 +484,10 @@ fn hub_models_refresh_stale_checks_the_age() {
         &json!({"acme": [format!("{}/v1", server.url())]}),
     );
     write_cache(&rig.home, "acme", &server.url(), &["cached"]);
+    std::fs::File::open(rig.home.join("extensions").join("acme-ext"))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH)
+        .unwrap();
     let wall = fakes::clock::FakeClock::new().wall();
     // A fresh list stays: no refresh runs.
     date_cache(&rig.home, "acme", Duration::from_secs(90), wall);
