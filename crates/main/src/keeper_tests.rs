@@ -314,14 +314,14 @@ fn ordinary_client_rejects_handover_frames() {
         },
         FromKeeper::AdoptDone(true),
     ] {
-        // docs/tools.md, "The keeper": a candidate cannot issue arbitrary
+        // `docs/tools.md`, "The keeper": a candidate cannot issue arbitrary
         // frames before an authenticated handover, and a Start client never
         // negotiates one.
         assert!(client.reply(frame).is_err());
     }
 }
 
-// ---- taking a handover (docs/tools.md, "The keeper": a resume takes the log back) ----
+// ---- taking a handover (`docs/tools.md`, "The keeper": a resume takes the log back) ----
 
 fn session_id() -> SessionId {
     SessionId("s_0123456789abcdef".into())

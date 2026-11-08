@@ -1153,10 +1153,9 @@ fn keeper_bound_timeout_resume_delivers_keeper_timeout() {
     std::mem::forget(guard);
     session_watchdog.stand_down(setup.deadline.cleanup_phase());
 
-    // Observe the bind after the killed session has released its socket.
-    // Do not subscribe: the keeper accepts and closes without protocol.
-    let socket = setup.session_socket(id);
-    wait_for_refuse_only_socket(setup.deadline.start_wait(), socket);
+    // No wait on the keeper's socket here: with this bound the keeper may
+    // have expired and unlinked it before a poll runs. The keeper's own
+    // record below shows it took the log.
     let dir = session_dir(&setup, id);
     fakes::wait_until(
         "keeper-timeout job_completed to appear",

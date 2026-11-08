@@ -368,7 +368,7 @@ fn holding_job() -> Supervisor {
 #[test]
 fn handover_lists_the_held_jobs_and_leaves_the_calls() {
     let mut sup = holding();
-    // docs/tools.md, "The keeper": the jobs still running are the resumed
+    // `docs/tools.md`, "The keeper": the jobs still running are the resumed
     // session's again.
     assert_eq!(
         sup.hand_over(),
@@ -505,7 +505,7 @@ fn losing_the_lock_after_handover_stops_only_tool_calls() {
     assert!(sup.hand_over().is_some());
     assert!(sup.exited("done", end()).is_empty());
     let _ = sup.lifeline_eof();
-    // docs/tools.md, "One keeper per session": the keeper that loses the
+    // `docs/tools.md`, "The keeper": the keeper that loses the
     // lock stops its tool calls, writes nothing and exits; adopted jobs get
     // no stop and no completion from it.
     let steps = sup.lock_lost();

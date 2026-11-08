@@ -607,7 +607,7 @@ fn keeper_control_ignores_torn_tail_and_proceeds_to_takeover() {
     }
 }
 
-// ---- the handover (docs/tools.md, "The keeper": a resume takes the log back) ----
+// ---- the handover (`docs/tools.md`, "The keeper": a resume takes the log back) ----
 
 /// A candidate on the keeper's socket: the frames it hears, `None` at its end.
 struct Peer {
@@ -759,7 +759,7 @@ fn an_identity_only_probe_cannot_release_the_log() {
     let mut probe = connect(&keeper);
     identify(&mut probe, &id);
     drop(probe);
-    // docs/events.md, "Writing": a probe that only asks who holds the log
+    // `docs/events.md`, "Writing": a probe that only asks who holds the log
     // takes nothing: the lock and the socket stay with the keeper.
     let mut again = connect(&keeper);
     identify(&mut again, &id);
@@ -856,7 +856,7 @@ fn a_handover_releases_the_log_and_the_socket_and_names_the_jobs() {
     let mut peer = connect(&keeper);
     identify(&mut peer, &id);
     let running = handover(&mut peer);
-    // docs/tools.md, "The keeper": the keeper unlinks the socket, releases
+    // `docs/tools.md`, "The keeper": the keeper unlinks the socket, releases
     // the lock and acknowledges, so the ack is the proof the lock is free.
     assert!(!socket_of(&keeper).exists());
     assert_eq!(lock_holder(&keeper), None);
@@ -907,7 +907,7 @@ fn release_waits_behind_a_held_log_mutex() {
         hearing_nothing(&peer),
         "the keeper answered before it was free"
     );
-    // docs/events.md, "Writing": a second Fiber process cannot open the
+    // `docs/events.md`, "Writing": a second Fiber process cannot open the
     // session while the keeper still holds it.
     assert!(matches!(
         log::Log::open(&keeper.sessions, id.clone(), fakes::clock::FakeClock::new()),

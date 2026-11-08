@@ -568,7 +568,7 @@ fn monitor_lines_without_stderr_artifact() {
     });
     let (_, events) = Deadline::after(Duration::from_secs(10)).recv_or_fail(&started, "start");
     let adopt = Deadline::after(Duration::from_secs(10)).recv_or_fail(&adopts, "adopt");
-    // docs/tools.md, "The keeper": the keeper carries the monitor intent.
+    // `docs/tools.md`, "The keeper": the keeper carries the monitor intent.
     // The missing stderr file leaves the path empty, not the intent.
     assert!(adopt.lines, "the monitor still delivers lines");
     assert_eq!(adopt.errors, None);

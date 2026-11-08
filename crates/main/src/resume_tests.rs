@@ -994,7 +994,7 @@ fn a_vanished_following_child_fails_the_seed_as_missing() {
     );
 }
 
-// ---- the keeper's handover (docs/tools.md, "The keeper": a resume takes the log back) ----
+// ---- the keeper's handover (`docs/tools.md`, "The keeper": a resume takes the log back) ----
 
 /// How a scripted keeper behaves once the resume contacts it.
 #[derive(Clone, Copy)]
