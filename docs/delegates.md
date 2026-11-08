@@ -48,7 +48,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 | `delegate_spawn` | `description`, `prompt`, `model`, `isolation`, `workspace`, `timeout_ms` | Starts a delegate. Returns a receipt with the delegate id and the output path. |
 | `delegate_fork` | `description`, `prompt`, `isolation`, `timeout_ms` | Starts a Fiber delegate from the parent's conversation. No model or thinking level: see "Forks". |
 | `delegate_message` | `id`, `message` | Steers a running delegate, or resumes a finished one. |
-| `delegate_models` | none | Returns the configured roles, what each maps to now, the full references available, and the quota of each provider credential label and harness (`docs/tools.md`, "Provider quota"). |
+| `delegate_models` | `filter` (optional) | Returns the session's own model first, then the configured roles, what each maps to now, the references available grouped by provider with counts, and the quota of each provider credential label and harness (`docs/tools.md`, "Provider quota"). `filter` keeps only references containing it. |
 | `jobs` | as `docs/tools.md` | Lists, waits for and stops delegates. |
 
 - `description` is a short label for people.
@@ -85,6 +85,8 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   (`docs/model-routing.md`, "Thinking"), for another harness it is passed to
   that harness's flag, such as Claude Code's `--effort` (cursor-agent writes
   it inside its model name).
+- A bare `provider/model` reference resolves to `fiber:provider/model`; only
+  switched-on providers count.
 - It is required and checked when the call is made. The schema leaves it
   optional and untyped, so a missing or wrong value reaches that check. An
   invalid value fails with `invalid_arguments` and lists the roles in full
@@ -100,8 +102,8 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   provider is marked ` (unavailable)`. Naming that role or the provider's
   model in a delegate call fails before any process starts.
 - The switched-on rule is the session's (`docs/model-routing.md`, "Naming
-  a model"): only switched-on providers count when a bare id resolves; a
-  full `provider/model` reference resolves installed-wide.
+  a model"): only switched-on providers count when a bare id resolves, and
+  a delegate call applies the same narrowing to a full reference.
 - A role is a name for a model reference, for example `deep` for
   `claude:opus:high`. A role may also name a credential label, so one
   project's delegates can run on different subscriptions of one provider

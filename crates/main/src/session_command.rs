@@ -863,6 +863,9 @@ pub(crate) fn assemble_session(
                 .extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
             extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
             extensions.drive_to(session.driver());
+            // The model switch rebuilds the delegate resolver around its
+            // model when it applies; hand it the session's delegates first.
+            switching.set_delegates(&delegates);
             let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
             let host_model = Arc::new(crate::model_host::ModelHost::new(
                 switching.reacher(Arc::new(crate::connect)),
@@ -1377,6 +1380,9 @@ pub(crate) fn assemble_session(
                 .extensions(Arc::clone(&extensions) as Arc<dyn contract::extension::ExtensionDoor>);
             extensions.emit_to(Arc::new(log::WeakEmit::new(&log)));
             extensions.drive_to(session.driver());
+            // The model switch rebuilds the delegate resolver around its
+            // model when it applies; hand it the session's delegates first.
+            switching.set_delegates(&delegates);
             let switching = Arc::new(switching.diagnostics(Arc::clone(&diag)));
             let host_model = Arc::new(crate::model_host::ModelHost::new(
                 switching.reacher(Arc::new(crate::connect)),
