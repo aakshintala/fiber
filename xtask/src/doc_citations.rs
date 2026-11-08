@@ -286,7 +286,8 @@ fn find_cites(original: &str, blanked: &str) -> Vec<Found> {
         }
         let target = blanked[i..p + 3].to_owned();
         let path_end = p + 3;
-        let wrapped = i > 0 && bytes[i - 1] == b'`' && byte_at(bytes, path_end) == Some(b'`');
+        let wrapped = i.checked_sub(1).and_then(|before| byte_at(bytes, before)) == Some(b'`')
+            && byte_at(bytes, path_end) == Some(b'`');
         let mut tail = path_end;
         if byte_at(bytes, tail) == Some(b'`') {
             tail += 1;
