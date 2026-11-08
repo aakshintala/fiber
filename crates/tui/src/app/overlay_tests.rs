@@ -5209,10 +5209,15 @@ fn the_replay_lands_idle_and_in_order_after_a_reopening() {
     assert!(matches!(app.overlay, Overlay::None), "the replay landed");
     assert!(idle(&app), "the replayed turns completed");
     let seqs = page_seqs(&app);
+    // docs/tui.md ("History and paging"): the replay arrives in `seq` order
+    // (docs/events.md, `history`) and the fold takes it in order, so the
+    // pages ascend.
     assert!(
         seqs.windows(2).all(|pair| pair[0].1 < pair[1].0),
         "the pages ascend: {seqs:?}"
     );
+    // docs/tui.md ("History and paging"): the pass ends when it folds the
+    // reopening's `last_seq`, so the landed pages end there.
     assert_eq!(seqs.last().map(|(_, last)| *last), Some(last));
 }
 

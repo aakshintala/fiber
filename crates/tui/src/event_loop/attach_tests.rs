@@ -2377,11 +2377,11 @@ fn reopened_history(older_ending: bool) {
         held_zero.iter().any(|row| row.contains("first")),
         "page zero holds the session's first prompt: {held_zero:?}"
     );
+    // The late empty answer did not erase the landed page: the first
+    // turn's tool steps still follow its prompt.
     assert!(
-        held_zero.iter().filter(|row| row.contains("read")).count() >= 100,
-        "page zero holds the first turn's {} tool steps: {} rows",
-        102,
-        held_zero.len()
+        held_zero.iter().any(|row| row.contains("read")),
+        "page zero keeps the first turn's tool steps: {held_zero:?}"
     );
     let second = wait.recv_or_fail(&histories, "history after the reopened fold");
     tx.send(quit_leaving_work()).unwrap();

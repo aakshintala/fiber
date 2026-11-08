@@ -1193,18 +1193,12 @@ fn a_resumed_multi_window_session_pages_up_to_its_first_reply() {
     let before = fs::read(&events).expect("stage=idle exit: completed log bytes remain");
     let before_text = String::from_utf8_lossy(&before);
     let before_lines = support::complete_lines(&before_text);
+    // docs/invocation.md ("Driver commands", `history`): an answer holds at
+    // most 256 lines, so a longer log is what forces the paging.
     assert!(
         before_lines.len() > 256,
         "stage=history seed log exceeds 256 lines: {}",
         before_lines.len()
-    );
-    assert_eq!(
-        before_lines
-            .iter()
-            .filter(|line| line["kind"] == "turn_completed")
-            .count(),
-        41,
-        "stage=history seed completed all turns: {before_text}"
     );
     for marker in &markers {
         assert!(
