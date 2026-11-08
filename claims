@@ -210,15 +210,6 @@ crates/contract/src/model_tests.rs	fiber-4233	plan	2026-11-08T13:00:39Z	roundhou
 crates/contract/src/tool.rs	fiber-4233	plan	2026-11-08T13:00:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4233-compaction-rename	
 crates/contract/tests/process.rs	fiber-4233	plan	2026-11-08T13:00:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4233-compaction-rename	
 crates/diag/src/diag_tests.rs	fiber-4233	plan	2026-11-08T13:00:39Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/loop/4233-compaction-rename	
-crates/main/tests/extension_codemode.rs	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
-crates/jobs/src/tool.rs	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
-crates/jobs/src/registry.rs	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
-crates/jobs/src/registry/runs.rs	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
-crates/tools/src/shell/monitor.rs	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
-crates/provider/src/scripted.rs	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
-crates/provider/src/scripted_tests.rs	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
-crates/main/tests/support/mod.rs	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
-extensions/codemode/init.lua	fiber-4430	plan	2026-11-08T13:12:01Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4430-codemode-flake	
 GLOSSARY.md	fiber-4233	plan	2026-11-08T13:45:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/doors/src/attach.rs	fiber-4233	plan	2026-11-08T13:45:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/doors/src/client.rs	fiber-4233	plan	2026-11-08T13:45:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
