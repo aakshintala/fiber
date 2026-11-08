@@ -4770,7 +4770,7 @@ fn a_delegate_fails_on_a_required_server_nobody_approved() {
 
 #[test]
 fn a_delegate_spawn_with_an_unknown_model_fails_and_starts_nothing() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::without_provider();
     let _guard = arm(&setup);
     let parent = ProviderServer::start([
         support::stream(&[spawn_call("fiber:fake/none")]),
@@ -5094,7 +5094,7 @@ fn delegate_models_omits_logged_out_provider_references() {
 
 #[test]
 fn delegate_models_returns_the_roles_and_references_and_its_definition_lists_neither() {
-    let setup = support::Setup::new();
+    let setup = support::Setup::without_provider();
     let _guard = arm(&setup);
     let parent = ProviderServer::start([
         support::stream(&[function_call("call_models", "delegate_models", &json!({}))]),
