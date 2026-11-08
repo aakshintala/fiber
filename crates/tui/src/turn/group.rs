@@ -14,9 +14,7 @@ use crate::ext::{
     CallState, GroupLine, Input, LedgerResult, LedgerRow, PromptImage, RowError, TurnCall,
     TurnCallResult, TurnFailed, TurnGroup, TurnGroupState, TurnSection, TurnStreaming, TurnThought,
 };
-use crate::format::{
-    Kind, Kinds, count, dim, heading, kind, label, oneline, opened, summary, via,
-};
+use crate::format::{Kind, Kinds, count, dim, heading, kind, label, oneline, opened, summary, via};
 use crate::rows::{RowText, Rows};
 use crate::theme::{Role, style};
 
