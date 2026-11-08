@@ -85,6 +85,7 @@ impl Driver {
         let first = match setup.deadline.recv(&lines) {
             Ok(first) => first,
             Err(error) => {
+                let pid = child.id();
                 let child = match child.try_wait() {
                     Ok(None) => String::from("still running"),
                     Ok(Some(status)) => format!("exited with {status}"),
@@ -96,7 +97,11 @@ impl Driver {
                     std::sync::mpsc::RecvTimeoutError::Timeout => {
                         let servers = configured_servers(&setup.home());
                         let report = startup_timeout_report(&servers, &child, &stderr, &snap);
-                        panic!("{report}");
+                        let evidence = timeout_evidence(
+                            list_session_tree(pid),
+                            &spawns_line(setup.root.path()),
+                        );
+                        panic!("{report}\n{evidence}");
                     }
                     std::sync::mpsc::RecvTimeoutError::Disconnected => {
                         let sections = startup_timeout_sections(&stderr, &snap);
@@ -1049,13 +1054,134 @@ fn home_snapshot(home: &Path) -> HomeSnapshot {
     }
 }
 
+/// The rows of `ps -ax -ww -o pid= -o ppid= -o pgid= -o stat= -o etime=
+/// -o command=` output that are `root`, have `pgid == root`, or descend
+/// from an included row by `ppid`, in input order. A session runs each
+/// MCP server in a session of its own (`setsid`), so a `pgid` filter
+/// alone would miss the server's wrapper: the walk follows `ppid`.
+/// Each row comes back as `pid ppid pgid stat etime command` with single
+/// spaces. An empty observation is an error, not an empty tree.
+fn session_tree(ps: &str, root: u32) -> Result<Vec<String>, String> {
+    let mut rows = Vec::new();
+    for line in ps.lines().filter(|line| !line.trim().is_empty()) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let number = |at: usize| fields.get(at).and_then(|field| field.parse::<u32>().ok());
+        match (number(0), number(1), number(2)) {
+            (Some(pid), Some(ppid), Some(pgid)) if fields.len() >= 6 => {
+                rows.push((pid, ppid, pgid, fields.join(" ")));
+            }
+            _ => return Err(format!("ps line is malformed: {line:?}")),
+        }
+    }
+    if rows.is_empty() {
+        return Err("ps listed no processes".to_owned());
+    }
+    let mut included = std::collections::HashSet::new();
+    loop {
+        let before = included.len();
+        for (pid, ppid, pgid, _) in &rows {
+            if *pid == root || *pgid == root || included.contains(ppid) {
+                included.insert(*pid);
+            }
+        }
+        if included.len() == before {
+            break;
+        }
+    }
+    Ok(rows
+        .into_iter()
+        .filter(|(pid, ..)| included.contains(pid))
+        .map(|(.., line)| line)
+        .collect())
+}
+
+/// [`session_tree`] over a live `ps`, bounded by
+/// `fakes::MUST_SUCCEED_WITHIN`. A `ps` that never exits is killed and
+/// reported; every failure is a returned string, never a panic, so the
+/// timeout report still leads the panic.
+fn list_session_tree(root: u32) -> Result<Vec<String>, String> {
+    let mut command = std::process::Command::new("ps");
+    command
+        .args([
+            "-ax", "-ww", "-o", "pid=", "-o", "ppid=", "-o", "pgid=", "-o", "stat=", "-o",
+            "etime=", "-o", "command=",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .env_clear()
+        .envs(fakes::check_run())
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    let (child, watchdog) = spawn_watched(&mut command);
+    let ps_group = child.id();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let deadline = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let output = match deadline.recv(&finished) {
+        Ok(output) => output.map_err(|error| format!("ps could not be reaped: {error}"))?,
+        Err(_) => {
+            match fakes::kill_group(ps_group, "KILL") {
+                Ok(_) | Err(_) => {}
+            }
+            watchdog.stand_down(deadline.cleanup_phase());
+            return Err(format!(
+                "ps did not exit within {}s",
+                fakes::MUST_SUCCEED_WITHIN.as_secs()
+            ));
+        }
+    };
+    watchdog.stand_down(deadline.cleanup_phase());
+    if !output.status.success() {
+        return Err(format!(
+            "ps exited {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|error| format!("ps output is not text: {error}"))?;
+    session_tree(&text, root)
+}
+
+/// How many lines the wrapper's `spawns` file under `root` holds, or
+/// that it is absent. Only the two `flaky.sh` tests write one.
+fn spawns_line(root: &Path) -> String {
+    match fs::read_to_string(root.join("spawns")) {
+        Ok(text) => format!("spawns: {} lines", text.lines().count()),
+        Err(_) => String::from("spawns: absent"),
+    }
+}
+
+/// The evidence appended to the `fiber_started` timeout report (see #4379):
+/// the processes under the session child, then the `spawns` line.
+fn timeout_evidence(listing: Result<Vec<String>, String>, spawns: &str) -> String {
+    let mut text = match listing {
+        Ok(rows) if rows.is_empty() => String::from(
+            "processes under the session child (pid ppid pgid stat etime command):\n(none)",
+        ),
+        Ok(rows) => format!(
+            "processes under the session child (pid ppid pgid stat etime command):\n{}",
+            rows.join("\n")
+        ),
+        Err(error) => format!("processes: {error}"),
+    };
+    text.push('\n');
+    text.push_str(spawns);
+    text
+}
+
 /// The `fiber_started` startup-timeout diagnostic for #3515: when the
 /// startup wait expires, the panic names the startup state it found —
 /// the configured servers, the child status, stderr so far, and the
 /// runtime directories under the test home — instead of only the
 /// deadline. The Timeout branch itself is not forceable live by
 /// design, so these unit tests pin the builder, the reader, and the
-/// snapshot.
+/// snapshot. The #4379 evidence follows the report: a `bash` row in
+/// `U`/`E`, or a forked `fiber session` copy under the child with
+/// `spawns` 0 or absent, points at `spawn`/`exec`; a `bash flaky.sh` or
+/// fixture row asleep after the wrapper ran points at a stall after
+/// `spawn` returns; no row under the child with `spawns` at the
+/// expected count points at a stall after the join, in the session.
 #[test]
 fn startup_timeout_report_names_servers_child_stderr_and_snapshot() {
     let snap = HomeSnapshot {
@@ -1250,4 +1376,149 @@ fn configured_servers_reads_shapes_without_object_servers_as_no_servers() {
             "{config}"
         );
     }
+}
+
+/// A `ps` listing with the session child 4242 (a group of its own), a
+/// `setsid`'d server wrapper 4300 under it, that wrapper's own child 4301
+/// (listed before its parent, so the walk needs more than one pass), a
+/// row in the child's group, and rows unrelated to it.
+const PS_FIXTURE: &str = "\
+ 4301  4300  4300 S    00:40 sleep 600
+    1     0     1 Ss   09:00 /sbin/init
+ 4242  4100  4242 S    00:41 fiber session --id s_00000000000000d1 --workspace /tmp/ws
+ 4300  4242  4300 S    00:41 bash /tmp/ws/flaky.sh
+ 4250  4100  4242 S    00:41 same-group-row
+ 4400  4399  4399 S    01:00 unrelated one
+ 4399     1  4399 S    01:00 unrelated parent
+";
+
+fn tree_pids(rows: &[String]) -> Vec<u32> {
+    rows.iter()
+        .map(|row| row.split(' ').next().unwrap().parse().unwrap())
+        .collect()
+}
+
+#[test]
+fn timeout_evidence_tree_lists_the_root_group_children_and_setsid_descendants() {
+    let rows = session_tree(PS_FIXTURE, 4242).unwrap();
+    let pids = tree_pids(&rows);
+    // The root, a `pgid == root` row, and a direct child in another
+    // group (the wrapper), then a grandchild listed before its parent.
+    assert!(pids.contains(&4242), "{rows:?}");
+    assert!(pids.contains(&4250), "{rows:?}");
+    assert!(pids.contains(&4300), "{rows:?}");
+    assert!(pids.contains(&4301), "{rows:?}");
+    // Input order is kept.
+    assert_eq!(pids, vec![4301, 4242, 4300, 4250]);
+}
+
+#[test]
+fn timeout_evidence_tree_leaves_out_unrelated_rows_and_reused_parents() {
+    let rows = session_tree(PS_FIXTURE, 4242).unwrap();
+    let pids = tree_pids(&rows);
+    assert!(!pids.contains(&1), "{rows:?}");
+    assert!(!pids.contains(&4400), "{rows:?}");
+    assert!(!pids.contains(&4399), "{rows:?}");
+}
+
+#[test]
+fn timeout_evidence_tree_keeps_every_word_of_a_command_and_the_etime_shapes() {
+    let ps = " 10 1 10 S 1-02:03:04 a  b   c\n 11 10 11 S 05:06 d e\n";
+    assert_eq!(
+        session_tree(ps, 10).unwrap(),
+        vec!["10 1 10 S 1-02:03:04 a b c", "11 10 11 S 05:06 d e"]
+    );
+}
+
+#[test]
+fn timeout_evidence_tree_names_a_malformed_line() {
+    for ps in [
+        " 10 1 10 S 00:01\n",
+        " x 1 10 S 00:01 cmd\n",
+        " 10 y 10 S 00:01 cmd\n",
+        " 10 1 z S 00:01 cmd\n",
+    ] {
+        let error = session_tree(ps, 10).unwrap_err();
+        assert!(error.contains(ps.trim()), "{error}");
+    }
+    // Six fields is the edge: one short fails, exactly six passes.
+    assert!(session_tree(" 10 1 10 S 00:01 c\n", 10).is_ok());
+}
+
+#[test]
+fn timeout_evidence_tree_reads_no_rows_as_an_error() {
+    assert_eq!(session_tree("", 10).unwrap_err(), "ps listed no processes");
+    assert_eq!(
+        session_tree("\n  \n", 10).unwrap_err(),
+        "ps listed no processes"
+    );
+}
+
+#[test]
+fn timeout_evidence_tree_of_a_gone_root_is_empty_not_an_error() {
+    assert_eq!(
+        session_tree(PS_FIXTURE, 9999).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn timeout_evidence_live_listing_shows_a_running_process() {
+    let mut command = std::process::Command::new("sleep");
+    command.arg("120");
+    let (mut child, watchdog) = spawn_watched(&mut command);
+    let pid = child.id();
+    let listing = list_session_tree(pid);
+    let cleanup = fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN).cleanup_phase();
+    match fakes::kill_group(pid, "KILL") {
+        Ok(_) | Err(_) => {}
+    }
+    child.wait().unwrap();
+    watchdog.stand_down(cleanup);
+    let rows = listing.unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row.starts_with(&format!("{pid} ")) && row.ends_with("sleep 120")),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn timeout_evidence_spawns_line_reads_absent_two_and_zero() {
+    let root = fakes::TempDir::new("spawns-line");
+    assert_eq!(spawns_line(root.path()), "spawns: absent");
+    fs::write(root.path().join("spawns"), "spawn\nspawn\n").unwrap();
+    assert_eq!(spawns_line(root.path()), "spawns: 2 lines");
+    fs::write(root.path().join("spawns"), "").unwrap();
+    assert_eq!(spawns_line(root.path()), "spawns: 0 lines");
+}
+
+#[test]
+fn timeout_evidence_prints_rows_in_order_then_the_spawns_line() {
+    let rows = vec!["1 0 1 S 00:01 a".to_owned(), "2 1 1 S 00:01 b".to_owned()];
+    assert_eq!(
+        timeout_evidence(Ok(rows), "spawns: 0 lines"),
+        "processes under the session child (pid ppid pgid stat etime command):\n\
+         1 0 1 S 00:01 a\n2 1 1 S 00:01 b\nspawns: 0 lines"
+    );
+}
+
+#[test]
+fn timeout_evidence_prints_the_error_and_still_the_spawns_line() {
+    assert_eq!(
+        timeout_evidence(
+            Err("ps did not exit within 10s".to_owned()),
+            "spawns: absent"
+        ),
+        "processes: ps did not exit within 10s\nspawns: absent"
+    );
+}
+
+#[test]
+fn timeout_evidence_names_an_empty_tree_and_still_prints_the_spawns_line() {
+    assert_eq!(
+        timeout_evidence(Ok(Vec::new()), "spawns: 2 lines"),
+        "processes under the session child (pid ppid pgid stat etime command):\n\
+         (none)\nspawns: 2 lines"
+    );
 }
