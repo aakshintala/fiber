@@ -87,7 +87,7 @@ fn arguments(model: &str) -> serde_json::Map<String, serde_json::Value> {
 /// `fiber:` references, so a refusal listing the closest 3 must leave one
 /// out. No refusal prints this text whole: unknown models list the roles
 /// line, up to 3 closest references and the pointer instead.
-const CATALOGUE: &str = "Roles:\ndeep: fiber:fake/m:high\nReferences:\nfiber:fake/gpt-5.6:xhigh\nfiber:fake/gpt-5.4\nfiber:fake/gpt-5.6\nfiber:fake/other";
+const CATALOGUE: &str = "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m:high\nReferences:\nfake (4):\nfiber:fake/gpt-5.6:xhigh\nfiber:fake/gpt-5.4\nfiber:fake/gpt-5.6\nfiber:fake/other";
 
 /// The roles line the stub's refusals carry: the one configured role.
 const ROLES_LINE: &str = "Roles: deep";
@@ -448,6 +448,13 @@ fn the_schema_leaves_model_optional_and_untyped() {
     use contract::tool::Tool as _;
     let rig = rig();
     let definition = tool(&rig).definition();
+    assert!(
+        definition
+            .description
+            .contains("A bare `provider/model` resolves to `fiber:provider/model`."),
+        "{}",
+        definition.description
+    );
     assert_eq!(
         definition.input_schema["required"],
         serde_json::json!(["description", "prompt"])

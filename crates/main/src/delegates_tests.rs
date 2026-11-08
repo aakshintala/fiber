@@ -226,7 +226,7 @@ fn a_full_reference_resolves_to_its_provider_model_and_level() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!(
         (resolve.lookup)("fiber:fake/m:high").unwrap(),
         "fake/m:high"
@@ -242,7 +242,7 @@ fn a_reference_without_a_level_resolves_to_its_provider_model() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!((resolve.lookup)("fiber:fake/m").unwrap(), "fake/m");
 }
 
@@ -255,7 +255,7 @@ fn a_level_the_model_does_not_take_fails_with_the_thinking_message() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     let Err(reason) = (resolve.lookup)("fiber:fake/plain:high") else {
         panic!("a level the model does not take resolves");
     };
@@ -268,7 +268,7 @@ fn a_level_the_model_does_not_take_fails_with_the_thinking_message() {
 #[test]
 fn an_unknown_model_lists_the_valid_references() {
     let (providers, config) = rig(json!({}));
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!(
         (resolve.lookup)("fiber:fake/nope").unwrap_err(),
         "Unknown delegate model \"fiber:fake/nope\"."
@@ -276,26 +276,108 @@ fn an_unknown_model_lists_the_valid_references() {
 }
 
 #[test]
-fn a_reference_without_the_fiber_prefix_is_refused() {
-    let (providers, config) = rig(json!({}));
-    let resolve = resolver(&providers, &config);
+fn a_bare_reference_resolves_through_the_fiber_prefix() {
+    let (root, providers, _) = stored_rig(json!({}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
+    let resolve = resolver(&providers, &config, "fake/m");
+    assert_eq!((resolve.lookup)("fake/m").unwrap(), "fake/m");
     // `claude:opus` names another harness, which this ticket does not build.
     assert_eq!(
         (resolve.lookup)("claude:opus").unwrap_err(),
         "Unknown delegate model \"claude:opus\"."
     );
-    // `fake/m` would resolve through the plain lookup, but only full
-    // `fiber:` references are accepted.
+}
+
+#[test]
+fn a_bare_reference_with_a_level_resolves() {
+    let (root, providers, _) = stored_rig(json!({}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
+    let resolve = resolver(&providers, &config, "fake/m");
+    assert_eq!((resolve.lookup)("fake/m:high").unwrap(), "fake/m:high");
+}
+
+#[test]
+fn a_bare_reference_with_a_level_the_model_does_not_take_keeps_the_thinking_message() {
+    let (root, providers, _) = stored_rig(json!({}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
+    let resolve = resolver(&providers, &config, "fake/m");
+    // Only the `Unknown` refusal is rewritten to the typed argument: a
+    // thinking failure passes through untouched, so both forms agree.
+    assert_eq!(
+        (resolve.lookup)("fake/plain:high").unwrap_err(),
+        (resolve.lookup)("fiber:fake/plain:high").unwrap_err()
+    );
+}
+
+#[test]
+fn a_role_named_like_a_bare_reference_resolves_as_the_role() {
+    let (root, providers, _) = stored_rig(json!({"fake/m": "fiber:fake/plain"}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
+    let resolve = resolver(&providers, &config, "fake/m");
+    // The role check runs first, so the colliding name never reaches
+    // the bare-form branch.
+    assert_eq!((resolve.lookup)("fake/m").unwrap(), "fake/plain");
+}
+
+#[test]
+fn an_unknown_bare_reference_names_the_typed_argument() {
+    let (root, providers, _) = stored_rig(json!({}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
+    let resolve = resolver(&providers, &config, "fake/m");
+    // The refusal names `nope/x`, not the `fiber:`-prefixed form the
+    // lookup resolved internally.
+    assert_eq!(
+        (resolve.lookup)("nope/x").unwrap_err(),
+        "Unknown delegate model \"nope/x\"."
+    );
+}
+
+#[test]
+fn a_bare_reference_on_a_switched_off_provider_is_refused() {
+    // Installed but never logged in: the fake's only credential source
+    // is its unset `FIBER_TEST_FAKE_KEY` variable and no label is
+    // stored, so the switched-on narrowing from #4190 leaves it out.
+    let (providers, config) = rig(json!({}));
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!(
         (resolve.lookup)("fake/m").unwrap_err(),
         "Unknown delegate model \"fake/m\"."
+    );
+    assert_eq!(
+        resolve.catalogue.as_ref(),
+        "Session model: fiber:fake/m\nRoles: none\nReferences: none"
     );
 }
 
 #[test]
 fn a_bare_id_without_a_provider_is_refused() {
     let (providers, config) = rig(json!({}));
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!(
         (resolve.lookup)("fiber:m").unwrap_err(),
         "Unknown delegate model \"fiber:m\"."
@@ -305,7 +387,7 @@ fn a_bare_id_without_a_provider_is_refused() {
 #[test]
 fn odd_references_list_the_valid_references() {
     let (providers, config) = rig(json!({}));
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     for reference in ["fiber:", "fiber:/", "fiber:fake/m:", "fiber:fake/"] {
         assert_eq!(
             (resolve.lookup)(reference).unwrap_err(),
@@ -324,7 +406,7 @@ fn a_role_resolves_to_its_reference_and_level() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!((resolve.lookup)("deep").unwrap(), "fake/m:high");
 }
 
@@ -340,7 +422,7 @@ fn a_role_object_resolves_through_its_model() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
 }
 
@@ -351,7 +433,7 @@ fn a_role_to_another_harness_or_unknown_model_is_refused() {
         "bare": "fake/m",
         "missing": "fiber:fake/nope",
     }));
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     for (name, target) in [
         ("gone", "claude:opus"),
         ("bare", "fake/m"),
@@ -373,7 +455,7 @@ fn a_role_with_a_level_its_model_does_not_take_is_refused() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     let reason = (resolve.lookup)("bad").unwrap_err();
     assert!(
         reason.starts_with("Role \"bad\" maps to \"fiber:fake/plain:high\": "),
@@ -394,7 +476,7 @@ fn roles_do_not_chain() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     // `a` maps to `b`, which is resolved as a reference only: no role
     // lookup follows.
     assert_eq!(
@@ -420,18 +502,21 @@ fn the_catalogue_lists_roles_then_references_sorted() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!(
         resolve.catalogue.as_ref(),
-        "Roles:\ndeep: fiber:fake/m:high\nfast: fiber:fake/plain\ngone: claude:opus (unavailable)\nReferences:\nfiber:fake/m (thinking: low, high)\nfiber:fake/plain"
+        "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m:high\nfast: fiber:fake/plain\ngone: claude:opus (unavailable)\nReferences:\nfake (2):\nfiber:fake/m (thinking: low, high)\nfiber:fake/plain"
     );
 }
 
 #[test]
 fn an_empty_catalogue_reads_none() {
     let (providers, config) = rig_with(json!({}), false);
-    let resolve = resolver(&providers, &config);
-    assert_eq!(resolve.catalogue.as_ref(), "Roles: none\nReferences: none");
+    let resolve = resolver(&providers, &config, "fake/m");
+    assert_eq!(
+        resolve.catalogue.as_ref(),
+        "Session model: fiber:fake/m\nRoles: none\nReferences: none"
+    );
 }
 
 #[test]
@@ -450,9 +535,12 @@ fn lookup_and_catalogue_agree_for_every_role() {
         "test",
         vec!["providers.fake.credential=default".to_owned()],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     let catalogue = resolve.catalogue.as_ref().to_owned();
-    let mut sections = catalogue.split("\nReferences:\n");
+    let rest = catalogue
+        .strip_prefix("Session model: fiber:fake/m\n")
+        .expect("the session first line");
+    let mut sections = rest.split("\nReferences:\n");
     let roles = sections
         .next()
         .expect("a roles section")
@@ -484,7 +572,13 @@ fn lookup_and_catalogue_agree_for_every_role() {
     assert!(usable > 0 && unavailable > 0);
     // Every listed reference looks up `Ok`.
     let mut seen = 0;
+    if references == "none" {
+        panic!("the fixture lists references");
+    }
     for line in references.split('\n') {
+        if line.ends_with(':') {
+            continue;
+        }
         let reference = line.split_once(' ').map(|(head, _)| head).unwrap_or(line);
         assert!((resolve.lookup)(reference).is_ok(), "{reference}");
         seen += 1;
@@ -1628,7 +1722,7 @@ fn a_role_object_with_a_stored_label_resolves_to_that_label() {
         json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}),
         &["work"],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
     assert_eq!((resolve.credential)("fast"), Ok(Some("work".to_owned())));
 }
@@ -1639,7 +1733,7 @@ fn a_role_naming_a_label_the_provider_lacks_is_refused_naming_the_labels() {
         json!({"fast": {"model": "fiber:fake/plain", "credential": "gone"}}),
         &["work"],
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!((resolve.lookup)("fast").unwrap(), "fake/plain");
     // The refusal names the label asked for and every label the provider
     // has, sorted; the model sees only role names, never labels, so the
@@ -1673,7 +1767,7 @@ fn a_scripted_provider_role_with_a_stored_label_is_refused_with_credential_missi
     )
     .unwrap();
     providers.add_scripted("scripted/a.json");
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!((resolve.lookup)("s").unwrap(), "scripted/a.json");
     assert_eq!(
         (resolve.credential)("s"),
@@ -1687,7 +1781,7 @@ fn a_scripted_provider_role_with_a_stored_label_is_refused_with_credential_missi
 #[test]
 fn a_full_reference_resolves_with_no_label() {
     let (providers, config) = rig(json!({}));
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     // A delegate started with a full reference uses the provider's
     // configured label, so no override travels.
     assert_eq!((resolve.credential)("fiber:fake/m"), Ok(None));
@@ -1696,7 +1790,7 @@ fn a_full_reference_resolves_with_no_label() {
 #[test]
 fn a_string_role_resolves_with_no_label() {
     let (providers, config) = rig(json!({"deep": "fiber:fake/m:high"}));
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     assert_eq!((resolve.credential)("deep"), Ok(None));
 }
 
@@ -1713,7 +1807,7 @@ fn a_repository_layer_role_credential_is_ignored() {
             "odd": {"model": "fiber:fake/plain", "credential": 5},
         })),
     );
-    let resolve = resolver(&providers, &config);
+    let resolve = resolver(&providers, &config, "fake/m");
     // A repository's role cannot name a credential: the label is ignored,
     // and a non-string `credential` reads as no label too. The load raises
     // one ignored-key notice per role carrying one, naming the key.
@@ -1755,8 +1849,8 @@ fn a_repository_layer_role_credential_is_ignored() {
 fn the_catalogue_never_prints_a_role_label() {
     let object = rig(json!({"fast": {"model": "fiber:fake/plain", "credential": "work"}}));
     let string = rig(json!({"fast": "fiber:fake/plain"}));
-    let labelled = resolver(&object.0, &object.1).catalogue;
-    let plain = resolver(&string.0, &string.1).catalogue;
+    let labelled = resolver(&object.0, &object.1, "fake/m").catalogue;
+    let plain = resolver(&string.0, &string.1, "fake/m").catalogue;
     assert_eq!(labelled.as_ref(), plain.as_ref());
     assert!(!labelled.contains("work"), "{labelled}");
 }
@@ -2026,7 +2120,7 @@ fn models_rig(catalogue: &str) -> super::Delegates {
     )
 }
 
-fn models_text(models: &jobs::DelegateModels) -> String {
+fn models_text(models: &super::LiveModels) -> String {
     use contract::tool::Tool as _;
     let output = models.run(
         &serde_json::Map::new(),
@@ -2119,29 +2213,28 @@ fn refreshed_tools_share_one_resolve() {
     delegates.set_resolve(resolve);
     // The stored snapshot is what the declared tools read: a fresh
     // spawn tool never meets a stale models text, or the reverse.
-    let snapshot = delegates.resolve_snapshot();
-    let (spawn, models) = delegates.tools_with(&snapshot);
+    let (spawn, models) = delegates.tools_with();
     assert_eq!(
-        spawn.resolve.catalogue.to_string(),
+        spawn.resolve().catalogue.to_string(),
         "Roles: none\nReferences:\nfiber:fake/m (thinking: high)"
     );
     assert_eq!(
-        models.catalogue.to_string(),
-        spawn.resolve.catalogue.to_string()
+        models.catalogue().to_string(),
+        spawn.resolve().catalogue.to_string()
     );
     assert_eq!(
-        (spawn.resolve.lookup)("fiber:fake/m:high"),
+        (spawn.resolve().lookup)("fiber:fake/m:high"),
         Ok("fake/m:high".to_owned())
     );
     // The declared tools read the same snapshot: both carry the fresh
     // catalogue, and neither holds the wired-in stub.
     assert_eq!(
-        delegates.tool().resolve.catalogue.to_string(),
-        models.catalogue.to_string()
+        delegates.tool().resolve().catalogue.to_string(),
+        models.catalogue().to_string()
     );
     assert_eq!(
-        delegates.models().catalogue.to_string(),
-        models.catalogue.to_string()
+        delegates.models().catalogue().to_string(),
+        models.catalogue().to_string()
     );
 }
 
