@@ -1628,8 +1628,8 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
                 vec![
                     "c_bare",
                     "c_close",
-                    "c_drop",
                     "c_compaction",
+                    "c_drop",
                     "c_noargs",
                     "c_prompt",
                     "c_reply",

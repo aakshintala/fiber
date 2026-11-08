@@ -234,13 +234,13 @@ impl Hooks for CompactionHooks {
 }
 
 /// A compaction whose note a hook wrote: no note request, then the opening.
-const HOOK_HANDED_OFF: &[&str] = &[
+const HOOK_COMPACTED: &[&str] = &[
     "compaction_started",
     "compaction_completed",
     "opening_message",
 ];
 /// A compaction whose note the model wrote, to the new opening message.
-const MODEL_HANDED_OFF: &[&str] = &[
+const MODEL_COMPACTED: &[&str] = &[
     "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
@@ -336,15 +336,7 @@ fn a_hook_note_completes_the_compaction_with_no_note_request() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[
-            OPENING,
-            STEP,
-            CALL_BODY,
-            STEP,
-            HOOK_HANDED_OFF,
-            REPLY,
-            ENDED,
-        ],
+        &[OPENING, STEP, CALL_BODY, STEP, HOOK_COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -413,7 +405,7 @@ fn no_hook_note_leaves_the_note_to_the_model() {
             STEP,
             CALL_BODY,
             STEP,
-            MODEL_HANDED_OFF,
+            MODEL_COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -564,15 +556,7 @@ fn a_person_compaction_hands_the_hook_its_instructions() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[
-            OPENING,
-            STEP,
-            CALL_BODY,
-            STEP,
-            HOOK_HANDED_OFF,
-            REPLY,
-            ENDED,
-        ],
+        &[OPENING, STEP, CALL_BODY, STEP, HOOK_COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -701,7 +685,7 @@ fn an_overflow_compaction_hands_the_hook_the_moved_results() {
             TWO_CALLS,
             STEP,
             REJECTED,
-            HOOK_HANDED_OFF,
+            HOOK_COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -1048,15 +1032,7 @@ fn the_live_conversation_after_a_hook_note_is_what_a_rebuild_renders() {
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[
-            OPENING,
-            STEP,
-            CALL_BODY,
-            STEP,
-            HOOK_HANDED_OFF,
-            REPLY,
-            ENDED,
-        ],
+        &[OPENING, STEP, CALL_BODY, STEP, HOOK_COMPACTED, REPLY, ENDED],
     );
 
     let requests = session.requests();

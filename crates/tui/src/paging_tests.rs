@@ -2134,7 +2134,7 @@ fn fill(stream: &mut Stream, n: usize) {
 }
 
 /// A compaction, completed with an empty note.
-fn handed_off(stream: &mut Stream) {
+fn compacted(stream: &mut Stream) {
     stream.durable("compaction_started", None, json!({"trigger": "auto"}));
     stream.durable(
         "compaction_completed",
@@ -2292,7 +2292,7 @@ fn a_cut_after_a_band_opens_the_next_page_with_an_edge() {
     let mut stream = Stream::new(false);
     begun(&mut stream, "go");
     stream.text("a_m", "before");
-    handed_off(&mut stream);
+    compacted(&mut stream);
     fill(&mut stream, 60);
     stream.durable("step_started", None, json!({}));
     stream.text("a_m", "after");
@@ -2339,7 +2339,7 @@ fn a_cut_after_a_band_and_a_blank_reply_opens_the_next_page_with_an_edge() {
     let mut stream = Stream::new(false);
     begun(&mut stream, "go");
     stream.text("a_m", "before");
-    handed_off(&mut stream);
+    compacted(&mut stream);
     stream.text("a_m", "   ");
     fill(&mut stream, 60);
     stream.durable("step_started", None, json!({}));

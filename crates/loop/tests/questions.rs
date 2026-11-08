@@ -47,7 +47,7 @@ fn asking(name: &'static str, texts: &[&str]) -> TestTool {
 }
 
 /// A tool whose calls return `control.compact`.
-fn handing_off(name: &'static str) -> TestTool {
+fn compacting(name: &'static str) -> TestTool {
     let mut tool = TestTool::reads(name, "Compacted.");
     tool.output.control = Some(Control {
         compact: Some("the note".into()),
@@ -310,7 +310,7 @@ fn an_empty_list_of_questions_asks_nothing() {
 fn a_compaction_in_the_same_step_applies_before_the_questions_end_the_turn() {
     let mut session = session(
         vec![
-            Arc::new(handing_off("hand")),
+            Arc::new(compacting("hand")),
             Arc::new(asking("ask", &["Which?"])),
         ],
         &["hand", "ask"],
@@ -437,7 +437,7 @@ fn a_cancel_that_ends_the_step_drops_the_questions() {
 fn a_compaction_the_questions_and_a_queued_line_end_one_step_in_order() {
     let mut session = session(
         vec![
-            Arc::new(handing_off("hand")),
+            Arc::new(compacting("hand")),
             Arc::new(asking("ask", &["Which?"])),
             Arc::new(scanning()),
         ],
@@ -488,7 +488,7 @@ fn a_directory_scanned_before_a_compaction_sends_its_file_once_in_the_new_contex
         ],
         None,
         vec![
-            Arc::new(handing_off("hand")),
+            Arc::new(compacting("hand")),
             Arc::new(asking("ask", &["Which?"])),
             Arc::new(scanning()),
         ],
@@ -553,7 +553,7 @@ fn a_directory_scanned_before_a_compaction_sends_its_file_once_in_the_new_contex
 fn a_cancel_after_the_questions_are_collected_ends_the_turn_interrupted() {
     let session = session(
         vec![
-            Arc::new(handing_off("hand")),
+            Arc::new(compacting("hand")),
             Arc::new(asking("ask", &["Which?"])),
         ],
         &["hand", "ask"],

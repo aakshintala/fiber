@@ -145,7 +145,7 @@ const CALL_BODY: &[&str] = &[
     "tool_call_completed",
 ];
 /// A compaction that completed on a one-part note, to the new opening message.
-const HANDED_OFF: &[&str] = &[
+const COMPACTED: &[&str] = &[
     "compaction_started",
     "assistant_message_started",
     "assistant_message_delta",
@@ -192,7 +192,7 @@ fn is_opening(input: &Input) -> bool {
 }
 
 #[test]
-fn a_context_below_the_trigger_does_not_hand_off() {
+fn a_context_below_the_trigger_does_not_compact() {
     let mut session = session(vec![called(100), said("Done.", 100)], settings());
 
     let (outcome, lines) = run(&mut session, "hi");
@@ -204,7 +204,7 @@ fn a_context_below_the_trigger_does_not_hand_off() {
 }
 
 #[test]
-fn a_context_one_token_short_of_the_trigger_does_not_hand_off() {
+fn a_context_one_token_short_of_the_trigger_does_not_compact() {
     // 998 prompt tokens and a one-token result: 999.
     let mut session = session(vec![called(TRIGGER - 2), said("Done.", 100)], settings());
 
@@ -217,7 +217,7 @@ fn a_context_one_token_short_of_the_trigger_does_not_hand_off() {
 }
 
 #[test]
-fn a_context_exactly_at_the_trigger_hands_off() {
+fn a_context_exactly_at_the_trigger_compacts() {
     let forgot = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&forgot);
     let mut session = session(
@@ -235,7 +235,7 @@ fn a_context_exactly_at_the_trigger_hands_off() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -312,7 +312,7 @@ fn the_live_conversation_after_a_compaction_is_what_a_rebuild_renders() {
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     let requests = session.requests();
@@ -433,7 +433,7 @@ fn a_failed_note_request_leaves_the_context_and_blocks_the_rest_of_the_turn() {
 }
 
 #[test]
-fn a_new_turn_may_hand_off_after_a_failed_one() {
+fn a_new_turn_may_compact_after_a_failed_one() {
     let mut session = session(
         vec![
             called(TRIGGER - 1),
@@ -469,10 +469,7 @@ fn a_new_turn_may_hand_off_after_a_failed_one() {
     );
 
     let (outcome, second) = run(&mut session, "again");
-    assert_kinds(
-        &second,
-        &[&["turn_started"], STEP, HANDED_OFF, REPLY, ENDED],
-    );
+    assert_kinds(&second, &[&["turn_started"], STEP, COMPACTED, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let done = of_kind(&second, "compaction_completed");
@@ -780,7 +777,7 @@ fn a_budget_refused_note_stops_nothing_and_the_turn_end_stops_once() {
 }
 
 #[test]
-fn automatic_compaction_off_never_hands_off() {
+fn automatic_compaction_off_never_compacts() {
     let mut session = session(
         vec![called(TRIGGER * 5), said("Done.", TRIGGER * 5)],
         CompactionSettings {
@@ -816,7 +813,7 @@ fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -916,7 +913,7 @@ fn each_compaction_starts_a_context_that_can_be_nudged_again() {
             &["context_nudged"],
             CALL_BODY,
             STEP,
-            HANDED_OFF,
+            COMPACTED,
             CALL_BODY,
             STEP,
             &["context_nudged"],
@@ -972,7 +969,7 @@ fn a_new_context_is_unmeasured_in_the_next_turn_too() {
     let (first, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REJECTED, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REJECTED, ENDED],
     );
     assert_eq!(first, Some(TurnOutcome::Failed));
     assert_eq!(
@@ -1074,7 +1071,7 @@ fn a_person_compaction_during_a_turn_runs_at_the_next_step_boundary() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -1135,7 +1132,7 @@ fn a_person_compaction_runs_with_automatic_compaction_off() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -1161,7 +1158,7 @@ fn commands_before_one_boundary_make_one_compaction_with_their_instructions_join
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -1189,7 +1186,7 @@ fn a_compaction_with_no_instructions_asks_for_the_note_only() {
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert!(
@@ -1221,7 +1218,7 @@ fn a_compaction_held_at_the_end_of_the_turn_continues_the_turn() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, REPLY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, REPLY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -1252,7 +1249,7 @@ fn a_person_compaction_on_the_automatic_boundary_runs_once_as_the_persons() {
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(
@@ -1276,7 +1273,7 @@ fn a_steer_drop_cannot_drop_a_compaction() {
     let (_, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     let rejected = Deadline::after(DEADLINE)
@@ -1298,7 +1295,7 @@ fn a_steer_drop_between_turns_cannot_drop_a_compaction_either() {
 
     let outcome = session.turn();
     let lines = session.lines();
-    assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, ENDED]);
+    assert_kinds(&lines, &[OPENING, STEP, COMPACTED, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let rejected = Deadline::after(DEADLINE)
@@ -1332,7 +1329,7 @@ fn a_person_compaction_between_turns_is_a_turn_of_its_own() {
 
     let outcome = session.turn();
     let lines = session.lines();
-    assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, ENDED]);
+    assert_kinds(&lines, &[OPENING, STEP, COMPACTED, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert!(
@@ -1399,7 +1396,7 @@ fn a_prompt_in_the_drain_of_a_compaction_is_carried_and_answered_after_it() {
 
         let outcome = session.turn();
         let lines = session.lines();
-        assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, REPLY, ENDED]);
+        assert_kinds(&lines, &[OPENING, STEP, COMPACTED, REPLY, ENDED]);
 
         assert_eq!(outcome, Some(TurnOutcome::Completed));
         assert!(
@@ -1511,7 +1508,7 @@ fn a_turn_a_job_started_goes_on_after_a_compaction() {
             &["job_completed"],
             CALL_BODY,
             STEP,
-            HANDED_OFF,
+            COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -1565,7 +1562,7 @@ fn a_compaction_after_close_joins_a_turn_that_already_has_input() {
 
     let outcome = session.turn();
     let lines = session.lines();
-    assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, REPLY, ENDED]);
+    assert_kinds(&lines, &[OPENING, STEP, COMPACTED, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert!(Deadline::after(DEADLINE).recv(&answer).unwrap().is_ok());
@@ -1621,7 +1618,7 @@ fn call_lines(count: usize) -> Vec<&'static str> {
 }
 
 #[test]
-fn a_call_that_sets_control_compaction_restarts_the_context_from_its_note() {
+fn a_call_that_sets_control_compact_restarts_the_context_from_its_note() {
     let mut session = tool_session(
         vec![calling(&["wrapup"], 500), said("Done.", 50)],
         vec![wrapping("wrapup", "Tool note.")],
@@ -1799,7 +1796,7 @@ fn the_loop_acts_on_the_field_and_never_on_the_tool_name() {
 }
 
 #[test]
-fn a_call_that_failed_does_not_hand_off_whatever_it_set() {
+fn a_call_that_failed_does_not_compact_whatever_it_set() {
     let mut tool = TestTool::failing("wrapup", ErrorCode::ToolError);
     tool.output.control = Some(Control {
         compact: Some("Never.".into()),
@@ -1839,7 +1836,7 @@ fn a_held_person_compaction_still_runs_at_the_boundary_after_a_tool_compaction()
             &call_lines(1),
             &["compaction_completed", "opening_message"],
             STEP,
-            HANDED_OFF,
+            COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -1915,7 +1912,7 @@ fn error_of(line: &Envelope) -> &str {
 }
 
 #[test]
-fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
+fn a_provider_overflow_moves_the_last_steps_results_and_compacts() {
     let mut session = Session::with_tools(
         vec![
             called_both(100),
@@ -1933,7 +1930,7 @@ fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
     assert_kinds(
         &lines,
         &[
-            OPENING, STEP, TWO_CALLS, STEP, REJECTED, HANDED_OFF, REPLY, ENDED,
+            OPENING, STEP, TWO_CALLS, STEP, REJECTED, COMPACTED, REPLY, ENDED,
         ],
     );
 
@@ -2123,7 +2120,7 @@ fn an_overflow_in_the_step_of_a_failed_automatic_compaction_fails_the_turn() {
 }
 
 #[test]
-fn an_overflow_in_a_later_step_than_a_failed_automatic_compaction_hands_off() {
+fn an_overflow_in_a_later_step_than_a_failed_automatic_compaction_compacts() {
     // Step 2: the automatic compaction fails, and the request goes on. Step 3:
     // the automatic trigger stays blocked, but the overflow rule runs.
     let mut session = session(
@@ -2150,7 +2147,7 @@ fn an_overflow_in_a_later_step_than_a_failed_automatic_compaction_hands_off() {
             CALL_BODY,
             STEP,
             REJECTED,
-            HANDED_OFF,
+            COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -2178,7 +2175,7 @@ fn a_second_overflow_in_one_step_fails_the_turn() {
     assert_kinds(
         &lines,
         &[
-            OPENING, STEP, CALL_BODY, STEP, REJECTED, HANDED_OFF, REJECTED, ENDED,
+            OPENING, STEP, CALL_BODY, STEP, REJECTED, COMPACTED, REJECTED, ENDED,
         ],
     );
 
@@ -2216,7 +2213,7 @@ fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation
             STEP,
             &["steering_queue", "steering_applied"],
             REJECTED,
-            HANDED_OFF,
+            COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -2261,7 +2258,7 @@ fn a_result_before_the_last_reply_stays_in_the_note_request() {
 
     assert_kinds(
         &lines,
-        &[&["turn_started"], STEP, REJECTED, HANDED_OFF, REPLY, ENDED],
+        &[&["turn_started"], STEP, REJECTED, COMPACTED, REPLY, ENDED],
     );
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let requests = session.requests();
@@ -2290,7 +2287,7 @@ fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
     assert_kinds(
         &lines,
         &[
-            OPENING, STEP, CALL_BODY, STEP, REJECTED, HANDED_OFF, REPLY, ENDED,
+            OPENING, STEP, CALL_BODY, STEP, REJECTED, COMPACTED, REPLY, ENDED,
         ],
     );
 
@@ -2362,7 +2359,7 @@ fn windowed(script: Vec<Scripted>, settings: CompactionSettings, window: u64) ->
 }
 
 #[test]
-fn an_estimate_over_a_known_window_hands_off_before_sending() {
+fn an_estimate_over_a_known_window_compacts_before_sending() {
     // 1,000 prompt tokens and a one-token result: 1,001 over the window.
     let mut session = windowed(
         vec![
@@ -2377,7 +2374,7 @@ fn an_estimate_over_a_known_window_hands_off_before_sending() {
     let (outcome, lines) = run(&mut session, "hi");
     assert_kinds(
         &lines,
-        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+        &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, REPLY, ENDED],
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
@@ -2440,7 +2437,7 @@ fn an_estimate_over_the_window_after_a_compaction_in_the_step_fails_the_turn() {
 
     let (outcome, lines) = run(&mut session, "hi");
 
-    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, ENDED]);
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, COMPACTED, ENDED]);
     assert_eq!(outcome, Some(TurnOutcome::Failed));
     assert_eq!(of_kind(&lines, "compaction_started").len(), 1);
     assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
@@ -2467,7 +2464,7 @@ fn the_live_conversation_after_an_overflow_compaction_is_what_a_rebuild_renders(
     assert_kinds(
         &lines,
         &[
-            OPENING, STEP, TWO_CALLS, STEP, REJECTED, HANDED_OFF, REPLY, ENDED,
+            OPENING, STEP, TWO_CALLS, STEP, REJECTED, COMPACTED, REPLY, ENDED,
         ],
     );
 
@@ -2527,7 +2524,7 @@ fn a_result_carried_past_a_tool_compaction_keeps_its_artifact_for_an_overflow() 
             &["compaction_completed", "opening_message"],
             STEP,
             REJECTED,
-            HANDED_OFF,
+            COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -2607,7 +2604,7 @@ fn a_compaction_rebuilds_the_section_from_its_current_files() {
             STEP,
             CALL_BODY,
             STEP,
-            HANDED_OFF,
+            COMPACTED,
             REPLY,
             ENDED,
         ],
@@ -2644,7 +2641,7 @@ fn a_compaction_rebuilds_the_section_from_its_current_files() {
 }
 
 #[test]
-fn a_tool_compaction_in_a_step_that_already_handed_off_is_an_ordinary_result() {
+fn a_tool_compaction_in_a_step_that_already_compacted_is_an_ordinary_result() {
     // The check compacts automatically, then the first reply in the new
     // context calls a tool that sets `control.compact`: at most one compaction
     // runs per step, so the call's result stays as any result does.
@@ -2667,7 +2664,7 @@ fn a_tool_compaction_in_a_step_that_already_handed_off_is_an_ordinary_result() {
             STEP,
             CALL_BODY,
             STEP,
-            HANDED_OFF,
+            COMPACTED,
             &call_lines(1),
             STEP,
             REPLY,
@@ -2702,7 +2699,7 @@ fn a_tool_compaction_in_a_step_that_already_handed_off_is_an_ordinary_result() {
 }
 
 #[test]
-fn a_tool_may_hand_off_in_the_step_after_an_automatic_compaction() {
+fn a_tool_may_compact_in_the_step_after_an_automatic_compaction() {
     let mut session = tool_session(
         vec![
             called(TRIGGER - 1),
@@ -2722,7 +2719,7 @@ fn a_tool_may_hand_off_in_the_step_after_an_automatic_compaction() {
             STEP,
             CALL_BODY,
             STEP,
-            HANDED_OFF,
+            COMPACTED,
             &call_lines(1),
             STEP,
             &call_lines(1),
@@ -2781,7 +2778,7 @@ fn a_skill_written_before_a_compaction_expands_after_it() {
     session.inbox.send(compaction("c_h", None)).unwrap();
     let outcome = session.turn();
     let handed = session.lines();
-    assert_kinds(&handed, &[&["turn_started"], STEP, HANDED_OFF, ENDED]);
+    assert_kinds(&handed, &[&["turn_started"], STEP, COMPACTED, ENDED]);
     assert_eq!(outcome, Some(TurnOutcome::Completed));
 
     // Now the same prompt expands.

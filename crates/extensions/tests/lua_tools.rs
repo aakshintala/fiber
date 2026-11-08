@@ -428,7 +428,7 @@ tool("full", function()
     content = { { type = "text", text = "a" }, { type = "text", text = "b" } },
     details = { count = 3 },
     error = { code = "nonzero_exit", message = "m" },
-    control = { compaction = "n" },
+    control = { compact = "n" },
   }
 end)
 tool("nothing", function() return nil end)

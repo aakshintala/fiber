@@ -2284,7 +2284,7 @@ fn a_cancel_reaches_a_call_running_after_a_resumed_credential_refusal() {
 }
 
 #[test]
-fn a_resumed_credential_refusal_hands_off_from_a_later_call() {
+fn a_resumed_credential_refusal_compacts_from_a_later_call() {
     // The credential-refusal branch runs its batch uncancelled, so a later
     // call whose result sets `control.compact` restarts the context from
     // its note through `compaction_from_tools`, as in any step: the `!cancelled`
@@ -3700,7 +3700,7 @@ fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
 
 /// A history whose first context ends in a completed compaction: the early
 /// turn's lines, then the compaction turn, the note and the new opening.
-fn handed_off(script: Vec<Scripted>) -> History {
+fn compacted(script: Vec<Scripted>) -> History {
     let history = History::new(script);
     history.write(opening_of("old-os"), None);
     history.write(user_turn("one"), None);
@@ -3720,7 +3720,7 @@ fn handed_off(script: Vec<Scripted>) -> History {
 
 #[test]
 fn a_resume_after_a_completed_compaction_sends_the_note_and_what_came_after_only() {
-    let mut history = handed_off(vec![Scripted::text("Hello.")]);
+    let mut history = compacted(vec![Scripted::text("Hello.")]);
     history.write(message_started(), Some("a_3"));
     history.write(assistant("after"), Some("a_3"));
     history.freeze();
@@ -3759,7 +3759,7 @@ fn a_turn_suspended_after_a_compaction_re_raises_its_request_past_lines_written_
     // `main`'s order: the pass, then `fiber_started` and the like, then the
     // resume. The window ends where the pass ended, so the suspension it
     // read still stands.
-    let mut history = handed_off(vec![Scripted::text("Hello.")]);
+    let mut history = compacted(vec![Scripted::text("Hello.")]);
     history.write(user_turn("three"), None);
     history.write(message_started(), Some("a_5"));
     history.write(requested("read", "Paris"), Some("a_1"));
@@ -3920,7 +3920,7 @@ fn an_answerable_resume_runs_the_call_a_person_allows() {
 }
 
 #[test]
-fn an_allowed_call_that_sets_control_compaction_hands_off_after_the_batch() {
+fn an_allowed_call_that_sets_control_compact_compacts_after_the_batch() {
     // The finishing turn's batch ran uncancelled: a call whose result set
     // `control.compact` restarts the context from its note, as in any step.
     let mut history = suspended_batch(vec![Scripted::text("Done.")], &["wrapup"], 1);

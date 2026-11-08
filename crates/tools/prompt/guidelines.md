@@ -24,7 +24,7 @@
 
 - When a tool you need is missing, find it with `tool_search`.
 
-## compaction
+## compact
 
 - Call `compact` with your note to restart your context from it, for example when one piece of work ends and an unrelated one begins.
 

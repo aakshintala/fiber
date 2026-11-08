@@ -92,7 +92,7 @@ fn band(cards: &mut Cards) {
 }
 
 /// The compaction completes, so later text is a reply, not the note.
-fn handed_off(cards: &mut Cards) {
+fn compacted(cards: &mut Cards) {
     feed(
         cards,
         "compaction_completed",
@@ -411,7 +411,7 @@ fn a_compaction_breaks_the_card_into_two_surfaces() {
     start(&mut cards, "go");
     text(&mut cards, "a_1", "before");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_2", "after");
     done(&mut cards);
     let (rows, _, pieces) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
@@ -556,7 +556,7 @@ fn a_band_first_or_last_draws_no_empty_piece() {
     let mut cards = fresh();
     start(&mut cards, "go");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_1", "after");
     done(&mut cards);
     let (rows, _, pieces) = draw(&cards.turns[0], WIDTH, Edges::BOTH);
@@ -631,7 +631,7 @@ fn edges_the_page_withholds_are_not_drawn() {
     start(&mut cards, "go");
     text(&mut cards, "a_1", "before");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_2", "after");
     done(&mut cards);
     // A page continuation carries no prompt bubble: only the pieces draw.
@@ -715,7 +715,7 @@ fn rows_reports_which_pieces_drew() {
     assert_eq!(
         draw_pieces(&|cards| {
             band(cards);
-            handed_off(cards);
+            compacted(cards);
             text(cards, "a_1", "hi");
         }),
         Pieces {
@@ -747,7 +747,7 @@ fn rows_reports_which_pieces_drew() {
         draw_pieces(&|cards| {
             text(cards, "a_1", "   ");
             band(cards);
-            handed_off(cards);
+            compacted(cards);
             text(cards, "a_2", "hi");
         }),
         Pieces {
@@ -763,10 +763,10 @@ fn a_later_band_does_not_change_whether_the_first_piece_drew() {
     let mut cards = fresh();
     start(&mut cards, "go");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_1", "middle");
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     text(&mut cards, "a_2", "last");
     assert_eq!(
         draw(&cards.turns[0], WIDTH, Edges::BOTH).2,
@@ -792,7 +792,7 @@ fn whether_a_piece_draws_does_not_depend_on_the_width() {
             }
             3 => {
                 band(&mut cards);
-                handed_off(&mut cards);
+                compacted(&mut cards);
                 text(&mut cards, "a_1", "hi");
             }
             4 => band(&mut cards),
@@ -803,7 +803,7 @@ fn whether_a_piece_draws_does_not_depend_on_the_width() {
             6 => {
                 text(&mut cards, "a_1", "   ");
                 band(&mut cards);
-                handed_off(&mut cards);
+                compacted(&mut cards);
                 text(&mut cards, "a_2", "hi");
             }
             _ => {}
@@ -1791,7 +1791,7 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
         let mut cards = fresh();
         start(&mut cards, "go");
         band(&mut cards);
-        handed_off(&mut cards);
+        compacted(&mut cards);
         text(&mut cards, "a_1", "after");
         done(&mut cards);
         draw(&cards.turns[0], WIDTH, edges)
@@ -1801,7 +1801,7 @@ fn no_color_keeps_box_rows_out_of_the_logical_copy() {
         let mut cards = fresh();
         start(&mut cards, "go");
         band(&mut cards);
-        handed_off(&mut cards);
+        compacted(&mut cards);
         text(&mut cards, "a_1", "after");
         done(&mut cards);
         draw(&cards.turns[0], WIDTH, edges)
@@ -1961,7 +1961,7 @@ fn rich() -> Cards {
     );
     completed(&mut cards, "a_d", json!({}));
     band(&mut cards);
-    handed_off(&mut cards);
+    compacted(&mut cards);
     feed(
         &mut cards,
         "job_started",

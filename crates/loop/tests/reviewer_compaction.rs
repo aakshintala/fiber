@@ -1603,7 +1603,7 @@ fn a_compaction_with_session_start_context_and_a_reviewer_completes() {
 }
 
 #[test]
-fn kept_messages_over_the_trigger_are_carried_whole_and_hand_off_once() {
+fn kept_messages_over_the_trigger_are_carried_whole_and_compact_once() {
     // 8,000 bytes are 2,000 tokens: the kept message alone is over a
     // trigger of 1,000.
     let long = format!("never push to main. {}", "x".repeat(8_000));
