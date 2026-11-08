@@ -87,22 +87,18 @@ fn a_failure_with_no_signal_is_reported() {
 
 #[test]
 fn delegate_admission_startup_classification_keeps_asks_closed_and_delegates_open() {
-    use super::close_from_start_for;
+    use super::StartupAdmission;
 
-    for (one_turn, delegate, case_fallback, expected) in [
-        (false, false, false, false),
-        (false, false, true, true),
-        (false, true, false, false),
-        (false, true, true, true),
-        (true, false, false, true),
-        (true, false, true, true),
-        (true, true, false, false),
-        (true, true, true, true),
+    for (one_turn, delegate, expected) in [
+        (false, false, StartupAdmission::Serve),
+        (false, true, StartupAdmission::Serve),
+        (true, false, StartupAdmission::Ask),
+        (true, true, StartupAdmission::Delegate),
     ] {
         assert_eq!(
-            close_from_start_for(one_turn, delegate, case_fallback),
+            StartupAdmission::for_run(one_turn, delegate),
             expected,
-            "one_turn={one_turn}, delegate={delegate}, case_fallback={case_fallback}"
+            "one_turn={one_turn}, delegate={delegate}"
         );
     }
 }

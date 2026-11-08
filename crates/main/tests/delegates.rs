@@ -9470,6 +9470,7 @@ fn delegate_admission_resumed_delegate_takes_a_message_and_exits_with_a_client_a
             "args": {"from_session_id": parent_id, "text": "resumed-message-marker"}})
         .to_string(),
     );
+    admission_message_enqueued(&resumed_socket);
     child.release_one();
     let resumed_message = support::recv_answer(
         &resumed_socket,
@@ -10910,6 +10911,7 @@ fn a_siblings_session_message_draws_a_labelled_rule_with_its_name_in_the_delegat
         "args": {"from_session_id": sender, "text": MARK2}})
         .to_string(),
     );
+    admission_message_enqueued(&socket);
     child.release_one();
     child.release_one();
     let answer = support::recv_answer(&socket, "c_msg", "the message take");
@@ -10964,6 +10966,14 @@ fn a_siblings_session_message_draws_a_labelled_rule_with_its_name_in_the_delegat
     quit(run);
 }
 
+/// A reader-side command behind `message` proves it reached the inbox before
+/// the test releases the provider. The message's own ack needs the loop to run.
+fn admission_message_enqueued(socket: &support::Socket) {
+    socket.send(r#"{"id":"c_enqueued","command":"tools"}"#);
+    let answer = support::recv_answer(socket, "c_enqueued", "the reader's message enqueue barrier");
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+}
+
 #[test]
 fn delegate_admission_forked_run_takes_a_message_and_exits_with_a_client_attached() {
     let setup = support::Setup::new();
@@ -10983,9 +10993,9 @@ fn delegate_admission_forked_run_takes_a_message_and_exits_with_a_client_attache
         if String::from_utf8_lossy(&request.body).contains("you are a fork of session")
             && !held.swap(true, Ordering::SeqCst)
         {
+            let release_rx = release_rx.lock().unwrap();
             entered_tx.send(()).unwrap();
-            let _released =
-                Deadline::after(Duration::from_secs(40)).recv(&release_rx.lock().unwrap());
+            let _released = Deadline::after(Duration::from_secs(40)).recv(&release_rx);
         }
         reply(request)
     })
@@ -11018,6 +11028,7 @@ fn delegate_admission_forked_run_takes_a_message_and_exits_with_a_client_attache
             "args": {"from_session_id": parent_id, "text": "fork-message-marker"}})
         .to_string(),
     );
+    admission_message_enqueued(&socket);
     // The hook answers only after the held provider call returns; do not wait
     // for the message acknowledgement while the fork's loop is streaming.
     release_tx.send(()).unwrap();

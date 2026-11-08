@@ -173,22 +173,38 @@ impl ResumeStart {
 
 pub(crate) struct SessionInputs {
     pub(crate) prompt: Option<String>,
-    pub(crate) one_turn: bool,
-    pub(crate) close_from_start: bool,
+    pub(crate) admission: StartupAdmission,
     pub(crate) start: Start,
     pub(crate) fiber_path: PathBuf,
     pub(crate) reads: Arc<crate::switch::Reads>,
 }
 
-/// Whether the session may answer an approval: the base run's
-/// answerability, and never when a program drives the session
-/// (`docs/permissions.md`, "Supervised sessions"). Both the fresh and
-/// the resumed path compute their effective value through here, so a
-/// supervised session stays unanswerable however it started.
-pub(crate) fn close_from_start_for(one_turn: bool, delegate: bool, case_fallback: bool) -> bool {
-    case_fallback || (one_turn && !delegate)
+/// The startup contract: serve clients, or exit after an ask or delegate run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StartupAdmission {
+    /// Serve clients until close or idle exit.
+    Serve,
+    /// Close admission before running the initial prompt.
+    Ask,
+    /// Keep admission open while running the initial prompt, then exit.
+    Delegate,
 }
 
+impl StartupAdmission {
+    /// Classifies a new session before its parent provenance is consumed.
+    pub(crate) fn for_run(one_turn: bool, delegate: bool) -> Self {
+        match (one_turn, delegate) {
+            (false, _) => Self::Serve,
+            (true, false) => Self::Ask,
+            (true, true) => Self::Delegate,
+        }
+    }
+}
+
+/// Whether the session may answer an approval: the base run's
+/// answerability, and never when a program drives the session
+/// (`docs/permissions.md`, "Supervised sessions"). Both fresh and resumed
+/// sessions compute the effective value here.
 pub(crate) fn effective_answerable(base: bool, supervised: bool) -> bool {
     base && !supervised
 }
@@ -526,7 +542,7 @@ pub(crate) fn run_new(
     let fiber_path = process.exe.clone()?;
     // Preserve whether this process was started as a delegate before its
     // parent provenance is consumed into `Start`.
-    let close_from_start = close_from_start_for(one_turn, parent.is_some(), false);
+    let admission = StartupAdmission::for_run(one_turn, parent.is_some());
     // A rewind's new session runs where the old one did, with the model,
     // credential and thinking level the old log's latest build recorded,
     // as a resume keeps its recorded ones (`docs/events.md`, "Rewind").
@@ -653,8 +669,7 @@ pub(crate) fn run_new(
     };
     let inputs = SessionInputs {
         prompt,
-        one_turn,
-        close_from_start,
+        admission,
         start,
         fiber_path: fiber_path.clone(),
         reads,
@@ -673,12 +688,12 @@ pub(crate) fn assemble_session(
 ) -> Result<i32, Failure> {
     let SessionInputs {
         prompt,
-        one_turn,
-        close_from_start,
+        admission: startup_admission,
         start,
         fiber_path,
         reads,
     } = inputs;
+    let one_turn = startup_admission != StartupAdmission::Serve;
     match start {
         Start::Resume(resume) => {
             let id = resume.id();
@@ -1039,8 +1054,7 @@ pub(crate) fn assemble_session(
                 &log,
                 dir.path(),
                 prompt,
-                one_turn,
-                close_from_start,
+                startup_admission,
                 cancel,
                 &diag,
                 &current,
@@ -1532,15 +1546,18 @@ pub(crate) fn assemble_session(
                 }
             });
             let case_fallback = case_inputs.is_some() && case_driver.is_none();
-            let run_one_turn = one_turn || case_fallback;
-            let close_from_start = close_from_start || case_fallback;
+            let startup_admission = if case_fallback {
+                StartupAdmission::Ask
+            } else {
+                startup_admission
+            };
+            let run_one_turn = startup_admission != StartupAdmission::Serve;
             let code = run_turn(
                 &session,
                 &log,
                 dir.path(),
                 prompt,
-                run_one_turn,
-                close_from_start,
+                startup_admission,
                 cancel,
                 &diag,
                 &current,

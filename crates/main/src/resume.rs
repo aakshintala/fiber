@@ -272,8 +272,7 @@ pub(crate) fn ask_resume(
         overrides,
         resuming.credential,
         Some(prompt),
-        true,
-        true,
+        crate::session_command::StartupAdmission::Ask,
         false,
         clock,
         signals,
@@ -353,10 +352,10 @@ pub(crate) fn session_resume(
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let dir = log::SessionDir::new(&sessions, &id);
-    let one_turn = prompt.is_some();
+    let admission = crate::session_command::StartupAdmission::for_run(prompt.is_some(), true);
     resume_session(
-        log, &sessions, &dir, id, overrides, credential, prompt, one_turn, false, true, clock,
-        signals, process,
+        log, &sessions, &dir, id, overrides, credential, prompt, admission, true, clock, signals,
+        process,
     )
 }
 
@@ -378,8 +377,7 @@ fn resume_session(
     overrides: Vec<String>,
     credential: Option<String>,
     prompt: Option<String>,
-    one_turn: bool,
-    close_from_start: bool,
+    admission: crate::session_command::StartupAdmission,
     enter_present: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
@@ -457,8 +455,7 @@ fn resume_session(
         overrides,
         credential,
         prompt,
-        one_turn,
-        close_from_start,
+        admission,
         clock,
         signals,
         process,
@@ -488,8 +485,7 @@ fn resumed_session(
     overrides: Vec<String>,
     credential: Option<String>,
     prompt: Option<String>,
-    one_turn: bool,
-    close_from_start: bool,
+    admission: crate::session_command::StartupAdmission,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     process: &crate::startup::Process,
@@ -515,7 +511,7 @@ fn resumed_session(
     let fiber_path = process.exe.clone()?;
     // The diagnostic process: a one-turn resume is an ask; a resumed
     // session keeps its session identity.
-    let diag_process = if one_turn {
+    let diag_process = if admission != crate::session_command::StartupAdmission::Serve {
         log::diag::Process::Ask
     } else {
         log::diag::Process::Session
@@ -557,8 +553,7 @@ fn resumed_session(
     )?;
     let inputs = crate::session_command::SessionInputs {
         prompt,
-        one_turn,
-        close_from_start,
+        admission,
         start: crate::session_command::Start::Resume(resume),
         fiber_path: fiber_path.clone(),
         reads: Arc::clone(&reads),
