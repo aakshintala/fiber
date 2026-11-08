@@ -292,6 +292,8 @@ fn models_diagnostic_records_post_apply_catalogue_size() {
     .unwrap();
     let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
     assert_eq!(line["code"], "models_applied");
+    // docs/state.md, “Diagnostic logs”: the applied catalogue size is its
+    // current length; the failed read leaves this controlled catalogue empty.
     assert_eq!(line["data"], serde_json::json!({"catalogue_size":0}));
 }
 
@@ -328,6 +330,8 @@ fn models_diagnostic_records_nonempty_post_apply_catalogue_size() {
     .unwrap();
     let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
     assert_eq!(line["code"], "models_applied");
+    // docs/state.md, “Diagnostic logs”: models_applied records catalogue_size;
+    // this controlled input applies exactly one model.
     assert_eq!(line["data"], serde_json::json!({"catalogue_size":1}));
 }
 

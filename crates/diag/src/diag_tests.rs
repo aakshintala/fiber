@@ -192,13 +192,21 @@ fn debug_event_writes_structured_code_and_data() {
 
 #[test]
 fn debug_event_is_filtered_at_info_level() {
-    let home = Home::new("ld-info-debug-event");
-    home.diag(Process::Tui, Level::Info).debug_event(
+    let debug_home = Home::new("ld-info-debug-event-control");
+    debug_home.diag(Process::Tui, Level::Debug).debug_event(
         "models_applied",
         "Models were applied.",
         &serde_json::json!({"catalogue_size":2}),
     );
-    assert!(!home.path().join("logs").exists());
+    assert!(debug_home.text(&pid_file("tui")).contains("models_applied"));
+
+    let info_home = Home::new("ld-info-debug-event");
+    info_home.diag(Process::Tui, Level::Info).debug_event(
+        "models_applied",
+        "Models were applied.",
+        &serde_json::json!({"catalogue_size":2}),
+    );
+    assert!(!info_home.path().join("logs").exists());
 }
 
 #[test]

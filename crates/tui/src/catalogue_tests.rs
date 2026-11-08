@@ -48,6 +48,9 @@ fn models_diagnostic_records_read_completion_and_queued_start() {
         .map(|line| line["code"].as_str().unwrap())
         .collect::<Vec<_>>();
     codes.sort_unstable();
+    // docs/state.md, “Diagnostic logs”: each completed read emits one
+    // models_read_done, and the queued ask emits models_ask_started only when
+    // it starts. These two controlled reads and one queued start give 2 + 1.
     assert_eq!(
         codes,
         ["models_ask_started", "models_read_done", "models_read_done"]
