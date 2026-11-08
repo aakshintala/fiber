@@ -36,8 +36,17 @@ fn configured() -> Setup {
     );
     setup
 }
-fn record_connect_error(slot: &Mutex<Option<String>>, error: std::io::Error) {
-    *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error.to_string());
+fn probe(
+    connect: impl FnOnce() -> std::io::Result<UnixStream>,
+    last: &Mutex<Option<String>>,
+) -> bool {
+    match connect() {
+        Ok(_) => true,
+        Err(error) => {
+            *last.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error.to_string());
+            false
+        }
+    }
 }
 
 fn timeout_diagnostic(last_error: Option<String>, path: &PathBuf) -> String {
@@ -59,13 +68,7 @@ fn wait_for_refuse_only_socket(deadline: Deadline, path: PathBuf) {
     let target = path.clone();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         fakes::wait_until("keeper refuse-only socket to accept", deadline, move || {
-            match UnixStream::connect(&target) {
-                Ok(_) => true,
-                Err(error) => {
-                    record_connect_error(&error_slot, error);
-                    false
-                }
-            }
+            probe(|| UnixStream::connect(&target), &error_slot)
         });
     }));
     if result.is_err() {
@@ -365,29 +368,21 @@ fn a_crash_leaves_the_job_to_the_keeper_and_the_resume_delivers_it() {
 fn refuse_only_socket_timeout_reports_connect_error_and_path_state() {
     let setup = Setup::new();
     let path = setup.workspace().join("missing-socket");
-    let result = std::panic::catch_unwind(|| {
-        wait_for_refuse_only_socket(Deadline::after(std::time::Duration::ZERO), path.clone());
-    });
-    let panic = result.expect_err("an expired socket wait fails");
-    let message = panic
-        .downcast_ref::<String>()
-        .map(String::as_str)
-        .or_else(|| panic.downcast_ref::<&str>().copied())
-        .unwrap_or("non-string panic");
-    assert!(message.contains("socket path "), "{message}");
-    assert!(message.contains(": absent"), "{message}");
-
-    let recorded = Mutex::new(None);
-    record_connect_error(
-        &recorded,
-        std::io::Error::new(std::io::ErrorKind::NotFound, "probe failure"),
-    );
-    let diagnostic = timeout_diagnostic(recorded.into_inner().unwrap(), &path);
+    let last = Mutex::new(None);
+    assert!(!probe(
+        || Err(std::io::Error::other("probe failure")),
+        &last,
+    ));
+    assert_eq!(last.lock().unwrap().as_deref(), Some("probe failure"));
+    let diagnostic = timeout_diagnostic(last.into_inner().unwrap(), &path);
+    assert!(diagnostic.contains("socket path "), "{diagnostic}");
+    assert!(diagnostic.contains(": absent"), "{diagnostic}");
     assert!(
         diagnostic.contains("last connect error: probe failure"),
         "{diagnostic}"
     );
-    let no_observation = timeout_diagnostic(None, &path);
+    let last = Mutex::new(None);
+    let no_observation = timeout_diagnostic(last.into_inner().unwrap(), &path);
     assert!(
         no_observation.contains("last connect error: no connect error was observed"),
         "{no_observation}"
