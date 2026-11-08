@@ -2,8 +2,9 @@
 //! views (`docs/tui.md`, "Swapped views"): the real binary on a 160x48 pty
 //! in truecolour, with the scripted provider answering, draws the doc's
 //! rows. Source headings are bold, a switch reads `[on]` bold or `[off]`
-//! dim, a rule's ✕ is in `error`, the settings table has a dim header and
-//! aligned columns, and each view's last rows are dim. The focused row
+//! dim, a rule's ✕ is in `error`, the settings view has a dim note, a bold
+//! open tab and a footer with bold keys, and each view's last rows are
+//! dim. The focused row
 //! carries a "› " gutter and no reverse video. The changed-files diff's
 //! `@@` row is dim.
 

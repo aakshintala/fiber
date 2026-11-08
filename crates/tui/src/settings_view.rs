@@ -391,9 +391,9 @@ struct PageField {
 }
 
 /// The list sub-page of a string list or `repository_extensions`
-/// (`docs/tui.md`, "Controls"): the committed entries, the entry in focus
-/// and the open field. Every change saves the whole list before the
-/// entries change.
+/// (`docs/tui.md`, "Swapped views", `/settings`): the committed entries,
+/// the entry in focus and the open field. Every change saves the whole
+/// list before the entries change.
 struct Page {
     key: String,
     label: String,
