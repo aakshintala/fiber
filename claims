@@ -148,3 +148,4 @@ scripts/check	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/
 docs/ci.md	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 xtask/src/main.rs	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
 xtask/tests/cli.rs	fiber-3998	plan	2026-11-08T01:17:27Z	roundhouse-7010-plus-1:/home/aakshintala/work	
+crates/main/tests/mcp_view.rs	fiber-4379	plan	2026-11-08T01:24:58Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
