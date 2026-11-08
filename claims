@@ -804,3 +804,4 @@ crates/main/tests/fixtures/provider_replay/3969_post_handoff_text.sse	fiber-4233
 crates/main/tests/extension_commands.rs	fiber-4233	plan	2026-11-08T13:45:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/snapshots	fiber-4233	plan	2026-11-08T13:45:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 research/compaction/cost.md	fiber-4233	plan	2026-11-08T13:45:53Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/config/src/keys_tests.rs	fiber-4233	plan	2026-11-08T13:54:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
