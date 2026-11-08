@@ -592,6 +592,66 @@ fn a_before_tool_rewrite_is_checked_judged_and_run_and_the_model_sees_its_own_ca
     assert_eq!(call["arguments"], json!({"path": "a.txt"}).to_string());
 }
 
+/// The opened ledger's row for a rewritten call draws the arguments that
+/// ran and names the extension that rewrote them (`docs/tui.md`, "Tool
+/// groups and the ledger").
+#[test]
+fn a_hook_rewrite_shows_in_the_ledger_row() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("a.txt"), "A\n").unwrap();
+    fs::write(setup.workspace().join("b.txt"), "B\n").unwrap();
+    setup.lua("guard", &rewrite_guard("b.txt"));
+    support::write_json(
+        &setup.workspace().join("s.json"),
+        &json!({"steps": [
+            {"tool_calls": [{"name": "read", "arguments": {"path": "a.txt"}}]},
+            {"text": ["done"]},
+        ]}),
+    );
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "scripted/s.json", "hub": {"idle_exit_ms": 200}}),
+    );
+    let mut run = support::pty::Run::spawn(&setup, 160, 48, &[], &support::TRUECOLOUR);
+    run.ready();
+    let from = run.output().len();
+    run.write(b"read it\r");
+    run.wait_screen("the reply", |screen| {
+        screen
+            .rows
+            .iter()
+            .any(|row| row.contains("\u{25a3} completed"))
+    });
+    run.turn_finished(from);
+
+    // Ctrl+O opens the ledger. The check mark draws once the call
+    // completes, and a frame draws a whole row, so its result is drawn too.
+    // The wait checks every cell the asserts below read: the rewritten
+    // path, the requested path's absence and the mark ending the row.
+    run.write(b"\x0f");
+    let screen = run.wait_screen("the read's ledger row", |screen| {
+        screen.rows.iter().any(|row| {
+            row.contains("\u{2713} read")
+                && row.contains("b.txt")
+                && !row.contains("a.txt")
+                && row.trim_end().ends_with("\u{b7} via fiber.test/guard")
+        })
+    });
+    let row = screen
+        // settled: the wait checked this row's path and mark.
+        .rows
+        .iter()
+        .find(|row| row.contains("\u{2713} read"))
+        .unwrap();
+    assert!(row.contains("b.txt"), "the rewritten path, in {row:?}");
+    assert!(!row.contains("a.txt"), "not the requested path, in {row:?}");
+    assert!(
+        row.trim_end().ends_with("\u{b7} via fiber.test/guard"),
+        "the mark, in {row:?}"
+    );
+    run.write(b"\x03\x03\r");
+}
+
 #[test]
 fn a_rewrite_into_credentials_is_refused_by_the_credential_deny() {
     let setup = Setup::new();
