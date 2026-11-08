@@ -4,8 +4,9 @@
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
 #![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
+use crate::test_support::set_source_mtime;
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use contract::ErrorCode;
 use contract::clock::Clock;
@@ -193,6 +194,8 @@ fn date_cache(home: &Path, name: &str, age: Duration, wall: SystemTime) {
         .unwrap();
 }
 
+/// Sets every file and directory in an installed extension source tree
+/// to the same mtime, including the root directory.
 fn call(
     seam: &Seam,
     operation: &str,
@@ -484,6 +487,7 @@ fn hub_models_refresh_stale_checks_the_age() {
         &json!({"acme": [format!("{}/v1", server.url())]}),
     );
     write_cache(&rig.home, "acme", &server.url(), &["cached"]);
+    set_source_mtime(&rig.home.join("extensions").join("acme-ext"), UNIX_EPOCH);
     let wall = fakes::clock::FakeClock::new().wall();
     // A fresh list stays: no refresh runs.
     date_cache(&rig.home, "acme", Duration::from_secs(90), wall);
