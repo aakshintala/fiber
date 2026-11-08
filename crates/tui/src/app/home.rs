@@ -121,6 +121,7 @@ impl Home {
             list_scroll: Cell::new(0),
             last_chip: Spot::Workspace,
             blockers: Vec::new(),
+            blocker_keys: Vec::new(),
             chooser: Chooser::default(),
             questions: Questions::default(),
             left_after_attach: None,
@@ -1263,13 +1264,7 @@ impl App {
             Spot::Thinking => self.open_thinking(),
             Spot::Pick(at) => self.pick(at),
             Spot::Blocker(index) => {
-                if self
-                    .home
-                    .as_ref()
-                    .and_then(|home| home.blocker_keys.get(index))
-                    .copied()
-                    .unwrap_or(false)
-                {
+                if self.home.blocker_keys.get(index).copied().unwrap_or(false) {
                     self.open_config_view(super::ConfigView::Login)
                 } else {
                     Effect::None

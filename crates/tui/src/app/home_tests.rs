@@ -3266,10 +3266,7 @@ fn first_run_login_escape_restores_blocker_and_key_only_click_reopens_login() {
         blockers(&app),
         ["No provider key. Run `fiber login` to fix it."]
     );
-    assert_eq!(
-        app.home.as_ref().map(|home| home.blocker_keys.clone()),
-        Some(vec![true])
-    );
+    assert_eq!(app.home.blocker_keys, vec![true]);
     app.home_click(crate::home::Spot::Blocker(0));
     assert!(app.config_view_open());
 
@@ -3286,12 +3283,7 @@ fn first_run_login_escape_restores_blocker_and_key_only_click_reopens_login() {
         blockers(&no_model),
         ["No model was chosen. Set `model` in configuration."]
     );
-    assert!(
-        !no_model
-            .home
-            .as_ref()
-            .is_some_and(|home| home.blocker_keys[0])
-    );
+    assert!(!no_model.home.blocker_keys[0]);
     no_model.home_click(crate::home::Spot::Blocker(0));
     assert!(!no_model.config_view_open());
 }

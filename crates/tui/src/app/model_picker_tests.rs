@@ -99,7 +99,7 @@ fn first_run_catalogue_opens_unselected_picker_with_connected_local_outbox() {
 #[test]
 fn first_run_configured_model_with_credential_opens_neither_overlay() {
     let mut app = home();
-    app.home.as_mut().unwrap().launch.model = Some("acme/m1".to_owned());
+    app.home.launch.model = Some("acme/m1".to_owned());
     app.defer_first_run();
     app.on_models(Ok(catalogue()));
     assert_eq!(app.home_model().unwrap().0, "acme/m1");
