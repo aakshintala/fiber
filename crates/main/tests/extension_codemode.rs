@@ -925,13 +925,39 @@ fn a_spawn_row_names_its_job_id_when_the_log_path_has_a_space() {
     );
 }
 
+/// A script source that runs `start`, a `host.tool` call that starts a job,
+/// then waits inside the script for that job's end and prints the start
+/// call's outcome. The job's news is in the inbox before the script returns,
+/// so the session takes the two steps its scripted model has. A wait that
+/// times out or fails raises an error naming the job.
+fn waiting_for_the_job(start: &str) -> String {
+    format!(
+        r#"local o = {start}
+local receipt = o.content[1].text:match("^[^\n]*\n([^\n]*)")
+local id = receipt and receipt:match("^Job (%S+)%. Output: ")
+if id == nil then error("the start call's receipt names no job: " .. tostring(o)) end
+local waited = host.tool("jobs", {{ action = "wait", job_id = id, timeout_ms = 30000 }})
+if waited.status ~= "completed" or tostring(waited):find("is still running", 1, true) then
+  error("job " .. id .. " did not end: " .. tostring(waited))
+end
+print(o)"#
+    )
+}
+
 #[test]
 fn a_background_shell_row_names_its_job_id() {
-    let source = r#"local o = host.tool("shell", { command = "printf hello", run_in_background = true })
-print(o)"#;
-    let setup = reviewed_setup(&calling(source), &allow());
+    let source = waiting_for_the_job(
+        r#"host.tool("shell", { command = "printf hello", run_in_background = true })"#,
+    );
+    let setup = reviewed_setup(&calling(&source), &allow());
     let run = ask(&setup, "run it");
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.of("step_started").len(),
+        2,
+        "a late job delivery opened a third step: {:?}",
+        run.of("step_started")
+    );
     let completed = completed_holding(&run, "Script finished");
     let text = completed_text(completed);
     let receipt_id = text
@@ -951,11 +977,18 @@ print(o)"#;
 
 #[test]
 fn a_monitor_row_names_its_job_id() {
-    let source = r#"local o = host.tool("shell", { command = "printf hello", monitor = true, timeout_ms = 1000 })
-print(o)"#;
-    let setup = reviewed_setup(&calling(source), &allow());
+    let source = waiting_for_the_job(
+        r#"host.tool("shell", { command = "printf hello", monitor = true, timeout_ms = 1000 })"#,
+    );
+    let setup = reviewed_setup(&calling(&source), &allow());
     let run = ask(&setup, "run it");
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.of("step_started").len(),
+        2,
+        "a late job delivery opened a third step: {:?}",
+        run.of("step_started")
+    );
     let completed = completed_holding(&run, "Script finished");
     let text = completed_text(completed);
     assert!(text.starts_with("Started a monitor.\n"), "{text:?}");
@@ -974,11 +1007,18 @@ print(o)"#;
 
 #[test]
 fn a_tty_shell_row_names_its_job_id() {
-    let source = r#"local o = host.tool("shell", { command = "printf hello", tty = true, run_in_background = true })
-print(o)"#;
-    let setup = reviewed_setup(&calling(source), &allow());
+    let source = waiting_for_the_job(
+        r#"host.tool("shell", { command = "printf hello", tty = true, run_in_background = true })"#,
+    );
+    let setup = reviewed_setup(&calling(&source), &allow());
     let run = ask(&setup, "run it");
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.of("step_started").len(),
+        2,
+        "a late job delivery opened a third step: {:?}",
+        run.of("step_started")
+    );
     let completed = completed_holding(&run, "Script finished");
     let text = completed_text(completed);
     let receipt_id = text
