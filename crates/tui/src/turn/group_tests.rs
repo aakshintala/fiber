@@ -2187,6 +2187,8 @@ fn answered_ask_call(id: usize) -> Call {
         &mut fold,
         &crate::turn::Recipients {
             sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
         },
     );
     let mut turns = vec![turn];
@@ -2258,6 +2260,8 @@ fn outer_action_id_stored_from_ran_by() {
             &mut fold,
             &crate::turn::Recipients {
                 sessions: &Default::default(),
+                delegates: &Default::default(),
+                page: None,
             },
         );
         turn.groups()

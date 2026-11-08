@@ -2415,6 +2415,8 @@ fn a_completed_call_keeps_its_details_artifact_kept_and_signal() {
         &mut fold,
         &crate::turn::Recipients {
             sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
         },
     );
     assert!(turn.call_completed(
@@ -2521,6 +2523,8 @@ fn call_timing_measures_start_to_completion() {
             &mut fold,
             &crate::turn::Recipients {
                 sessions: &Default::default(),
+                delegates: &Default::default(),
+                page: None,
             },
         );
     }
@@ -2573,6 +2577,8 @@ fn toggle_of_a_call_view_changes_nothing() {
         &mut fold,
         &crate::turn::Recipients {
             sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
         },
     );
     let id = super::target_id("a_1");

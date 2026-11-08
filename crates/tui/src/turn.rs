@@ -17,13 +17,14 @@ use contract::events::{
     ToolCallCompleted, ToolCallRequested, TurnCompleted, TurnStarted, UsageRecorded,
 };
 use contract::shapes::{Origin, Sender};
-use contract::{Envelope, SessionId};
+use contract::{Envelope, JobId, SessionId};
 use ratatui::text::Line;
 use serde_json::Value;
 
 use crate::app::{Target, read, text_of};
 use crate::format;
 use crate::markdown;
+use crate::window::Delegates;
 
 mod answers;
 mod card;
@@ -658,23 +659,39 @@ impl Turn {
 }
 
 /// What the terminal holds about a message call's recipient, read when the
-/// call folds: the held name of each session. It reads no hub state and no
-/// `App`; the owner of the fold lends it.
+/// call folds: the held name of each session and the held description of
+/// each delegate. It reads no hub state and no `App`; the owner of the
+/// fold lends it.
 pub(crate) struct Recipients<'a> {
     pub(crate) sessions: &'a HashMap<SessionId, String>,
+    /// The delegates held so far.
+    pub(crate) delegates: &'a Delegates,
+    /// A history fold's page-local starts, read before `delegates`; none
+    /// on the live path.
+    pub(crate) page: Option<&'a Delegates>,
 }
 
 impl Recipients<'_> {
-    /// The recipient's held name for a `session_message` call whose `id`
-    /// names a held session, else none. Only an empty name counts as not
-    /// held: a name of only whitespace is held and drawn as it is.
+    /// A `session_message` call's held session name, or a
+    /// `delegate_message` call's held delegate description, for the `id`
+    /// the call names; none for any other call. Only an empty text counts
+    /// as not held: a name of only whitespace is held and drawn as it is.
     pub(crate) fn of(&self, name: &str, arguments: &Value) -> Option<String> {
         let id = arguments.get("id")?.as_str()?;
         let held = match format::kind(name, arguments) {
-            format::Kind::SessionMessage => self.sessions.get(&SessionId(id.to_owned()))?,
-            _ => return None,
-        };
-        (!held.is_empty()).then(|| held.clone())
+            format::Kind::SessionMessage => self
+                .sessions
+                .get(&SessionId(id.to_owned()))
+                .map(String::as_str),
+            format::Kind::DelegateMessage => {
+                let job = JobId(id.to_owned());
+                self.page
+                    .and_then(|page| page.get(&job))
+                    .or_else(|| self.delegates.get(&job))
+            }
+            _ => None,
+        }?;
+        (!held.is_empty()).then(|| held.to_owned())
     }
 }
 

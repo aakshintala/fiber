@@ -1270,6 +1270,34 @@ fn a_session_message_row_shows_its_recipient_name() {
     assert!(!shown.contains("s_other"), "{shown}");
 }
 
+/// A message to a delegate the terminal holds a description for shows
+/// the description on its ledger row; one to an unknown id shows the id.
+#[test]
+fn a_delegate_message_row_shows_its_recipient_description() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(at(
+        "job_started",
+        None,
+        0,
+        serde_json::json!({"job_id": "j_abc", "description": "Fix the parser", "output_path": "/o"}),
+    ));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "ask them"));
+    app.on_line(at("step_started", None, 0, serde_json::json!({})));
+    messages(
+        &mut app,
+        &[
+            ("a_1", "delegate_message", "j_abc"),
+            ("a_2", "delegate_message", "j_nobody"),
+        ],
+    );
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let shown = screen(&app);
+    assert!(shown.contains("message  Fix the parser"), "{shown}");
+    assert!(shown.contains("message  j_nobody"), "{shown}");
+    assert!(!shown.contains("j_abc"), "{shown}");
+}
+
 #[test]
 fn tool_group_ledger_open_with_a_call_open() {
     let mut app = empty();

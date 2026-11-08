@@ -308,6 +308,8 @@ fn folded(lines: &[contract::Envelope]) -> (Vec<Turn>, Vec<bool>) {
                 line,
                 &crate::turn::Recipients {
                     sessions: &Default::default(),
+                    delegates: &Default::default(),
+                    page: None,
                 },
             )
         })

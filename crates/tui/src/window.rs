@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
 
-use contract::events::{TurnCompleted, TurnOutcome, UsageRecorded};
-use contract::{Envelope, GenerationId, Seq, SessionId};
+use contract::events::{JobStarted, TurnCompleted, TurnOutcome, UsageRecorded};
+use contract::{Envelope, GenerationId, JobId, Seq, SessionId};
 use jiff::tz::TimeZone;
 use ratatui::text::Line;
 
@@ -337,6 +337,91 @@ pub(crate) struct Pages {
     halves: BTreeMap<SessionId, BTreeMap<String, String>>,
     /// Actual names currently known for senders in this conversation.
     session_names: Arc<HashMap<SessionId, String>>,
+    /// The description of each job the stream started, as the latest
+    /// `job_started` folded gave it: what a `delegate_message` row names.
+    delegates: Delegates,
+}
+
+/// What a message call's recipient resolves against while a history page
+/// folds: the held session names and the held delegate descriptions.
+pub(crate) struct Resolve<'a> {
+    pub(crate) sessions: &'a HashMap<SessionId, String>,
+    pub(crate) held: &'a Delegates,
+}
+
+/// Each job's description and the stream position of the `job_started`
+/// that gave it: the line's segment session and its `seq`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Delegates(HashMap<JobId, (String, SessionId, Option<Seq>)>);
+
+impl Delegates {
+    /// The `job_started` `envelope` carries, if it is one that parses.
+    fn start(envelope: &Envelope) -> Option<JobStarted> {
+        if envelope.kind() != EventKind::JobStarted {
+            return None;
+        }
+        read!(envelope, JobStarted)
+    }
+
+    /// Notes a live line: a `job_started` replaces the held entry.
+    fn note_live(&mut self, envelope: &Envelope) {
+        if let Some(started) = Self::start(envelope) {
+            self.0.insert(
+                started.job_id,
+                (
+                    started.description,
+                    envelope.session_id.clone(),
+                    envelope.seq,
+                ),
+            );
+        }
+    }
+
+    /// Notes a history line into this page-local overlay: a start with a
+    /// `seq` is recorded when `held` has no entry for its job, or when
+    /// `held`'s entry comes from the same segment with a lower `seq`. A
+    /// held entry from another segment, or one with no `seq`, is never
+    /// overtaken: folding goes newest segment first, so an entry already
+    /// held is the newer one. A later line on the page replaces the
+    /// overlay's own entry.
+    fn note_page(&mut self, envelope: &Envelope, held: &Delegates) {
+        let Some(seq) = envelope.seq else {
+            return;
+        };
+        let Some(started) = Self::start(envelope) else {
+            return;
+        };
+        let newer = held.0.get(&started.job_id).is_none_or(|(_, session, at)| {
+            *session == envelope.session_id && at.is_some_and(|at| at < seq)
+        });
+        if newer {
+            self.0.insert(
+                started.job_id,
+                (started.description, envelope.session_id.clone(), Some(seq)),
+            );
+        }
+    }
+
+    /// Keeps a kept page's overlay: each entry already passed the stream
+    /// order rule, so it replaces the held one.
+    fn merge(&mut self, page: Delegates) {
+        self.0.extend(page.0);
+    }
+
+    /// Takes each of `older`'s entries this holds none for. The work is
+    /// one step per entry of `older`.
+    fn fill_from(&mut self, older: &Delegates) {
+        for (job, entry) in &older.0 {
+            self.0.entry(job.clone()).or_insert_with(|| entry.clone());
+        }
+    }
+
+    /// The description held for `job`.
+    pub(crate) fn get(&self, job: &JobId) -> Option<&str> {
+        self.0
+            .get(job)
+            .map(|(description, _, _)| description.as_str())
+    }
 }
 
 impl Pages {
@@ -370,6 +455,7 @@ impl Pages {
             ext: crate::ext::Ext::default(),
             halves: BTreeMap::new(),
             session_names: Arc::new(HashMap::new()),
+            delegates: Delegates::default(),
         }
     }
 
@@ -419,8 +505,11 @@ impl Pages {
                 Cut::None | Cut::AtCandidate => {}
             }
         }
+        self.delegates.note_live(envelope);
         let recipients = Recipients {
             sessions: &self.session_names,
+            delegates: &self.delegates,
+            page: None,
         };
         let mut pending_folded = None;
         if let Some(pending) = &mut self.pending {
@@ -760,16 +849,18 @@ impl Pages {
             }
             if folding.as_ref().is_none_or(|(page, _)| *page != at) {
                 if let Some((page, group)) = folding.take()
-                    && self.residency.load(
+                    && let Some(overlay) = self.residency.load(
                         page,
                         &group,
                         &self.seeds,
                         &self.overrides,
-                        &Recipients {
+                        &Resolve {
                             sessions: &self.session_names,
+                            held: &self.delegates,
                         },
                     )
                 {
+                    self.delegates.merge(overlay);
                     self.count(page);
                 }
                 folding = Some((at, Vec::new()));
@@ -779,16 +870,18 @@ impl Pages {
             }
         }
         if let Some((page, group)) = folding.take()
-            && self.residency.load(
+            && let Some(overlay) = self.residency.load(
                 page,
                 &group,
                 &self.seeds,
                 &self.overrides,
-                &Recipients {
+                &Resolve {
                     sessions: &self.session_names,
+                    held: &self.delegates,
                 },
             )
         {
+            self.delegates.merge(overlay);
             self.count(page);
         }
     }
@@ -814,12 +907,16 @@ impl Pages {
         at: usize,
         lines: &[Envelope],
     ) -> Option<(Vec<Row>, Vec<RowText>, TurnRanges, CallPaths)> {
-        let recipients = Recipients {
-            sessions: &self.session_names,
-        };
-        let part = self
-            .residency
-            .refold(at, lines, &self.seeds, &self.overrides, &recipients)?;
+        let part = self.residency.refold(
+            at,
+            lines,
+            &self.seeds,
+            &self.overrides,
+            &Resolve {
+                sessions: &self.session_names,
+                held: &self.delegates,
+            },
+        )?;
         let (rows, texts, _, turns) = self.draw_data(at, &part, Draw::AllOpen);
         Some((rows, texts, turns, call_paths(&part)))
     }
@@ -1103,6 +1200,7 @@ impl Pages {
         fresh.ext.cache = Arc::new(self.ext.cache.scratch_sharing_pending());
         fresh.halves = self.halves.clone();
         fresh.session_names = Arc::clone(&self.session_names);
+        fresh.delegates = self.delegates.clone();
         fresh
     }
 
@@ -1181,6 +1279,7 @@ impl Pages {
         if len == 0 {
             return;
         }
+        fold.delegates.fill_from(&self.delegates);
         // The summaries the carried pages draw: every summary a carried
         // seed or card names. Summaries are pushed in fold order, so the
         // carried ones are the prefix ending here.
