@@ -1018,18 +1018,14 @@ fn no_query_before_the_acknowledgement() {
 #[test]
 fn no_query_without_the_session_card() {
     let mut app = home();
-    app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
-        .launch
-        .panel_cards = vec!["jobs".to_owned()];
+    app.home.launch.panel_cards = vec!["jobs".to_owned()];
     let out = opened(&mut app);
     assert!(out.iter().any(|line| line["command"] == "subscribe"));
     assert!(ack(&mut app, &out).is_empty());
 }
 
 #[test]
-fn no_query_without_home() {
+fn no_query_for_a_status_with_no_row() {
     let mut app = App::new(PathBuf::from("/w"));
     app.attach(contract::SessionId(SESSION.to_owned()));
     assert!(

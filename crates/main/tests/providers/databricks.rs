@@ -15,10 +15,14 @@
 use crate::support;
 
 use std::process::Output;
+use std::sync::{Arc, Mutex};
 
 use fakes::{ProviderServer, Request, Response, fingerprint};
 use serde_json::{Value, json};
-use support::{HELLO_KINDS, Run, Setup, hello, is_status, run_to_exit, write_json};
+use support::{
+    HELLO_KINDS, HubProc, Run, SessionGuard, Setup, connect_hub, hello, is_status, recv_answer,
+    run_to_exit, subscribe, until, until_after, write_json,
+};
 
 /// Parses `fiber ask` stdout into a run: one JSON value per line, without
 /// `session_status` lines, which an observer thread writes.
@@ -185,9 +189,18 @@ fn credentials(host: &str) -> [(&str, &str); 2] {
     [("DATABRICKS_TOKEN", "dapi-test"), ("DATABRICKS_HOST", host)]
 }
 
+/// A request's tags header, parsed.
+fn tags_header(request: &Request) -> Value {
+    let raw = request
+        .header("databricks-ai-gateway-request-tags")
+        .unwrap_or_else(|| panic!("no tags header: {request:?}"));
+    serde_json::from_str(raw).unwrap()
+}
+
 /// A turn's three requests: the two discovery answers, then the model's.
-/// Every request carries the package's header.
-fn assert_turn(requests: &[Request], model_path: &str) {
+/// Both discovery requests carry the source-only header; the model's
+/// carries `model_tags`, parsed.
+fn assert_tagged_turn(requests: &[Request], model_path: &str, model_tags: &Value) {
     assert_eq!(requests.len(), 3, "{requests:?}");
     assert_eq!(
         requests[0].path,
@@ -198,14 +211,22 @@ fn assert_turn(requests: &[Request], model_path: &str) {
         "/api/ai-gateway/v2/external-provider-models?page_size=1000"
     );
     assert_eq!(requests[2].path, model_path);
-    for request in requests {
+    for request in &requests[..2] {
         assert_eq!(
-            request.header("databricks-ai-gateway-request-tags"),
-            Some("{\"source\":\"fiber\"}"),
+            tags_header(request),
+            json!({"source": "fiber"}),
             "{request:?}"
         );
+    }
+    assert_eq!(tags_header(&requests[2]), *model_tags, "{:?}", requests[2]);
+    for request in requests {
         assert_fingerprint(request, "authorization", "Bearer dapi-test");
     }
+}
+
+/// A turn's three requests with the default, source-only model header.
+fn assert_turn(requests: &[Request], model_path: &str) {
+    assert_tagged_turn(requests, model_path, &json!({"source": "fiber"}));
 }
 
 #[test]
@@ -527,4 +548,213 @@ fn discovered_default_level_sends_without_a_suffix() {
     let body: Value = serde_json::from_slice(&requests[2].body).unwrap();
     assert_eq!(body["thinking"], json!({"type": "adaptive"}));
     assert_eq!(body["output_config"], json!({"effort": "medium"}));
+}
+
+/// One `fiber ask` turn on `model` with `-c providers.databricks.request_tags=<tags>`:
+/// the run and the three requests the fake server saw.
+fn tagged_ask(model: &str, reply: Response, tags: &str) -> (Run, Vec<Request>) {
+    let setup = Setup::new();
+    let server = ProviderServer::start(discovery().into_iter().chain([reply])).unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
+    let flag = format!("providers.databricks.request_tags={tags}");
+    let run = run(
+        &setup,
+        &["ask", "-c", &flag, "--model", model, "hi"],
+        &credentials(&host),
+    );
+    (run, server.requests())
+}
+
+#[test]
+fn request_tags_ask_accepts_native_objects() {
+    let routes = [
+        (
+            "databricks/databricks-claude-opus-5",
+            anthropic_hello(),
+            "/ai-gateway/anthropic/v1/messages",
+        ),
+        (
+            "databricks/databricks-gpt-6-sol",
+            hello(),
+            "/ai-gateway/codex/v1/responses",
+        ),
+        (
+            "databricks/databricks-glm-5.3",
+            completions_hello(),
+            "/ai-gateway/mlflow/v1/chat/completions",
+        ),
+    ];
+    for (model, reply, path) in routes {
+        let (run, requests) = tagged_ask(model, reply, r#"{"run":"r1"}"#);
+        assert_eq!(run.code, Some(0), "{model}: {}", run.stderr);
+        assert_eq!(run.kinds(), HELLO_KINDS, "{model}");
+        assert_tagged_turn(&requests, path, &json!({"source": "fiber", "run": "r1"}));
+    }
+    // A `source` in the value never replaces `fiber`.
+    let (run, requests) = tagged_ask(
+        "databricks/databricks-glm-5.3",
+        completions_hello(),
+        r#"{"run":"r1","source":"mine"}"#,
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_tagged_turn(
+        &requests,
+        "/ai-gateway/mlflow/v1/chat/completions",
+        &json!({"source": "fiber", "run": "r1"}),
+    );
+}
+
+#[test]
+fn request_tags_invalid_value_uses_default() {
+    let (run, requests) = tagged_ask(
+        "databricks/databricks-glm-5.3",
+        completions_hello(),
+        r#"{"run":"r1","bad":7}"#,
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let notices: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "notice")
+        .collect();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0]["payload"]["code"], "config_invalid");
+    let message = notices[0]["payload"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("providers.databricks.request_tags"),
+        "{message}"
+    );
+    assert!(!message.contains("r1"), "{message}");
+    let kinds: Vec<&str> = run
+        .kinds()
+        .into_iter()
+        .filter(|kind| *kind != "notice")
+        .collect();
+    assert_eq!(kinds, HELLO_KINDS);
+    assert_eq!(run.text_completed(), "Hello.");
+    assert_turn(&requests, "/ai-gateway/mlflow/v1/chat/completions");
+}
+
+/// Starts a session through the hub with `overrides` on the glm model,
+/// waits for its turn, closes it and waits for it to exit. Returns the
+/// stream's `config_invalid` notices.
+fn hub_turn(client: &support::Socket, workspace: &str, id: &str, overrides: &[&str]) -> Vec<Value> {
+    let mut all = vec!["model=databricks/databricks-glm-5.3"];
+    all.extend(overrides);
+    client.send(
+        &json!({
+            "id": id,
+            "command": "start",
+            "args": {"workspace": workspace, "overrides": all,
+                     "content": [{"type": "text", "text": "hi"}]},
+        })
+        .to_string(),
+    );
+    let started = recv_answer(client, id, "the start acknowledgement");
+    assert_eq!(started["kind"], "command_accepted", "{started}");
+    let session = started["payload"]["result"]["session_id"]
+        .as_str()
+        .expect("the start answers with a session id")
+        .to_owned();
+    let sub = subscribe(client, &session);
+    let mut stream = until(client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    client.send(
+        &json!({"id": format!("{id}_close"), "session_id": session, "command": "close"})
+            .to_string(),
+    );
+    stream.extend(until_after(client, &sub, "fiber_exited", |line| {
+        line["kind"] == "fiber_exited"
+    }));
+    stream
+        .into_iter()
+        .filter(|line| line["kind"] == "notice" && line["payload"]["code"] == "config_invalid")
+        .collect()
+}
+
+#[test]
+fn request_tags_hub_overrides_are_session_local() {
+    const MODEL_PATH: &str = "/ai-gateway/mlflow/v1/chat/completions";
+    let setup = Setup::new();
+    let server = ProviderServer::start_responding(|request| {
+        if request
+            .path
+            .starts_with("/api/2.1/unity-catalog/model-services")
+        {
+            Response::status(200, services_body().to_string())
+        } else if request
+            .path
+            .starts_with("/api/ai-gateway/v2/external-provider-models")
+        {
+            Response::status(200, catalog_body().to_string())
+        } else {
+            completions_hello()
+        }
+    })
+    .unwrap();
+    let host = install(
+        &setup,
+        &server,
+        include_str!("../../../providers/databricks/thinking.lua"),
+    );
+    // The hub's environment is empty, so the host and the token come from
+    // configuration.
+    write_json(
+        &setup.home().join("config/databricks.json"),
+        &json!({"workspace": host}),
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"providers": {"databricks": {"credentials": {
+            "default": {"command": ["echo", "dapi-test"]}
+        }}}}),
+    );
+
+    let hub: Arc<Mutex<Option<HubProc>>> = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = SessionGuard::arm(setup.deadline, &workspace);
+
+    // The same literal ask takes, then a second tag set, then none.
+    let first = r#"providers.databricks.request_tags={"run":"r1"}"#;
+    let second = r#"providers.databricks.request_tags={"run":"r2","source":"mine"}"#;
+    let mut invalid = Vec::new();
+    invalid.extend(hub_turn(&client, &workspace, "c_one", &[first]));
+    invalid.extend(hub_turn(&client, &workspace, "c_two", &[second]));
+    invalid.extend(hub_turn(&client, &workspace, "c_none", &[]));
+    assert!(invalid.is_empty(), "{invalid:?}");
+
+    let requests = server.requests();
+    let models: Vec<&Request> = requests.iter().filter(|r| r.path == MODEL_PATH).collect();
+    let tags: Vec<Value> = models.iter().map(|r| tags_header(r)).collect();
+    assert_eq!(
+        tags,
+        [
+            json!({"source": "fiber", "run": "r1"}),
+            json!({"source": "fiber", "run": "r2"}),
+            json!({"source": "fiber"}),
+        ],
+        "{requests:?}"
+    );
+    // Discovery, wherever a session ran it, stays source-only.
+    for request in requests.iter().filter(|r| r.path != MODEL_PATH) {
+        assert_eq!(
+            tags_header(request),
+            json!({"source": "fiber"}),
+            "{request:?}"
+        );
+    }
+
+    guard.wait_gone();
+    drop(client);
+    hub.lock()
+        .unwrap()
+        .take()
+        .expect("the hub ran")
+        .kill_and_wait();
 }

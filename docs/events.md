@@ -1409,7 +1409,7 @@ Durable.
 | `status` | string | yes | `completed`, `failed` or `cancelled`; a closed set |
 | `error` | `error` | no | on `failed` |
 | `process` | `process` | no | for a job that ran a process |
-| `output_tail` | string | no | for a failed job, the tail of its output, capped; absent when a hook changed the completion notice (`notice` holds what the model was sent) |
+| `output_tail` | string | no | the tail of its output, capped; absent when a hook changed the completion notice (`notice` holds what the model was sent) |
 | `notice` | string | no | the text the model was sent, when a hook changed or withheld the completion notice |
 | `changed_by` | `changed_by` | no | when a hook changed the completion notice, and named itself |
 | `protected_paths` | object | no | on an adopted shell call that changed a protected path: `restored` (array of strings) and `failed` (array of `path` and `message` objects), as on `tool_call_completed`; absent when nothing changed (`docs/sandbox.md`, "Protected paths") |

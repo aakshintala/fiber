@@ -131,12 +131,20 @@ pub struct TurnCallResult<'a> {
 pub struct TurnCall<'a> {
     /// The tool's name.
     pub name: &'a str,
-    /// The call's arguments.
+    /// The call's arguments: the ones that ran, when a `before_tool` hook
+    /// rewrote them.
     pub arguments: &'a Value,
+    /// With a rewrite, the extensions whose hooks rewrote the arguments,
+    /// in the order they ran; absent when none took attribution.
+    pub changed_by: Option<&'a [String]>,
     /// What the call is doing, or how it ended.
     pub state: CallState<'a, TurnCallResult<'a>, &'a str>,
     /// The suffix a form's answer replaces the status with.
     pub answer: Option<&'a str>,
+    /// The recipient's description, for a `delegate_message`, or name, for a
+    /// `session_message`, as the terminal held it when the call folded; `None`
+    /// when it held none or the call is no message call.
+    pub recipient: Option<&'a str>,
     /// Whether the call is open.
     pub open: bool,
     /// Whether a `permission_requested` for it is open.
@@ -527,6 +535,7 @@ impl<'a> TurnCall<'a> {
     pub(crate) fn hash_key(&self, key: &mut DefaultHasher) {
         self.name.hash(key);
         hash_value(self.arguments, key);
+        self.changed_by.hash(key);
         hash_call_state(
             &self.state,
             hash_turn_call_result,
@@ -534,6 +543,7 @@ impl<'a> TurnCall<'a> {
             key,
         );
         self.answer.hash(key);
+        self.recipient.hash(key);
         self.open.hash(key);
         self.asking.hash(key);
     }

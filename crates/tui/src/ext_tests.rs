@@ -202,6 +202,7 @@ fn base() -> Base {
 
 fn base_row(base: &Base) -> LedgerRow<'_> {
     LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -218,6 +219,7 @@ fn base_row(base: &Base) -> LedgerRow<'_> {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     }
 }
@@ -244,6 +246,7 @@ fn the_name_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let renamed = LedgerRow {
+        changed_by: None,
         name: "read",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -260,6 +263,7 @@ fn the_name_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&renamed));
@@ -271,6 +275,7 @@ fn a_nested_argument_value_is_in_the_key() {
     let row = base_row(&base);
     let changed = serde_json::json!({"command": "ls", "nested": {"depth": 2}});
     let varied = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &changed,
         state: CallState::Failed {
@@ -287,6 +292,7 @@ fn a_nested_argument_value_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&varied));
@@ -305,6 +311,7 @@ fn argument_key_order_is_not_in_the_key() {
     let one_value = serde_json::Value::Object(first);
     let two_value = serde_json::Value::Object(second);
     let one = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &one_value,
         state: CallState::Failed {
@@ -321,9 +328,11 @@ fn argument_key_order_is_not_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     let two = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &two_value,
         state: CallState::Failed {
@@ -340,6 +349,7 @@ fn argument_key_order_is_not_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&one));
@@ -351,10 +361,12 @@ fn the_status_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let running = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Running,
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&running));
@@ -365,6 +377,7 @@ fn the_exit_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let failed = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -381,6 +394,7 @@ fn the_exit_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&failed));
@@ -391,6 +405,7 @@ fn the_duration_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let slower = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -407,6 +422,7 @@ fn the_duration_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&slower));
@@ -417,6 +433,7 @@ fn the_line_count_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let longer = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -433,6 +450,7 @@ fn the_line_count_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&longer));
@@ -496,6 +514,7 @@ fn a_change_is_in_the_key() {
     .enumerate()
     {
         let other = LedgerRow {
+            changed_by: None,
             name: "shell",
             arguments: &base.arguments,
             state: CallState::Failed {
@@ -512,6 +531,7 @@ fn a_change_is_in_the_key() {
                 },
             },
             answer: Some("yes"),
+            recipient: None,
             flat: false,
         };
         assert_ne!(key_of(&row), key_of(&other), "case {index}");
@@ -523,6 +543,7 @@ fn the_error_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let code = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -539,9 +560,11 @@ fn the_error_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     let message = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -558,9 +581,11 @@ fn the_error_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     let missing = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Completed(LedgerResult {
@@ -571,6 +596,7 @@ fn the_error_is_in_the_key() {
             output: "first",
         }),
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&code));
@@ -583,6 +609,7 @@ fn the_output_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let other = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -599,9 +626,26 @@ fn the_output_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&other));
+}
+
+#[test]
+fn the_recipient_is_in_the_key() {
+    let base = base();
+    let row = base_row(&base);
+    let named = LedgerRow {
+        recipient: Some("Fix the parser"),
+        ..base_row(&base)
+    };
+    let other = LedgerRow {
+        recipient: Some("Review the fix"),
+        ..base_row(&base)
+    };
+    assert_ne!(key_of(&row), key_of(&named));
+    assert_ne!(key_of(&named), key_of(&other));
 }
 
 #[test]
@@ -609,6 +653,7 @@ fn the_answer_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let other = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -625,9 +670,11 @@ fn the_answer_is_in_the_key() {
             },
         },
         answer: Some("no"),
+        recipient: None,
         flat: false,
     };
     let missing = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -644,6 +691,7 @@ fn the_answer_is_in_the_key() {
             },
         },
         answer: None,
+        recipient: None,
         flat: false,
     };
     assert_ne!(key_of(&row), key_of(&other));
@@ -655,6 +703,7 @@ fn flat_is_in_the_key() {
     let base = base();
     let row = base_row(&base);
     let flat = LedgerRow {
+        changed_by: None,
         name: "shell",
         arguments: &base.arguments,
         state: CallState::Failed {
@@ -671,9 +720,53 @@ fn flat_is_in_the_key() {
             },
         },
         answer: Some("yes"),
+        recipient: None,
         flat: true,
     };
     assert_ne!(key_of(&row), key_of(&flat));
+}
+
+#[test]
+fn hook_rewrite_key_changed_by_is_in_the_ledger_row_key() {
+    let base = base();
+    let guard = ["guard".to_owned()];
+    let audit = ["audit".to_owned()];
+    let plain = base_row(&base);
+    let by_guard = LedgerRow {
+        changed_by: Some(&guard),
+        ..plain
+    };
+    let by_audit = LedgerRow {
+        changed_by: Some(&audit),
+        ..plain
+    };
+    assert_ne!(key_of(&plain), key_of(&by_guard));
+    assert_ne!(key_of(&by_guard), key_of(&by_audit));
+    assert_eq!(key_of(&by_guard), key_of(&by_guard));
+}
+
+#[test]
+fn hook_rewrite_key_changed_by_is_in_the_turn_call_key() {
+    use std::hash::DefaultHasher;
+    fn call_key(call: &super::TurnCall<'_>) -> u64 {
+        let mut key = DefaultHasher::new();
+        call.hash_key(&mut key);
+        std::hash::Hasher::finish(&key)
+    }
+    let guard = ["guard".to_owned()];
+    let audit = ["audit".to_owned()];
+    let plain = group_call("shell");
+    let by_guard = super::TurnCall {
+        changed_by: Some(&guard),
+        ..group_call("shell")
+    };
+    let by_audit = super::TurnCall {
+        changed_by: Some(&audit),
+        ..group_call("shell")
+    };
+    assert_ne!(call_key(&plain), call_key(&by_guard));
+    assert_ne!(call_key(&by_guard), call_key(&by_audit));
+    assert_eq!(call_key(&by_guard), call_key(&by_guard));
 }
 
 #[test]
@@ -1050,6 +1143,7 @@ fn card() -> TurnCard<'static> {
                         open: false,
                     }],
                     calls: vec![TurnCall {
+                        changed_by: None,
                         name: "read",
                         arguments: &serde_json::Value::Null,
                         state: CallState::Completed(TurnCallResult {
@@ -1062,6 +1156,7 @@ fn card() -> TurnCard<'static> {
                             images: Vec::new(),
                         }),
                         answer: None,
+                        recipient: None,
                         open: false,
                         asking: false,
                     }],
@@ -1734,6 +1829,7 @@ fn group_line(running: bool) -> super::GroupLine<'static> {
 
 fn group_call(name: &'static str) -> super::TurnCall<'static> {
     super::TurnCall {
+        changed_by: None,
         name,
         arguments: &serde_json::Value::Null,
         state: CallState::Completed(TurnCallResult {
@@ -1746,9 +1842,25 @@ fn group_call(name: &'static str) -> super::TurnCall<'static> {
             images: Vec::new(),
         }),
         answer: None,
+        recipient: None,
         open: false,
         asking: false,
     }
+}
+
+#[test]
+fn a_group_calls_recipient_is_in_the_key() {
+    let with = |recipient| super::GroupLine {
+        calls: vec![super::TurnCall {
+            recipient,
+            ..group_call("delegate_message")
+        }],
+        ..group_line(false)
+    };
+    let held = with(Some("Fix the parser")).key("group_line");
+    assert_ne!(with(None).key("group_line"), held);
+    assert_ne!(with(Some("Review the fix")).key("group_line"), held);
+    assert_eq!(with(Some("Fix the parser")).key("group_line"), held);
 }
 
 #[test]

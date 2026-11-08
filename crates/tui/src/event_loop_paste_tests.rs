@@ -82,7 +82,7 @@ fn ctrl_v_then_enter_sends_the_image_to_the_hub() {
     lp.hub.store(ours);
     lp.app
         .attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
-    assert!(lp.app.on_line(Line::Hub(hello())).is_empty());
+    lp.app.on_line(Line::Hub(hello()));
     let (_, step_rx) = mpsc::channel();
     assert_eq!(lp.step(Input::Bytes(vec![0x16]), &step_rx), None);
     let landed = Deadline::after(DEADLINE).recv(&worker).unwrap();

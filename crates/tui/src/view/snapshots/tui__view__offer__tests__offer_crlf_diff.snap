@@ -2,27 +2,27 @@
 source: crates/tui/src/view/offer_tests.rs
 expression: screen
 ---
- Offer  repository code                                              Esc returns
+  Offer  repository code                                             Esc returns
 
-▸ Extension lint · 1.0.0
-  extension lint
-  files: a.ts
-  the declaration changed
-    -old
-    +new
-  ( ) approve   (•) skip for this session   ( ) never
+ ▸ Extension lint · 1.0.0
+   extension lint
+   files: a.ts
+   the declaration changed
+     -old
+     +new
+   ( ) approve   (•) skip for this session   ( ) never
 
-A package's TUI files are never installed from a repository.
-
-↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside
-  Send · 0 approve, 1 skip, 0 never
-
-
+ A package's TUI files are never installed from a repository.
+⋮
+⋮↑↓ choose an item · ←→ its answer · Send answers them all · Esc puts it aside
+⋮  Send · 0 approve, 1 skip, 0 never
 
 
 
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
-▌ ›
-▌──────────────────────────────────────────────────────────────────────────────
-▌auto                                                        ctx ▆▆▆▆▆▆▆▆ — · —
-▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+
+
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                       ctx ▆▆▆▆▆▆▆▆ — · —
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

@@ -65,8 +65,8 @@ impl App {
         self.drag.drag = self.chrome.layout().and_then(|layout| {
             let edge = layout::edge_at(&layout, col)?;
             let before = match edge {
-                Edge::Rail | Edge::Grip => self.home.as_ref()?.launch.rail_share,
-                Edge::Panel => self.home.as_ref()?.launch.panel_share,
+                Edge::Rail | Edge::Grip => self.home.launch.rail_share,
+                Edge::Panel => self.home.launch.panel_share,
             };
             Some(Drag {
                 edge,
@@ -94,18 +94,14 @@ impl App {
         match edge {
             Edge::Rail => {
                 let below = width < layout::RAIL_FLOOR;
-                if let Some(home) = self.home.as_mut() {
-                    home.launch.rail_share = layout::share_for(width, screen);
-                }
+                self.home.launch.rail_share = layout::share_for(width, screen);
                 if let Some(drag) = self.drag.drag.as_mut() {
                     drag.below = below;
                 }
             }
             Edge::Grip => {
                 if width >= layout::RAIL_FLOOR {
-                    if let Some(home) = self.home.as_mut() {
-                        home.launch.rail_share = layout::share_for(width, screen);
-                    }
+                    self.home.launch.rail_share = layout::share_for(width, screen);
                     self.show_rail();
                     if let Some(drag) = self.drag.drag.as_mut() {
                         drag.edge = Edge::Rail;
@@ -113,9 +109,7 @@ impl App {
                 }
             }
             Edge::Panel => {
-                if let Some(home) = self.home.as_mut() {
-                    home.launch.panel_share = layout::share_for(width, screen);
-                }
+                self.home.launch.panel_share = layout::share_for(width, screen);
             }
         }
     }
@@ -134,26 +128,15 @@ impl App {
         };
         if drag.edge == Edge::Rail && drag.below {
             self.hide_rail();
-            if let Some(home) = self.home.as_mut() {
-                home.launch.rail_share = drag.before;
-            }
+            self.home.launch.rail_share = drag.before;
             return;
         }
-        if drag.edge == Edge::Grip {
-            return;
-        }
-        let share = match drag.edge {
-            Edge::Rail => self.home.as_ref().map(|home| home.launch.rail_share),
-            Edge::Panel => self.home.as_ref().map(|home| home.launch.panel_share),
-            Edge::Grip => None,
+        let (key, share) = match drag.edge {
+            Edge::Rail => ("tui.rail.width", self.home.launch.rail_share),
+            Edge::Panel => ("tui.panel.width", self.home.launch.panel_share),
+            Edge::Grip => return,
         };
-        let key = match drag.edge {
-            Edge::Rail | Edge::Grip => "tui.rail.width",
-            Edge::Panel => "tui.panel.width",
-        };
-        if let Some(share) = share
-            && share != drag.before
-        {
+        if share != drag.before {
             self.queue_save(key, format!("{share}"));
         }
     }
@@ -162,8 +145,8 @@ impl App {
     /// below the floor has no share yet, so it draws none.
     pub(crate) fn dragging(&self) -> Option<(Edge, f64)> {
         match self.drag.drag?.edge {
-            Edge::Rail => Some((Edge::Rail, self.home.as_ref()?.launch.rail_share)),
-            Edge::Panel => Some((Edge::Panel, self.home.as_ref()?.launch.panel_share)),
+            Edge::Rail => Some((Edge::Rail, self.home.launch.rail_share)),
+            Edge::Panel => Some((Edge::Panel, self.home.launch.panel_share)),
             Edge::Grip => None,
         }
     }

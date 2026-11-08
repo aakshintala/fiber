@@ -4,22 +4,77 @@
 use super::{Focus, Resolved, Typed, join, matching, split};
 use serde_json::json;
 
-/// A mint handing out `c_1`, `c_2`, … in order.
+/// Stands in for the caller: it mints `c_1`, `c_2`, … for the directories
+/// [`Typed::due`] returns and keeps them as the `Directories` tags would.
 struct Mint {
     next: usize,
+    /// The asked directories as `(id, directory)` in send order.
+    tags: Vec<(String, String)>,
 }
 
 impl Mint {
+    /// Sends what is due, skipping the directories already tagged.
     fn run(&mut self, typed: &mut Typed) -> Vec<(String, String)> {
-        typed.due(|| {
+        let tags = self.tags.clone();
+        let due = typed.due(|dir| tags.iter().any(|(_, asked)| asked == dir));
+        let mut out = Vec::new();
+        for dir in due {
             self.next += 1;
-            format!("c_{}", self.next)
-        })
+            let id = format!("c_{}", self.next);
+            self.tags.push((id.clone(), dir.clone()));
+            out.push((id, dir));
+        }
+        out
+    }
+
+    /// Settles the tag `id` and returns its directory; `None` for an
+    /// unknown id, as the app lets it fall through.
+    fn settle(&mut self, id: &str) -> Option<String> {
+        let at = self.tags.iter().position(|(tag, _)| tag == id)?;
+        Some(self.tags.remove(at).1)
+    }
+
+    /// Answers `id` with `result`; false when no tag names `id`.
+    fn answered(
+        &mut self,
+        typed: &mut Typed,
+        id: &str,
+        result: Option<&serde_json::Value>,
+    ) -> bool {
+        let Some(dir) = self.settle(id) else {
+            return false;
+        };
+        typed.answered(&dir, result);
+        true
+    }
+
+    /// Rejects `id`; false when no tag names `id`.
+    fn rejected(&mut self, typed: &mut Typed, id: &str) -> bool {
+        let Some(dir) = self.settle(id) else {
+            return false;
+        };
+        typed.rejected(&dir);
+        true
+    }
+
+    /// Answers `id` with `names` at `path`.
+    fn answer(&mut self, typed: &mut Typed, id: &str, names: &[&str], path: &str) -> bool {
+        self.answered(typed, id, Some(&result(names, path)))
+    }
+
+    /// A disconnect: the tags go and their directories, in send order,
+    /// are handed back to `typed`.
+    fn disconnect(&mut self, typed: &mut Typed) {
+        let retry = self.tags.drain(..).map(|(_, dir)| dir).collect();
+        typed.disconnected(retry);
     }
 }
 
 fn mint() -> Mint {
-    Mint { next: 0 }
+    Mint {
+        next: 0,
+        tags: Vec::new(),
+    }
 }
 
 /// Types `text` one character at a time.
@@ -32,11 +87,6 @@ fn type_text(typed: &mut Typed, text: &str) {
 /// A `directories` result listing `names` at `path`.
 fn result(names: &[&str], path: &str) -> serde_json::Value {
     json!({"directories": names, "path": path})
-}
-
-/// Answers `id` with `names` at `path`.
-fn answer(typed: &mut Typed, id: &str, names: &[&str], path: &str) -> bool {
-    typed.answered(id, Some(&result(names, path)))
 }
 
 #[test]
@@ -101,7 +151,7 @@ fn resolve_opens_root_from_a_held_listing() {
     type_text(&mut typed, "/");
     let sent = ids.run(&mut typed);
     assert_eq!(sent.len(), 1);
-    assert!(answer(&mut typed, &sent[0].0, &[], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &[], "/"));
     assert!(matches!(typed.resolve(), Resolved::Open(path) if path == "/"));
 }
 
@@ -112,7 +162,7 @@ fn resolve_opens_root_from_a_double_slash() {
     type_text(&mut typed, "//");
     let sent = ids.run(&mut typed);
     assert_eq!(sent.len(), 2);
-    assert!(answer(&mut typed, &sent[1].0, &[], "/"));
+    assert!(ids.answer(&mut typed, &sent[1].0, &[], "/"));
     assert!(matches!(typed.resolve(), Resolved::Open(path) if path == "/"));
 }
 
@@ -126,11 +176,11 @@ fn resolve_opens_a_trailing_slash_from_its_parent_listing() {
         sent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
         vec!["/", "/a/", "/a/b/"]
     );
-    assert!(answer(&mut typed, &sent[2].0, &[], "/a/b/"));
-    assert!(answer(&mut typed, &sent[0].0, &["b"], "/"));
+    assert!(ids.answer(&mut typed, &sent[2].0, &[], "/a/b/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["b"], "/"));
     // The parent names `b`, but `/a/` is not listed yet: loading.
     assert!(matches!(typed.resolve(), Resolved::Loading));
-    assert!(answer(&mut typed, &sent[1].0, &["b"], "/a/"));
+    assert!(ids.answer(&mut typed, &sent[1].0, &["b"], "/a/"));
     assert!(matches!(typed.resolve(), Resolved::Open(path) if path == "/a/b"));
 }
 
@@ -140,8 +190,8 @@ fn resolve_reports_missing_when_the_parent_omits_the_name() {
     let mut ids = mint();
     type_text(&mut typed, "/a/b/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[2].0, &[], "/a/b/"));
-    assert!(answer(&mut typed, &sent[1].0, &["c"], "/a/"));
+    assert!(ids.answer(&mut typed, &sent[2].0, &[], "/a/b/"));
+    assert!(ids.answer(&mut typed, &sent[1].0, &["c"], "/a/"));
     assert!(matches!(typed.resolve(), Resolved::Missing));
     assert!(typed.missing());
 }
@@ -152,7 +202,7 @@ fn resolve_waits_for_the_current_listing_before_the_parent() {
     let mut ids = mint();
     type_text(&mut typed, "/a/b/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[1].0, &["b"], "/a/"));
+    assert!(ids.answer(&mut typed, &sent[1].0, &["b"], "/a/"));
     // `/a/` names `b`, but `/a/b/` itself is not listed yet: loading.
     assert!(matches!(typed.resolve(), Resolved::Loading));
     assert!(!typed.missing());
@@ -164,8 +214,8 @@ fn resolve_reports_missing_when_the_parent_listing_failed() {
     let mut ids = mint();
     type_text(&mut typed, "/a/b/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[2].0, &[], "/a/b/"));
-    assert!(typed.rejected(&sent[1].0));
+    assert!(ids.answer(&mut typed, &sent[2].0, &[], "/a/b/"));
+    assert!(ids.rejected(&mut typed, &sent[1].0));
     assert!(matches!(typed.resolve(), Resolved::Missing));
 }
 
@@ -179,7 +229,7 @@ fn resolve_reports_missing_without_a_parent_lookup_for_a_full_name() {
         sent.iter().map(|(_, dir)| dir.as_str()).collect::<Vec<_>>(),
         vec!["/", "/a/"]
     );
-    assert!(answer(&mut typed, &sent[1].0, &[], "/a/"));
+    assert!(ids.answer(&mut typed, &sent[1].0, &[], "/a/"));
     assert!(matches!(typed.resolve(), Resolved::Missing));
     assert!(typed.queued.is_empty());
 }
@@ -215,7 +265,7 @@ fn resolve_opens_home_once_its_listing_answers() {
     );
     // In flight, Enter queues nothing.
     assert!(matches!(typed.resolve(), Resolved::Loading));
-    assert!(answer(&mut typed, &sent[0].0, &[], "/Users/me/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &[], "/Users/me/"));
     assert!(matches!(typed.resolve(), Resolved::Open(path) if path == "/Users/me"));
 }
 
@@ -226,7 +276,7 @@ fn resolve_opens_root_for_a_home_path_of_slash() {
     type_text(&mut typed, "~");
     assert!(matches!(typed.resolve(), Resolved::Loading));
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &[], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &[], "/"));
     assert!(matches!(typed.resolve(), Resolved::Open(path) if path == "/"));
 }
 
@@ -236,8 +286,8 @@ fn resolve_opens_a_home_completion_through_the_listed_path() {
     let mut ids = mint();
     type_text(&mut typed, "~/tree/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["tree"], "/root/"));
-    assert!(answer(&mut typed, &sent[1].0, &[], "/root/tree/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["tree"], "/root/"));
+    assert!(ids.answer(&mut typed, &sent[1].0, &[], "/root/tree/"));
     assert!(matches!(typed.resolve(), Resolved::Open(path) if path == "/root/tree"));
 }
 
@@ -248,7 +298,7 @@ fn resolve_reports_missing_when_the_home_listing_failed() {
     type_text(&mut typed, "~");
     assert!(matches!(typed.resolve(), Resolved::Loading));
     let sent = ids.run(&mut typed);
-    assert!(typed.rejected(&sent[0].0));
+    assert!(ids.rejected(&mut typed, &sent[0].0));
     assert!(matches!(typed.resolve(), Resolved::Missing));
     assert!(typed.missing());
 }
@@ -313,7 +363,7 @@ fn a_held_in_flight_or_queued_directory_is_not_queued_twice() {
     // `/` and `/a/` are in flight: retyping queues nothing.
     assert_eq!(typed.text(), "/a/");
     assert!(ids.run(&mut typed).is_empty());
-    assert!(answer(&mut typed, &sent[0].0, &["a"], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a"], "/"));
     // `/` is held now: backspacing and retyping queues nothing for it.
     assert!(typed.pop());
     assert!(typed.pop());
@@ -322,8 +372,32 @@ fn a_held_in_flight_or_queued_directory_is_not_queued_twice() {
     // `/a/` is still in flight: typing back queues nothing.
     type_text(&mut typed, "a/");
     assert!(ids.run(&mut typed).is_empty());
-    assert!(answer(&mut typed, &sent[1].0, &[], "/a/"));
+    assert!(ids.answer(&mut typed, &sent[1].0, &[], "/a/"));
     assert!(ids.run(&mut typed).is_empty());
+}
+
+#[test]
+fn due_skips_exactly_the_directories_in_flight() {
+    let mut typed = Typed::new();
+    type_text(&mut typed, "/a/b/");
+    let due = typed.due(|dir| dir == "/a/");
+    assert_eq!(due, ["/".to_owned(), "/a/b/".to_owned()]);
+    // The skipped directory left the queue with the rest: a second pass
+    // asks nothing.
+    assert!(typed.due(|_| false).is_empty());
+}
+
+#[test]
+fn bare_tilde_resolve_queues_the_home_listing_once() {
+    let mut typed = Typed::new();
+    type_text(&mut typed, "~");
+    assert!(matches!(typed.resolve(), Resolved::Loading));
+    assert!(matches!(typed.resolve(), Resolved::Loading));
+    assert_eq!(typed.due(|_| false), ["~/".to_owned()]);
+    // With the listing out, resolving again queues it, and `due` drops
+    // it while its tag lives.
+    assert!(matches!(typed.resolve(), Resolved::Loading));
+    assert!(typed.due(|dir| dir == "~/").is_empty());
 }
 
 #[test]
@@ -336,7 +410,7 @@ fn backspace_to_empty_clears_the_queue_and_keeps_the_rest() {
     assert_eq!(typed.text(), "/");
     assert!(!typed.pop());
     assert!(typed.queued.is_empty());
-    assert_eq!(typed.inflight.len(), 1);
+    assert_eq!(ids.tags.len(), 1);
 }
 
 #[test]
@@ -350,7 +424,7 @@ fn due_drains_in_order_with_the_minted_ids() {
     assert_eq!(sent[1].0, "c_2");
     assert_eq!(sent[2].0, "c_3");
     assert_eq!(
-        typed.inflight,
+        sent,
         &[
             ("c_1".to_owned(), "/".to_owned()),
             ("c_2".to_owned(), "/a/".to_owned()),
@@ -365,7 +439,7 @@ fn answers_store_a_well_formed_listing() {
     let mut ids = mint();
     type_text(&mut typed, "/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["b", "a"], "/x/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["b", "a"], "/x/"));
     assert_eq!(typed.completions(), vec!["b", "a"]);
 }
 
@@ -387,7 +461,7 @@ fn answers_store_an_empty_listing_for_rejections_and_malformed_results() {
         let mut ids = mint();
         type_text(&mut typed, "/");
         let sent = ids.run(&mut typed);
-        assert!(typed.answered(&sent[0].0, Some(&result)));
+        assert!(ids.answered(&mut typed, &sent[0].0, Some(&result)));
         assert!(typed.completions().is_empty(), "result {result}");
         // A failed listing is held: retyping asks nothing more.
         assert!(!typed.pop());
@@ -398,23 +472,8 @@ fn answers_store_an_empty_listing_for_rejections_and_malformed_results() {
     let mut ids = mint();
     type_text(&mut typed, "/");
     let sent = ids.run(&mut typed);
-    assert!(typed.rejected(&sent[0].0));
+    assert!(ids.rejected(&mut typed, &sent[0].0));
     assert!(typed.completions().is_empty());
-}
-
-#[test]
-fn answers_for_unknown_ids_change_nothing() {
-    let mut typed = Typed::new();
-    let mut ids = mint();
-    type_text(&mut typed, "/");
-    assert!(!typed.answered("c_999", Some(&result(&["a"], "/"))));
-    assert!(!typed.rejected("c_999"));
-    assert!(typed.completions().is_empty());
-    let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["a"], "/"));
-    // The same id twice: the second answers nothing.
-    assert!(!answer(&mut typed, &sent[0].0, &["b"], "/"));
-    assert_eq!(typed.completions(), vec!["a"]);
 }
 
 #[test]
@@ -424,11 +483,11 @@ fn disconnect_requeues_in_flight_directories_in_send_order() {
     type_text(&mut typed, "/a/");
     let sent = ids.run(&mut typed);
     assert_eq!(sent.len(), 2);
-    typed.disconnected();
-    assert!(typed.inflight.is_empty());
+    ids.disconnect(&mut typed);
+    assert!(ids.tags.is_empty());
     assert_eq!(typed.queued, &["/".to_owned(), "/a/".to_owned()]);
     // Old ids match nothing after the disconnect.
-    assert!(!answer(&mut typed, &sent[0].0, &["a"], "/"));
+    assert!(!ids.answer(&mut typed, &sent[0].0, &["a"], "/"));
     let resent = ids.run(&mut typed);
     assert_eq!(resent.len(), 2);
     assert_ne!(resent[0].0, sent[0].0);
@@ -449,8 +508,10 @@ fn disconnect_keeps_queued_directories_behind_the_retried_ones() {
     let sent = ids.run(&mut typed);
     assert_eq!(sent.len(), 1);
     type_text(&mut typed, "a/");
-    assert_eq!(typed.queued, &["/a/".to_owned()]);
-    typed.disconnected();
+    // `/` is queued again beside its live ask: `due` drops it while the
+    // tag lives, and the disconnect must not ask it twice.
+    assert_eq!(typed.queued, &["/".to_owned(), "/a/".to_owned()]);
+    ids.disconnect(&mut typed);
     assert_eq!(typed.queued, &["/".to_owned(), "/a/".to_owned()]);
 }
 
@@ -460,8 +521,8 @@ fn disconnect_keeps_the_cache() {
     let mut ids = mint();
     type_text(&mut typed, "/a/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["a"], "/"));
-    typed.disconnected();
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a"], "/"));
+    ids.disconnect(&mut typed);
     let resent = ids.run(&mut typed);
     assert_eq!(
         resent
@@ -473,16 +534,17 @@ fn disconnect_keeps_the_cache() {
 }
 
 #[test]
-fn forget_drops_in_flight_ids_and_keeps_the_cache() {
+fn dropping_the_tags_with_no_retry_keeps_the_cache() {
     let mut typed = Typed::new();
     let mut ids = mint();
     type_text(&mut typed, "/a/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["a"], "/"));
-    typed.forget();
-    assert!(typed.inflight.is_empty());
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a"], "/"));
+    // The recents alone are open at a disconnect: the tags drop and
+    // nothing is handed back to ask again.
+    ids.tags.clear();
     assert!(typed.queued.is_empty());
-    assert!(!answer(&mut typed, &sent[1].0, &["x"], "/a/"));
+    assert!(!ids.answer(&mut typed, &sent[1].0, &["x"], "/a/"));
     // The cache stays: back at `/`, its held listing asks nothing more.
     assert!(typed.pop());
     assert!(typed.pop());
@@ -496,7 +558,7 @@ fn a_keystroke_focuses_the_first_matching_completion() {
     let mut ids = mint();
     type_text(&mut typed, "/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
     assert_eq!(typed.focus(), &Focus::Completion("a1".to_owned()));
     typed.push('a');
     assert_eq!(typed.text(), "/a");
@@ -514,7 +576,7 @@ fn a_late_listing_focuses_nothing_into_its_first_completion() {
     type_text(&mut typed, "/");
     let sent = ids.run(&mut typed);
     assert_eq!(typed.focus(), &Focus::Nothing);
-    assert!(answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
     assert_eq!(typed.focus(), &Focus::Completion("a1".to_owned()));
 }
 
@@ -526,7 +588,7 @@ fn a_late_listing_keeps_a_focused_recent() {
     let sent = ids.run(&mut typed);
     typed.move_focus(true, 2);
     assert_eq!(typed.focus(), &Focus::Recent(0));
-    assert!(answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
     assert_eq!(typed.focus(), &Focus::Recent(0));
 }
 
@@ -536,7 +598,7 @@ fn arrows_walk_completions_then_recents_and_clamp() {
     let mut ids = mint();
     type_text(&mut typed, "/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
     typed.move_focus(true, 2);
     assert_eq!(typed.focus(), &Focus::Completion("a2".to_owned()));
     typed.move_focus(true, 2);
@@ -561,7 +623,7 @@ fn down_from_nothing_focuses_the_first_row() {
     let mut ids = mint();
     type_text(&mut typed, "/x");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &[], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &[], "/"));
     assert_eq!(typed.focus(), &Focus::Nothing);
     typed.move_focus(true, 2);
     assert_eq!(typed.focus(), &Focus::Recent(0));
@@ -576,7 +638,7 @@ fn a_late_listing_keeps_a_deeper_recent() {
     typed.move_focus(true, 2);
     typed.move_focus(true, 2);
     assert_eq!(typed.focus(), &Focus::Recent(1));
-    assert!(answer(&mut typed, &sent[0].0, &["a1"], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a1"], "/"));
     assert_eq!(typed.focus(), &Focus::Recent(1));
 }
 
@@ -586,7 +648,7 @@ fn up_from_nothing_stays_above_the_list() {
     let mut ids = mint();
     type_text(&mut typed, "/x");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &[], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &[], "/"));
     typed.move_focus(false, 2);
     assert_eq!(typed.focus(), &Focus::Nothing);
 }
@@ -597,7 +659,7 @@ fn tab_completes_the_focused_completion_with_a_trailing_slash() {
     let mut ids = mint();
     type_text(&mut typed, "/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a1", "a2"], "/"));
     assert!(typed.tab());
     assert_eq!(typed.text(), "/a1/");
     let asked = ids.run(&mut typed);
@@ -609,7 +671,7 @@ fn tab_completes_the_focused_completion_with_a_trailing_slash() {
         vec!["/a1/"]
     );
     assert_eq!(typed.focus(), &Focus::Nothing);
-    assert!(answer(&mut typed, &asked[0].0, &["deep"], "/a1/"));
+    assert!(ids.answer(&mut typed, &asked[0].0, &["deep"], "/a1/"));
     // Typing into the completed directory focuses its first entry.
     typed.push('d');
     assert_eq!(typed.focus(), &Focus::Completion("deep".to_owned()));
@@ -621,11 +683,11 @@ fn tab_onto_a_held_directory_focuses_its_first_completion() {
     let mut ids = mint();
     type_text(&mut typed, "/");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &["a1"], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &["a1"], "/"));
     // Answer the queued `/a1/` listing before Tab, so it is held.
     assert!(typed.tab());
     let asked = ids.run(&mut typed);
-    assert!(answer(&mut typed, &asked[0].0, &["deep"], "/a1/"));
+    assert!(ids.answer(&mut typed, &asked[0].0, &["deep"], "/a1/"));
     // Back to `/` and Tab again: `/a1/` is held, so focus lands at once.
     assert!(typed.pop());
     assert!(typed.pop());
@@ -644,7 +706,7 @@ fn tab_without_a_focused_completion_changes_nothing() {
     let mut ids = mint();
     type_text(&mut typed, "/x");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &[], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &[], "/"));
     assert!(!typed.tab());
     assert_eq!(typed.text(), "/x");
     assert!(ids.run(&mut typed).is_empty());
@@ -660,7 +722,7 @@ fn missing_clears_on_the_next_keystroke() {
     let mut ids = mint();
     type_text(&mut typed, "/zz");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &[], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &[], "/"));
     assert!(matches!(typed.resolve(), Resolved::Missing));
     assert!(typed.missing());
     typed.push('z');
@@ -677,7 +739,7 @@ fn the_recent_is_the_focused_recent_index() {
     let mut ids = mint();
     type_text(&mut typed, "/a");
     let sent = ids.run(&mut typed);
-    assert!(answer(&mut typed, &sent[0].0, &[], "/"));
+    assert!(ids.answer(&mut typed, &sent[0].0, &[], "/"));
     assert_eq!(typed.recent(), None);
     typed.move_focus(true, 2);
     assert_eq!(typed.recent(), Some(0));

@@ -6,6 +6,9 @@ now, not a plan. It is settled by
 [The tool contract: what every tool shares](https://github.com/aakshintala/fiber/issues/14);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
+The first-party `codemode` extension adds one tool that runs a script calling
+the session's other tools (`docs/extensions.md`, "Code mode").
+
 Vocabulary is `GLOSSARY.md`. Tool call, effect, artifact, participant, seam,
 extension and event mean what it says there and nothing else. How effects are
 judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
@@ -653,8 +656,6 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   - It was started with `run_in_background`, `tty` or `monitor`, in which
     case it moves at once.
   - A driver sends the `background` driver command (`docs/invocation.md`).
-  - Its shell exits while processes it started are still running ("When a
-    command ends").
 - Moving never kills anything and never restarts anything. The tool call
   completes with the job's receipt, which says the command is still
   running, why it moved, the `job_id` and the output file's path. When
@@ -666,18 +667,40 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 
 ### When a command ends
 
-- A command runs until its process group is empty, not until its shell
-  exits and not until its output pipe closes. Fiber checks whether the
-  group still has members (`kill(-pgid, 0)`).
-- If the shell exits and processes it started are still in the group, the
-  command moves to the background at once. The receipt gives the shell's
-  exit code and names what was left running (command names and process
-  ids). The job ends when the group is empty, and keeps the command's
-  timeout. A receipt for a move that kept a timeout ends with the stop
-  time in UTC, the timeout, and the long-running-process hint, for
-  example (``Fiber stops it at 2023-11-14T22:13:50Z (timeout_ms 60000).
-  To keep a long-running process such as a server, start it with
-  `run_in_background` and no timeout, or with `detach`. ``).
+- A command with no job list (a run that cannot move) runs until its
+  process group is empty, not until its shell exits and not until its
+  output pipe closes. Fiber checks whether the group still has members
+  (`kill(-pgid, 0)`).
+- A foreground `shell` call ends when its shell exits. If processes it
+  started are still in the group, the call still completes at once, with
+  the shell's output and exit code as for any command that finished
+  ("Result and output"): `completed` for 0, `failed` with `nonzero_exit`
+  otherwise. The leftovers are a side effect, not the work, so they are
+  not a job: they get no timeout and no notice, and only a shutdown stops
+  them. The result ends with one line after the closing line: how many
+  processes are left running and the first three by name and process id
+  (for example `2 processes left running (first: sleep (12), sleep (13)).`),
+  the artifact file for what they print after the call returns, and
+  the long-running-process hint (``To keep a long-running process such as
+  a server, start it with `run_in_background` and no timeout, or with
+  `detach`.``). When the group cannot be listed the line gives no count and
+  says processes are still running in the group; when the session has no
+  artifacts directory it says the output could not be saved, and that output
+  is dropped. A shell that leaves nothing running ends with no such line.
+- Where the leftovers' output lands has three tiers. Output already
+  delivered when the shell exits is in the result. Output still in flight at
+  exit, or written before the call returns, may be in either place. Output
+  written after the call returns is in the artifact file. A byte lands in
+  one place only, and the artifact stops growing at the same cap as a job's
+  output file. The file closes when the output pipe does, and Fiber takes the
+  group off its list once the group is empty.
+- A command still running after 30 seconds moves to the background as
+  "Moving to the background" says, and a move that kept a timeout ends its
+  receipt with the stop time in UTC, the timeout, and the
+  long-running-process hint, for example (``Fiber stops it at
+  2023-11-14T22:13:50Z (timeout_ms 60000). To keep a long-running process
+  such as a server, start it with `run_in_background` and no timeout, or
+  with `detach`. ``).
 - A process that left the group on purpose, for example with `setsid`,
   is not tracked. `nohup` does not leave the group: the process stays in
   it, and a timeout, a cancellation, a `jobs stop` and a shutdown stop it
@@ -725,7 +748,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 
   A notice that the job could not be opened goes on the line before it. On an
   output Fiber kept whole, `Output was still held open.` goes on the line after
-  it. `process` and `details` carry the same facts for a client, which should
+  it. A shell that exited with processes left running adds its one
+  leftover line after the closing line, on a whole and a spilled output alike
+  ("When a command ends"). `process` and `details` carry the same facts for a client, which should
   read them there rather than parse the text.
 - `details` is `{ "command": "<command>", "exit_code": N }`, or `"signal"`
   in place of `"exit_code"` when a signal killed it, so a client draws the
@@ -1040,6 +1065,11 @@ The kinds are `docs/events.md`.
   answer still reports the final state, without the delegate's final message.
   Its `delegate_finished` and `job_completed` are written with no turn, after
   the `after_tool` hooks (`docs/extensions.md`, "Host calls").
+- A `jobs wait` that returns a job's final state carries the same `output_tail`
+  as the completion notice, with the output path in the wait answer. A wait
+  that ends at its deadline with the job still running reports `still_running`
+  with no tail; a finished job whose output file is empty or missing carries
+  no tail either.
 - A monitor is a job running a watch command. The model starts one with a
   `shell` call that sets `monitor: true`, so the command goes through the
   shell's classifier, permissions and `workdir` like any other. Lines on its standard output

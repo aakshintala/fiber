@@ -15,14 +15,14 @@ use contract::{ActionId, Envelope, Seq, SessionId};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
-use super::{Draw, Folded, Pages, Part, fold};
+use super::{Delegates, Draw, Folded, Pages, Part, fold as fold_with, shell_target};
 use crate::app::{App, Effect, Target};
 use crate::ext::{Failure, Handle, Input, RawSpan, Renderer};
 use crate::keys::Key;
 use crate::link::Line;
 use crate::local_time::new_york;
 use crate::rows::Rows;
-use crate::turn::{Entry, Row, Turn, target_id};
+use crate::turn::{Entry, Recipients, Row, Turn, target_id};
 
 const SESSION: &str = "s_aaaaaaaaaaaaaaaa";
 
@@ -236,6 +236,19 @@ fn history(lines: &[Envelope], range: &RangeInclusive<Seq>) -> Vec<Envelope> {
         .filter(|line| line.seq.is_some_and(|seq| range.contains(&seq)))
         .cloned()
         .collect()
+}
+
+/// One line folded into `part` with no session or delegate held.
+fn fold(part: &mut Part, envelope: &Envelope) -> Folded {
+    fold_with(
+        part,
+        envelope,
+        &Recipients {
+            sessions: &HashMap::new(),
+            delegates: &Delegates::default(),
+            page: None,
+        },
+    )
 }
 
 /// What one fold of every line draws, with the totals `pages` kept.
@@ -632,6 +645,90 @@ fn page_texts(app: &App, at: usize) -> Vec<String> {
         app.pages().draw(at, part, &mut rows);
     }
     rows.iter().map(|(line, _)| line.to_string()).collect()
+}
+
+/// The ledger row of the read in `page`, whose rewrite the fold took.
+fn rewritten_row(app: &App, page: usize) -> Option<String> {
+    page_texts(app, page)
+        .into_iter()
+        .find(|line| line.contains("\u{2713} read"))
+}
+
+#[test]
+fn a_replayed_hook_rewrite_is_drawn_from_history() {
+    let mut stream = Stream::new(false);
+    stream.durable(
+        "turn_started",
+        None,
+        json!({"input": [{"type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "read it"}]}]}),
+    );
+    stream.durable("step_started", None, json!({}));
+    stream.durable("assistant_message_started", Some("a_mrw"), json!({}));
+    stream.durable(
+        "tool_call_requested",
+        Some("a_trw"),
+        json!({"name": "read", "arguments": {"path": "a.txt"}}),
+    );
+    stream.durable(
+        "assistant_message_completed",
+        Some("a_mrw"),
+        json!({"outcome": "completed"}),
+    );
+    stream.durable(
+        "tool_call_started",
+        Some("a_trw"),
+        json!({"effects": ["reads"], "reversible": true,
+            "arguments": {"path": "b.txt"}, "changed_by": ["fiber.test/guard"]}),
+    );
+    stream.durable(
+        "tool_call_completed",
+        Some("a_trw"),
+        json!({"status": "completed", "content": [{"type": "text", "text": "B"}]}),
+    );
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+    let first_turn = stream.lines.len();
+    for turn in 1..4 {
+        stream.turn(turn, 30);
+    }
+    let lines = stream.lines;
+
+    // The reference folds turn 0 alone, so its page is the open one and
+    // never evicts.
+    let mut reference = app(80, 20);
+    open(&mut reference, &lines[..first_turn]);
+    let group = first_group(&reference).expect("the rewritten read's group");
+    reference.open(group);
+    let want = rewritten_row(&reference, 0).expect("the reference ledger row");
+    assert!(want.contains("b.txt"), "{want:?}");
+    assert!(want.contains("via fiber.test/guard"), "{want:?}");
+
+    // The replay closes turn 0's page behind three more turns, so the row
+    // can only come back from the durable lines.
+    let mut app = app(80, 20);
+    open(&mut app, &lines);
+    assert!(app.pages().part(0).is_none());
+    app.jump(0);
+    assert!(!app.needs().is_empty(), "page 0 loads from history");
+    frame(&mut app, &lines);
+    assert!(app.pages().part(0).is_some());
+    let group = first_group(&app).expect("the replayed group");
+    app.open(group);
+    assert_eq!(rewritten_row(&app, 0), Some(want.clone()));
+
+    // Dropped and loaded again, the row is the same with no second open.
+    for _ in 0..200 {
+        if app.pages().part(0).is_none() {
+            break;
+        }
+        app.on_key(Key::PageDown, now());
+        frame(&mut app, &lines);
+    }
+    assert!(app.pages().part(0).is_none(), "page 0 dropped again");
+    app.jump(0);
+    assert!(!app.needs().is_empty(), "page 0 loads from history again");
+    frame(&mut app, &lines);
+    assert_eq!(rewritten_row(&app, 0), Some(want));
 }
 
 #[test]
@@ -1592,7 +1689,7 @@ fn shell_output_draws_only_on_its_own_page_after_its_own_turn() {
             .entry((page, after))
             .or_default()
             .push(pages.shells.len());
-        pages.shells.push((page, after, text.to_owned()));
+        pages.shells.push((page, after, text.to_owned(), false));
     }
     let part = pages.part(0).expect("open page");
     let mut out = Rows::default();
@@ -5189,18 +5286,22 @@ fn carry_chain_carries_only_generations_below_the_carried_summaries() {
 #[test]
 fn carry_chain_carries_only_shells_below_the_carried_count() {
     let (mut preview, mut fold, len, summaries) = carry_edge();
-    preview.shells.push((0, 0, "ancestor output".to_owned()));
+    preview
+        .shells
+        .push((0, 0, "ancestor output".to_owned(), false));
     preview.shell_index.entry((0, 0)).or_default().push(0);
-    preview.shells.push((len, 1, "own output".to_owned()));
+    preview
+        .shells
+        .push((len, 1, "own output".to_owned(), false));
     preview.shell_index.entry((len, 1)).or_default().push(1);
-    fold.shells.push((1, 0, "fold output".to_owned()));
+    fold.shells.push((1, 0, "fold output".to_owned(), false));
     fold.shell_index.entry((1, 0)).or_default().push(0);
     preview.carry_chain(&mut fold);
     assert_eq!(
         fold.shells,
         vec![
-            (0, 0, "ancestor output".to_owned()),
-            (1 + len, summaries, "fold output".to_owned()),
+            (0, 0, "ancestor output".to_owned(), false),
+            (1 + len, summaries, "fold output".to_owned(), false),
         ],
         "the carried shell lands first and the fold's own shifts past it"
     );
@@ -5380,4 +5481,1001 @@ fn a_dropped_page_draw_keeps_the_frame_wall_time() {
     assert!(!rows.is_empty(), "the dropped page draws");
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(fake.nows.borrow().clone(), vec![1_000]);
+}
+
+/// One turn of message calls, `(action, name, id)` each, every one
+/// completed: the turn closes, so its calls sit in a ledger.
+fn message_turn(stream: &mut Stream, calls: &[(&str, &str, &str)]) {
+    stream.durable("turn_started", None, json!({"input": []}));
+    stream.durable("step_started", None, json!({}));
+    for &(action, name, id) in calls {
+        stream.durable(
+            "tool_call_requested",
+            Some(action),
+            json!({"name": name, "arguments": {"id": id, "message": "hi"}}),
+        );
+        stream.complete(action, false);
+    }
+    stream.durable("turn_completed", None, json!({"outcome": "completed"}));
+}
+
+/// Every drawn row of every resident page with the ledgers open.
+fn ledger_rows(pages: &mut Pages) -> Vec<String> {
+    pages.toggle_ledgers();
+    let mut out = Vec::new();
+    for at in 0..=pages.index().pages().len() {
+        let mut rows = Rows::default();
+        if let Some(part) = pages.part(at) {
+            pages.draw(at, part, &mut rows);
+        }
+        out.extend(rows.iter().map(|(line, _)| line.to_string()));
+    }
+    pages.toggle_ledgers();
+    out
+}
+
+fn labels(names: &[(&str, &str)]) -> std::sync::Arc<HashMap<SessionId, String>> {
+    std::sync::Arc::new(
+        names
+            .iter()
+            .map(|&(id, name)| (SessionId(id.to_owned()), name.to_owned()))
+            .collect(),
+    )
+}
+
+#[test]
+fn a_session_message_row_stores_its_recipient_name_when_folded() {
+    let mut pages = Pages::new(80);
+    pages.set_session_labels(labels(&[("s_other", "worker")]));
+    let mut stream = Stream::new(false);
+    message_turn(
+        &mut stream,
+        &[
+            ("a_1", "session_message", "s_other"),
+            ("a_2", "session_message", "s_unknown"),
+        ],
+    );
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(rows.iter().any(|row| row.contains("message  worker")));
+    assert!(rows.iter().any(|row| row.contains("message  s_unknown")));
+    assert!(!rows.iter().any(|row| row.contains("s_other")));
+}
+
+/// A rename redraws every resident page from its stored cards: the
+/// resident row keeps the name held when it folded, and a call folded
+/// after the rename takes the new one.
+#[test]
+fn a_rename_leaves_a_resident_recipient_row_as_folded() {
+    let mut pages = Pages::new(80);
+    pages.set_session_labels(labels(&[("s_other", "worker")]));
+    let mut stream = Stream::new(false);
+    message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+    for line in &stream.lines {
+        pages.apply(line);
+    }
+    pages.set_session_labels(labels(&[("s_other", "renamed")]));
+    let before = ledger_rows(&mut pages);
+    assert!(before.iter().any(|row| row.contains("message  worker")));
+    assert!(!before.iter().any(|row| row.contains("renamed")));
+    let mut later = Stream::new(false);
+    later.seq = stream.seq;
+    message_turn(&mut later, &[("a_2", "session_message", "s_other")]);
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let after = ledger_rows(&mut pages);
+    assert!(after.iter().any(|row| row.contains("message  worker")));
+    assert!(after.iter().any(|row| row.contains("message  renamed")));
+}
+
+/// Only an empty name counts as not held: the row draws the id for it,
+/// and a name of only whitespace is held, so the row does not.
+#[test]
+fn an_empty_recipient_name_draws_the_id_and_a_blank_one_does_not() {
+    for (name, draws_id) in [("", true), (" ", false)] {
+        let mut pages = Pages::new(80);
+        pages.set_session_labels(labels(&[("s_other", name)]));
+        let mut stream = Stream::new(false);
+        message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+        for line in &stream.lines {
+            pages.apply(line);
+        }
+        let rows = ledger_rows(&mut pages);
+        assert!(
+            rows.iter().any(|row| row.contains("message")),
+            "{name:?}: {rows:?}"
+        );
+        assert_eq!(
+            rows.iter().any(|row| row.contains("s_other")),
+            draws_id,
+            "{name:?}: {rows:?}"
+        );
+    }
+}
+
+/// Folds every line of `lines` live into a fresh `Pages`.
+fn applied(lines: &[Envelope]) -> Pages {
+    let mut pages = Pages::new(80);
+    for line in lines {
+        pages.apply(line);
+    }
+    pages
+}
+
+fn has_row(rows: &[String], text: &str) -> bool {
+    rows.iter().any(|row| row.contains(text))
+}
+
+#[test]
+fn a_delegate_message_row_stores_its_recipient_description_when_folded() {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "Fix the parser");
+    message_turn(
+        &mut stream,
+        &[
+            ("a_1", "delegate_message", "j_abc"),
+            ("a_2", "delegate_message", "j_unknown"),
+        ],
+    );
+    let rows = ledger_rows(&mut applied(&stream.lines));
+    assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
+    assert!(has_row(&rows, "message  j_unknown"), "{rows:?}");
+    assert!(!has_row(&rows, "j_abc"), "{rows:?}");
+}
+
+#[test]
+fn an_empty_recipient_description_draws_the_id() {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "");
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    let rows = ledger_rows(&mut applied(&stream.lines));
+    assert!(has_row(&rows, "message  j_abc"), "{rows:?}");
+}
+
+/// A resumed job writes a second `job_started`: calls folded after it take
+/// the new description, and the rows folded before keep theirs.
+#[test]
+fn a_resumed_recipient_description_applies_to_later_calls_only() {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "Fix the parser");
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    job_started(&mut stream, "j_abc", "Review the fix");
+    message_turn(&mut stream, &[("a_2", "delegate_message", "j_abc")]);
+    let rows = ledger_rows(&mut applied(&stream.lines));
+    assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
+    assert!(has_row(&rows, "message  Review the fix"), "{rows:?}");
+}
+
+/// The first page holds the start, the second the call, a third closes
+/// the second.
+fn start_then_call() -> Vec<Envelope> {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "Fix the parser");
+    pad(&mut stream);
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    stream.lines
+}
+
+/// The range of closed page `at`.
+fn page_range(pages: &Pages, at: usize) -> RangeInclusive<Seq> {
+    let page = pages.index().pages().get(at).expect("a closed page");
+    page.first_seq..=page.last_seq
+}
+
+#[test]
+fn a_dropped_recipient_row_draws_its_description_when_its_page_loads_again() {
+    let lines = start_then_call();
+    let mut pages = applied(&lines);
+    assert_eq!(
+        pages.index().pages().len(),
+        3,
+        "two closed pages and the open one"
+    );
+    drop_all(&mut pages);
+    let range = page_range(&pages, 1);
+    pages.load(&SessionId(SESSION.to_owned()), &history(&lines, &range));
+    let rows = ledger_rows(&mut pages);
+    assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
+}
+
+/// Reloading the page of an old start never takes back a resumed
+/// description, whatever order the loads and the live lines come in.
+#[test]
+fn a_reloaded_old_start_does_not_replace_a_resumed_recipient_description() {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "old");
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    job_started(&mut stream, "j_abc", "new");
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    let mut pages = applied(&stream.lines);
+    assert_eq!(pages.index().pages().len(), 3);
+    drop_all(&mut pages);
+    let range = page_range(&pages, 0);
+    pages.load(
+        &SessionId(SESSION.to_owned()),
+        &history(&stream.lines, &range),
+    );
+    let mut later = Stream::new(false);
+    later.seq = stream.seq;
+    message_turn(&mut later, &[("a_9", "delegate_message", "j_abc")]);
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(has_row(&rows, "message  new"), "{rows:?}");
+    assert!(!has_row(&rows, "message  old"), "{rows:?}");
+}
+
+/// One closed page holding a start "old", a call and a start "new".
+fn old_call_new() -> (Pages, Vec<Envelope>) {
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "old");
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    job_started(&mut stream, "j_abc", "new");
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    let pages = applied(&stream.lines);
+    assert_eq!(
+        pages.index().pages().len(),
+        2,
+        "one closed page and the open one"
+    );
+    (pages, stream.lines)
+}
+
+/// Folds closed page 0 of `pages` from `lines` with `held` as the held
+/// delegates, and draws it.
+fn load_with(pages: &mut Pages, lines: &[Envelope], held: &Delegates) -> Vec<String> {
+    drop_all(pages);
+    let range = page_range(pages, 0);
+    let group = history(lines, &range);
+    let refs: Vec<&Envelope> = group.iter().collect();
+    let names = HashMap::new();
+    let kept = pages.residency.load(
+        0,
+        &refs,
+        &pages.seeds,
+        &pages.overrides,
+        &super::Resolve {
+            sessions: &names,
+            held,
+        },
+    );
+    assert!(kept.is_some(), "the page loads");
+    ledger_rows(pages)
+}
+
+/// Each line is noted just before it folds: with nothing held, the call
+/// resolves to the start before it, not the later start on its page.
+#[test]
+fn a_recipient_resolves_to_the_start_before_it_on_its_page() {
+    let (mut pages, lines) = old_call_new();
+    let rows = load_with(&mut pages, &lines, &Delegates::default());
+    assert!(has_row(&rows, "message  old"), "{rows:?}");
+    assert!(!has_row(&rows, "message  new"), "{rows:?}");
+}
+
+/// A held description later in stream order than the page's own start
+/// wins over it.
+#[test]
+fn a_later_held_recipient_description_wins_over_an_earlier_start_on_the_page() {
+    let (mut pages, lines) = old_call_new();
+    let mut held = Delegates::default();
+    for line in &lines {
+        if line.kind() == EventKind::JobStarted && line.payload["description"] == "new" {
+            held.note_live(line);
+        }
+    }
+    let rows = load_with(&mut pages, &lines, &held);
+    assert!(has_row(&rows, "message  new"), "{rows:?}");
+    assert!(!has_row(&rows, "message  old"), "{rows:?}");
+}
+
+/// A held entry from another segment, or with no `seq`, is never
+/// overtaken by a loaded line; one from the same segment is, only by a
+/// later `seq`.
+#[test]
+fn a_loaded_recipient_start_overtakes_a_held_one_only_by_stream_order() {
+    let start = |session: &str, seq: Option<u64>, text: &str| {
+        let mut line = envelope(
+            "job_started",
+            None,
+            json!({"job_id": "j_abc", "description": text, "output_path": "/o"}),
+        );
+        line.session_id = SessionId(session.to_owned());
+        line.seq = seq.map(Seq);
+        line
+    };
+    let job = contract::JobId("j_abc".to_owned());
+    let overlay = |held: &Delegates, loaded: &Envelope| {
+        let mut overlay = Delegates::default();
+        overlay.note_page(loaded, held);
+        overlay.get(&job).map(str::to_owned)
+    };
+    let mut held = Delegates::default();
+    held.note_live(&start("s_a", Some(5), "held"));
+    // The same segment: a lower seq loses, the same loses, a higher wins.
+    assert_eq!(overlay(&held, &start("s_a", Some(4), "low")), None);
+    assert_eq!(overlay(&held, &start("s_a", Some(5), "same")), None);
+    assert_eq!(
+        overlay(&held, &start("s_a", Some(6), "high")).as_deref(),
+        Some("high")
+    );
+    // Another segment never overtakes, whatever its seq.
+    assert_eq!(overlay(&held, &start("s_b", Some(9), "other")), None);
+    // A line with no seq is never recorded.
+    assert_eq!(
+        overlay(&Delegates::default(), &start("s_a", None, "x")),
+        None
+    );
+    // A held entry with no seq is never overtaken.
+    let mut unsequenced = Delegates::default();
+    unsequenced.note_live(&start("s_a", None, "held"));
+    assert_eq!(overlay(&unsequenced, &start("s_a", Some(9), "x")), None);
+    // Nothing held: any sequenced start is recorded.
+    assert_eq!(
+        overlay(&Delegates::default(), &start("s_b", Some(1), "first")).as_deref(),
+        Some("first")
+    );
+}
+
+/// A scratch fold for search borrows the held map: its work stays in
+/// proportion to the page's lines, not the jobs held.
+#[test]
+fn a_search_fold_does_not_copy_the_held_recipient_descriptions() {
+    use std::hint::black_box;
+    let ((), probe) = fakes::alloc::bytes_during(|| {
+        drop(black_box(Vec::<u8>::with_capacity(fakes::alloc::LARGE)));
+    });
+    assert!(
+        probe.peak() >= fakes::alloc::LARGE,
+        "the counting allocator is installed"
+    );
+    let mut stream = Stream::new(false);
+    job_started(&mut stream, "j_abc", "Fix the parser");
+    message_turn(&mut stream, &[("a_1", "delegate_message", "j_abc")]);
+    pad(&mut stream);
+    message_turn(&mut stream, &[]);
+    let mut pages = applied(&stream.lines);
+    assert_eq!(pages.index().pages().len(), 2);
+    for job in 0..14_000 {
+        let started = envelope(
+            "job_started",
+            None,
+            json!({"job_id": format!("j_{job}"), "description": "d".repeat(64), "output_path": "/o"}),
+        );
+        pages.delegates.note_live(&started);
+    }
+    // Copying the held map would take one block past `LARGE`.
+    let ((), copy) = fakes::alloc::bytes_during(|| drop(black_box(pages.delegates.clone())));
+    assert!(
+        copy.peak() >= fakes::alloc::LARGE,
+        "the held map is large: {}",
+        copy.peak()
+    );
+    drop_all(&mut pages);
+    let range = page_range(&pages, 0);
+    let page = history(&stream.lines, &range);
+    let (folded, bytes) = fakes::alloc::bytes_during(|| pages.fold_text(0, black_box(&page)));
+    assert!(
+        bytes.peak() < fakes::alloc::LARGE,
+        "the search fold peaks at {}",
+        bytes.peak()
+    );
+    let (rows, _) = folded.expect("the page folds");
+    let drawn = texts(&rows);
+    assert!(has_row(&drawn, "message  Fix the parser"), "{drawn:?}");
+}
+
+/// A copy of the pages keeps the held descriptions, and a cleared one
+/// holds none.
+#[test]
+fn a_fresh_pages_keeps_recipient_descriptions_and_a_cleared_one_drops_them() {
+    let mut first = Stream::new(false);
+    job_started(&mut first, "j_abc", "Fix the parser");
+    let mut pages = applied(&first.lines);
+    let mut copy = pages.fresh();
+    let mut later = Stream::new(false);
+    message_turn(&mut later, &[("a_1", "delegate_message", "j_abc")]);
+    for line in &later.lines {
+        copy.apply(line);
+    }
+    assert!(has_row(&ledger_rows(&mut copy), "message  Fix the parser"));
+    pages.clear();
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(has_row(&rows, "message  j_abc"), "{rows:?}");
+}
+
+/// A carry fills only the gaps: the descendant's entry stays, and the
+/// ancestor's other entries arrive.
+#[test]
+fn a_recipient_carry_fills_gaps_and_keeps_the_descendants_entry() {
+    let start = |job: &str, text: &str, seq: u64| {
+        let mut line = envelope(
+            "job_started",
+            None,
+            json!({"job_id": job, "description": text, "output_path": "/o"}),
+        );
+        line.seq = Some(Seq(seq));
+        line
+    };
+    let mut ancestor = Delegates::default();
+    ancestor.note_live(&start("j_abc", "ancestor", 1));
+    ancestor.note_live(&start("j_def", "other", 2));
+    let mut descendant = Delegates::default();
+    descendant.note_live(&start("j_abc", "descendant", 9));
+    descendant.fill_from(&ancestor);
+    let get = |job: &str| {
+        descendant
+            .get(&contract::JobId(job.to_owned()))
+            .map(str::to_owned)
+    };
+    assert_eq!(get("j_abc").as_deref(), Some("descendant"));
+    assert_eq!(get("j_def").as_deref(), Some("other"));
+}
+
+/// A start on the page later than the held one wins over it: the overlay
+/// is read before the held map.
+#[test]
+fn a_page_start_later_than_the_held_one_wins_the_recipient_description() {
+    let (_, mut lines) = old_call_new();
+    // Shift the lines up, so a held start at seq 0 comes before them all.
+    for line in &mut lines {
+        line.seq = line.seq.map(|seq| Seq(seq.0 + 1));
+    }
+    let mut earlier = envelope(
+        "job_started",
+        None,
+        json!({"job_id": "j_abc", "description": "held", "output_path": "/o"}),
+    );
+    earlier.seq = Some(Seq(0));
+    let mut held = Delegates::default();
+    held.note_live(&earlier);
+    let mut pages = applied(&lines);
+    let rows = load_with(&mut pages, &lines, &held);
+    assert!(has_row(&rows, "message  old"), "{rows:?}");
+    assert!(!has_row(&rows, "message  held"), "{rows:?}");
+}
+
+/// A kept page's starts join the held map, so a live call after the
+/// page loads resolves the start the held map lacked.
+#[test]
+fn a_loaded_page_start_is_held_for_a_later_live_recipient_call() {
+    let lines = start_then_call();
+    let mut pages = applied(&lines);
+    pages.delegates = Delegates::default();
+    drop_all(&mut pages);
+    let range = page_range(&pages, 0);
+    pages.load(&SessionId(SESSION.to_owned()), &history(&lines, &range));
+    let mut later = Stream::new(false);
+    later.seq = lines.len() as u64;
+    message_turn(&mut later, &[("a_9", "delegate_message", "j_abc")]);
+    for line in &later.lines {
+        pages.apply(line);
+    }
+    let rows = ledger_rows(&mut pages);
+    assert!(has_row(&rows, "message  Fix the parser"), "{rows:?}");
+}
+
+/// A `session_status` line naming `session` `name`.
+fn status_line(session: &str, name: &str) -> Line {
+    let mut line = envelope(
+        "session_status",
+        None,
+        json!({"name": name, "named": true, "workspace": "/w", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 0, "cache_read": 0,
+                "cache_write": {}, "output": 0},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0, "clients": 0}),
+    );
+    line.session_id = SessionId(session.to_owned());
+    Line::Session(line)
+}
+
+/// The row a rename never redraws on a resident page, folded again when
+/// its page is dropped and loaded again (`docs/tui.md`, "Tool groups and
+/// the ledger").
+#[test]
+fn a_dropped_page_folds_its_recipient_row_again_with_the_name_held_then() {
+    let mut stream = Stream::new(false);
+    message_turn(&mut stream, &[("a_1", "session_message", "s_other")]);
+    for turn in 0..6 {
+        stream.turn(turn, 30);
+    }
+    let lines = stream.lines;
+    let mut app = app(80, 20);
+    app.on_key(Key::CtrlO, now());
+    app.on_line(status_line("s_other", "worker"));
+    open(&mut app, &lines);
+    app.jump(0);
+    frame(&mut app, &lines);
+    assert!(has_row(&page_texts(&app, 0), "message  worker"));
+    // A rename redraws the resident page from its stored card.
+    app.on_line(status_line("s_other", "renamed"));
+    let resident = page_texts(&app, 0);
+    assert!(has_row(&resident, "message  worker"), "{resident:?}");
+    assert!(!has_row(&resident, "renamed"), "{resident:?}");
+    // Dropped, then loaded again: folded again with the name held now.
+    app.on_key(Key::End, now());
+    frame(&mut app, &lines);
+    assert!(app.pages().part(0).is_none(), "page 0 is dropped");
+    app.jump(0);
+    frame(&mut app, &lines);
+    let reloaded = page_texts(&app, 0);
+    assert!(has_row(&reloaded, "message  renamed"), "{reloaded:?}");
+}
+
+const SENT: &str = "sent with your next prompt";
+
+/// A `!` run's stored item: head, the kind `note`, `lines` output lines
+/// `out 01`.., then `ending` (none when empty).
+fn shell_item(note: &str, lines: usize, ending: &str) -> String {
+    let mut text = format!("! seq\n{note}");
+    for n in 1..=lines {
+        text.push_str(&format!("\nout {n:02}"));
+    }
+    if !ending.is_empty() {
+        text.push('\n');
+        text.push_str(ending);
+    }
+    text
+}
+
+/// What the open page draws for its shells in `mode`: each line's text
+/// and target.
+fn shell_drawn(pages: &Pages, mode: Draw) -> Vec<(String, Option<Target>)> {
+    let part = pages.part(0).expect("open page");
+    let (rows, _, _, _) = pages.draw_data(0, part, mode);
+    rows.into_iter()
+        .map(|(line, target)| (line.to_string(), target))
+        .collect()
+}
+
+fn shell_texts(pages: &Pages, mode: Draw) -> Vec<String> {
+    shell_drawn(pages, mode)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
+}
+
+/// A page holding one shell run.
+fn shell_pages(item: String) -> Pages {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(item)));
+    pages
+}
+
+/// The run's expected lines: head, note, `out 01..=shown`, then `tail`.
+fn shell_expect(note: &str, shown: usize, tail: &[&str]) -> Vec<String> {
+    let mut want = vec!["! seq".to_owned(), note.to_owned()];
+    want.extend((1..=shown).map(|n| format!("out {n:02}")));
+    want.extend(tail.iter().map(|line| (*line).to_owned()));
+    want
+}
+
+/// Output of 19 and 20 lines draws whole, 21 draws 20 then "1 more
+/// line", 300 draws 20 then "280 more lines"; the exit row stays last
+/// and only the more row carries a target.
+#[test]
+fn shell_cap_boundary() {
+    for (lines, shown, more) in [
+        (19usize, 19usize, None),
+        (20, 20, None),
+        (21, 20, Some("1 more line")),
+        (300, 20, Some("280 more lines")),
+    ] {
+        let pages = shell_pages(shell_item(SENT, lines, "exit 0"));
+        let mut tail = Vec::new();
+        tail.extend(more);
+        tail.push("exit 0");
+        let drawn = shell_drawn(&pages, Draw::Shown);
+        let texts: Vec<String> = drawn.iter().map(|(text, _)| text.clone()).collect();
+        assert_eq!(texts, shell_expect(SENT, shown, &tail), "{lines}");
+        let targeted: Vec<&str> = drawn
+            .iter()
+            .filter(|(_, target)| target.is_some())
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert_eq!(targeted, more.into_iter().collect::<Vec<_>>(), "{lines}");
+        assert!(!texts.iter().any(|text| text.contains('…')), "{lines}");
+    }
+    // `!!`'s note caps the same way, and a signal ends the run as exit does.
+    let pages = shell_pages(shell_item("only you see this", 22, "signal SIGKILL"));
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        shell_expect("only you see this", 20, &["2 more lines", "signal SIGKILL"])
+    );
+    let pages = shell_pages(shell_item(SENT, 22, "exit -1"));
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        shell_expect(SENT, 20, &["2 more lines", "exit -1"])
+    );
+}
+
+/// An output line shaped like an ending is output unless it is the
+/// run's last line and fully matches `exit -?\d+` or `signal \S+`.
+#[test]
+fn shell_cap_ending_grammar() {
+    for (last, ending) in [
+        ("exit 0", true),
+        ("exit 12", true),
+        ("exit -1", true),
+        ("exit", false),
+        ("exit -", false),
+        ("exit x", false),
+        ("exit 1x", false),
+        ("exit  1", false),
+        ("signal SIGKILL", true),
+        ("signal", false),
+        ("signal a b", false),
+    ] {
+        // 20 output lines then `last`: an ending leaves the output at
+        // 20 and uncapped; anything else makes it 21 and caps it.
+        let pages = shell_pages(shell_item(SENT, 20, last));
+        let texts = shell_texts(&pages, Draw::Shown);
+        if ending {
+            assert_eq!(texts, shell_expect(SENT, 20, &[last]), "{last}");
+        } else {
+            assert_eq!(texts.len(), 2 + 20 + 1, "{last}");
+            assert_eq!(
+                texts.last().map(String::as_str),
+                Some("1 more line"),
+                "{last}"
+            );
+            assert!(!texts.iter().any(|text| text == last), "{last}");
+        }
+    }
+}
+
+/// Opening the more row shows every line then "show less"; opening it
+/// again closes it. The row is a focus stop, the page's rows stay
+/// counted, and nothing lands in the overrides.
+#[test]
+fn shell_cap_toggle() {
+    let mut pages = shell_pages(shell_item(SENT, 25, "exit 0"));
+    let closed = shell_drawn(&pages, Draw::Shown);
+    let more = closed
+        .iter()
+        .find_map(|(_, target)| *target)
+        .expect("a more row target");
+    let part = pages.part(0).expect("open page");
+    let (_, _, focus, _) = pages.draw_data(0, part, Draw::Shown);
+    assert!(
+        focus
+            .iter()
+            .any(|(_, _, id)| *id == crate::mouse::TargetId::Line(more)),
+        "the more row is a focus stop"
+    );
+    let total = pages.index().total();
+    assert_eq!(total, 2 + 20 + 1 + 1);
+    assert!(pages.open(&more));
+    let mut tail = vec!["show less", "exit 0"];
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        shell_expect(SENT, 25, &tail)
+    );
+    assert_eq!(pages.index().total(), 2 + 25 + 1 + 1, "the page recounts");
+    // The same target is on "show less".
+    let open = shell_drawn(&pages, Draw::Shown);
+    assert_eq!(
+        open.iter()
+            .filter(|(_, target)| *target == Some(more))
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["show less"]
+    );
+    assert!(pages.overrides.is_empty(), "shell state is not an override");
+    assert!(pages.open(&more));
+    tail = vec!["5 more lines", "exit 0"];
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        shell_expect(SENT, 20, &tail)
+    );
+    assert_eq!(pages.index().total(), total, "closing recounts");
+    // A target no run names opens nothing, and the old group key for a
+    // run names no group.
+    assert!(!pages.open(&Target::Shell(9)));
+    assert!(!pages.open(&Target::Group(target_id("shell 0"))));
+}
+
+/// Each run in a bucket caps and toggles on its own.
+#[test]
+fn shell_cap_runs_toggle_independently() {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    assert!(pages.add_shell(Some(shell_item(SENT, 22, "exit 0"))));
+    let targets: Vec<Target> = shell_drawn(&pages, Draw::Shown)
+        .into_iter()
+        .filter_map(|(_, target)| target)
+        .collect();
+    assert_eq!(targets.len(), 2);
+    assert_ne!(targets[0], targets[1]);
+    assert!(pages.open(&targets[1]));
+    let texts = shell_texts(&pages, Draw::Shown);
+    assert!(
+        texts.contains(&"1 more line".to_owned()),
+        "first stays closed"
+    );
+    assert!(texts.contains(&"show less".to_owned()), "second opened");
+    assert!(!texts.contains(&"2 more lines".to_owned()));
+}
+
+/// The more row's target is the run's own variant, numbered by slot.
+#[test]
+fn shell_cap_key_prefix() {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    let targets: Vec<Option<Target>> = shell_drawn(&pages, Draw::Shown)
+        .into_iter()
+        .map(|(_, target)| target)
+        .filter(Option::is_some)
+        .collect();
+    assert_eq!(
+        targets,
+        vec![Some(Target::Shell(0)), Some(Target::Shell(1))]
+    );
+}
+
+/// A shell slot names a run only below the run count: the last slot is
+/// the run, the count itself and past it name none.
+#[test]
+fn shell_cap_slot_boundary() {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    let runs = pages.shells.len();
+    assert_eq!(runs, 2);
+    assert_eq!(pages.shell_slot(&Target::Shell(runs - 1)), Some(runs - 1));
+    assert_eq!(pages.shell_slot(&Target::Shell(runs)), None);
+    assert_eq!(pages.shell_slot(&Target::Shell(runs + 1)), None);
+}
+
+/// An error row (`! cmd` then `code: message`) has no kind note, so it
+/// draws whole whatever its length.
+#[test]
+fn shell_cap_error_row_uncapped() {
+    let mut item = "! bad\ninternal: first".to_owned();
+    for n in 2..=25 {
+        item.push_str(&format!("\nmessage {n}"));
+    }
+    let pages = shell_pages(item.clone());
+    let drawn = shell_drawn(&pages, Draw::Shown);
+    assert_eq!(
+        drawn
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>(),
+        item.split('\n').collect::<Vec<_>>()
+    );
+    assert!(drawn.iter().all(|(_, target)| target.is_none()));
+}
+
+/// A run with no output keeps its head, note and exit and no more row.
+#[test]
+fn shell_cap_empty_output() {
+    for ending in ["exit 0", "exit 3", "signal SIGTERM", ""] {
+        let pages = shell_pages(shell_item(SENT, 0, ending));
+        let drawn = shell_drawn(&pages, Draw::Shown);
+        let mut want = shell_expect(SENT, 0, &[]);
+        if !ending.is_empty() {
+            want.push(ending.to_owned());
+        }
+        assert_eq!(
+            drawn
+                .iter()
+                .map(|(text, _)| text.clone())
+                .collect::<Vec<_>>(),
+            want,
+            "{ending:?}"
+        );
+        assert!(drawn.iter().all(|(_, target)| target.is_none()));
+    }
+}
+
+/// The 1 MiB cut notice is an ordinary output line: within the first 20
+/// it stays on the shown rows, past them it shows once the row opens, and
+/// an opened row stops at it.
+#[test]
+fn shell_cap_cut_notice() {
+    let notice = "[41 bytes cut. The full output is in artifacts/o_1.txt; read it with `read`.]";
+    let item = |at: usize| {
+        let mut text = format!("! seq\n{SENT}");
+        for n in 1..=at {
+            text.push_str(&format!("\nout {n:02}"));
+        }
+        text.push_str(&format!("\n{notice}"));
+        for n in 1..=3 {
+            text.push_str(&format!("\ntail {n}"));
+        }
+        text.push_str("\nexit 0");
+        text
+    };
+    let early = shell_pages(item(5));
+    let texts = shell_texts(&early, Draw::Shown);
+    assert!(texts.iter().any(|text| text == notice), "{texts:?}");
+    let mut late = shell_pages(item(30));
+    let texts = shell_texts(&late, Draw::Shown);
+    assert!(!texts.iter().any(|text| text.contains("artifacts/o_1.txt")));
+    let more = shell_drawn(&late, Draw::Shown)
+        .into_iter()
+        .find_map(|(_, target)| target)
+        .expect("a more row");
+    assert!(late.open(&more));
+    let texts = shell_texts(&late, Draw::Shown);
+    assert!(texts.iter().any(|text| text == notice));
+    assert_eq!(
+        texts
+            .iter()
+            .rev()
+            .take(5)
+            .rev()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["tail 1", "tail 2", "tail 3", "show less", "exit 0"]
+    );
+}
+
+/// A run whose 1 MiB cut notice sits past line 20 shows no path while
+/// collapsed, with the notice not promoted into the shown lines; opening
+/// the run shows the notice and its path (RULING-4367-2).
+#[test]
+fn shell_cap_cut_notice_path_past_the_cap() {
+    let path = "/tmp/fiber/artifacts/o_9.txt";
+    let notice = format!("[1048577 bytes cut. The full output is in {path}; read it with `read`.]");
+    let mut item = shell_item(SENT, 30, "");
+    item.push_str(&format!("\n{notice}\nexit 0"));
+    let mut pages = shell_pages(item);
+    let closed = shell_texts(&pages, Draw::Shown);
+    assert_eq!(
+        closed,
+        shell_expect(SENT, 20, &["11 more lines", "exit 0"]),
+        "the notice is the 31st output line: not promoted past the cap"
+    );
+    assert!(!closed.iter().any(|text| text.contains(path)));
+    let more = shell_drawn(&pages, Draw::Shown)
+        .into_iter()
+        .find_map(|(_, target)| target)
+        .expect("a more row");
+    assert!(pages.open(&more));
+    let open = shell_texts(&pages, Draw::Shown);
+    assert!(open.iter().any(|text| text == &notice), "{open:?}");
+    assert_eq!(
+        shell_expect(SENT, 30, &[notice.as_str(), "show less", "exit 0"]),
+        open
+    );
+}
+
+/// A more row's target follows its run when `carry_chain` prepends runs:
+/// the slot moves, the run is found again by page, turn-after and text
+/// (equal runs in order), and a run the fold lacks maps to nothing.
+#[test]
+fn shell_cap_target_follows_the_run_across_carry() {
+    let (mut preview, mut fold, len, _) = carry_edge();
+    for (page, after, text) in [
+        (len, 1, "own, not carried"),
+        (0, 0, "ancestor"),
+        (1, 0, "twin"),
+        (1, 0, "twin"),
+    ] {
+        preview
+            .shell_index
+            .entry((page, after))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shells.push((page, after, text.to_owned(), false));
+    }
+    fold.shell_index.entry((0, 0)).or_default().push(0);
+    fold.shells.push((0, 0, "fold".to_owned(), false));
+    preview.carry_chain(&mut fold);
+    let moved: Vec<Option<Target>> = (0..5)
+        .map(|slot| preview.same_target(Target::Shell(slot), &fold))
+        .collect();
+    assert_eq!(
+        moved,
+        vec![
+            None,
+            Some(Target::Shell(0)),
+            Some(Target::Shell(1)),
+            Some(Target::Shell(2)),
+            None
+        ],
+        "the carried runs move down one slot; the first twin keeps the first"
+    );
+    assert!(fold.toggle_shell(&Target::Shell(2)), "the second twin");
+    assert_eq!(fold.shells.get(2).map(|run| run.3), Some(true));
+    assert_eq!(fold.shells.get(1).map(|run| run.3), Some(false));
+}
+
+/// Reveal opens a closed run, never closes an open one, reports whether
+/// anything changed, and records no override.
+#[test]
+fn shell_cap_force_open() {
+    let mut item = shell_item(SENT, 25, "exit 0");
+    item = item.replace("out 24", "needle past the cap");
+    let mut pages = shell_pages(item);
+    let target = shell_target(0);
+    let texts = shell_texts(&pages, Draw::Shown);
+    assert!(!texts.iter().any(|text| text.contains("needle")));
+    assert!(pages.force_open(&target));
+    assert!(
+        shell_texts(&pages, Draw::Shown)
+            .iter()
+            .any(|text| text == "needle past the cap")
+    );
+    assert_eq!(pages.index().total(), 2 + 25 + 1 + 1, "the page recounts");
+    assert!(!pages.force_open(&target), "already open: nothing changed");
+    assert!(
+        shell_texts(&pages, Draw::Shown)
+            .iter()
+            .any(|text| text == "show less"),
+        "reveal never closes"
+    );
+    assert!(pages.overrides.is_empty(), "shell state is not an override");
+}
+
+/// A search draw shows every output line, as it does for an opened
+/// call, while the run stays closed for the person.
+#[test]
+fn shell_cap_all_open() {
+    let pages = shell_pages(shell_item(SENT, 25, "exit 0"));
+    let (rows, _, _, _) = pages.page_text_open_turns(0).expect("resident page");
+    let texts: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(
+        texts,
+        shell_expect(SENT, 25, &["5 more lines", "exit 0"]),
+        "all 25 lines, and the more row as an opened call keeps its own"
+    );
+    let shown = shell_texts(&pages, Draw::Shown);
+    assert!(!shown.iter().any(|text| text == "out 25"), "still closed");
+}
+
+/// `carry_chain` keeps each run's open state with the run and numbers
+/// the more-row keys by the run's new slot.
+#[test]
+fn shell_cap_carry() {
+    let (mut preview, mut fold, len, summaries) = carry_edge();
+    for (page, text, open) in [(0, "ancestor open", true), (1, "ancestor closed", false)] {
+        preview
+            .shell_index
+            .entry((page, 0))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shells.push((page, 0, text.to_owned(), open));
+    }
+    for (text, open) in [("fold open", true), ("fold closed", false)] {
+        fold.shell_index
+            .entry((1, 0))
+            .or_default()
+            .push(fold.shells.len());
+        fold.shells.push((1, 0, text.to_owned(), open));
+    }
+    preview.carry_chain(&mut fold);
+    assert_eq!(
+        fold.shells,
+        vec![
+            (0, 0, "ancestor open".to_owned(), true),
+            (1, 0, "ancestor closed".to_owned(), false),
+            (1 + len, summaries, "fold open".to_owned(), true),
+            (1 + len, summaries, "fold closed".to_owned(), false),
+        ]
+    );
+    // The more-row keys follow the new slots: the third run is slot 2.
+    assert_eq!(fold.shell_slot(&shell_target(2)), Some(2));
+    assert!(
+        fold.toggle_shell(&shell_target(2)),
+        "the carried run answers"
+    );
+    assert_eq!(fold.shells.get(2).map(|run| run.3), Some(false));
 }

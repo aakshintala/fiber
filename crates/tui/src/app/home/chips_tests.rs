@@ -302,9 +302,7 @@ fn a_hidden_remembered_chip_falls_back_to_the_workspace_chip() {
     assert_eq!(app.on_edit(Edit::Right), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Worktree)));
     // Outside git the switch hides: ↓ lands on the workspace chip.
-    let crate::LaunchLocation::Local { git, .. } =
-        &mut app.home.as_mut().expect("home").launch.location
-    else {
+    let crate::LaunchLocation::Local { git, .. } = &mut app.home.launch.location else {
         panic!("local launch")
     };
     *git = false;
@@ -321,7 +319,7 @@ fn enter_on_the_workspace_chip_opens_the_picker_and_keeps_focus() {
     drawn(&mut app);
     assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
-    let picker = app.home.as_ref().and_then(|home| home.chooser.picker());
+    let picker = app.home.chooser.picker();
     assert_eq!(
         picker.map(|picker| (picker.recents().to_vec(), picker.selected())),
         Some((vec!["/w".to_owned()], 0))
@@ -332,11 +330,7 @@ fn enter_on_the_workspace_chip_opens_the_picker_and_keeps_focus() {
     // Esc closes the picker with the chip still focused; a second Esc
     // returns to the entry bar.
     assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.chooser.picker().is_none())
-    );
+    assert!(app.home.chooser.picker().is_none());
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
     assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
     assert_eq!(app.focused(), None);
@@ -411,11 +405,7 @@ fn enter_on_a_chip_with_a_draft_clicks_the_chip() {
     // The chip's click wins over `start`: the picker opens, nothing is
     // sent, and the draft stays.
     assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.chooser.picker().is_some())
-    );
+    assert!(app.home.chooser.picker().is_some());
     assert_eq!(app.input().expand(), "hi");
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
@@ -1085,11 +1075,7 @@ fn arrows_with_the_picker_open_leave_the_chip_alone() {
     drawn(&mut app);
     assert_eq!(app.on_key(Key::Down, testkit::now()), Effect::None);
     assert_eq!(app.on_key(Key::Enter, testkit::now()), Effect::None);
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.chooser.picker().is_some())
-    );
+    assert!(app.home.chooser.picker().is_some());
     drawn(&mut app);
     // ← → behind the picker move nothing: the chip stays focused.
     assert_eq!(press(&mut app, "right"), Effect::None);
@@ -1101,18 +1087,10 @@ fn arrows_with_the_picker_open_leave_the_chip_alone() {
     // ↓ reaches the picker, not the list: the chip stays focused.
     assert_eq!(press(&mut app, "down"), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.chooser.picker().is_some())
-    );
+    assert!(app.home.chooser.picker().is_some());
     // Esc closes the picker with the chip still focused.
     assert_eq!(app.on_key(Key::Esc, testkit::now()), Effect::None);
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.chooser.picker().is_none())
-    );
+    assert!(app.home.chooser.picker().is_none());
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
 }
 
@@ -1126,11 +1104,7 @@ fn paste_with_the_picker_open_keeps_focus_and_draft() {
     assert_eq!(app.on_edit(Edit::Paste("XY".to_owned())), Effect::None);
     assert_eq!(app.focused(), Some(TargetId::Home(Spot::Workspace)));
     assert!(app.input().expand().is_empty());
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.chooser.picker().is_some())
-    );
+    assert!(app.home.chooser.picker().is_some());
 }
 
 #[test]

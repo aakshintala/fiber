@@ -11,19 +11,21 @@ use contract::events::EventKind;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use contract::Envelope;
 use contract::events::{
-    Anchor, AssistantMessageCompleted, InputItem, MessageOutcome, ReasoningCompleted,
-    RetryScheduled, SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta,
-    ToolCallCompleted, ToolCallRequested, TurnCompleted, TurnStarted, UsageRecorded,
+    Anchor, AssistantMessageCompleted, InputItem, MessageOutcome, PermissionResolved,
+    ReasoningCompleted, RetryScheduled, SteeringApplied, TextCompleted, TextDelta,
+    ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnCompleted,
+    TurnStarted, UsageRecorded,
 };
 use contract::shapes::{Origin, Sender};
+use contract::{Envelope, JobId, SessionId};
 use ratatui::text::Line;
 use serde_json::Value;
 
 use crate::app::{Target, read, text_of};
 use crate::format;
 use crate::markdown;
+use crate::window::Delegates;
 
 mod answers;
 mod card;
@@ -407,6 +409,7 @@ impl Turn {
         requested: ToolCallRequested,
         ts: u64,
         fold: &mut Fold,
+        recipients: &Recipients<'_>,
     ) {
         self.calls = self.calls.saturating_add(1);
         let message = self.message.clone();
@@ -446,11 +449,13 @@ impl Turn {
             Anchor::OuterCall(id) => Some(id),
             Anchor::Command(_) => None,
         });
+        let recipient = recipients.of(&requested.name, &arguments);
         group.section(step).calls.push(Call {
             id: target_id(action),
             action: action.to_owned(),
             name: requested.name,
             arguments,
+            recipient,
             outer_action_id,
             ..Call::default()
         });
@@ -464,6 +469,23 @@ impl Turn {
                 true
             }) && group.touched(ts)
         })
+    }
+
+    /// The arguments a `before_tool` hook rewrote for `action`, and the
+    /// extensions that took attribution (`docs/events.md`, "`changed_by`"):
+    /// the call's arguments become the rewrite, so every reader of them
+    /// agrees. An empty list names no one. Timing and `asking` stay;
+    /// nothing changes when the call is not in this turn.
+    pub(crate) fn rewritten(
+        &mut self,
+        action: &str,
+        arguments: serde_json::Map<String, Value>,
+        changed_by: Option<Vec<String>>,
+    ) {
+        if let Some(call) = self.groups_mut().find_map(|group| group.call(action)) {
+            call.arguments = Value::Object(arguments);
+            call.changed_by = changed_by.filter(|names| !names.is_empty());
+        }
     }
 
     /// `tool_call_completed`; false when the call is not in this turn.
@@ -611,7 +633,11 @@ impl Turn {
                 | Entry::Answers(_)
                 | Entry::Message(_) => None,
             }),
-            Target::Login | Target::Image(_) | Target::Copy { .. } | Target::CallView(_) => None,
+            Target::Login
+            | Target::Image(_)
+            | Target::Copy { .. }
+            | Target::CallView(_)
+            | Target::Shell(_) => None,
         }
     }
 
@@ -654,9 +680,66 @@ impl Turn {
     }
 }
 
+/// What the terminal holds about a message call's recipient, read when the
+/// call folds: the held name of each session and the held description of
+/// each delegate. It reads no hub state and no `App`; the owner of the
+/// fold lends it.
+pub(crate) struct Recipients<'a> {
+    pub(crate) sessions: &'a HashMap<SessionId, String>,
+    /// The delegates held so far.
+    pub(crate) delegates: &'a Delegates,
+    /// A history fold's page-local starts, read before `delegates`; none
+    /// on the live path.
+    pub(crate) page: Option<&'a Delegates>,
+}
+
+impl Recipients<'_> {
+    /// A `session_message` call's held session name, or a
+    /// `delegate_message` call's held delegate description, for the `id`
+    /// the call names; none for any other call. Only an empty text counts
+    /// as not held: a name of only whitespace is held and drawn as it is.
+    pub(crate) fn of(&self, name: &str, arguments: &Value) -> Option<String> {
+        let id = arguments.get("id")?.as_str()?;
+        let held = match format::kind(name, arguments) {
+            format::Kind::SessionMessage => self
+                .sessions
+                .get(&SessionId(id.to_owned()))
+                .map(String::as_str),
+            format::Kind::DelegateMessage => {
+                let job = JobId(id.to_owned());
+                self.page
+                    .and_then(|page| page.get(&job))
+                    .or_else(|| self.delegates.get(&job))
+            }
+            format::Kind::Read
+            | format::Kind::Search
+            | format::Kind::List
+            | format::Kind::Edit
+            | format::Kind::Write
+            | format::Kind::Shell
+            | format::Kind::Delegate
+            | format::Kind::Jobs
+            | format::Kind::Ask(_)
+            | format::Kind::Fetch
+            | format::Kind::Web
+            | format::Kind::Skill
+            | format::Kind::Tools
+            | format::Kind::Session
+            | format::Kind::Notes
+            | format::Kind::Other => None,
+        }?;
+        (!held.is_empty()).then(|| held.to_owned())
+    }
+}
+
 /// Folds one line of the attached session's stream into `turns`; false
 /// when it changed no card.
-pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envelope) -> bool {
+pub(crate) fn fold_line(
+    turns: &mut Vec<Turn>,
+    fold: &mut Fold,
+    envelope: &Envelope,
+    recipients: &Recipients<'_>,
+) -> bool {
     let action = envelope.action_id.as_ref().map(|id| id.0.as_str());
     let ts = envelope.ts;
     let kind = envelope.kind();
@@ -850,7 +933,7 @@ pub(crate) fn fold_line(turns: &mut Vec<Turn>, fold: &mut Fold, envelope: &Envel
         | EventKind::CommandAccepted
         | EventKind::CommandRejected
         | EventKind::Unknown(_) => {
-            action.is_some_and(|action| fold_action(turns, fold, envelope, action))
+            action.is_some_and(|action| fold_action(turns, fold, envelope, action, recipients))
         }
     };
     if let Some(turn) = open(turns) {
@@ -866,15 +949,29 @@ fn open(turns: &mut [Turn]) -> Option<&mut Turn> {
 
 /// Folds a line about one action into `turns`; false when it changed no
 /// card.
-fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action: &str) -> bool {
+fn fold_action(
+    turns: &mut [Turn],
+    fold: &mut Fold,
+    envelope: &Envelope,
+    action: &str,
+    recipients: &Recipients<'_>,
+) -> bool {
     let ts = envelope.ts;
     // Completions may follow their turn's end, so they search back
     // through every card; streaming goes only to the open one.
     match envelope.kind() {
-        EventKind::ToolCallStarted => turns
-            .iter_mut()
-            .rev()
-            .any(|turn| turn.call_started(action, ts)),
+        EventKind::ToolCallStarted => {
+            // A payload that does not decode still starts its call.
+            let mut rewrite = read!(envelope, ToolCallStarted)
+                .and_then(|started| Some((started.arguments?, started.changed_by)));
+            turns.iter_mut().rev().any(|turn| {
+                let started = turn.call_started(action, ts);
+                if started && let Some((arguments, changed_by)) = rewrite.take() {
+                    turn.rewritten(action, arguments, changed_by);
+                }
+                started
+            })
+        }
         EventKind::ToolCallCompleted => read!(envelope, ToolCallCompleted).is_some_and(|done| {
             turns
                 .iter_mut()
@@ -883,10 +980,22 @@ fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action:
         }),
         EventKind::PermissionRequested | EventKind::PermissionResolved => {
             let asking = envelope.kind() == EventKind::PermissionRequested;
-            turns
-                .iter_mut()
-                .rev()
-                .any(|turn| turn.permission(action, asking))
+            // A reviewed call's decision with no request holds the
+            // rewrite no `tool_call_started` does when the call is denied.
+            let mut rewrite = if asking {
+                None
+            } else {
+                read!(envelope, PermissionResolved)
+                    .and_then(|resolved| resolved.call)
+                    .and_then(|call| Some((call.arguments?, call.changed_by)))
+            };
+            turns.iter_mut().rev().any(|turn| {
+                let found = turn.permission(action, asking);
+                if found && let Some((arguments, changed_by)) = rewrite.take() {
+                    turn.rewritten(action, arguments, changed_by);
+                }
+                found
+            })
         }
         EventKind::ReasoningCompleted => read!(envelope, ReasoningCompleted).is_some_and(|done| {
             let mut text = Some(done.text);
@@ -981,7 +1090,7 @@ fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action:
                     .is_some_and(|delta| turn.reasoning_delta(action, &delta.text, ts)),
                 EventKind::ToolCallRequested => {
                     read!(envelope, ToolCallRequested).is_some_and(|requested| {
-                        turn.call_requested(action, requested, ts, fold);
+                        turn.call_requested(action, requested, ts, fold, recipients);
                         true
                     })
                 }

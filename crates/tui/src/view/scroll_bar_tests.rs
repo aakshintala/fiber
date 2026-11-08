@@ -126,8 +126,9 @@ fn a_full_row_leaves_the_bar_column_blank() {
         .map(|y| (0..WIDTH).filter(|x| buf[(*x, y)].symbol() == "w").count())
         .max()
         .unwrap_or(0);
-    // The reply wraps at the card's inner width of 57.
-    assert_eq!(widest, 57);
+    // The reply wraps at the card's inner width of 55: the grip, the
+    // conversation column's gutter and the card's sides come off 60.
+    assert_eq!(widest, 55);
 }
 
 /// Fourteen done turns: a history taller than the screen.

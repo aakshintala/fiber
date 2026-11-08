@@ -58,6 +58,7 @@ fn raw(text: &str) -> RawSpan {
 
 fn input<'a>(name: &'a str, output: &'a str, arguments: &'a serde_json::Value) -> Input<'a> {
     Input::LedgerRow(LedgerRow {
+        changed_by: None,
         name,
         arguments,
         state: CallState::Completed(LedgerResult {
@@ -68,6 +69,7 @@ fn input<'a>(name: &'a str, output: &'a str, arguments: &'a serde_json::Value) -
             output,
         }),
         answer: None,
+        recipient: None,
         flat: false,
     })
 }
@@ -415,6 +417,7 @@ mod context_regressions {
     }
     fn input(arguments: &serde_json::Value) -> Input<'_> {
         Input::LedgerRow(LedgerRow {
+            changed_by: None,
             name: "shell",
             arguments,
             state: CallState::Completed(LedgerResult {
@@ -425,6 +428,7 @@ mod context_regressions {
                 output: "done",
             }),
             answer: None,
+            recipient: None,
             flat: false,
         })
     }

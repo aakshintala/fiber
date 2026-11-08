@@ -1,8 +1,10 @@
 //! The steering queue above the input box, and its selection
 //! (`docs/tui.md`, "Steering").
 //!
-//! The queue is the latest `steering_queue` for the attached session, so
-//! every attached client sees and edits the same one. Selecting a row
+//! The queue is the latest `steering_queue` for the session whose input
+//! box shows: the attached session's, or an open fiber delegate's while
+//! its view is swapped in, so every client of that session sees and edits
+//! the same one. Selecting a row
 //! stashes the draft and loads the row's text; clearing the selection puts
 //! the stash back. A selection is held by the row's `steer` command id, so
 //! a queue that reorders keeps it on the same message.
@@ -93,6 +95,13 @@ impl Steering {
         {
             self.clear(draft);
         }
+    }
+
+    /// Empties the queue and clears the selection, the stash back in
+    /// `draft`.
+    pub(crate) fn reset(&mut self, draft: &mut Draft) {
+        self.clear(draft);
+        self.rows.clear();
     }
 
     /// Whether a row is selected.
@@ -327,7 +336,7 @@ impl App {
     /// `steer` with the edited text; the draft from before the selection
     /// comes back.
     pub(super) fn amend(&mut self) -> Effect {
-        let Some(session) = self.session().cloned() else {
+        let Some(session) = self.steering_session() else {
             return Effect::None;
         };
         if !self.outbox.is_up() {
@@ -355,10 +364,11 @@ impl App {
         Effect::Send(lines)
     }
 
-    /// One `steer_drop` per command id in `rows`; nothing when there are
-    /// none, or no connection to send them on.
+    /// One `steer_drop` per command id in `rows`, to the session whose
+    /// queue shows; nothing when there are none, or no connection to send
+    /// them on.
     fn steer_drop(&mut self, rows: Vec<String>) -> Effect {
-        let Some(session) = self.session().cloned() else {
+        let Some(session) = self.steering_session() else {
             return Effect::None;
         };
         if rows.is_empty() || !self.outbox.is_up() {

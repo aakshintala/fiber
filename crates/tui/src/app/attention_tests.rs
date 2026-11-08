@@ -322,8 +322,6 @@ fn a_deleted_session_clears_its_waiting_title() {
     // An accepted delete drops the feed row; the next hub line folds the
     // rows in and clears the title.
     app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
         .sessions
         .remove(&contract::SessionId(SESSION.to_owned()));
     app.on_line(live(OTHER, serde_json::json!({"state": "idle"})));
@@ -428,11 +426,7 @@ fn session_id() -> contract::SessionId {
 #[test]
 fn a_seen_session_removed_titles_nothing() {
     let mut app = seen_waiting();
-    app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
-        .sessions
-        .remove(&session_id());
+    app.home.sessions.remove(&session_id());
     assert_eq!(app.attention_title(), None);
 }
 
@@ -446,8 +440,6 @@ fn a_waiting_row_with_no_left_titles_its_kind() {
 fn a_left_row_that_still_waits_titles_nothing() {
     let mut app = seen_waiting();
     app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
         .sessions
         .left(&session_id(), crate::home::Left::Exited);
     assert_eq!(app.attention_title(), None);
@@ -458,18 +450,12 @@ fn a_live_row_that_stopped_waiting_titles_nothing() {
     let mut app = seen_waiting();
     let mut row = app
         .home
-        .as_ref()
-        .unwrap_or_else(|| panic!("home"))
         .sessions
         .row(&session_id())
         .cloned()
         .unwrap_or_else(|| panic!("row"));
     row.state = crate::home::State::Idle;
-    app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
-        .sessions
-        .status(row);
+    app.home.sessions.status(row);
     assert_eq!(app.attention_title(), None);
 }
 
@@ -478,21 +464,13 @@ fn a_left_row_past_waiting_titles_nothing() {
     let mut app = seen_waiting();
     let mut row = app
         .home
-        .as_ref()
-        .unwrap_or_else(|| panic!("home"))
         .sessions
         .row(&session_id())
         .cloned()
         .unwrap_or_else(|| panic!("row"));
     row.state = crate::home::State::Idle;
+    app.home.sessions.status(row);
     app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
-        .sessions
-        .status(row);
-    app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
         .sessions
         .left(&session_id(), crate::home::Left::Exited);
     assert_eq!(app.attention_title(), None);

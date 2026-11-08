@@ -1022,9 +1022,14 @@ install still running.
     dim, then the tab bar: Appearance, Notifications, Models, Permissions,
     Sessions, Advanced. The open tab is bold on the `surface` tint, and ←→
     moves between tabs. The view opens on Appearance.
-  - **Tabs:** each key belongs to exactly one tab, named in its `KEYS`
-    entry with its label and one-line description. A test fails when an
-    entry lacks any of the three. Advanced holds what a person rarely
+  - **Tabs:** each key with no `*` in its path belongs to exactly one tab,
+    named in its `KEYS` entry, unless a screen row covers it: then that row
+    draws it, and the key has no row of its own. Every `KEYS` entry has a
+    label and a one-line description. The six screen rows are not `KEYS`
+    entries; each has its own label, one-line description and tab. A test
+    fails when an entry lacks its label or description, when a key with no
+    `*` lacks its tab and no screen row covers it, or when a screen row
+    lacks any of the three. Advanced holds what a person rarely
     changes (`hub.*`, `session.idle_exit_ms`, `cache.*`, `retry.*`,
     `diagnostics.level`). Permissions holds the reviewer keys first, then
     the sandbox keys.
@@ -1032,10 +1037,12 @@ install still running.
     line apart on terminals tall enough, with "› " marking the focused row.
     A value set anywhere but global is followed by its layer, dim
     (`project`, `repository`, `-c`); a global or default value shows no
-    layer. A key with `*` in its path is a row that opens its own screen:
-    Key bindings (`/keys`), Credentials (`/credential`), Rules (`/rules`),
-    Tools (`/tools`), Skills (`/skills`) and MCP servers (`/mcp`). Its
-    value reads "Open /keys ›".
+    layer. A key with `*` in its path has no row of its own; six rows
+    open a screen instead: Key bindings (`/keys`), Credentials
+    (`/credential`), Rules (`/rules`), Tools (`/tools`), Skills (`/skills`)
+    and MCP servers (`/mcp`). Such a row's value reads "Open /keys ›". Key
+    bindings ends Appearance, Credentials ends Models, Rules then Tools end
+    Permissions, and Skills then MCP servers end Sessions.
   - **Controls:** Enter or Space changes the focused value, by its type.
     - A boolean shows `[x] On` or `[ ] Off`, and the key flips it.
     - A key with a fixed set of values (`thinking`, `cache.lifetime`,
@@ -1336,7 +1343,12 @@ cancelled, ✗ dim otherwise. Then the call's kind in `info`, padded to nine
 columns, its target cut with "…", and its result: "N lines" for a read, "N
 matches" for a search, "N paths" for a listing, "+N −N" for an edit, "exit N
 · N lines" for a command, otherwise the first line of its output, all dim
-but the edit's counts. A running call reads "running" in `attention`, and an
+but the edit's counts. A call whose arguments a `before_tool` hook rewrote
+draws the arguments that ran: `tool_call_started`'s `arguments`, or
+`permission_resolved`'s on a reviewed call's decision that has no request
+(`docs/events.md`, "`changed_by`"). Its result is then followed by " · via
+<names>", dim, the `changed_by` extensions joined by ", "; a rewrite with no
+`changed_by` draws no mark. A running call reads "running" in `attention`, and an
 ask waiting on the person "waiting on you"; "cancelled", "denied" and a
 failure's "<code>: <message>" are dim. A thinking row is "○ Thinking:
 <heading>" or "+ Thought: <heading> · 22s", dim and italic.
@@ -1405,7 +1417,9 @@ call's `details` (`docs/tools.md`, "What a result carries"); a call whose
   call's arguments (`id` and `message`, or `id` and `text`), not its
   `details`, so a running or failed call shows them too; a failed call's
   "<code>: <message>" still comes first. A part that is absent, not text or
-  empty draws no row. The ledger row's target is the id. When the result has
+  empty draws no row. The ledger row's target is the recipient's description, for a delegate, or its
+  name, for a session, else the id. The row shows the name held when it was
+  folded, and a page loaded again is folded again. When the result has
   an artifact, the swapped view draws these rows before the paged output.
 - **An MCP call, an extension's tool, or any tool whose `details` the
   terminal does not recognise** shows `content` as plain text. Text that is
@@ -2136,8 +2150,9 @@ through the `input_status` slot ("Extension seams").
   could not start shows `! <command>` then `<code>: <message>` as it
   arrived. A refused run puts that row on the attached screen beside the
   notice. A session `duplicate_command` refusal draws neither a row nor a
-  notice. Shell rows show at most 20 lines, the same way an opened call
-  is.
+  notice. A run's output shows at most 20 lines, then a "N more lines"
+  row; clicking it, or Enter on it, opens the rest in place, and again
+  closes it.
 
 ### Bindings
 
@@ -2935,7 +2950,8 @@ the session's offset table (`docs/invocation.md`, "Driver commands";
   ends. Scrolling, recounting at a new width, search and copy wait.
   The one exception: rows that depend on turns before the held pages (an
   orphaned job's completion, an automatic handoff's trigger, a ledger
-  toggled earlier: only rows of these kinds) may change in the frame where
+  toggled earlier, a message call to a delegate started or named before the
+  held pages: only rows of these kinds) may change in the frame where
   the pass ends. An opening that fills only after crossing `seq 0` draws
   through the chain root, so the landing rewrites nothing across the seam.
   If the own segment fills first, the count phase adds ancestors above the
@@ -3088,8 +3104,10 @@ keys set, and notices the terminal raises itself, such as a configuration or
 I/O failure. Chrome slots may also read outside the stream: the branch comes
 from `git status`, the cards follow the panel's configuration, and `spend`
 falls back to the attached spend when the session reports none. A ledger row, for example, receives the call's name,
-arguments, status, exit code, duration, line count, `changes` and error, folded
-from its `tool_call_*` events. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
+arguments, `changed_by`, status, exit code, duration, line count, `changes` and
+error, folded from its `tool_call_*` and `permission_resolved` events, and a
+message call's `recipient`: the recipient's description or name as the terminal
+held it when the call folded, absent when it held none. No slot sees the terminal's internals. A ledger row's renderer draws what follows the step's six-column gutter and receives the width less 6; a renderer that returns no lines draws no row.
 
 Each slot's input holds exactly what its built-in renderer reads. Every input listed here also carries `flat`, which is true in screen-reader mode when the terminal drops every style. Timestamps come as source values, never as elapsed strings. The person's own interaction state (selection, open or closed) is included only where the built-in draws it. An optional key is absent when it does not apply, never `null`. The terminal's internals stay out: no layout, width fit, cache, spinner glyph or motion clock.
 

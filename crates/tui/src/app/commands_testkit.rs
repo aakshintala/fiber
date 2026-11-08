@@ -32,16 +32,35 @@ pub(crate) fn painted(
     (crate::view::text(&buf), targets)
 }
 
-/// An app in `/w`, connected to the hub, with no session.
+/// An app in `/w` whose home has a model chosen, connected to the hub, with
+/// no session.
 pub(crate) fn connected() -> App {
     let mut app = App::new(PathBuf::from("/w"));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
     let hello = contract::HubLine {
         kind: HubEventKind::HubHello,
         ts: 0,
         schema_version: contract::SCHEMA_VERSION,
         payload: serde_json::Map::new(),
     };
-    assert!(app.on_line(Line::Hub(hello)).is_empty());
+    // Home's startup reads: the feed, then the first `recent` page.
+    let names: Vec<String> = app
+        .on_line(Line::Hub(hello))
+        .iter()
+        .map(|line| {
+            let line: Value = serde_json::from_str(line).unwrap();
+            line["command"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(names, ["feed", "recent"]);
     app
 }
 
@@ -278,7 +297,16 @@ pub(crate) fn remote_search_app(
     router.set_feed(tx, crate::link::Credits::new(64));
     let mut app = connected();
     // An empty workspace is none: no hub search runs for it.
-    app.workspace = (!workspace.is_empty()).then(|| PathBuf::from(workspace));
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from(workspace),
+            project: String::new(),
+            git: false,
+        },
+        ..Default::default()
+    });
+    // A session on screen, so `@` opens the mention panel in its input box.
+    app.attach(contract::SessionId("s_aaaaaaaaaaaaaaaa".to_owned()));
     app.set_remote(Arc::new(crate::remote::Remote::new(
         Arc::new(crate::configure_fake::Fake::new(vec![])),
         "/client".into(),

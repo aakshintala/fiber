@@ -275,7 +275,7 @@ fn shell_ignores_missing_or_malformed_side_files_and_search_off_carries_no_varia
 }
 
 #[test]
-fn a_foreground_grep_moved_after_writing_matches_keeps_only_receipt_details() {
+fn a_foreground_grep_whose_shell_exits_leaving_a_descendant_keeps_its_matches() {
     let dir = fakes::TempDir::new("fiber-shell-moved-matches");
     let jobs = fakes::jobs::FakeJobs::new(dir.path());
     let fiber = fakes::script(
@@ -293,19 +293,25 @@ exec 3<>block
         .with_search(fiber)
         .with_jobs(jobs.clone());
     let output = run_details_call(shell, args("grep x a"));
-    // The receipt proves the group moved; release the descendant before assertions.
+    // The shell's own result proves the call ended; release the descendant
+    // before assertions.
     let mut release = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
         .open(dir.path().join("block"))
         .unwrap();
     std::io::Write::write_all(&mut release, b"done\n").unwrap();
-    let ended = jobs
-        .ended(fakes::Deadline::after(Duration::from_secs(10)))
-        .expect("moved grep descendant ended");
-    assert_eq!(ended.status, Outcome::Completed);
-    assert_eq!(output.details, Some(json!({"command":"grep x a"})));
-    assert!(output.process.is_none());
+    assert!(output.jobs.is_empty());
+    assert!(jobs.started().is_empty());
+    assert!(output.error.is_none(), "{:?}", output.error);
+    let details = output.details.unwrap();
+    assert_eq!(details["command"], "grep x a");
+    assert_eq!(details["exit_code"], 0);
+    assert_eq!(
+        details["matches"],
+        json!([{"path":"a","lines":[{"line":1,"text":"x","spans":[[0,1]]}]}])
+    );
+    assert!(output.process.is_some());
     let called = std::fs::read_to_string(dir.path().join("called")).unwrap();
     assert!(!Path::new(&called).parent().unwrap().exists());
 }
