@@ -25,41 +25,11 @@ const ALT_X: &[u8] = b"\x1b[120;3u";
 /// a status glyph that animates while the delegate holds no status.
 const DELEGATE_ROW: &str = "review the parser";
 
-/// The first column on row `y` where `needle` starts, cell by cell.
-fn col_of(grid: &Grid, y: u16, needle: &str) -> Option<u16> {
-    let want: Vec<char> = needle.chars().collect();
-    // settled: a finder run by `click_where` on the frame the click acts on.
-    let width = u16::try_from(grid.rows.first().map_or(0, |row| row.chars().count())).ok()?;
-    (0..width).find(|x| {
-        want.iter().enumerate().all(|(dx, want)| {
-            let at = x.saturating_add(u16::try_from(dx).unwrap_or(u16::MAX));
-            // settled: a finder run by `click_where` on the frame the click acts on.
-            at < width && grid.cell(at, y).symbol == want.to_string()
-        })
-    })
-}
-
-/// The row holding `needle`.
-fn row_of(grid: &Grid, needle: &str) -> Option<u16> {
-    // settled: a finder run by `click_where` on the frame the click acts on.
-    grid.rows
-        .iter()
-        .position(|row| row.contains(needle))
-        .and_then(|y| u16::try_from(y).ok())
-}
-
-/// Where `needle` starts.
-fn find_text(grid: &Grid, needle: &str) -> Option<(u16, u16)> {
-    let y = row_of(grid, needle)?;
-    Some((col_of(grid, y, needle)?, y))
-}
-
 /// Where the `✕` of the queued row holding `text` is: the first `✕` right
 /// of the row's text.
 fn find_cross(grid: &Grid, text: &str) -> Option<(u16, u16)> {
-    let (from, y) = find_text(grid, text)?;
-    // settled: a finder run by `click_where` on the frame the click acts on.
-    let width = u16::try_from(grid.rows.first()?.chars().count()).ok()?;
+    let (from, y) = grid.text_at(text)?;
+    let (width, _) = grid.size();
     (from..width)
         // settled: a finder run by `click_where` on the frame the click acts on.
         .find(|x| grid.cell(*x, y).symbol == "✕")
@@ -67,8 +37,10 @@ fn find_cross(grid: &Grid, text: &str) -> Option<(u16, u16)> {
 }
 
 /// The delegate's session id: the `delegate_session_id` of the
-/// `delegate_started` line in the parent's log, waited for under one
-/// deadline.
+/// `delegate_started` line in the parent's log, once that log also holds
+/// the parent's `turn_completed`. The delegate's response is held, so
+/// that line is the last data the parent folds into the panel row; the
+/// wait runs under one deadline.
 fn delegate_session(setup: &Setup) -> String {
     let sessions = log::sessions_dir(&setup.home(), &worktree::project(&setup.workspace()));
     let found = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
@@ -81,13 +53,17 @@ fn delegate_session(setup: &Setup) -> String {
             let Ok(text) = std::fs::read_to_string(entry.path().join("events.jsonl")) else {
                 continue;
             };
-            for line in super::support::complete_lines(&text) {
-                if line["kind"] == "delegate_started"
-                    && let Some(id) = line["payload"]["delegate_session_id"].as_str()
-                {
-                    *seen.lock().unwrap() = Some(id.to_owned());
-                    return true;
-                }
+            let lines = super::support::complete_lines(&text);
+            let id = lines.iter().find_map(|line| {
+                (line["kind"] == "delegate_started")
+                    .then(|| line["payload"]["delegate_session_id"].as_str())
+                    .flatten()
+            });
+            if let Some(id) = id
+                && lines.iter().any(|line| line["kind"] == "turn_completed")
+            {
+                *seen.lock().unwrap() = Some(id.to_owned());
+                return true;
             }
         }
         false
@@ -223,16 +199,18 @@ fn queued_delegate_steering_journey() {
             assert_eq!(requests[0].method, "POST");
             let body = String::from_utf8_lossy(&requests[0].body).into_owned();
             assert!(body.contains("go"), "the delegate's prompt in {body}");
+            // The parent's last data is its `turn_completed`; the panel
+            // row is clicked only once the grid shows that turn's text.
+            let delegate = delegate_session(&setup);
             run.wait_screen("the running delegate row", |grid| {
-                shows(grid, "1 running") && shows(grid, DELEGATE_ROW)
+                shows(grid, "1 running") && shows(grid, DELEGATE_ROW) && shows(grid, "Done.")
             });
-            run.click_where("the delegate row", |grid| find_text(grid, DELEGATE_ROW));
+            run.click_where("the delegate row", |grid| grid.text_at(DELEGATE_ROW));
             run.wait_screen("the delegate view", |grid| {
                 shows(grid, "Delegate  ◆ review the parser")
                     && shows(grid, "› ◆ review the parser")
                     && shows(grid, "steering goes to ◆ review the parser")
             });
-            let delegate = delegate_session(&setup);
             // A second client on the delegate hears its lines; each wait
             // below starts after the latest durable line the test consumed.
             let control = Socket::connect(setup.deadline, &setup.hub_socket());
