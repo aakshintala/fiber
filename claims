@@ -1,7 +1,3 @@
-crates/log/src/history.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/log/src/offsets.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/paging_session.rs	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-docs/performance.md	fiber-4059	plan	2026-11-07T15:37:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/diag.rs	fiber-4312	plan	2026-11-07T15:48:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/contract/src/diag_tests.rs	fiber-4312	plan	2026-11-07T15:48:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/jobs/src/delegate/run.rs	fiber-4312	plan	2026-11-07T15:48:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -23,11 +19,6 @@ crates/tools/src/picture_timing_tests.rs	fiber-4312	plan	2026-11-07T15:48:55Z	Am
 docs/testing.md	fiber-4312	plan	2026-11-07T15:48:55Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 extensions/codemode/init.lua	fiber-4339	plan	2026-11-07T16:16:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/tests/extension_codemode.rs	fiber-4339	plan	2026-11-07T16:16:49Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/log/src/history_tests.rs	fiber-4059	plan	2026-11-07T16:20:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/lib.rs	fiber-4059	plan	2026-11-07T16:20:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/jigs.rs	fiber-4059	plan	2026-11-07T16:20:30Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/tui/src/scroll_stall_tests.rs	fiber-4059	grant	2026-11-07T16:24:07Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/tui/4059-scroll-up-stall	
-crates/tui/examples/paging.rs	fiber-4059	plan	2026-11-07T17:44:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .config/nextest.toml	fiber-2465	plan	2026-11-07T20:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/ci.yml	fiber-2465	plan	2026-11-07T20:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 .github/workflows/build-timings.yml	fiber-2465	plan	2026-11-07T20:26:21Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
