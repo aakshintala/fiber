@@ -395,3 +395,4 @@ crates/main/src/reload.rs	fiber-4326	plan	2026-11-08T07:20:46Z	Amoghs-MacBook-Pr
 crates/main/src/reload_tests.rs	fiber-4326	plan	2026-11-08T07:20:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/extensions.md	fiber-4326	plan	2026-11-08T07:20:46Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tui/src/event_loop.rs,crates/tui/src/event_loop/hub.rs,crates/tui/src/app/attach_fold.rs,crates/tui/src/event_loop/attach_tests.rs,crates/main/tests/main_journeys.rs,crates/main/tests/support/mod.rs	fiber-4192	grant	2026-11-08T07:44:08Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tui/4192-cold-resume-hang	
+crates/cli/src/models.rs	fiber-4326	plan	2026-11-08T07:51:38Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
