@@ -79,6 +79,27 @@ if grep -Fq "crates/a/tests/later.rs" "$record"; then
   fail "filter holds the later commit's test"
 fi
 
+# A red commit's root-level test is moved by the fix commit. Filtering
+# against the head tree would miss it; the red tree still contains tests/a.rs.
+repo_move="$tmp/repo-move"
+new_repo "$repo_move"
+mkdir -p "$repo_move/tests"
+printf '// red test\n' >"$repo_move/tests/a.rs"
+git -C "$repo_move" add tests/a.rs
+git -C "$repo_move" commit -q -m red
+mkdir -p "$repo_move/tests/area"
+git -C "$repo_move" mv tests/a.rs tests/area/a.rs
+git -C "$repo_move" commit -q -m move
+base_move=$(git -C "$repo_move" rev-parse HEAD~2)
+cd "$repo_move"
+head_move=$(git rev-parse HEAD)
+rc=0
+"$bug_red" "$base_move" "$head_move" >"$tmp/out-move.txt" 2>&1 || rc=$?
+cd "$top"
+[ "$rc" -eq 0 ] || { cat "$tmp/out-move.txt" >&2; fail "moved-test case exited $rc, want 0"; }
+grep -Fq 'tests/a.rs' "$record" || { cat "$tmp/out-move.txt" >&2; fail "moved-test filter misses tests/a.rs"; }
+grep -Fq 'filter' "$tmp/out-move.txt" || { cat "$tmp/out-move.txt" >&2; fail "moved-test filter is empty"; }
+
 # A red commit with no test file exits 1, even when the later commit
 # adds one.
 repo2="$tmp/repo2"
@@ -236,6 +257,11 @@ mkdir -p "$tmp/bin-unrun"
 cat >"$tmp/bin-unrun/cargo" <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "${1-}" = run ]; then
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+  [ "$#" -gt 0 ] && shift
+  [ "${1-}" = bug-filter ] && set -- xtask "$@"
+fi
 if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
   shift 2
   kept=()
@@ -399,6 +425,11 @@ set -euo pipefail
 if [ "${1-}" = xtask ] && [ "${2-}" = narrow-plan ]; then
   shift 2
   exec "$BUG_RED_REAL_CARGO" run --quiet --manifest-path "$BUG_RED_TOP/Cargo.toml" --package xtask -- narrow-plan "$@"
+fi
+if [ "${1-}" = run ]; then
+  while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+  [ "$#" -gt 0 ] && shift
+  [ "${1-}" = bug-filter ] && set -- xtask "$@"
 fi
 if [ "${1-}" = xtask ] && [ "${2-}" = bug-filter ]; then
   "$BUG_RED_STUB_CARGO" "$@"
