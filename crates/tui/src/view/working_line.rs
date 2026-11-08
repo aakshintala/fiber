@@ -13,7 +13,7 @@ use crate::ext::{Input, RawSpan, SlotDraw, WorkingLine, WorkingRetry};
 use crate::mouse::{Target, TargetId};
 use crate::theme::{Role, style};
 use crate::view::notice_rows::frame_bound;
-use crate::working::{Working, lay};
+use crate::working::{Laid, Working, lay, lay_with_hint};
 
 /// The working line's renderer input: the attached turn's start with
 /// its wait to retry, from the same turn card the built-in reads.
@@ -31,12 +31,26 @@ fn input(working: &Working, flat: bool) -> WorkingLine {
     }
 }
 
+/// The built-in line laid out for `width`: a delegate's view names its own
+/// interrupt in the hint, the first key bound to `interrupt_turn` or just
+/// the click; the conversation keeps "Esc to interrupt".
+fn laid(app: &App, working: &Working, width: u16) -> Laid {
+    let motion = app.motion();
+    if !app.item_transcript() {
+        return lay(working, motion.wall_ms(), motion.spinner(), width);
+    }
+    let hint = match app.keys().first_label("interrupt_turn") {
+        Some(key) => format!("{key} or click to interrupt"),
+        None => "click to interrupt".to_owned(),
+    };
+    lay_with_hint(working, motion.wall_ms(), motion.spinner(), width, &hint)
+}
+
 /// The built-in working-line row as spans: the laid text in its base
 /// style. The spinner's colour and the glimmer band are paint-time
 /// recolors, so a cached line's text never changes.
 fn builtin_spans(app: &App, working: &Working, width: u16) -> Vec<Vec<RawSpan>> {
-    let motion = app.motion();
-    let laid = lay(working, motion.wall_ms(), motion.spinner(), width);
+    let laid = laid(app, working, width);
     let line = if laid.retrying {
         style(Role::Warning)
     } else {
@@ -145,7 +159,7 @@ fn paint_builtin(
     targets: &mut Vec<Target>,
 ) {
     let motion = app.motion();
-    let laid = lay(working, motion.wall_ms(), motion.spinner(), area.width);
+    let laid = laid(app, working, area.width);
     let line = if laid.retrying {
         style(Role::Warning)
     } else {

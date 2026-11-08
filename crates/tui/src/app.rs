@@ -72,6 +72,8 @@ mod home;
 pub(crate) mod hooks_view;
 mod hub_version;
 mod images;
+#[cfg(test)]
+mod interrupt_tests;
 pub(crate) mod items;
 mod keyboard;
 mod links;

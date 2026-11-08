@@ -1,0 +1,34 @@
+---
+source: crates/tui/src/app/interrupt_tests.rs
+expression: text
+---
+  Keys  /keys                                                                            Esc returns
+   Enter                 send                 Send a prompt, or a steering message during a turn
+   Shift+Enter, Ctrl+J   line_break           Insert a line break
+   Esc                   close_or_interrupt   Close what is on top; interrupt the turn when nothing
+                                              is open
+   Ctrl+C                clear_then_quit      Clear the draft, then quit
+   ⌥0                    go_home              Go home
+ › Ctrl+N                new_session          Start a new session
+   ⌥1 ⌥2 ⌥3 ⌥4 ⌥5 ⌥6 ⌥7  rail_row_n           Switch to the session of rail card N
+   ⌥8 ⌥9
+   Delete, Backspace     delete_session       Delete the selected exited, or a live one with Delete
+                                              session in the session list
+   ⌥I                    interrupt_turn       Interrupt the turn on screen, whatever is open over
+                                              it, except the /keys screen
+⋮  ↑                     recall_prompt        Recall an earlier prompt from the project of the
+⋮                                             session on screen
+⋮  ←                     focus_rail           Move focus from an empty input box into the rail
+   Ctrl+R                search_prompts       Search those prompts
+   ⌥← ⌥→, Ctrl+← Ctrl+→, move_word            Move by word
+   ⌥B ⌥F
+   ⌥Backspace,           delete_word          Delete a word
+ ⌥I is bound to Interrupt the turn on screen, whatever is open over it, except the /keys screen
+ Enter swap · Esc cancel
+   ● Working · Esc to interrupt
+ ▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+ ▌ ›
+ ▌─────────────────────────────────────────────────────────────────────────────────────────────────
+ ▌auto                                                                           ctx ▆▆▆▆▆▆▆▆ — · —
+ ▌0 waiting  │  $0.00
+ ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀

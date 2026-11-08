@@ -1186,8 +1186,23 @@ impl App {
                 return Effect::None;
             }
         };
+        self.send_cancel(&session)
+    }
+
+    /// Interrupts the turn of the conversation on screen, whatever is open
+    /// over it: a delegate's own in its view, else the attached session's.
+    /// It closes nothing and leaves the draft and the steering queue.
+    pub(super) fn interrupt_turn(&mut self) -> Effect {
+        match self.interrupt_session() {
+            Some(session) => self.send_cancel(&session),
+            None => Effect::None,
+        }
+    }
+
+    /// One `cancel` of `session`'s turn, settled by its answer.
+    fn send_cancel(&mut self, session: &SessionId) -> Effect {
         let id = mint();
-        let line = session_command(&id, "cancel", &session, None).to_string();
+        let line = session_command(&id, "cancel", session, None).to_string();
         self.outbox.insert(id, Kind::Cancel, Draft::default());
         Effect::Send(vec![line])
     }
