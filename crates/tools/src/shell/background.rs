@@ -296,6 +296,7 @@ pub(crate) fn finish_inline(
         Ok((file, path)) => {
             let mut inner = lock(&progress.shared.inner);
             inner.file = Some(file);
+            inner.artifact_sink = true;
             inner.cap = cap;
             format!(
                 "Output written after the call returns is in {}.",
@@ -369,21 +370,9 @@ const FIRST_NAMES: usize = 3;
 fn leftover_line(members: Option<&GroupMembers>, saved: &str) -> String {
     let hint = super::MOVED_JOB_HINT;
     match members {
-        Some(GroupMembers::Members(names)) => {
-            let rows: Vec<&str> = names.split("), ").collect();
+        Some(GroupMembers::Members(rows)) => {
             let count = rows.len();
-            let first: Vec<String> = rows
-                .iter()
-                .enumerate()
-                .take(FIRST_NAMES)
-                .map(|(at, row)| {
-                    if at + 1 == count {
-                        (*row).to_owned()
-                    } else {
-                        format!("{row})")
-                    }
-                })
-                .collect();
+            let first: Vec<&str> = rows.iter().take(FIRST_NAMES).map(String::as_str).collect();
             let (number, noun) = if count == 1 {
                 ("1".to_owned(), "process")
             } else {
@@ -428,7 +417,7 @@ fn hand_off(
     // `ps` a second time. Only a shell exit with members carries one.
     // Read before the job's thread takes the move.
     let members: Option<String> = match moved.progress.members.as_ref() {
-        Some(GroupMembers::Members(names)) => Some(names.clone()),
+        Some(GroupMembers::Members(rows)) => Some(rows.join(", ")),
         Some(GroupMembers::Empty) | Some(GroupMembers::Unavailable) | None => None,
     };
     // A spill in progress goes to the job's output file; the line names
@@ -690,7 +679,7 @@ fn shell_sentence(code: i32, members: Option<&str>) -> String {
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum GroupMembers {
     /// Member names for the receipt, as `name (pid)`.
-    Members(String),
+    Members(Vec<String>),
     /// A successful listing with no rows: the group is empty.
     Empty,
     /// The listing failed or never answered within [`PS_BOUND`].
@@ -811,11 +800,10 @@ fn parse_ps(text: &str, pgid: u32) -> Vec<(u32, String)> {
     rows
 }
 
-fn format_rows(rows: &[(u32, String)]) -> String {
+fn format_rows(rows: &[(u32, String)]) -> Vec<String> {
     rows.iter()
         .map(|(pid, name)| format!("{name} ({pid})"))
-        .collect::<Vec<_>>()
-        .join(", ")
+        .collect()
 }
 
 /// The command's first line, cut to [`DESCRIPTION_LIMIT`] characters.

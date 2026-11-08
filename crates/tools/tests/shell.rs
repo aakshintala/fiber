@@ -1451,13 +1451,17 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
 }
 
 /// A shell that starts `count` `sleep`s in its group, waits until `ps` shows
-/// them all, records its group then its readiness in `ready`, prints `done`,
+/// them all (or exits 97 with a named message on stderr once `DEADLINE`
+/// passes), records its group then its readiness in `ready`, prints `done`,
 /// blocks on the `gate` FIFO, and runs `after`.
 fn leaves_sleepers(ready: &Path, gate: &Path, count: u32, after: &str) -> String {
     format!(
         "echo $$ > {ready}; i=0; while [ $i -lt {count} ]; do sleep 1000 & i=$((i+1)); done; \
-         until [ \"$(ps -A -o pgid=,comm= | awk -v g=$$ '$1==g && $2 ~ /sleep/' | wc -l)\" -ge {count} ]; do :; done; \
+         end=$(( $(date +%s) + {limit} )); \
+         until [ \"$(ps -A -o pgid=,comm= | awk -v g=$$ '$1==g && $2 ~ /sleep/' | wc -l)\" -ge {count} ]; do \
+         if [ \"$(date +%s)\" -ge \"$end\" ]; then echo \"leaves_sleepers: {count} sleepers not listed by ps within {limit} s\" >&2; exit 97; fi; done; \
          echo $$ >> {ready}; echo done; read -r _ < {gate}; {after}",
+        limit = DEADLINE.as_secs(),
         ready = quote(ready),
         gate = quote(gate),
     )

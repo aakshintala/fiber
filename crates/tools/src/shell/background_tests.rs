@@ -191,7 +191,7 @@ not a row\n";
     assert!(parse_ps(text, 8).is_empty());
     assert_eq!(
         format_rows(&[(12, "sleep".to_owned()), (34, "my cmd".to_owned())]),
-        "sleep (12), my cmd (34)"
+        ["sleep (12)", "my cmd (34)"]
     );
 }
 
@@ -201,6 +201,16 @@ fn rows(count: u32) -> GroupMembers {
 }
 
 const SAVED: &str = "Output written after the call returns is in /a/s_1.txt.";
+
+#[test]
+fn leftover_line_counts_rows_not_a_delimiter_inside_a_name() {
+    let members = GroupMembers::Members(format_rows(&[(7, "nap), extra".to_owned())]));
+    let line = leftover_line(Some(&members), SAVED);
+    assert!(
+        line.starts_with("1 process left running (first: nap), extra (7))."),
+        "{line}"
+    );
+}
 
 #[test]
 fn leftover_line_for_one_process_is_singular() {
@@ -283,7 +293,7 @@ fn members_listing_moves_at_once_and_names_the_receipt() {
     let (text, job) = hand_off_with_timeout(
         dir.path(),
         3,
-        GroupMembers::Members("sleep (12), my cmd (34)".to_owned()),
+        GroupMembers::Members(vec!["sleep (12)".to_owned(), "my cmd (34)".to_owned()]),
         None,
         Some(Limit {
             ms: 5_000,
@@ -403,7 +413,7 @@ fn moved_receipt_names_the_stop_time_and_timeout() {
     let (text, job) = hand_off_with_timeout(
         dir.path(),
         3,
-        GroupMembers::Members("sleep (12)".to_owned()),
+        GroupMembers::Members(vec!["sleep (12)".to_owned()]),
         Some(Duration::from_secs(30)),
         Some(Limit {
             ms: 60_000,
@@ -483,7 +493,7 @@ fn terminal_receipt_with_a_timeout_names_the_stop_time() {
     let (text, job) = hand_off_with_timeout(
         dir.path(),
         3,
-        GroupMembers::Members("sleep (12)".to_owned()),
+        GroupMembers::Members(vec!["sleep (12)".to_owned()]),
         Some(Duration::from_secs(30)),
         Some(Limit {
             ms: 60_000,
@@ -562,10 +572,9 @@ fn the_group_is_listed_from_ps() {
     let ps = fake_ps(dir.path(), rows);
     // `docs/tools.md` promises the names, not their order: the fixture
     // prints in row order, so the test compares the listing as a set.
-    let GroupMembers::Members(names) = listed(&ps, 99, &clock) else {
+    let GroupMembers::Members(mut got) = listed(&ps, 99, &clock) else {
         panic!("the fixture group lists its members");
     };
-    let mut got: Vec<&str> = names.split(", ").collect();
     got.sort_unstable();
     assert_eq!(got, ["my cmd (34)", "sleep (12)"]);
     assert_eq!(listed(&ps, 8, &clock), GroupMembers::Empty);
