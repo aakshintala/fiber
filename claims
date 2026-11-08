@@ -663,3 +663,4 @@ crates/tui/src/event_loop/pause.rs	fiber-4435	plan	2026-11-08T20:08:01Z	Amoghs-M
 crates/main/tests/hub_daemon/keeper.rs	fiber-4351	plan	2026-11-08T20:18:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/delegation/delegates.rs	fiber-4182	plan	2026-11-08T20:30:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	4438,4434,4422
 crates/main/tests/screen_looks/panel_look.rs	fiber-4182	plan	2026-11-08T20:30:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	4438,4434,4422
+crates/tui/src/event_loop.rs	fiber-4435	plan	2026-11-08T20:39:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4442,4441,4440,4438,4436,4434,4428,4422,4375
