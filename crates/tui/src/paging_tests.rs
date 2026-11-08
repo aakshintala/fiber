@@ -15,7 +15,7 @@ use contract::{ActionId, Envelope, Seq, SessionId};
 use contract::{HubEventKind, events::EventKind};
 use serde_json::{Value, json};
 
-use super::{Draw, Folded, Pages, Part, fold};
+use super::{Draw, Folded, Pages, Part, fold, shell_target};
 use crate::app::{App, Effect, Target};
 use crate::ext::{Failure, Handle, Input, RawSpan, Renderer};
 use crate::keys::Key;
@@ -1592,7 +1592,7 @@ fn shell_output_draws_only_on_its_own_page_after_its_own_turn() {
             .entry((page, after))
             .or_default()
             .push(pages.shells.len());
-        pages.shells.push((page, after, text.to_owned()));
+        pages.shells.push((page, after, text.to_owned(), false));
     }
     let part = pages.part(0).expect("open page");
     let mut out = Rows::default();
@@ -5189,18 +5189,22 @@ fn carry_chain_carries_only_generations_below_the_carried_summaries() {
 #[test]
 fn carry_chain_carries_only_shells_below_the_carried_count() {
     let (mut preview, mut fold, len, summaries) = carry_edge();
-    preview.shells.push((0, 0, "ancestor output".to_owned()));
+    preview
+        .shells
+        .push((0, 0, "ancestor output".to_owned(), false));
     preview.shell_index.entry((0, 0)).or_default().push(0);
-    preview.shells.push((len, 1, "own output".to_owned()));
+    preview
+        .shells
+        .push((len, 1, "own output".to_owned(), false));
     preview.shell_index.entry((len, 1)).or_default().push(1);
-    fold.shells.push((1, 0, "fold output".to_owned()));
+    fold.shells.push((1, 0, "fold output".to_owned(), false));
     fold.shell_index.entry((1, 0)).or_default().push(0);
     preview.carry_chain(&mut fold);
     assert_eq!(
         fold.shells,
         vec![
-            (0, 0, "ancestor output".to_owned()),
-            (1 + len, summaries, "fold output".to_owned()),
+            (0, 0, "ancestor output".to_owned(), false),
+            (1 + len, summaries, "fold output".to_owned(), false),
         ],
         "the carried shell lands first and the fold's own shifts past it"
     );
@@ -5380,4 +5384,468 @@ fn a_dropped_page_draw_keeps_the_frame_wall_time() {
     assert!(!rows.is_empty(), "the dropped page draws");
     assert_eq!(fake.frames.borrow().clone(), vec![0]);
     assert_eq!(fake.nows.borrow().clone(), vec![1_000]);
+}
+
+const SENT: &str = "sent with your next prompt";
+
+/// A `!` run's stored item: head, the kind `note`, `lines` output lines
+/// `out 01`.., then `ending` (none when empty).
+fn shell_item(note: &str, lines: usize, ending: &str) -> String {
+    let mut text = format!("! seq\n{note}");
+    for n in 1..=lines {
+        text.push_str(&format!("\nout {n:02}"));
+    }
+    if !ending.is_empty() {
+        text.push('\n');
+        text.push_str(ending);
+    }
+    text
+}
+
+/// What the open page draws for its shells in `mode`: each line's text
+/// and target.
+fn shell_drawn(pages: &Pages, mode: Draw) -> Vec<(String, Option<Target>)> {
+    let part = pages.part(0).expect("open page");
+    let (rows, _, _, _) = pages.draw_data(0, part, mode);
+    rows.into_iter()
+        .map(|(line, target)| (line.to_string(), target))
+        .collect()
+}
+
+fn shell_texts(pages: &Pages, mode: Draw) -> Vec<String> {
+    shell_drawn(pages, mode)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect()
+}
+
+/// A page holding one shell run.
+fn shell_pages(item: String) -> Pages {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(item)));
+    pages
+}
+
+/// The run's expected lines: head, note, `out 01..=shown`, then `tail`.
+fn shell_expect(note: &str, shown: usize, tail: &[&str]) -> Vec<String> {
+    let mut want = vec!["! seq".to_owned(), note.to_owned()];
+    want.extend((1..=shown).map(|n| format!("out {n:02}")));
+    want.extend(tail.iter().map(|line| (*line).to_owned()));
+    want
+}
+
+/// Output of 19 and 20 lines draws whole, 21 draws 20 then "1 more
+/// line", 300 draws 20 then "280 more lines"; the exit row stays last
+/// and only the more row carries a target.
+#[test]
+fn shell_cap_boundary() {
+    for (lines, shown, more) in [
+        (19usize, 19usize, None),
+        (20, 20, None),
+        (21, 20, Some("1 more line")),
+        (300, 20, Some("280 more lines")),
+    ] {
+        let pages = shell_pages(shell_item(SENT, lines, "exit 0"));
+        let mut tail = Vec::new();
+        tail.extend(more);
+        tail.push("exit 0");
+        let drawn = shell_drawn(&pages, Draw::Shown);
+        let texts: Vec<String> = drawn.iter().map(|(text, _)| text.clone()).collect();
+        assert_eq!(texts, shell_expect(SENT, shown, &tail), "{lines}");
+        let targeted: Vec<&str> = drawn
+            .iter()
+            .filter(|(_, target)| target.is_some())
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert_eq!(targeted, more.into_iter().collect::<Vec<_>>(), "{lines}");
+        assert!(!texts.iter().any(|text| text.contains('…')), "{lines}");
+    }
+    // `!!`'s note caps the same way, and a signal ends the run as exit does.
+    let pages = shell_pages(shell_item("only you see this", 22, "signal SIGKILL"));
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        shell_expect("only you see this", 20, &["2 more lines", "signal SIGKILL"])
+    );
+    let pages = shell_pages(shell_item(SENT, 22, "exit -1"));
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        shell_expect(SENT, 20, &["2 more lines", "exit -1"])
+    );
+}
+
+/// An output line shaped like an ending is output unless it is the
+/// run's last line and fully matches `exit -?\d+` or `signal \S+`.
+#[test]
+fn shell_cap_ending_grammar() {
+    for (last, ending) in [
+        ("exit 0", true),
+        ("exit 12", true),
+        ("exit -1", true),
+        ("exit", false),
+        ("exit -", false),
+        ("exit x", false),
+        ("exit 1x", false),
+        ("exit  1", false),
+        ("signal SIGKILL", true),
+        ("signal", false),
+        ("signal a b", false),
+    ] {
+        // 20 output lines then `last`: an ending leaves the output at
+        // 20 and uncapped; anything else makes it 21 and caps it.
+        let pages = shell_pages(shell_item(SENT, 20, last));
+        let texts = shell_texts(&pages, Draw::Shown);
+        if ending {
+            assert_eq!(texts, shell_expect(SENT, 20, &[last]), "{last}");
+        } else {
+            assert_eq!(texts.len(), 2 + 20 + 1, "{last}");
+            assert_eq!(
+                texts.last().map(String::as_str),
+                Some("1 more line"),
+                "{last}"
+            );
+            assert!(!texts.iter().any(|text| text == last), "{last}");
+        }
+    }
+}
+
+/// Opening the more row shows every line then "show less"; opening it
+/// again closes it. The row is a focus stop, the page's rows stay
+/// counted, and nothing lands in the overrides.
+#[test]
+fn shell_cap_toggle() {
+    let mut pages = shell_pages(shell_item(SENT, 25, "exit 0"));
+    let closed = shell_drawn(&pages, Draw::Shown);
+    let more = closed
+        .iter()
+        .find_map(|(_, target)| *target)
+        .expect("a more row target");
+    let part = pages.part(0).expect("open page");
+    let (_, _, focus, _) = pages.draw_data(0, part, Draw::Shown);
+    assert!(
+        focus
+            .iter()
+            .any(|(_, _, id)| *id == crate::mouse::TargetId::Line(more)),
+        "the more row is a focus stop"
+    );
+    let total = pages.index().total();
+    assert_eq!(total, 2 + 20 + 1 + 1);
+    assert!(pages.open(&more));
+    let mut tail = vec!["show less", "exit 0"];
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        shell_expect(SENT, 25, &tail)
+    );
+    assert_eq!(pages.index().total(), 2 + 25 + 1 + 1, "the page recounts");
+    // The same target is on "show less".
+    let open = shell_drawn(&pages, Draw::Shown);
+    assert_eq!(
+        open.iter()
+            .filter(|(_, target)| *target == Some(more))
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["show less"]
+    );
+    assert!(pages.overrides.is_empty(), "shell state is not an override");
+    assert!(pages.open(&more));
+    tail = vec!["5 more lines", "exit 0"];
+    assert_eq!(
+        shell_texts(&pages, Draw::Shown),
+        shell_expect(SENT, 20, &tail)
+    );
+    assert_eq!(pages.index().total(), total, "closing recounts");
+    // A target no run names opens nothing, and the old group key for a
+    // run names no group.
+    assert!(!pages.open(&Target::Shell(9)));
+    assert!(!pages.open(&Target::Group(target_id("shell 0"))));
+}
+
+/// Each run in a bucket caps and toggles on its own.
+#[test]
+fn shell_cap_runs_toggle_independently() {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    assert!(pages.add_shell(Some(shell_item(SENT, 22, "exit 0"))));
+    let targets: Vec<Target> = shell_drawn(&pages, Draw::Shown)
+        .into_iter()
+        .filter_map(|(_, target)| target)
+        .collect();
+    assert_eq!(targets.len(), 2);
+    assert_ne!(targets[0], targets[1]);
+    assert!(pages.open(&targets[1]));
+    let texts = shell_texts(&pages, Draw::Shown);
+    assert!(
+        texts.contains(&"1 more line".to_owned()),
+        "first stays closed"
+    );
+    assert!(texts.contains(&"show less".to_owned()), "second opened");
+    assert!(!texts.contains(&"2 more lines".to_owned()));
+}
+
+/// The more row's target is the run's own variant, numbered by slot.
+#[test]
+fn shell_cap_key_prefix() {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    let targets: Vec<Option<Target>> = shell_drawn(&pages, Draw::Shown)
+        .into_iter()
+        .map(|(_, target)| target)
+        .filter(Option::is_some)
+        .collect();
+    assert_eq!(
+        targets,
+        vec![Some(Target::Shell(0)), Some(Target::Shell(1))]
+    );
+}
+
+/// A shell slot names a run only below the run count: the last slot is
+/// the run, the count itself and past it name none.
+#[test]
+fn shell_cap_slot_boundary() {
+    let mut pages = Pages::new(80);
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    assert!(pages.add_shell(Some(shell_item(SENT, 21, "exit 0"))));
+    let runs = pages.shells.len();
+    assert_eq!(runs, 2);
+    assert_eq!(pages.shell_slot(&Target::Shell(runs - 1)), Some(runs - 1));
+    assert_eq!(pages.shell_slot(&Target::Shell(runs)), None);
+    assert_eq!(pages.shell_slot(&Target::Shell(runs + 1)), None);
+}
+
+/// An error row (`! cmd` then `code: message`) has no kind note, so it
+/// draws whole whatever its length.
+#[test]
+fn shell_cap_error_row_uncapped() {
+    let mut item = "! bad\ninternal: first".to_owned();
+    for n in 2..=25 {
+        item.push_str(&format!("\nmessage {n}"));
+    }
+    let pages = shell_pages(item.clone());
+    let drawn = shell_drawn(&pages, Draw::Shown);
+    assert_eq!(
+        drawn
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>(),
+        item.split('\n').collect::<Vec<_>>()
+    );
+    assert!(drawn.iter().all(|(_, target)| target.is_none()));
+}
+
+/// A run with no output keeps its head, note and exit and no more row.
+#[test]
+fn shell_cap_empty_output() {
+    for ending in ["exit 0", "exit 3", "signal SIGTERM", ""] {
+        let pages = shell_pages(shell_item(SENT, 0, ending));
+        let drawn = shell_drawn(&pages, Draw::Shown);
+        let mut want = shell_expect(SENT, 0, &[]);
+        if !ending.is_empty() {
+            want.push(ending.to_owned());
+        }
+        assert_eq!(
+            drawn
+                .iter()
+                .map(|(text, _)| text.clone())
+                .collect::<Vec<_>>(),
+            want,
+            "{ending:?}"
+        );
+        assert!(drawn.iter().all(|(_, target)| target.is_none()));
+    }
+}
+
+/// The 1 MiB cut notice is an ordinary output line: within the first 20
+/// it stays on the shown rows, past them it shows once the row opens, and
+/// an opened row stops at it.
+#[test]
+fn shell_cap_cut_notice() {
+    let notice = "[41 bytes cut. The full output is in artifacts/o_1.txt; read it with `read`.]";
+    let item = |at: usize| {
+        let mut text = format!("! seq\n{SENT}");
+        for n in 1..=at {
+            text.push_str(&format!("\nout {n:02}"));
+        }
+        text.push_str(&format!("\n{notice}"));
+        for n in 1..=3 {
+            text.push_str(&format!("\ntail {n}"));
+        }
+        text.push_str("\nexit 0");
+        text
+    };
+    let early = shell_pages(item(5));
+    let texts = shell_texts(&early, Draw::Shown);
+    assert!(texts.iter().any(|text| text == notice), "{texts:?}");
+    let mut late = shell_pages(item(30));
+    let texts = shell_texts(&late, Draw::Shown);
+    assert!(!texts.iter().any(|text| text.contains("artifacts/o_1.txt")));
+    let more = shell_drawn(&late, Draw::Shown)
+        .into_iter()
+        .find_map(|(_, target)| target)
+        .expect("a more row");
+    assert!(late.open(&more));
+    let texts = shell_texts(&late, Draw::Shown);
+    assert!(texts.iter().any(|text| text == notice));
+    assert_eq!(
+        texts
+            .iter()
+            .rev()
+            .take(5)
+            .rev()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["tail 1", "tail 2", "tail 3", "show less", "exit 0"]
+    );
+}
+
+/// A run whose 1 MiB cut notice sits past line 20 shows no path while
+/// collapsed, with the notice not promoted into the shown lines; opening
+/// the run shows the notice and its path (RULING-4367-2).
+#[test]
+fn shell_cap_cut_notice_path_past_the_cap() {
+    let path = "/tmp/fiber/artifacts/o_9.txt";
+    let notice = format!("[1048577 bytes cut. The full output is in {path}; read it with `read`.]");
+    let mut item = shell_item(SENT, 30, "");
+    item.push_str(&format!("\n{notice}\nexit 0"));
+    let mut pages = shell_pages(item);
+    let closed = shell_texts(&pages, Draw::Shown);
+    assert_eq!(
+        closed,
+        shell_expect(SENT, 20, &["11 more lines", "exit 0"]),
+        "the notice is the 31st output line: not promoted past the cap"
+    );
+    assert!(!closed.iter().any(|text| text.contains(path)));
+    let more = shell_drawn(&pages, Draw::Shown)
+        .into_iter()
+        .find_map(|(_, target)| target)
+        .expect("a more row");
+    assert!(pages.open(&more));
+    let open = shell_texts(&pages, Draw::Shown);
+    assert!(open.iter().any(|text| text == &notice), "{open:?}");
+    assert_eq!(
+        shell_expect(SENT, 30, &[notice.as_str(), "show less", "exit 0"]),
+        open
+    );
+}
+
+/// A more row's target follows its run when `carry_chain` prepends runs:
+/// the slot moves, the run is found again by page, turn-after and text
+/// (equal runs in order), and a run the fold lacks maps to nothing.
+#[test]
+fn shell_cap_target_follows_the_run_across_carry() {
+    let (mut preview, mut fold, len, _) = carry_edge();
+    for (page, after, text) in [
+        (len, 1, "own, not carried"),
+        (0, 0, "ancestor"),
+        (1, 0, "twin"),
+        (1, 0, "twin"),
+    ] {
+        preview
+            .shell_index
+            .entry((page, after))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shells.push((page, after, text.to_owned(), false));
+    }
+    fold.shell_index.entry((0, 0)).or_default().push(0);
+    fold.shells.push((0, 0, "fold".to_owned(), false));
+    preview.carry_chain(&mut fold);
+    let moved: Vec<Option<Target>> = (0..5)
+        .map(|slot| preview.same_target(Target::Shell(slot), &fold))
+        .collect();
+    assert_eq!(
+        moved,
+        vec![
+            None,
+            Some(Target::Shell(0)),
+            Some(Target::Shell(1)),
+            Some(Target::Shell(2)),
+            None
+        ],
+        "the carried runs move down one slot; the first twin keeps the first"
+    );
+    assert!(fold.toggle_shell(&Target::Shell(2)), "the second twin");
+    assert_eq!(fold.shells.get(2).map(|run| run.3), Some(true));
+    assert_eq!(fold.shells.get(1).map(|run| run.3), Some(false));
+}
+
+/// Reveal opens a closed run, never closes an open one, reports whether
+/// anything changed, and records no override.
+#[test]
+fn shell_cap_force_open() {
+    let mut item = shell_item(SENT, 25, "exit 0");
+    item = item.replace("out 24", "needle past the cap");
+    let mut pages = shell_pages(item);
+    let target = shell_target(0);
+    let texts = shell_texts(&pages, Draw::Shown);
+    assert!(!texts.iter().any(|text| text.contains("needle")));
+    assert!(pages.force_open(&target));
+    assert!(
+        shell_texts(&pages, Draw::Shown)
+            .iter()
+            .any(|text| text == "needle past the cap")
+    );
+    assert_eq!(pages.index().total(), 2 + 25 + 1 + 1, "the page recounts");
+    assert!(!pages.force_open(&target), "already open: nothing changed");
+    assert!(
+        shell_texts(&pages, Draw::Shown)
+            .iter()
+            .any(|text| text == "show less"),
+        "reveal never closes"
+    );
+    assert!(pages.overrides.is_empty(), "shell state is not an override");
+}
+
+/// A search draw shows every output line, as it does for an opened
+/// call, while the run stays closed for the person.
+#[test]
+fn shell_cap_all_open() {
+    let pages = shell_pages(shell_item(SENT, 25, "exit 0"));
+    let (rows, _, _, _) = pages.page_text_open_turns(0).expect("resident page");
+    let texts: Vec<String> = rows.iter().map(|(line, _)| line.to_string()).collect();
+    assert_eq!(
+        texts,
+        shell_expect(SENT, 25, &["5 more lines", "exit 0"]),
+        "all 25 lines, and the more row as an opened call keeps its own"
+    );
+    let shown = shell_texts(&pages, Draw::Shown);
+    assert!(!shown.iter().any(|text| text == "out 25"), "still closed");
+}
+
+/// `carry_chain` keeps each run's open state with the run and numbers
+/// the more-row keys by the run's new slot.
+#[test]
+fn shell_cap_carry() {
+    let (mut preview, mut fold, len, summaries) = carry_edge();
+    for (page, text, open) in [(0, "ancestor open", true), (1, "ancestor closed", false)] {
+        preview
+            .shell_index
+            .entry((page, 0))
+            .or_default()
+            .push(preview.shells.len());
+        preview.shells.push((page, 0, text.to_owned(), open));
+    }
+    for (text, open) in [("fold open", true), ("fold closed", false)] {
+        fold.shell_index
+            .entry((1, 0))
+            .or_default()
+            .push(fold.shells.len());
+        fold.shells.push((1, 0, text.to_owned(), open));
+    }
+    preview.carry_chain(&mut fold);
+    assert_eq!(
+        fold.shells,
+        vec![
+            (0, 0, "ancestor open".to_owned(), true),
+            (1, 0, "ancestor closed".to_owned(), false),
+            (1 + len, summaries, "fold open".to_owned(), true),
+            (1 + len, summaries, "fold closed".to_owned(), false),
+        ]
+    );
+    // The more-row keys follow the new slots: the third run is slot 2.
+    assert_eq!(fold.shell_slot(&shell_target(2)), Some(2));
+    assert!(
+        fold.toggle_shell(&shell_target(2)),
+        "the carried run answers"
+    );
+    assert_eq!(fold.shells.get(2).map(|run| run.3), Some(false));
 }
