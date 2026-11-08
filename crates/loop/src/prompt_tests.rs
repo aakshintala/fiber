@@ -213,8 +213,8 @@ fn pinned(bytes: &[u8], len: usize, hash: u64) {
 fn system_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/system.md"),
-        1574,
-        0x7164e4d94572814c,
+        1580,
+        0x9ca094c1a02a1054,
     );
 }
 
@@ -231,8 +231,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        7256,
-        0x94885746ad26157,
+        7280,
+        0x244233e6f107ecfd,
     );
 }
 
@@ -240,8 +240,8 @@ fn messages_md_bytes_are_pinned() {
 fn reviewer_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/reviewer.md"),
-        9145,
-        0xba38cac73db603f8,
+        9150,
+        0x378bf92e2e471af3,
     );
 }
 
