@@ -5694,7 +5694,7 @@ fn a_later_held_recipient_description_wins_over_an_earlier_start_on_the_page() {
 /// overtaken by a loaded line; one from the same segment is, only by a
 /// later `seq`.
 #[test]
-fn a_loaded_start_overtakes_a_held_one_only_by_stream_order() {
+fn a_loaded_recipient_start_overtakes_a_held_one_only_by_stream_order() {
     let start = |session: &str, seq: Option<u64>, text: &str| {
         let mut line = envelope(
             "job_started",

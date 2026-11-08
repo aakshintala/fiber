@@ -410,6 +410,10 @@ impl Delegates {
 
     /// Takes each of `older`'s entries this holds none for. The work is
     /// one step per entry of `older`.
+    #[allow(
+        clippy::iter_over_hash_type,
+        reason = "insert-if-absent per key gives the same map in any order, and no order reaches a request"
+    )]
     fn fill_from(&mut self, older: &Delegates) {
         for (job, entry) in &older.0 {
             self.0.entry(job.clone()).or_insert_with(|| entry.clone());

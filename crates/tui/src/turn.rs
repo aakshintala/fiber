@@ -689,7 +689,22 @@ impl Recipients<'_> {
                     .and_then(|page| page.get(&job))
                     .or_else(|| self.delegates.get(&job))
             }
-            _ => None,
+            format::Kind::Read
+            | format::Kind::Search
+            | format::Kind::List
+            | format::Kind::Edit
+            | format::Kind::Write
+            | format::Kind::Shell
+            | format::Kind::Delegate
+            | format::Kind::Jobs
+            | format::Kind::Ask(_)
+            | format::Kind::Fetch
+            | format::Kind::Web
+            | format::Kind::Skill
+            | format::Kind::Tools
+            | format::Kind::Session
+            | format::Kind::Notes
+            | format::Kind::Other => None,
         }?;
         (!held.is_empty()).then(|| held.to_owned())
     }
