@@ -7,7 +7,7 @@ Changes save automatically
 
  Appearance   Notifications   Models   Permissions   Sessions   Advanced
 
-› Handoff tokens         400000
+› Compaction tokens      400000
 
   Repository extensions  none ›
 
@@ -23,6 +23,6 @@ Changes save automatically
 
 
 
-About handoff.tokens.
-handoff.tokens · using the default · changing handoff.tokens needs a reload (~18
+About compaction.tokens.
+compaction.tokens · using the default · changing compaction.tokens needs a reloa
 ←→ tab · / search · Enter change · Tab layer · Delete reset

@@ -27,7 +27,7 @@ Two consequences that get violated first, so they are stated first:
   bytes too big to inline. No `session.json`, no usage ledger, no checkpoint, no
   manifest. Token totals, history length and what the last turn was doing are
   folds computed at open.
-- **The log is append-only for the life of the session.** A handoff appends
+- **The log is append-only for the life of the session.** A compaction appends
   new events. It never rewrites, renames or restarts the file, because a sequence
   number a consumer stored yesterday must still point at the same event today.
 
@@ -386,7 +386,7 @@ Each item has a `type`, an open set; a consumer skips an item it does not know.
 | `message` | `content` (content parts), the keys of "Where a message came from", `changed_by` | a message from a driver, an extension, another session or Fiber |
 | `shell_command` | `seq` (integer) | a `shell_command` line since the last turn, named by its `seq` |
 | `jobs` | `job_ids` (array of strings) | jobs whose news started the turn; their `job_completed` and `job_line` lines follow at the first step boundary |
-| `handoff` | `command_id` (string) | a `handoff` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
+| `compaction` | `command_id` (string) | a `compact` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
 | `rewind` | `command_id` (string) | a `rewind` command that asked for a summary: the summary's turn on the old session, between turns (`docs/events.md`, "Rewind") |
 
 #### `step_started`
@@ -463,7 +463,7 @@ Durable. Written when the session accepts an `add_directory` driver command (`do
 | `path` | string | yes | the added folder's resolved path |
 | `inherited` | boolean | no | `true` when a fresh spawn records the root before its opening; the opening lists it, so it adds no separate message; absent or `false` for a normal folder-added message, including a folder added after a fork's point |
 
-The fold adds each resolved path at its first `directory_added` event and keeps it in that position. A later event for the same canonical path does not move it: B, A, B folds to B, A. A resume rebuilds the same order from the log. The opening message rebuilt at a handoff lists the folders in that order (`docs/system-prompt.md`, "After a handoff"). A fork or a rewind from a point after the event keeps it, and one from a point before it does not. For a fresh delegate spawn, the opening lists inherited folders, so their seed events add no separate folder-added messages. A later addition to a running fork does render its normal message.
+The fold adds each resolved path at its first `directory_added` event and keeps it in that position. A later event for the same canonical path does not move it: B, A, B folds to B, A. A resume rebuilds the same order from the log. The opening message rebuilt at a compaction lists the folders in that order (`docs/system-prompt.md`, "After a compaction"). A fork or a rewind from a point after the event keeps it, and one from a point before it does not. For a fresh delegate spawn, the opening lists inherited folders, so their seed events add no separate folder-added messages. A later addition to a running fork does render its normal message.
 
 #### `clients`
 
@@ -540,16 +540,16 @@ the client that sent a message. It is ephemeral because `steering_applied`
 makes each entry obsolete. The latest wins, and a client that attaches is sent
 the latest, as with `extension_ui`.
 
-`turn_completed` means settled. Retries and handoffs happen inside the turn
+`turn_completed` means settled. Retries and compactions happen inside the turn
 and appear as actions, so there is never a second "really finished" event.
 
 A **step** is one round-trip to the model, and `step_started` opens it. It is
 written before anything else in the step: the `steering_applied` and
-`job_line` lines the step takes in, and any handoff it runs before calling the
+`job_line` lines the step takes in, and any compaction it runs before calling the
 model. A step ends where the next `step_started` or the `turn_completed` is,
 so there is no closing line. A step's number is the count of `step_started`
 lines in its turn. The boundary is not derived from the actions, because a
-retry and a handoff's note request are each a model call inside one step:
+retry and a compaction's note request are each a model call inside one step:
 counting `assistant_message_started` gives attempts, never steps.
 
 ### Actions
@@ -688,7 +688,7 @@ Durable. The call's outcome.
 | `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
 | `kept` | array | no | when the result was cut, the byte ranges of the full output that `content` holds, each `[start, end]` (integers, `end` exclusive), in order (`docs/tools.md`, "Bounded results") |
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
-| `control` | object | no | instructions to the loop: `handoff` (string), a handoff note (`docs/handoff.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries"); `skill` (an object holding `name` and `path`, both strings), a skill the call loaded (`docs/tools.md`, "Skills") |
+| `control` | object | no | instructions to the loop: `compact` (string), a compaction note (`docs/compaction.md`); `questions` (`questions`); `name` (string), a session name (`docs/tools.md`, "What a result carries"); `skill` (an object holding `name` and `path`, both strings), a skill the call loaded (`docs/tools.md`, "Skills") |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
 | `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 | `hosts_surfaced` | array of strings | no | the hosts the result surfaced, as URLs, which become known in the session (`docs/tools.md`, "What a result carries"); absent when empty |
@@ -702,7 +702,7 @@ path as a string, and `hash`, the whole file's content hash as an integer.
 the bytes they stored. A failed call carries no `file_seen`. The history fold
 reads only this object (`docs/tools.md`, "Stale files"): a resume, a fork or
 a rewind rebuilds what the model's context has seen from it, and only a
-completed handoff clears it.
+completed compaction clears it.
 
 A failed model call is an assistant message that completed with a failed
 outcome and an `error`; the retry is a new action. Its codes
@@ -898,7 +898,7 @@ none.
 | `extension` | string | no | the extension whose `host.model` made the call |
 | `origin_session_id` | string | no | on a copy, the session whose call it was (`docs/delegates.md`, "Streams"); absent on the session's own calls |
 | `warming` | boolean | no | `true` on a cache-warming refresh (`docs/prompt-cache.md`, "Warming while idle"); absent on every other call |
-| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, `stage_2` or `handoff`, the handoff selection) and `action_id` (string, the tool call under review; absent on `handoff`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
+| `reviewer` | object | no | on a call the reviewer made: `purpose` (string, a closed set: `stage_1`, `stage_2` or `compaction`, the compaction selection) and `action_id` (string, the tool call under review; absent on `compaction`); absent on every other call. Present on every call the reviewer makes; the envelope's `action_id` stays absent, so an action's usage fold doesn't count the review as the call's own spend |
 
 #### `quota_noticed`
 
@@ -978,7 +978,7 @@ Durable.
 | `reason` | string | yes | `start`, `resume`, `reload` or `switch`; a closed set |
 | `model` | string | yes | the model reference |
 | `context_window` | integer | yes | the model's context window, in tokens |
-| `trigger_at` | integer | no | the context size, in tokens, at which an automatic handoff runs (`docs/handoff.md`, "Automatic"); absent when automatic handoff is off |
+| `trigger_at` | integer | no | the context size, in tokens, at which an automatic compaction runs (`docs/compaction.md`, "Automatic"); absent when automatic compaction is off |
 | `budget` | number | no | the session's `budget.usd` in US dollars, after every configuration layer and `-c` (`docs/loop.md`, "Spending budget"); absent when none is set |
 | `thinking` | string | no | the thinking level, where the model takes one (`docs/model-routing.md`, "Thinking") |
 | `tool_choice` | string | yes | the tool choice as sent |
@@ -1078,35 +1078,35 @@ turn start (`docs/system-prompt.md`, "Added and removed skills").
 
 #### `skills_resent`
 
-Durable. Written after `handoff_completed` and before the new
+Durable. Written after `compaction_completed` and before the new
 `opening_message` when the previous context had
-loaded skills (`docs/handoff.md`, "What the model sees after a handoff").
+loaded skills (`docs/compaction.md`, "What the model sees after a compaction").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `skills` | array | yes | each skill sent again, in the order it was first loaded: `name`, `path` and `content` (strings), the body read from disk at the handoff |
+| `skills` | array | yes | each skill sent again, in the order it was first loaded: `name`, `path` and `content` (strings), the body read from disk at the compaction |
 
 `opening_message` is written at session start and after each completed
-handoff. Each `extension_sections` entry records one extension's section with
+compaction. Each `extension_sections` entry records one extension's section with
 its extension, files and budget. `instruction_file` with `own_edit` records the
 content after the session's own call changed the file, and sends nothing. A
 diff is rendered from `content` and the content the model last had, both in the
 log. The texts are rendered from these payloads.
 
-### Handoff
+### Compaction
 
-Behaviour is `docs/handoff.md`.
+Behaviour is `docs/compaction.md`.
 
-#### `handoff_started`
+#### `compaction_started`
 
-Durable. Written before the note request. A tool-started handoff makes no note
+Durable. Written before the note request. A tool-started compaction makes no note
 request and writes none.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `trigger` | string | yes | `auto`, `person` or `overflow`; a closed set |
 
-#### `handoff_completed`
+#### `compaction_completed`
 
 Durable.
 
@@ -1115,9 +1115,9 @@ Durable.
 | `outcome` | string | yes | `completed`, `failed` or `cancelled`; a closed set |
 | `error` | `error` | no | on `failed` |
 | `note` | array of strings | no | the `action_id`s of the actions carrying the note, in call order |
-| `note_text` | string | no | a note a `before_handoff` hook wrote, in place of `note` |
+| `note_text` | string | no | a note a `before_compaction` hook wrote, in place of `note` |
 | `extension` | string | no | with `note_text`, the hook's extension |
-| `tokens_before` | integer | yes | the context size before the handoff, in tokens |
+| `tokens_before` | integer | yes | the context size before the compaction, in tokens |
 | `instructions` | string | no | the person's instructions, when there were any |
 
 #### `context_nudged`
@@ -1127,27 +1127,27 @@ Durable.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `tokens` | integer | yes | the context size when the nudge was given |
-| `trigger_at` | integer | yes | the context size at which an automatic handoff runs |
+| `trigger_at` | integer | yes | the context size at which an automatic compaction runs |
 
 The note request is an ordinary assistant message action with its own
-`usage_recorded`. `handoff_completed` points at the note and never copies its
+`usage_recorded`. `compaction_completed` points at the note and never copies its
 text ("Writing"), except a note a hook wrote, which appears on no earlier line.
 `context_nudged` is durable because the model saw it; the nudge's text is
 generated from its payload.
 
 #### `reviewer_kept`
 
-Durable. The person's messages the reviewer keeps across a handoff, each with the reply it answered. The agent's new context gets the same messages, without the replies (`docs/handoff.md`, "What the model sees after a handoff").
+Durable. The person's messages the reviewer keeps across a compaction, each with the reply it answered. The agent's new context gets the same messages, without the replies (`docs/compaction.md`, "What the model sees after a compaction").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `kept` | array | yes | the kept messages, oldest first, after the window cap: `{seq, item}` naming the `turn_started` or `steering_applied` line holding each message |
 | `failed` | boolean | no | `true` when the selection request failed, so every earlier person message was kept |
 
-Written after a completed handoff when the session has a reviewer (`docs/permissions.md`, "At a handoff").
+Written after a completed compaction when the session has a reviewer (`docs/permissions.md`, "At a compaction").
 
-A handoff that fails or is cancelled leaves the model's context as it was. A
-cancelled handoff means the turn was cancelled, by a person or a shutdown, and
+A compaction that fails or is cancelled leaves the model's context as it was. A
+cancelled compaction means the turn was cancelled, by a person or a shutdown, and
 the turn completes `interrupted`.
 
 ### MCP servers
@@ -1292,7 +1292,7 @@ the session. Behaviour is `docs/extensions.md` ("Process extensions").
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `session_id` | string | unless `reason` is `call` | the session's id |
-| `reason` | string | yes | why the session started: `new`, `resume`, `fork`, `rewind`, `handoff`, or `call` for a provider call outside a session; a closed set |
+| `reason` | string | yes | why the session started: `new`, `resume`, `fork`, `rewind`, `compaction`, or `call` for a provider call outside a session; a closed set |
 | `workspace` | string | yes | the workspace root |
 | `data_dirs` | object | yes | the paths `host.data_dir` returns: `machine` and `project` path strings |
 | `state` | object | yes | the extension's folded state, as `state.get` reads it |
@@ -1522,7 +1522,7 @@ A session is reconstructed from the log and its
 [configuration](configuration.md), nothing else.
 
 Open scans the file into an offset table, reading each line's `kind` and `seq` and refusing a complete line that is not JSON. It fully parses only the latest-wins kinds, the pending offer's `repository_code_offered` and `repository_code_resolved`, and the lines the rate fold reads. Only the window a consumer actually needs is otherwise parsed. The model's context, the TUI's viewport and any search are three
-residency policies over one primitive: a range read by `seq`. A handoff
+residency policies over one primitive: a range read by `seq`. A compaction
 shortening what the model sees must not shorten what a person can scroll back
 to.
 
@@ -1540,7 +1540,7 @@ What the reader can tell about work that was in flight, from the log alone:
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |
 | `fiber_started`, no `fiber_exited`, `rewound` or `moved` after it | that process died rather than exited |
 | `rewound` or `moved` last | the session continued elsewhere |
-| `handoff_started`, no `handoff_completed` | the process died during a handoff; the handoff did not take effect, and the model's context is what it was before it |
+| `compaction_started`, no `compaction_completed` | the process died during a compaction; the compaction did not take effect, and the model's context is what it was before it |
 
 A resume takes the log back from the keeper before it opens the log
 (`docs/tools.md`, "The keeper"), so a job the keeper ran is either completed in
@@ -1563,7 +1563,7 @@ An attempt count is derived by counting `assistant_message_started` lines, never
 from a stored counter, so it cannot drift from the record. A client that shows which attempt a model call is, such as the terminal's
 "attempt 2 of 4", counts the `assistant_message_started` lines of the request's
 retries in that step. The count starts again at each `step_started`, each
-`handoff_started`, whose note request is its own, and each
+`compaction_started`, whose note request is its own, and each
 `assistant_message_completed` whose outcome is `completed`.
 
 ## Rewind
@@ -1608,7 +1608,7 @@ earlier point. A person starts one from the terminal, a driver with the
   request matches the old session's up to the point, so it hits the prompt
   cache while the cache is warm. Everything after the history rides on the new
   session's `session_started`, as `rewind { summary?, note }`.
-- **A handoff is inherited by position.** A handoff completed in the old
+- **A compaction is inherited by position.** A compaction completed in the old
   session at or before the point applies to the new session. One after it does
   not.
 - **Jobs stop.** Every job still running when the session is rewound stops,
@@ -1640,8 +1640,8 @@ earlier point. A person starts one from the terminal, a driver with the
 
 The model does not rewind. For planned speculative work it uses
 `delegate_fork`, with `isolation: worktree` where files matter. For an
-unplanned dead end it hands off: it restarts its own context from a note it
-writes. How a handoff works is `docs/handoff.md`.
+unplanned dead end it compacts: it restarts its own context from a note it
+writes. How a compaction works is `docs/compaction.md`.
 
 ## Change workspace
 

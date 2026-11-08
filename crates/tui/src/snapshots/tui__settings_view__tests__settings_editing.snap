@@ -7,7 +7,7 @@ Changes save automatically
 
  Appearance   Notifications   Models   Permissions   Sessions   Advanced
 
-› Handoff tokens         4000005
+› Compaction tokens      4000005
 
   Repository extensions  none ›
 
@@ -23,6 +23,6 @@ Changes save automatically
 
 
 
-About handoff.tokens.
-handoff.tokens · using the default · changing handoff.tokens needs a reload
+About compaction.tokens.
+compaction.tokens · using the default · changing compaction.tokens needs a reloa
 Enter save · Esc cancel

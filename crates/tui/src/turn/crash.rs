@@ -417,8 +417,8 @@ pub(crate) fn fold(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope) -> 
         | EventKind::InstructionFile
         | EventKind::DateChanged
         | EventKind::SkillsChanged
-        | EventKind::HandoffStarted
-        | EventKind::HandoffCompleted
+        | EventKind::CompactionStarted
+        | EventKind::CompactionCompleted
         | EventKind::SkillsResent
         | EventKind::ContextNudged
         | EventKind::ReviewerKept

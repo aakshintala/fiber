@@ -79,8 +79,8 @@ fn unsorted() -> Vec<SettingRow> {
         ),
         on(
             Sessions,
-            "Handoff tokens",
-            "handoff.tokens",
+            "Compaction tokens",
+            "compaction.tokens",
             value("400000"),
             "default",
             ANY,
@@ -518,7 +518,7 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 | Appearance   Notifications   Models   Permissions   Sessions   Advanced
 |
-|› Handoff tokens         400000
+|› Compaction tokens      400000
 |
 |  Repository extensions  none ›
 |
@@ -534,8 +534,8 @@ fn every_tab_draws_its_rows_through_the_frame_renderer() {
 |
 |
 |
-|About handoff.tokens.
-|handoff.tokens · using the default · changing handoff.tokens needs a reload
+|About compaction.tokens.
+|compaction.tokens · using the default · changing compaction.tokens needs a reloa
 |←→ tab · / search · Enter change · Tab layer · Delete reset
 "#,
     );
@@ -1148,6 +1148,33 @@ fn a_number_opens_a_field_in_the_value_place_and_enter_saves_it_as_typed() {
     assert_eq!(writes(&fake), [w(Layer::Project, "tui.rail.width", "305")]);
     assert!(matches!(settings.mode, super::Mode::Rows));
     assert_eq!(settings.said, ["Saved to project config."]);
+}
+
+#[test]
+fn a_saved_write_rereads_and_says_the_file() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "compaction.tokens");
+    // Tab moves the default to project before Enter opens its field.
+    *support::lock(&fake.rows_after) = Some(with("compaction.tokens", value("400000"), "project"));
+    press(&mut settings, &fake, &[Key::Tab, Key::Enter]);
+    for _ in 0..6 {
+        one(&mut settings, &fake, Key::Backspace);
+    }
+    typed(&mut settings, &fake, "200000");
+    let reads = fake.reads().len();
+    one(&mut settings, &fake, Key::Enter);
+    assert_eq!(
+        writes(&fake).last(),
+        Some(&w(Layer::Project, "compaction.tokens", "200000"))
+    );
+    assert!(matches!(settings.mode, super::Mode::Rows));
+    assert_eq!(fake.reads().len(), reads + 1);
+    assert_eq!(settings.said, ["Saved to project config."]);
+    let frame = settings.frame(80, 24, None);
+    assert!(frame.below.iter().any(|line| {
+        line.contains("compaction.tokens")
+            && line.contains("changing compaction.tokens needs a reload")
+    }));
 }
 
 #[test]
@@ -2561,7 +2588,7 @@ fn applies_by_key() {
         ("providers.openai.credential.extra", Applies::Reload),
         ("providers.openai.credentials_extra", Applies::Reload),
         ("skills.disabled", Applies::NextTurn),
-        ("handoff.tokens", Applies::Reload),
+        ("compaction.tokens", Applies::Reload),
     ] {
         assert_eq!(applies(key), when, "{key}");
     }
@@ -2588,20 +2615,20 @@ fn client_hub_keys_apply_at_the_next_connection() {
 #[test]
 fn the_reload_cost_uses_the_last_usage() {
     assert_eq!(
-        applies_text("handoff.tokens", Some(180_000)),
-        "changing handoff.tokens needs a reload (~180k tokens)"
+        applies_text("compaction.tokens", Some(180_000)),
+        "changing compaction.tokens needs a reload (~180k tokens)"
     );
     assert_eq!(
-        applies_text("handoff.tokens", Some(999)),
-        "changing handoff.tokens needs a reload (~999 tokens)"
+        applies_text("compaction.tokens", Some(999)),
+        "changing compaction.tokens needs a reload (~999 tokens)"
     );
 }
 
 #[test]
 fn without_usage_it_says_a_change_needs_a_reload() {
     assert_eq!(
-        applies_text("handoff.tokens", None),
-        "changing handoff.tokens needs a reload"
+        applies_text("compaction.tokens", None),
+        "changing compaction.tokens needs a reload"
     );
     assert_eq!(
         applies_text("budget.usd", None),
@@ -2757,14 +2784,14 @@ fn settings_metadata_screen_commands_are_registered() {
 #[test]
 fn settings_80x24() {
     let fake = Fake::new(rows());
-    let settings = at(&fake, "handoff.tokens");
+    let settings = at(&fake, "compaction.tokens");
     insta::assert_snapshot!("settings_80x24", drawn(&settings, Some(180_000), 80, 24));
 }
 
 #[test]
 fn settings_editing() {
     let fake = Fake::new(rows());
-    let mut settings = at(&fake, "handoff.tokens");
+    let mut settings = at(&fake, "compaction.tokens");
     one(&mut settings, &fake, Key::Enter);
     typed(&mut settings, &fake, "5");
     insta::assert_snapshot!("settings_editing", drawn(&settings, None, 80, 24));

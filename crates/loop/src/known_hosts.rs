@@ -172,8 +172,8 @@ impl KnownHosts {
             Event::ModelChanged(_) => {}
             Event::DateChanged(_) => {}
             Event::SkillsChanged(_) => {}
-            Event::HandoffStarted(_) => {}
-            Event::HandoffCompleted(_) => {}
+            Event::CompactionStarted(_) => {}
+            Event::CompactionCompleted(_) => {}
             Event::SkillsResent(_) => {}
             Event::ContextNudged(_) => {}
             Event::ReviewerKept(_) => {}

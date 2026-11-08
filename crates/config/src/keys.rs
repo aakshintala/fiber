@@ -490,47 +490,47 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
-        "handoff.enabled",
+        "compaction.enabled",
         Bool,
         YES,
         Some("true"),
         tabbed(
             SettingsTab::Sessions,
-            "Automatic handoff",
-            "Whether a handoff starts automatically when the context grows.",
+            "Automatic compaction",
+            "Whether a compaction starts automatically when the context grows.",
         ),
     ),
     key(
-        "handoff.tokens",
+        "compaction.tokens",
         Count,
         YES,
         Some("400000"),
         tabbed(
             SettingsTab::Sessions,
-            "Handoff tokens",
-            "The context size, in tokens, at which an automatic handoff starts.",
+            "Compaction tokens",
+            "The context size, in tokens, at which an automatic compaction starts.",
         ),
     ),
     key(
-        "handoff.window_fraction",
+        "compaction.window_fraction",
         Number,
         YES,
         Some("0.7"),
         tabbed(
             SettingsTab::Sessions,
-            "Handoff window fraction",
+            "Compaction window fraction",
             "The trigger as a fraction of the model's context window, such as 0.7.",
         ),
     ),
     key(
-        "handoff.nudge",
+        "compaction.nudge",
         Bool,
         YES,
         Some("true"),
         tabbed(
             SettingsTab::Sessions,
-            "Handoff nudge",
-            "Whether Fiber tells the model its context is filling and that a handoff keeps the work going.",
+            "Compaction nudge",
+            "Whether Fiber tells the model its context is filling and that a compaction keeps the work going.",
         ),
     ),
     key(
@@ -589,43 +589,43 @@ pub const KEYS: &[Key] = &[
         ),
     ),
     key(
-        "models.*.handoff.enabled",
+        "models.*.compaction.enabled",
         Bool,
         YES,
         None,
         untabbed(
-            "Model automatic handoff",
-            "Whether automatic handoff runs for one model.",
+            "Model automatic compaction",
+            "Whether automatic compaction runs for one model.",
         ),
     ),
     key(
-        "models.*.handoff.tokens",
+        "models.*.compaction.tokens",
         Count,
         YES,
         None,
         untabbed(
-            "Model handoff tokens",
-            "The context size, in tokens, at which an automatic handoff starts for one model.",
+            "Model compaction tokens",
+            "The context size, in tokens, at which an automatic compaction starts for one model.",
         ),
     ),
     key(
-        "models.*.handoff.window_fraction",
+        "models.*.compaction.window_fraction",
         Number,
         YES,
         None,
         untabbed(
-            "Model handoff window fraction",
-            "The handoff trigger for one model, as a fraction of its context window.",
+            "Model compaction window fraction",
+            "The compaction trigger for one model, as a fraction of its context window.",
         ),
     ),
     key(
-        "models.*.handoff.nudge",
+        "models.*.compaction.nudge",
         Bool,
         YES,
         None,
         untabbed(
-            "Model handoff nudge",
-            "Whether the handoff nudge is given for one model.",
+            "Model compaction nudge",
+            "Whether the compaction nudge is given for one model.",
         ),
     ),
     key(
@@ -1216,7 +1216,7 @@ pub(crate) fn leaf(path: &[String]) -> Option<&'static Key> {
         .find(|k| segments(k).count() == path.len() && prefix_matches(k, path))
 }
 
-/// Whether a path is an object that holds keys, such as `handoff`.
+/// Whether a path is an object that holds keys, such as `compaction`.
 fn interior(path: &[String]) -> bool {
     KEYS.iter()
         .any(|k| segments(k).nth(path.len()).is_some() && prefix_matches(k, path))

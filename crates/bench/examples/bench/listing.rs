@@ -34,7 +34,7 @@ const SEED: Fixture = Fixture {
     metric: "listing_seed",
     turns: 1,
     reply_bytes: 64,
-    handoffs: 0,
+    compactions: 0,
 };
 
 /// Makes the workspace a git repository, so `fiber sessions` lists the

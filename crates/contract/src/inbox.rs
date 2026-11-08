@@ -147,10 +147,10 @@ pub enum Delivery {
     /// Starts a new session that continues this one in another workspace
     /// (`docs/events.md`, "Change workspace").
     ChangeWorkspace(crate::CommandId, crate::commands::ChangeWorkspaceArgs, Ack),
-    /// A person's `handoff`. While a turn runs it is held until the next
+    /// A person's `compact`. While a turn runs it is held until the next
     /// step boundary; while the loop is idle it starts a turn of its own
-    /// (`docs/handoff.md`, "A person").
-    Handoff(crate::CommandId, crate::commands::Handoff, Ack),
+    /// (`docs/compaction.md`, "A person").
+    Compaction(crate::CommandId, crate::commands::Compact, Ack),
     /// A person's answer to a pending approval.
     Reply(crate::commands::Reply, Ack),
     /// Accept no more prompts. The turn in flight finishes, then the loop

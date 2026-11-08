@@ -651,7 +651,7 @@ type Read = Result<(Got, Option<Result<Got, Failure>>), Failure>;
 
 /// Prepares a switch from the same calls `parts_in` makes for the startup
 /// model: resolving, thinking, the reviewer's model, the credential and
-/// Lua provider, connecting, the cache lifetime, the handoff settings, the
+/// Lua provider, connecting, the cache lifetime, the compaction settings, the
 /// addendum and the hosted search. Every check that can reject runs before
 /// the read, so a read's key is cached only for an admitted switch; a
 /// failed read rejects with its own code and caches nothing. The keys and
@@ -872,7 +872,7 @@ pub(crate) fn prepare(
         cache_lifetime: crate::settings::cache_lifetime(&now.config, &reference),
         context_window,
         addendum: switching.registry.addendum(&resolved).map(str::to_owned),
-        handoff: crate::handoff::handoff_settings(&now.config, &reference),
+        compaction: crate::compaction::compaction_settings(&now.config, &reference),
         reviewer,
         observe,
         reviewer_observe,

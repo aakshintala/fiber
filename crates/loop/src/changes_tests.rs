@@ -1518,7 +1518,7 @@ fn resumed_state_forgets_subdirectories_an_earlier_context_touched() {
     let workspace = canon(&workspace);
     let fake = clock();
     let message = opening::collect(&inputs(&home, &fake), &workspace).message;
-    // The call ran in the context before a handoff's new opening message:
+    // The call ran in the context before a compaction's new opening message:
     // the new context has not touched `sub/`.
     let lines = vec![
         envelope("opening_message", &Event::OpeningMessage(message.clone())),
@@ -2777,7 +2777,7 @@ fn resumed_state_restores_added_roots_and_sends_their_files_on_touch() {
 }
 
 #[test]
-fn resumed_state_keeps_added_folders_across_a_handoff_opening() {
+fn resumed_state_keeps_added_folders_across_a_compaction_opening() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
     let shared = home.join("shared");
@@ -2786,7 +2786,7 @@ fn resumed_state_keeps_added_folders_across_a_handoff_opening() {
     let workspace = canon(&workspace);
     let shared = canon(&shared);
     let fake = clock();
-    // The first context adds the folder; the handoff's opening lists it;
+    // The first context adds the folder; the compaction's opening lists it;
     // a call in the new context touches it.
     let touched = shared.join("new.rs").display().to_string();
     let touched = [touched.as_str()];

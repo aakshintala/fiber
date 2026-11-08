@@ -7,11 +7,11 @@ expression: painted_text(&saved)
 
   Appearance   Notifications   Models   Permissions   Sessions   Advanced
 
-   handoff.tokens  400000
+   compaction.tokens  400000
 
- › tui.theme       dark
+ › tui.theme          dark
 
-   Key bindings    Open /keys ›
+   Key bindings       Open /keys ›
 
 ⋮
 ⋮

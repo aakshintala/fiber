@@ -128,9 +128,9 @@ fn up_and_down_move_the_selection_clamped_and_scroll_the_window() {
 #[test]
 fn tab_completes_the_selected_name_and_closes_the_panel() {
     let mut app = connected();
-    type_text(&mut app, "/han");
+    type_text(&mut app, "/comp");
     assert_eq!(app.on_key(Key::Tab, now()), Effect::None);
-    assert_eq!(app.draft(), "/handoff ");
+    assert_eq!(app.draft(), "/compact ");
     assert_eq!(app.completions(), None);
 }
 
@@ -188,7 +188,7 @@ fn esc_closes_the_slash_panel_and_keeps_the_draft_until_it_is_emptied() {
 #[test]
 fn a_space_closes_the_slash_panel() {
     let mut app = connected();
-    type_text(&mut app, "/handoff ");
+    type_text(&mut app, "/compact ");
     assert_eq!(app.completions(), None);
     app.on_key(Key::Backspace, now());
     assert_eq!(shown(&app).len(), 1);

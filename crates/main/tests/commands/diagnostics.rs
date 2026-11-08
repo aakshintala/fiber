@@ -133,12 +133,12 @@ fn shell_echo() -> Response {
         "name": "shell", "arguments": "{\"command\":\"echo hi\"}"}})])
 }
 
-/// A `handoff` call with a note, as `loop_timing` answers it: the
+/// A `compact` call with a note, as `loop_timing` answers it: the
 /// journey's second tool call.
-fn handoff() -> Response {
+fn compaction() -> Response {
     stream(&[json!({"type": "response.output_item.done", "item": {
         "type": "function_call", "id": "fc_2", "call_id": "call_2",
-        "name": "handoff", "arguments": "{\"note\":\"Continue with the tests.\"}"}})])
+        "name": "compact", "arguments": "{\"note\":\"Continue with the tests.\"}"}})])
 }
 
 /// A background `shell` call carrying `sentinel`, as `jobs_timing`
@@ -171,14 +171,14 @@ fn journey(sentinel: String) -> ProviderServer {
                 .iter()
                 .any(|item| item["type"] == "function_call" && item["name"] == name)
         };
-        // The handoff rewinds the conversation: the handed-off step's
+        // The compaction rewinds the conversation: the compacted step's
         // input holds the note, never the calls before it. The note
         // therefore marks the journey's second half.
         if !text.contains("Continue with the tests.") {
             if !called("shell") {
                 return shell_echo();
             }
-            return handoff();
+            return compaction();
         }
         if !text.contains("Started in the background") {
             return background(&format!("echo {sentinel}"));
@@ -242,13 +242,13 @@ fn journey_config(setup: &Setup, servers: Value) {
     write_json(&setup.home().join("config.json"), &config);
 }
 
-/// At `debug` one `ask` run exercising a tool call, a handoff, one MCP
+/// At `debug` one `ask` run exercising a tool call, a compaction, one MCP
 /// server and one background job writes every session-core timer: each
 /// listed operation has at least one line, and no `op_timing` line
 /// carries a field outside `op`, `ms` and `tool`.
 /// Each count below is promised by `docs/state.md`, "Diagnostic logs":
 /// startup.* by the startup and routing paragraph, `startup.preamble`,
-/// `turn.*` and `turn.handoff` by the loop paragraph, `tool.*` by the
+/// `turn.*` and `turn.compaction` by the loop paragraph, `tool.*` by the
 /// one-tool-call paragraph, `mcp.connect` by the MCP paragraph,
 /// `jobs.start` by the jobs paragraph, `hook.turn_start` by the hook
 /// chains paragraph, and `log.*` by the session-log paragraph; the
@@ -292,7 +292,7 @@ fn a_debug_journey_times_the_session_core_matrix() {
         "startup.routing",
         "turn.request",
         "turn.model_call",
-        "turn.handoff",
+        "turn.compaction",
         "tool.permission",
         "tool.hooks",
         "tool.run",

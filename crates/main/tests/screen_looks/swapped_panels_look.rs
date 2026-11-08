@@ -436,17 +436,17 @@ fn the_settings_view_matches_the_doc() {
     assert!(text.contains("scripted/s.json ›"), "{text}");
     assert!(!text.contains("\"scripted/s.json\""), "unquoted: {text}");
     assert!(is_bold(&grid, find_row(&grid, "Models").unwrap(), "Models"));
-    // Two more reach Sessions; walk the focus to `handoff.tokens`, each
+    // Two more reach Sessions; walk the focus to `compaction.tokens`, each
     // press waiting for the gutter to move.
     for _ in 0..2 {
         run.write(b"\x1b[C");
     }
     grid = run.wait_screen("the Sessions tab", |grid| {
-        find_row(grid, "Handoff tokens").is_some()
+        find_row(grid, "Compaction tokens").is_some()
     });
     for _ in 0..40 {
         let on = focused_label(&grid);
-        if on.as_deref() == Some("Handoff tokens") {
+        if on.as_deref() == Some("Compaction tokens") {
             break;
         }
         run.write(b"\x1b[B");
@@ -454,49 +454,48 @@ fn the_settings_view_matches_the_doc() {
     }
     // Under the list: the description, then the key's path, where it is
     // set and what a change costs, dim, ahead of the footer.
-    let reload =
-        "handoff.tokens · using the default · changing handoff.tokens needs a reload (~84k tokens)";
+    let reload = "compaction.tokens · using the default · changing compaction.tokens needs a reload (~84k tokens)";
     // No input is pending: this wait checks every property read below, so
     // the frame the gutter moved onto is whole.
-    grid = run.wait_screen("the Handoff tokens row whole", |grid| {
-        let (Some(handoff), Some(detail), Some(footer)) = (
-            find_row(grid, "Handoff tokens"),
-            find_row(grid, "handoff.tokens ·"),
+    grid = run.wait_screen("the Compaction tokens row whole", |grid| {
+        let (Some(compaction), Some(detail), Some(footer)) = (
+            find_row(grid, "Compaction tokens"),
+            find_row(grid, "compaction.tokens ·"),
             find_row(grid, "Delete reset"),
         ) else {
             return false;
         };
-        focused_label(grid).as_deref() == Some("Handoff tokens")
-            && grid.rows[usize::from(handoff)].contains("400000")
-            && is_plain_of_reverse(grid, handoff, "Handoff tokens")
+        focused_label(grid).as_deref() == Some("Compaction tokens")
+            && grid.rows[usize::from(compaction)].contains("400000")
+            && is_plain_of_reverse(grid, compaction, "Compaction tokens")
             && grid.rows[usize::from(detail)].trim() == reload
             && is_dim(grid, detail, reload)
             && detail + 1 == footer
             && !grid.contents.contains("Ctrl+G opens the file")
     });
-    assert_eq!(focused_label(&grid).as_deref(), Some("Handoff tokens"));
-    let handoff = row_with(&grid, "Handoff tokens");
+    assert_eq!(focused_label(&grid).as_deref(), Some("Compaction tokens"));
+    let compaction = row_with(&grid, "Compaction tokens");
     assert!(
-        // settled: "the Handoff tokens row whole" checked the value.
-        grid.rows[usize::from(handoff)].contains("400000"),
+        // settled: "the Compaction tokens row whole" checked the value.
+        grid.rows[usize::from(compaction)].contains("400000"),
         "{}",
-        // settled: "the Handoff tokens row whole" checked the value.
+        // settled: "the Compaction tokens row whole" checked the value.
         grid.contents
     );
-    assert!(is_plain_of_reverse(&grid, handoff, "Handoff tokens"));
-    let detail = row_with(&grid, "handoff.tokens ·");
+    assert!(is_plain_of_reverse(&grid, compaction, "Compaction tokens"));
+    let detail = row_with(&grid, "compaction.tokens ·");
     assert_eq!(
-        // settled: "the Handoff tokens row whole" checked the detail row.
+        // settled: "the Compaction tokens row whole" checked the detail row.
         grid.rows[usize::from(detail)].trim(),
         reload,
         "{}",
-        // settled: "the Handoff tokens row whole" checked the detail row.
+        // settled: "the Compaction tokens row whole" checked the detail row.
         grid.contents
     );
     assert!(is_dim(&grid, detail, reload));
-    // settled: "the Handoff tokens row whole" checked both rows and the text.
+    // settled: "the Compaction tokens row whole" checked both rows and the text.
     assert_eq!(detail + 1, footer, "{}", grid.contents);
-    // settled: "the Handoff tokens row whole" checked the text is absent.
+    // settled: "the Compaction tokens row whole" checked the text is absent.
     assert!(!grid.contents.contains("Ctrl+G opens the file"));
     run.write(b"\x03\x03\r");
     assert_eq!(run.wait().status.code(), Some(0));

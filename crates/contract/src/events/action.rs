@@ -335,9 +335,9 @@ pub struct FileChange {
 /// A tool result's instructions to the loop.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Control {
-    /// A handoff note (`docs/handoff.md`).
+    /// A compaction note (`docs/compaction.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handoff: Option<String>,
+    pub compact: Option<String>,
     /// Questions for the driver: the turn ends with them at the step
     /// boundary (`docs/tools.md`, "What a result carries").
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -214,8 +214,8 @@ impl Hooks for StateHooks {
     fn turn_end(&self, call: &TurnEnd<'_>) -> ContextAnswer {
         self.pass.turn_end(call)
     }
-    fn before_handoff(&self, call: &BeforeHandoff<'_>) -> BeforeHandoffAnswer {
-        self.pass.before_handoff(call)
+    fn before_compaction(&self, call: &BeforeCompaction<'_>) -> BeforeCompactionAnswer {
+        self.pass.before_compaction(call)
     }
     fn deliver_to(&self, inbox: mpsc::Sender<Delivery>) {
         self.pass.deliver_to(inbox);
@@ -400,7 +400,7 @@ fn prepared() -> ReloadPrepared {
             reviewer_notes: "new notes".into(),
             limits: Default::default(),
             retry: Default::default(),
-            handoff: Default::default(),
+            compaction: Default::default(),
             budget: None,
             idle_exit: None,
             warm_cap: None,

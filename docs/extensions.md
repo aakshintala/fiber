@@ -19,7 +19,7 @@ invokes by name.
 
 An extension is meant to build anything a person wants on top of a coding
 agent: a memory system, a connector to an outside service, a goal that keeps
-the agent working, a research prototype of a better handoff.
+the agent working, a research prototype of a better compaction.
 
 Its code runs in one of two ways, and a package may use both:
 
@@ -179,7 +179,7 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 - **what any client gets:** the event stream, and the driver commands it may
   send (`docs/invocation.md`, "Driver commands")
 - **from Fiber:** a first message, `extension_hello`, with the session's id,
-  why it started (new, resume, fork, rewind or handoff), its workspace, the extension's
+  why it started (new, resume, fork, rewind or compaction), its workspace, the extension's
   data directories and its folded state; then each hook, watcher delivery and
   command as a request the extension answers
 - **from the extension:** its registrations, and host calls as requests Fiber
@@ -208,7 +208,7 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 >
 > **Fiber's requests are lines the extension answers with `reply`.** Each is an ephemeral line of kind `extension_request`, whose payload holds `request_id`, `registration` (the `id` of the `call` command that registered it), `key` (the function's key, such as `run`) and `args` (the arguments the Lua function receives, as a JSON array). The extension answers with `reply`: `request_id` and `result` (what the Lua function returns), or `request_id` and `error`, `{ code, message }`, which fails the call as a Lua error does. Stream items, meaning hooks, watcher deliveries and commands, are sent one at a time, each after the reply to the last one. Tool calls are sent as they arrive, so several can be outstanding. A reply to a request that is no longer pending, such as one past its timeout, is rejected `stale_request` and changes nothing. That is how a late reply is dropped.
 >
-> **`extension_hello`** is the first line Fiber sends, ephemeral, with payload keys `session_id`, `reason` (`new`, `resume`, `fork`, `rewind`, `handoff`, or `call` for a provider call outside a session, such as a call case or the credential precheck), `workspace` (the workspace root), `data_dirs` (`{ machine, project }`, the paths `host.data_dir` returns) and `state` (the extension's folded state, as `state.get` reads it). After a restart it is sent again, with the state as it stands in the session. With reason `call`, `session_id` is absent and `state` is `{}`. The extension has `host.http`, `host.exec`, `host.oauth`, `host.secret`, `host.data_dir`, `host.log`, `host.fs` reads, the hashes and `json`; any other host call raises `invalid_arguments` (`<call>: not available here`).
+> **`extension_hello`** is the first line Fiber sends, ephemeral, with payload keys `session_id`, `reason` (`new`, `resume`, `fork`, `rewind`, `compaction`, or `call` for a provider call outside a session, such as a call case or the credential precheck), `workspace` (the workspace root), `data_dirs` (`{ machine, project }`, the paths `host.data_dir` returns) and `state` (the extension's folded state, as `state.get` reads it). After a restart it is sent again, with the state as it stands in the session. With reason `call`, `session_id` is absent and `state` is `{}`. The extension has `host.http`, `host.exec`, `host.oauth`, `host.secret`, `host.data_dir`, `host.log`, `host.fs` reads, the hashes and `json`; any other host call raises `invalid_arguments` (`<call>: not available here`).
 
 Every session starts its own process extensions, a delegate included, as it
 starts its own MCP servers. Nothing is shared between sessions
@@ -683,7 +683,7 @@ including a `nil` value, raise `invalid_arguments`; use `state.unset` to remove 
   at the loop's next drain of its inbox, so a crash before then loses it.
   Once `fiber_exited` is written there is no next drain: `state.set` and
   `state.unset` fail with code `closing` ("When a session ends").
-- **A handoff keeps it.** The session continues, and so does its extension
+- **A compaction keeps it.** The session continues, and so does its extension
   state. Only the conversation restarts, which `session_start` is told
   ("The hook points").
 
@@ -1109,14 +1109,14 @@ calls exactly as for the model's ("Running a tool").
 
 | Hook point | When it runs | What the hook sees | What it may return |
 |---|---|---|---|
-| `session_start` | A session starts, resumes, forks or rewinds, before the first model request; and at each handoff, once the note is ready | why it started, the session's id and workspace root | context to add |
+| `session_start` | A session starts, resumes, forks or rewinds, before the first model request; and at each compaction, once the note is ready | why it started, the session's id and workspace root | context to add |
 | `before_message` | A person's or a driver's message arrives, as a turn's input or as steering, before it is logged | the message's text and images, and for a session message the sender's id and its parent's id | a replacement message, a refusal with a reason, context to add |
 | `turn_start` | A turn has started, before its first model request | the turn's input and what started it | context to add |
 | `before_tool` | A call has passed its schema check and its effects function, before permission is decided | the tool's name, the arguments, the declared effects, paths and reversibility | replacement arguments, a refusal with a reason |
 | `before_model_call` | A step's model request is built and the budget allows it, before it is sent (`docs/loop.md`, "Spending budget") | the model reference, and the session's `usage` so far, its delegates included (`docs/events.md`) | a refusal with a reason |
 | `after_tool` | A call that ran has returned, before its output is cut, its artifact is written or it is logged (a tool that already wrote its output to the call's artifact file has cut it first); and each job delivery, before it joins the conversation or is logged | the tool's name, the arguments, `status`, the full output, or the cut output with its artifact file's `path` and `size` when the tool already wrote that file, `details`, `process`, and `delivery` for a job delivery | replacement `content`, replacement `details`, text for the artifact |
 | `turn_end` | The model has replied without calling a tool, so the turn would complete, before `turn_completed` is written | the model's final reply | a message to continue the turn with |
-| `before_handoff` | A handoff has started, before the note request | the trigger, the person's instructions, and the conversation as Fiber's messages of content parts, without the note request | a handoff note (a string) |
+| `before_compaction` | A compaction has started, before the note request | the trigger, the person's instructions, and the conversation as Fiber's messages of content parts, without the note request | a compaction note (a string) |
 
 Returning nothing leaves things as they were.
 
@@ -1128,15 +1128,15 @@ context is appended again. The hook sees why the session started, so an
 extension that must not repeat itself keeps what it delivered in its
 extension state ("Extension state") and adds only what is new.
 
-`session_start` also runs at every handoff, with reason `handoff`, so what an
+`session_start` also runs at every compaction, with reason `compaction`, so what an
 extension adds at start is not lost when the conversation restarts. Extension
-state carries across a handoff but the model's context does not, so an
-extension that keeps what it delivered sees `handoff` and delivers it again,
+state carries across a compaction but the model's context does not, so an
+extension that keeps what it delivered sees `compaction` and delivers it again,
 as it is now. The hook sees the reason, as at every other start, and not the
-handoff note. Its context follows the new opening message, before the turn's
-input and the note (`docs/handoff.md`, "What the model sees after a
-handoff"). A `non-blocking` hook that fails there has its context dropped with
-a `notice`, and the handoff completes ("When a hook fails"). `turn_start` does
+compaction note. Its context follows the new opening message, before the turn's
+input and the note (`docs/compaction.md`, "What the model sees after a
+compaction"). A `non-blocking` hook that fails there has its context dropped with
+a `notice`, and the compaction completes ("When a hook fails"). `turn_start` does
 not run again, because the turn has not restarted.
 
 **`before_message`** covers every message a person or a driver sends, so a
@@ -1163,7 +1163,7 @@ as one a central service keeps. A refusal fails the turn with
 before every step's model request, so it must answer fast: an extension that
 reports spend to a service does that from a watcher on `usage_recorded`
 ("Watchers"), keeps the service's verdict in its state ("Extension state"), and the
-hook only reads it. A reviewer's call, a handoff note request, a
+hook only reads it. A reviewer's call, a compaction note request, a
 `host.model` call and a cache-warming refresh (`docs/prompt-cache.md`,
 "Warming while idle") are counted in `usage` but never reach this hook.
 
@@ -1221,12 +1221,12 @@ hook continues a turn. An extension that does this should keep its own limit in 
 and a person can always end the turn with the cancel key. A goal that keeps the
 agent working until a condition is met is built on this point.
 
-**`before_handoff`** lets an extension write the handoff note instead of the
+**`before_compaction`** lets an extension write the compaction note instead of the
 session's own model. When a hook returns a note, Fiber makes no note request.
-When none does, Fiber makes its own (`docs/handoff.md`, "The handoff note").
+When none does, Fiber makes its own (`docs/compaction.md`, "The compaction note").
 With several hooks, each sees the note the one before returned, and the last
-note wins; `handoff_completed.extension` names the extension whose note was
-used. The hook does not run for a handoff a tool started, which already has
+note wins; `compaction_completed.extension` names the extension whose note was
+used. The hook does not run for a compaction a tool started, which already has
 its note. The hook is handed the whole conversation, so a Lua extension that
 registers it raises `memory_mib` to fit the conversations it handles.
 
@@ -1238,16 +1238,16 @@ keys below; values use the shapes of `docs/events.md` ("Content parts",
 
 | Hook point | What `run` is given | What it may return |
 |---|---|---|
-| `session_start` | `reason`, why the session started: start, resume, fork, rewind or handoff; `session_id`; `workspace`, the workspace root | `context`, a non-empty string to add |
+| `session_start` | `reason`, why the session started: start, resume, fork, rewind or compaction; `session_id`; `workspace`, the workspace root | `context`, a non-empty string to add |
 | `before_message` | `content`, the message's content parts as logged; `from_session_id`, the sending session, and `parent_session_id`, its parent, for a session message, each absent otherwise | `content`, a non-empty list of parts that replaces the message: text parts, and image or pdf parts the message holds; `context`, a non-empty string to add; or `refuse`, a non-empty string, alone |
 | `turn_start` | `input`, the turn's input as the turn_started event logs it | `context`, a non-empty string to add |
 | `before_tool` | `tool`; `arguments`; `effects`, a list of effect names; `paths`, absent when the call declares none; `reversible` | `arguments`, a table that replaces the arguments, or `refuse`, a non-empty string, alone |
 | `before_model_call` | `model`, the model reference; `usage`, the session's usage so far, its delegates included, with cost absent when unknown | `refuse`, a non-empty string, alone |
 | `after_tool` | `tool`; `arguments`; `status`; `content`, the output's text parts joined; `details` and `process`, each absent when the call has none; details never hold the reserved file_seen record (docs/tools.md, "Stale files"); what a job delivery is given is in the after_tool paragraph above | `content`, a string; `details`, any value; `artifact`, a string |
 | `turn_end` | `reply`, the model's final reply | `message`, a non-empty string to continue the turn with |
-| `before_handoff` | `trigger`, what started the handoff: auto, person or overflow; `instructions`, absent when there were none; `messages`, the conversation as host.model takes it, without the note request; `note`, absent until a hook before this one returned one | `note`, a string with the handoff note |
+| `before_compaction` | `trigger`, what started the compaction: auto, person or overflow; `instructions`, absent when there were none; `messages`, the conversation as host.model takes it, without the note request; `note`, absent until a hook before this one returned one | `note`, a string with the compaction note |
 
-Returning `nil` or an empty table changes nothing; so does a `before_handoff`
+Returning `nil` or an empty table changes nothing; so does a `before_compaction`
 `note` that is empty after trimming. A key a hook returns is a
 change, even when its value is the one it was given, so a `check` hook that
 returns `arguments`, `content` or `context` has failed; a `check` hook refuses
@@ -1312,14 +1312,14 @@ What a `blocking` failure stops, at each point:
 | Hook point | What happens |
 |---|---|
 | `session_start` | The session does not start. Fiber exits with error `hook_failed`, naming the extension. |
-| `session_start` at a handoff | The handoff completes `failed` with code `hook_failed`, as for `before_handoff`. The session does not exit. |
+| `session_start` at a compaction | The compaction completes `failed` with code `hook_failed`, as for `before_compaction`. The session does not exit. |
 | `before_message` | The message is neither logged nor sent, and the sender gets `hook_failed`. |
 | `turn_start` | The turn completes `failed` with code `hook_failed`, before any model request. |
 | `before_tool` | The call completes `failed` with code `hook_failed` and never starts. |
 | `before_model_call` | The request is not sent, and the turn completes `failed` with code `hook_failed`. |
 | `after_tool` | The call keeps the status the tool reported, since it ran. Its only content is a line saying its output was withheld because the extension's hook failed, and no artifact is written. A job delivery is withheld the same way. A foreground `shell` call's artifact file is replaced with the same line, as an `output_file` is. |
 | `turn_end` | The turn completes `failed` with code `hook_failed`. |
-| `before_handoff` | The handoff completes `failed` with code `hook_failed`, as a failed note request does. |
+| `before_compaction` | The compaction completes `failed` with code `hook_failed`, as a failed note request does. |
 
 ### What a hook cannot do
 

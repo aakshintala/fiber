@@ -192,15 +192,15 @@ pub(crate) fn opening_of(os: &str) -> Event {
     })
 }
 
-pub(crate) fn handoff_started() -> Event {
-    Event::HandoffStarted(contract::events::HandoffStarted {
-        trigger: contract::events::HandoffTrigger::Auto,
+pub(crate) fn compaction_started() -> Event {
+    Event::CompactionStarted(contract::events::CompactionStarted {
+        trigger: contract::events::CompactionTrigger::Auto,
     })
 }
 
-pub(crate) fn handoff_done(outcome: contract::events::Outcome, note: &[&str]) -> Event {
+pub(crate) fn compaction_done(outcome: contract::events::Outcome, note: &[&str]) -> Event {
     let failed = outcome == contract::events::Outcome::Failed;
-    Event::HandoffCompleted(contract::events::HandoffCompleted {
+    Event::CompactionCompleted(contract::events::CompactionCompleted {
         outcome,
         error: failed.then(|| contract::shapes::Failure {
             code: contract::ErrorCode::RateLimited,

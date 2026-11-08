@@ -29,7 +29,7 @@ pub(crate) const SLOT_NAMES: [&str; 21] = [
     "thinking_line",
     "steer",
     "answers",
-    "handoff_band",
+    "compaction_band",
     "error_line",
     "notice",
     "working_line",

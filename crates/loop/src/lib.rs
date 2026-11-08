@@ -43,13 +43,13 @@ mod cancel;
 mod caps;
 mod changes;
 mod commands;
+mod compaction;
 mod completion;
 mod conversation;
 mod delegated;
 mod deliveries;
 mod diag;
 mod error;
-mod handoff;
 mod history;
 mod hooks;
 mod hosted;
@@ -106,8 +106,8 @@ pub use calls::Decided as ReviewDecision;
 pub use cancel::TurnCancel;
 pub use caps::{ResultCaps, capped};
 pub use commands::{Commands, RunnableCommands, commands, skills};
+pub use compaction::CompactionSettings;
 pub use error::Error;
-pub use handoff::HandoffSettings;
 pub use history::forked;
 pub use media::resolve_media;
 pub use offer::{Approved, LoadApproved, OfferKey, OfferOutcome};
@@ -308,7 +308,7 @@ pub struct Loop {
     limits: BlockLimits,
     /// What the reviewer is shown, rendered from the same events as
     /// `conversation` (`docs/permissions.md`, "What it is shown"). A
-    /// completed handoff drops every tool call from it and keeps the
+    /// completed compaction drops every tool call from it and keeps the
     /// person's messages, releasing the calls' allocation, so the resident
     /// state follows the context window, not the transcript
     /// (`docs/performance.md`, "What a budget covers").
@@ -327,7 +327,7 @@ pub struct Loop {
     // debt: missing docs/prompt-cache.md :notes row, Part 3 or 4's doc pass adds that row.
     notes_key: String,
     /// How much of `reviewed` the previous reviewer request sent. A
-    /// completed handoff resets it, as a resume and a model switch do:
+    /// completed compaction resets it, as a resume and a model switch do:
     /// `None` means no earlier prefix may be reused.
     reviewer_sent: Option<usize>,
     /// `permission_resolved` lines phase A of a concurrent batch buffered
@@ -408,9 +408,9 @@ pub struct Loop {
     /// Reports a replaced prompt's replacement to the door, before the
     /// prompt's acceptance (`docs/state.md`, "Prompt history").
     on_rewrite: Option<crate::before_message::OnRewrite>,
-    /// Handoff: the settings, the context's measure and what its render
-    /// carries (`docs/handoff.md`).
-    handoff: handoff::State,
+    /// Compaction: the settings, the context's measure and what its render
+    /// carries (`docs/compaction.md`).
+    compaction: compaction::State,
     /// The session's jobs, and how far the loop is in ending with them.
     ending: jobs::Ending,
     quota_notices: quota_notice::Notices,
@@ -522,7 +522,7 @@ struct Seed {
     context: Option<Vec<contract::Envelope>>,
     ledger: usage::Ledger,
     summary: Summary,
-    carry: handoff::Carry,
+    carry: compaction::Carry,
     chosen: Option<contract::ThinkingLevel>,
     tools: BTreeMap<String, calls::Registered>,
     replaced: Vec<ToolReplaced>,
@@ -678,7 +678,7 @@ impl Loop {
                 context: None,
                 ledger: usage::Ledger::default(),
                 summary: Summary::default(),
-                carry: handoff::Carry::default(),
+                carry: compaction::Carry::default(),
                 chosen: None,
                 tools,
                 replaced,
@@ -731,7 +731,7 @@ impl Loop {
         // The tracked state the log's lines describe, when the log holds
         // an opening message; without one the first turn writes it fresh
         // and rebuilds the state from it. Only the current context's
-        // lines: a completed handoff starts the tracked state afresh, as
+        // lines: a completed compaction starts the tracked state afresh, as
         // it does live.
         let skills = skill_set::SkillSet::new(prompt.clone(), &workspace);
         let changes = match &context {
@@ -826,7 +826,7 @@ impl Loop {
             hooks: None,
             release: None,
             on_rewrite: None,
-            handoff: handoff::State::new(carry),
+            compaction: compaction::State::new(carry),
             ending: jobs::Ending::default(),
             quota_notices: quota_notice::Notices::new(fired),
             warming: warm::Warming::default(),
