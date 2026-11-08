@@ -1022,9 +1022,14 @@ install still running.
     dim, then the tab bar: Appearance, Notifications, Models, Permissions,
     Sessions, Advanced. The open tab is bold on the `surface` tint, and ←→
     moves between tabs. The view opens on Appearance.
-  - **Tabs:** each key belongs to exactly one tab, named in its `KEYS`
-    entry with its label and one-line description. A test fails when an
-    entry lacks any of the three. Advanced holds what a person rarely
+  - **Tabs:** each key with no `*` in its path belongs to exactly one tab,
+    named in its `KEYS` entry, unless a screen row covers it: then that row
+    draws it, and the key has no row of its own. Every `KEYS` entry has a
+    label and a one-line description. The six screen rows are not `KEYS`
+    entries; each has its own label, one-line description and tab. A test
+    fails when an entry lacks its label or description, when a key with no
+    `*` lacks its tab and no screen row covers it, or when a screen row
+    lacks any of the three. Advanced holds what a person rarely
     changes (`hub.*`, `session.idle_exit_ms`, `cache.*`, `retry.*`,
     `diagnostics.level`). Permissions holds the reviewer keys first, then
     the sandbox keys.
@@ -1032,10 +1037,12 @@ install still running.
     line apart on terminals tall enough, with "› " marking the focused row.
     A value set anywhere but global is followed by its layer, dim
     (`project`, `repository`, `-c`); a global or default value shows no
-    layer. A key with `*` in its path is a row that opens its own screen:
-    Key bindings (`/keys`), Credentials (`/credential`), Rules (`/rules`),
-    Tools (`/tools`), Skills (`/skills`) and MCP servers (`/mcp`). Its
-    value reads "Open /keys ›".
+    layer. A key with `*` in its path has no row of its own; six rows
+    open a screen instead: Key bindings (`/keys`), Credentials
+    (`/credential`), Rules (`/rules`), Tools (`/tools`), Skills (`/skills`)
+    and MCP servers (`/mcp`). Such a row's value reads "Open /keys ›". Key
+    bindings ends Appearance, Credentials ends Models, Rules then Tools end
+    Permissions, and Skills then MCP servers end Sessions.
   - **Controls:** Enter or Space changes the focused value, by its type.
     - A boolean shows `[x] On` or `[ ] Off`, and the key flips it.
     - A key with a fixed set of values (`thinking`, `cache.lifetime`,
