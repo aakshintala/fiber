@@ -257,7 +257,7 @@ fn no_queries_without_a_card_session_or_live_link() {
     app.outbox.link = Link::Up;
     assert!(app.quota_focus().is_none());
     let mut app = attached();
-    app.home.as_mut().unwrap().launch.panel_cards = vec!["session".to_owned()];
+    app.home.launch.panel_cards = vec!["session".to_owned()];
     assert!(queries(app.on_line(session_line("clients", json!({"clients": []})))).is_empty());
     assert!(app.quota_focus().is_none());
     let mut app = attached();

@@ -52,9 +52,7 @@ impl App {
     pub(super) fn hub_hello_version(&mut self, payload: &Map<String, Value>) {
         let version = hub_string(payload, "fiber_version").filter(|version| !version.is_empty());
         let commit = hub_string(payload, "fiber_commit");
-        let Some(home) = self.home.as_mut() else {
-            return;
-        };
+        let home = &mut self.home;
         let launch = &home.launch;
         let found = version.as_deref().filter(|version| {
             differs(
@@ -74,11 +72,7 @@ impl App {
 
     /// Why an unreadable row cannot attach, with no final period.
     pub(in crate::app) fn unreadable_reason(&self) -> String {
-        match self
-            .home
-            .as_ref()
-            .and_then(|home| home.hub_other.as_deref())
-        {
+        match self.home.hub_other.as_deref() {
             Some(hub) => format!("Cannot attach: this session runs Fiber {hub}"),
             None => "Cannot attach: its status did not parse".to_owned(),
         }

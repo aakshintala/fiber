@@ -100,6 +100,15 @@ impl List {
         }
     }
 
+    /// Brings the selection and the first row shown back onto the last
+    /// of `rows` rows when a re-flow left them past it; a list already
+    /// in range stays where it is.
+    pub(crate) fn clamp(&mut self, rows: usize) {
+        let last = rows.saturating_sub(1);
+        self.selected = self.selected.min(last);
+        self.top = self.top.min(last);
+    }
+
     /// Whether the list marks its selection with a gutter.
     pub(crate) fn is_gutter(&self) -> bool {
         self.gutter

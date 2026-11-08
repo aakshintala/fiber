@@ -26,10 +26,12 @@ fn screen(app: &App) -> String {
     text(&buf)
 }
 
-/// An empty app at 60x12.
+/// An empty app at 60x12, on a session: the conversation screen, as the
+/// binary reaches it.
 fn empty() -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(WIDTH, HEIGHT);
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app
 }
 
@@ -177,7 +179,11 @@ fn steer_splits_tool_group() {
     let groups: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
+        .filter_map(|(at, row)| {
+            row.trim_start_matches([' ', '⋮'])
+                .starts_with("● ")
+                .then_some(at)
+        })
         .collect();
     // A labelled rule ends the tool group above it (`docs/tui.md`,
     // "Tool groups and the ledger").
@@ -241,7 +247,11 @@ fn answers_split_tool_group() {
     let groups: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
+        .filter_map(|(at, row)| {
+            row.trim_start_matches([' ', '⋮'])
+                .starts_with("● ")
+                .then_some(at)
+        })
         .collect();
     // A labelled rule ends the tool group above it (`docs/tui.md`,
     // "Tool groups and the ledger").
@@ -282,7 +292,11 @@ fn non_driver_message_splits_tool_group() {
     let groups: Vec<usize> = rows
         .iter()
         .enumerate()
-        .filter_map(|(at, row)| row.starts_with(" ● ").then_some(at))
+        .filter_map(|(at, row)| {
+            row.trim_start_matches([' ', '⋮'])
+                .starts_with("● ")
+                .then_some(at)
+        })
         .collect();
     // A labelled rule ends the tool group above it (`docs/tui.md`,
     // "Tool groups and the ledger").
@@ -465,7 +479,7 @@ fn page_down_to_the_bottom_follows_again() {
         app.on_key(Key::PageUp, now);
     }
     assert_eq!(app.top(), Some(0));
-    let top = screen(&app);
+    let top = sized(&mut app, WIDTH, 14);
     let top: Vec<&str> = top.lines().collect();
     // The first row is the blank before the first bubble, with the
     // thumb in the bar's column.
@@ -480,10 +494,10 @@ fn page_down_to_the_bottom_follows_again() {
     for _ in 0..22 {
         app.on_key(Key::PageDown, now);
     }
-    assert!(screen(&app).contains("prompt 31"));
+    assert!(sized(&mut app, WIDTH, 14).contains("prompt 31"));
     // PageDown while following does nothing.
     app.on_key(Key::PageDown, now);
-    assert!(screen(&app).contains("prompt 31"));
+    assert!(sized(&mut app, WIDTH, 14).contains("prompt 31"));
 }
 
 #[test]
@@ -496,8 +510,8 @@ fn a_long_draft_shows_its_end() {
     let shown = screen(&app);
     let rows: Vec<&str> = shown.lines().collect();
     assert_eq!(rows.get(7).map(|row| row.chars().count()), Some(60));
-    assert!(rows.get(7).is_some_and(|row| row.starts_with("▌ › a")));
-    assert_eq!(rows.get(8).copied(), Some("▌   aaaaaaaaaaaaaaend█"));
+    assert!(rows.get(7).is_some_and(|row| row.starts_with("⋮▌ › a")));
+    assert_eq!(rows.get(8).copied(), Some(" ▌   aaaaaaaaaaaaaaaend█"));
 }
 
 #[test]
@@ -513,16 +527,8 @@ fn draw_folds_an_events_file() {
     ]
     .map(|line| line.to_string())
     .join("\n");
-    let shown = crate::draw(&events, 20, 4).unwrap_or_else(|error| panic!("draw: {error}"));
-    assert_eq!(
-        shown,
-        format!(
-            "{}┃\n{}\n▌ › █\n{}\n",
-            "▀".repeat(19),
-            "▄".repeat(20),
-            "▀".repeat(20)
-        )
-    );
+    let shown = crate::draw(&events, 40, 10).unwrap_or_else(|error| panic!("draw: {error}"));
+    insta::assert_snapshot!("draw_folds_an_events_file", shown);
     assert_eq!(
         crate::draw("not json", 20, 4).map_err(|e| e.starts_with("line 1:")),
         Err(true)
@@ -536,6 +542,55 @@ fn sized(app: &mut App, width: u16, height: u16) -> String {
     let mut buf = Buffer::empty(area);
     render(app, area, &mut buf, None);
     text(&buf)
+}
+
+/// The session column's bottom stack and conversation drawn into a
+/// `width` by `height` column, in `render_frame`'s order. The Chrome floor
+/// keeps a screen from being this small, so the pieces draw into the
+/// column directly: each still has to keep the input line last and clip
+/// to the rows it is given.
+fn column_stack(app: &App, width: u16, height: u16) -> (Buffer, Vec<crate::mouse::Target>) {
+    let area = Rect::new(0, 0, width, height);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    let mut bottom = area.bottom();
+    if let Some(panel) = app.panel() {
+        bottom = super::request::draw_noted(app, &panel, area, bottom, &mut buf, &mut targets);
+    } else {
+        super::input_box::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    }
+    super::steering_queue::draw(app, area, &mut bottom, &mut buf, &mut targets);
+    super::banner::draw(app, area, &mut buf, &mut bottom);
+    super::working_line::draw(app, area, &mut buf, &mut bottom, &mut targets);
+    super::notice_rows::draw(
+        app,
+        area,
+        &mut buf,
+        &mut bottom,
+        &mut targets,
+        &super::notice_rows::frame_bound(app),
+    );
+    if let Some(rect) = app
+        .badge()
+        .and_then(|badge| super::put_spans(&mut buf, area, &mut bottom, super::badge_spans(&badge)))
+    {
+        targets.push(crate::mouse::Target {
+            id: crate::mouse::TargetId::Badge,
+            rect,
+        });
+    }
+    if app.hint() {
+        super::put(
+            &mut buf,
+            area,
+            &mut bottom,
+            &app.hint_text(),
+            Style::default(),
+        );
+    }
+    let rows = Rect::new(0, 0, width, bottom);
+    super::conversation::draw(app, rows, &mut buf, &mut targets);
+    (buf, targets)
 }
 
 /// A whole-screen snapshot pins one `prompt` replacement alongside the
@@ -721,48 +776,6 @@ fn notice_replacement_reserves_each_painted_row() {
     );
 }
 
-#[test]
-fn a_short_screen_keeps_the_input_line_last() {
-    let now = fakes::clock::FakeClock::new().now();
-    let mut app = empty();
-    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
-    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "one"));
-    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "two"));
-    app.connect_failed("lost".to_owned());
-    app.on_key(Key::CtrlC, now);
-    // The input line wins the last row with its edges where they fit,
-    // then the notice; a screen too short for them all drops the hint
-    // first, and the badge with the conversation. The edged input box
-    // takes the notice's row before the hint's.
-    assert_eq!(sized(&mut app, 20, 1), "▌ › █\n");
-    assert_eq!(sized(&mut app, 20, 2), "  ⚠ connection_fa… ✕\n▌ › █\n");
-    assert_eq!(
-        sized(&mut app, 20, 3),
-        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
-    );
-    assert_eq!(
-        sized(&mut app, 20, 4),
-        "  ⚠ connection_fa… ✕\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
-    );
-}
-
-#[test]
-fn the_overlay_never_covers_the_input_line() {
-    let now = fakes::clock::FakeClock::new().now();
-    let mut app = empty();
-    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
-    app.set_size(30, 1);
-    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "one"));
-    app.on_key(Key::PageUp, now);
-    app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "streamed"));
-    assert!(app.has_new());
-    assert_eq!(sized(&mut app, 30, 1), "▌ › █\n");
-    assert_eq!(
-        sized(&mut app, 30, 2),
-        "▐ ↓ New messages below · End ┃\n▌ › █\n"
-    );
-}
-
 const S_A: &str = "s_aaaaaaaaaaaaaaaa";
 const S_B: &str = "s_bbbbbbbbbbbbbbbb";
 
@@ -821,7 +834,7 @@ fn shell(session: &str, action: &str, command: &str) -> Line {
 
 /// The background of the cell at column 0 of `row`.
 fn bg(buf: &Buffer, row: u16) -> Option<ratatui::style::Color> {
-    buf.cell((0, row)).map(|cell| cell.bg)
+    buf.cell((1, row)).map(|cell| cell.bg)
 }
 
 #[test]
@@ -973,35 +986,98 @@ fn approval_feedback_typed_on_deny() {
 }
 
 #[test]
-fn a_short_screen_drops_the_badge_after_the_hint() {
+fn a_screen_below_the_floor_draws_the_floor_line_alone() {
+    // A Home'd app never draws the conversation below 40x10: the notice,
+    // the badge, the panel and the overlay all give way to the one line.
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = asked();
+    app.on_line(standing(S_A, "a_1", "r_1"));
+    app.on_key(Key::Esc, now);
+    app.connect_failed("lost".to_owned());
+    for (width, height) in [(40, 9), (39, 10), (40, 2)] {
+        let shown = sized(&mut app, width, height);
+        let line = format!("Fiber needs 40×10 · now {width}×{height}");
+        assert_eq!(
+            shown.lines().filter(|row| !row.trim().is_empty()).count(),
+            1,
+            "{width}x{height}: {shown}"
+        );
+        assert!(shown.contains(&line), "{width}x{height}: {shown}");
+    }
+}
+
+#[test]
+fn a_short_column_keeps_the_input_line_last() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "one"));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "two"));
+    app.connect_failed("lost".to_owned());
+    app.on_key(Key::CtrlC, now);
+    // The input line wins the last row with its edges where they fit,
+    // then the notice; a column too short for them all drops the hint
+    // first, and the badge with the conversation. The edged input box
+    // takes the notice's row before the hint's.
+    let shown = |height| text(&column_stack(&app, 20, height).0);
+    assert_eq!(shown(1), "▌ › █\n");
+    assert_eq!(shown(2), "  ⚠ connection_fa… ✕\n▌ › █\n");
+    assert_eq!(
+        shown(3),
+        "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+    );
+    assert_eq!(
+        shown(4),
+        "  ⚠ connection_fa… ✕\n▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄\n▌ › █\n▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀\n"
+    );
+}
+
+#[test]
+fn the_overlay_never_covers_the_input_line() {
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "one"));
+    app.on_key(Key::PageUp, now);
+    app.on_line(delta("s_aaaaaaaaaaaaaaaa", "a_1", "streamed"));
+    assert!(app.has_new());
+    assert_eq!(text(&column_stack(&app, 30, 1).0), "▌ › █\n");
+    assert_eq!(
+        text(&column_stack(&app, 30, 2).0),
+        " ▐ ↓ New messages below · End┃\n▌ › █\n"
+    );
+}
+
+#[test]
+fn a_short_column_drops_the_badge_after_the_hint() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = asked();
     app.on_line(standing(S_A, "a_1", "r_1"));
     app.on_key(Key::Esc, now);
     app.connect_failed("lost".to_owned());
     app.on_key(Key::CtrlC, now);
-    assert_eq!(sized(&mut app, 40, 1), "▌ › █\n");
+    let shown = |height| text(&column_stack(&app, 40, height).0);
+    assert_eq!(shown(1), "▌ › █\n");
     assert_eq!(
-        sized(&mut app, 40, 2),
-        "  ⚠ connection_failed · lost           ✕\n▌ › █\n".to_owned()
+        shown(2),
+        "  ⚠ connection_failed · lost           ✕\n▌ › █\n"
     );
     // The input box's edges take the rows the hint and the badge lose.
     assert_eq!(
-        sized(&mut app, 40, 3),
+        shown(3),
         format!("{}\n▌ › █\n{}\n", "▄".repeat(40), "▀".repeat(40))
     );
     assert_eq!(
-        sized(&mut app, 40, 4),
+        shown(4),
         format!(
             "  ⚠ connection_failed · lost           ✕\n{}\n▌ › █\n{}\n",
             "▄".repeat(40),
             "▀".repeat(40)
         )
     );
-    // Taller, the badge and the hint return above the notice: the
-    // taller box needs two more rows for the same progression.
+    // Taller, the badge returns above the notice.
     assert_eq!(
-        sized(&mut app, 40, 7),
+        shown(7),
         format!(
             "  ⚠ 1 approvals waiting · click to reope\n  ⚠ connection_failed · lost           ✕\n{}\n▌ › █\n▌{}\n▌auto                ctx ▆▆▆▆▆▆▆▆ — · —\n{}\n",
             "▄".repeat(40),
@@ -1012,12 +1088,85 @@ fn a_short_screen_drops_the_badge_after_the_hint() {
 }
 
 #[test]
-fn a_panel_taller_than_the_screen_keeps_its_header() {
+fn a_panel_taller_than_the_column_keeps_its_header() {
     let mut app = asked();
     app.on_line(standing(S_A, "a_1", "r_1"));
     assert_eq!(
-        sized(&mut app, 40, 2),
-        format!("▌ Approval 1 of 1 · {S_A}\n▌ Esc puts it aside\n")
+        text(&column_stack(&app, 40, 2).0),
+        format!("▌ Approval 1 of 1 · {S_A}\n▌  Esc puts it aside\n")
+    );
+}
+
+#[test]
+fn the_cursor_stays_on_a_column_one_wide() {
+    let mut app = App::new(PathBuf::from("/w"));
+    app.set_size(40, 10);
+    type_draft(&mut app, "ab");
+    let area = Rect::new(0, 0, 1, 5);
+    assert_eq!(cursor(&app, area).map(|at| at.x), Some(0));
+}
+
+#[test]
+fn new_messages_below_is_a_target_over_the_cells_it_drew() {
+    use crate::mouse::{Target, TargetId};
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    app.on_line(turn_started(S_A, "one"));
+    app.on_key(Key::PageUp, now);
+    app.on_line(delta(S_A, "a_1", "streamed"));
+    // The pill is 30 cells, centred over the rows area: 28 columns
+    // past the gutter and the scroll bar, it clips at the right edge
+    // with no ▌.
+    let (buf, targets) = column_stack(&app, 30, 2);
+    let below = Target {
+        id: TargetId::NewBelow,
+        rect: Rect::new(1, 0, 28, 1),
+    };
+    assert_eq!(targets, vec![below]);
+    assert_eq!(buf[(1, 0)].symbol(), "▐");
+    assert!(row_text(&buf, 0).contains("↓ New messages below · End"));
+    let (_, targets) = column_stack(&app, 10, 2);
+    assert_eq!(
+        targets.first().map(|target| target.rect),
+        Some(Rect::new(1, 0, 8, 1))
+    );
+    // No conversation row, no overlay and no target.
+    let (_, targets) = column_stack(&app, 30, 1);
+    assert!(targets.is_empty());
+}
+
+#[test]
+fn the_pill_clips_at_a_narrow_conversation() {
+    use crate::mouse::TargetId;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = empty();
+    attach(&mut app, S_A);
+    for n in 1..=14 {
+        app.on_line(turn_started(S_A, &format!("prompt {n}")));
+    }
+    app.on_key(Key::PageUp, now);
+    app.on_line(turn_started(S_A, "one more"));
+    // At 20 columns the rows are 18 wide past the gutter and the scroll
+    // bar: the pill starts at the rows' left edge and is cut at their
+    // right one, with no closing end.
+    let (buf, targets) = column_stack(&app, 20, HEIGHT);
+    let pill = text(&buf)
+        .lines()
+        .position(|row| row.contains("↓ New messages"))
+        .expect("the clipped pill");
+    let row = u16::try_from(pill).unwrap_or(u16::MAX);
+    assert_eq!(buf[(1, row)].symbol(), "▐");
+    assert!(
+        (0..20).all(|x| buf[(x, row)].symbol() != "▌"),
+        "{}",
+        row_text(&buf, row)
+    );
+    assert!(
+        targets.iter().any(
+            |target| target.id == TargetId::NewBelow && target.rect == Rect::new(1, row, 18, 1)
+        ),
+        "{targets:?}"
     );
 }
 
@@ -1045,7 +1194,7 @@ fn a_draft_of_three_lines() {
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     type_draft(&mut app, "first\nsecond\nthird");
     insta::assert_snapshot!("draft_of_three_lines", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(9, 8)));
+    assert_eq!(cursor_at(&app), Some(Position::new(10, 8)));
 }
 
 #[test]
@@ -1054,14 +1203,14 @@ fn a_draft_taller_than_a_third_scrolls_with_the_cursor() {
     type_draft(&mut app, "l1\nl2\nl3\nl4\nl5\nl6");
     // 12 rows: the box shows 4, the last four while the cursor is there.
     insta::assert_snapshot!("draft_taller_than_the_cap", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(6, 8)));
+    assert_eq!(cursor_at(&app), Some(Position::new(7, 8)));
     let now = fakes::clock::FakeClock::new().now();
     for _ in 0..5 {
         app.on_key(Key::Up, now);
     }
     // On the first line, the box shows the first four.
     insta::assert_snapshot!("draft_scrolled_to_its_top", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(6, 5)));
+    assert_eq!(cursor_at(&app), Some(Position::new(7, 5)));
 }
 
 #[test]
@@ -1071,7 +1220,7 @@ fn a_paste_token_in_the_draft() {
     let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
     app.on_edit(Edit::Paste(pasted.join("\n")));
     insta::assert_snapshot!("draft_with_a_paste_token", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(36, 8)));
+    assert_eq!(cursor_at(&app), Some(Position::new(37, 8)));
 }
 
 #[test]
@@ -1083,13 +1232,13 @@ fn a_draft_wider_than_the_screen_wraps() {
     let rows: Vec<&str> = shown.lines().collect();
     assert_eq!(
         rows.get(7).copied(),
-        Some(format!("▌ › {}", "w".repeat(56)).as_str())
+        Some(format!("⋮▌ › {}", "w".repeat(55)).as_str())
     );
     assert_eq!(
         rows.get(8).copied(),
-        Some(format!("▌   {}█", "w".repeat(14)).as_str())
+        Some(format!(" ▌   {}█", "w".repeat(15)).as_str())
     );
-    assert_eq!(cursor_at(&app), Some(Position::new(18, 8)));
+    assert_eq!(cursor_at(&app), Some(Position::new(20, 8)));
 }
 
 #[test]
@@ -1106,15 +1255,6 @@ fn the_cursor_hides_while_the_panel_is_open() {
     ));
     assert!(app.panel().is_some());
     assert_eq!(cursor_at(&app), None);
-}
-
-#[test]
-fn the_cursor_stays_on_a_screen_one_column_wide() {
-    let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(1, 5);
-    type_draft(&mut app, "ab");
-    let area = Rect::new(0, 0, 1, 5);
-    assert_eq!(cursor(&app, area).map(|at| at.x), Some(0));
 }
 
 /// One session envelope at `ts` milliseconds.
@@ -1209,6 +1349,93 @@ fn tool_group_collapsed() {
     let mut app = empty();
     tool_turn(&mut app);
     insta::assert_snapshot!("tool_group_collapsed", screen(&app));
+}
+
+/// A `session_status` line naming `session`.
+fn named(session: &str, name: &str) -> Line {
+    session_line(
+        session,
+        "session_status",
+        serde_json::json!({
+            "name": name, "named": true, "workspace": "/w", "project": "-w",
+            "state": "idle", "started": 0, "calls": 0, "since": 0,
+            "spend": {"tokens": {"input": 0, "cache_read": 0,
+                "cache_write": {}, "output": 0},
+                "cost": 0.0, "subscription_cost": 0.0},
+            "model": "test/model", "delegates": 0, "jobs": 0,
+            "clients": 0}),
+        None,
+    )
+}
+
+/// One `(action, name, id)` message call per entry, completed with "ok".
+fn messages(app: &mut App, calls: &[(&str, &str, &str)]) {
+    use serde_json::json;
+    for &(action, name, id) in calls {
+        app.on_line(at(
+            "tool_call_requested",
+            Some(action),
+            0,
+            json!({"name": name, "arguments": {"id": id, "message": "hi"}}),
+        ));
+        app.on_line(at(
+            "tool_call_completed",
+            Some(action),
+            0,
+            json!({"status": "completed", "content": [{"type": "text", "text": "ok"}]}),
+        ));
+    }
+}
+
+/// A message to a session the terminal holds a name for shows the name
+/// on its ledger row; one to a session it holds none for shows the id.
+#[test]
+fn a_session_message_row_shows_its_recipient_name() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(named("s_other", "worker"));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "ask them"));
+    app.on_line(at("step_started", None, 0, serde_json::json!({})));
+    messages(
+        &mut app,
+        &[
+            ("a_1", "session_message", "s_other"),
+            ("a_2", "session_message", "s_nobody"),
+        ],
+    );
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let shown = screen(&app);
+    assert!(shown.contains("message  worker"), "{shown}");
+    assert!(shown.contains("message  s_nobody"), "{shown}");
+    assert!(!shown.contains("s_other"), "{shown}");
+}
+
+/// A message to a delegate the terminal holds a description for shows
+/// the description on its ledger row; one to an unknown id shows the id.
+#[test]
+fn a_delegate_message_row_shows_its_recipient_description() {
+    let mut app = empty();
+    attach(&mut app, "s_aaaaaaaaaaaaaaaa");
+    app.on_line(at(
+        "job_started",
+        None,
+        0,
+        serde_json::json!({"job_id": "j_abc", "description": "Fix the parser", "output_path": "/o"}),
+    ));
+    app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "ask them"));
+    app.on_line(at("step_started", None, 0, serde_json::json!({})));
+    messages(
+        &mut app,
+        &[
+            ("a_1", "delegate_message", "j_abc"),
+            ("a_2", "delegate_message", "j_nobody"),
+        ],
+    );
+    app.on_key(Key::CtrlO, fakes::clock::FakeClock::new().now());
+    let shown = screen(&app);
+    assert!(shown.contains("message  Fix the parser"), "{shown}");
+    assert!(shown.contains("message  j_nobody"), "{shown}");
+    assert!(!shown.contains("j_abc"), "{shown}");
 }
 
 #[test]
@@ -1617,6 +1844,8 @@ fn styles_reach_the_screen() {
     let mut app = empty();
     tool_turn(&mut app);
     // The card's edges add rows, so the bubble needs a taller screen.
+    app.set_size(WIDTH, 30);
+    app.settle();
     let area = Rect::new(0, 0, WIDTH, 30);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
@@ -1637,22 +1866,29 @@ fn styles_reach_the_screen() {
     // whatever runs, so the row after it is the reply's, not the summary's
     // second row.
     let summary = row("● Read");
-    assert!(cell(1, summary).add_modifier.contains(Modifier::DIM));
-    assert!(!cell(0, summary + 1).add_modifier.contains(Modifier::DIM));
-    assert!(!cell(0, row("Fixed.")).add_modifier.contains(Modifier::DIM));
+    assert!(cell(3, summary).add_modifier.contains(Modifier::DIM));
+    assert!(!cell(2, summary + 1).add_modifier.contains(Modifier::DIM));
+    assert!(!cell(2, row("Fixed.")).add_modifier.contains(Modifier::DIM));
     // The bubble is tinted to the last text column, and blank to its
     // left.
     let bubble = row("fix the failing test");
     let reset = Some(ratatui::style::Color::Reset);
     assert_ne!(cell(WIDTH - 2, bubble).bg, reset);
-    assert_eq!(cell(0, bubble).bg, reset);
+    assert_eq!(cell(3, bubble).bg, reset);
     // The card's turn tint reaches the last text column: past the end
     // of a short card row, and on the split rows of a long one
     // (`docs/tui.md`, "Look"). The time row keeps the background.
     let turn = Some(crate::theme::Role::Turn.color());
     assert_eq!(cell(30, row("Fixed.")).bg, turn);
     assert_eq!(cell(WIDTH - 2, summary + 1).bg, turn);
-    assert_eq!(cell(0, row("you 00:00")).bg, reset);
+    // The time row, right-aligned past the grip's glyph, keeps the
+    // background up to its text.
+    let time = rows
+        .iter()
+        .position(|row| row.ends_with("you 00:00"))
+        .and_then(|at| u16::try_from(at).ok())
+        .unwrap_or(u16::MAX);
+    assert_eq!(cell(2, time).bg, reset);
 }
 
 #[test]
@@ -1660,7 +1896,7 @@ fn a_card_row_wrapped_by_the_view_is_tinted_on_every_row() {
     // The ▣ closing line splits in the card at 17 columns; every row it
     // draws carries the card's tint (`docs/tui.md`, "Look").
     let mut app = App::new(PathBuf::from("/w"));
-    app.set_size(20, 10);
+    app.set_size(40, 10);
     attach(&mut app, "s_aaaaaaaaaaaaaaaa");
     app.on_line(turn_started("s_aaaaaaaaaaaaaaaa", "hi"));
     for action in ["a_1", "a_2", "a_3", "a_4"] {
@@ -1677,8 +1913,16 @@ fn a_card_row_wrapped_by_the_view_is_tinted_on_every_row() {
         serde_json::json!({ "text": "ok" }),
         Some("a_m"),
     ));
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "usage_recorded",
+        serde_json::json!({"generation_id": "g_1", "model": "a/b",
+            "tokens": {"input": 18200, "cache_read": 0, "cache_write": {}, "output": 0},
+            "input_bytes": 1, "cost": 0.41}),
+        None,
+    ));
     app.on_line(turn_completed("s_aaaaaaaaaaaaaaaa", "completed"));
-    let area = Rect::new(0, 0, 20, 10);
+    let area = Rect::new(0, 0, 40, 10);
     let mut buf = Buffer::empty(area);
     render(&app, area, &mut buf, None);
     let shown: Vec<String> = text(&buf).lines().map(str::to_owned).collect();
@@ -1686,15 +1930,16 @@ fn a_card_row_wrapped_by_the_view_is_tinted_on_every_row() {
         .iter()
         .position(|row| row.contains("▣"))
         .expect("a closing line");
-    // "▣ completed · 4 calls" is 22 columns: two card rows, the split
-    // putting "calls" on the second whatever the bar draws
-    // after it.
-    assert!(shown[closing + 1].starts_with(" calls"), "{shown:?}");
+    // "▣ completed · 4 calls · 18.2k tokens · $0.41" is 44 columns: two
+    // card rows, the split putting "$0.41" on the second whatever the bar
+    // draws after it.
+    assert!(shown[closing + 1].contains("$0.41"), "{shown:?}");
     let turn = crate::theme::Role::Turn.color();
     let row = u16::try_from(closing).unwrap_or(u16::MAX);
-    assert_eq!(buf[(0, row)].bg, turn);
-    assert_eq!(buf[(0, row + 1)].bg, turn);
-    assert_eq!(buf[(18, row + 1)].bg, turn);
+    let card = app.conversation_area();
+    assert_eq!(buf[(card.x, row)].bg, turn);
+    assert_eq!(buf[(card.x, row + 1)].bg, turn);
+    assert_eq!(buf[(card.right() - 2, row + 1)].bg, turn);
 }
 
 #[test]
@@ -1912,9 +2157,14 @@ fn zero_width_draws_no_steering_drop_target() {
         app.steering_rows().iter().any(|row| row.droppable),
         "the fixture needs a selectable steering row"
     );
+    // The queue's own draw into a column of no width: the layout's area
+    // is the app's size, so the screen's draw is not the one under test.
     let area = Rect::new(0, 0, 0, HEIGHT);
     let mut buf = Buffer::empty(area);
-    let targets = render(&app, area, &mut buf, None);
+    let mut bottom = area.bottom();
+    let mut targets = Vec::new();
+    super::input_box::draw(&app, area, &mut bottom, &mut buf, &mut targets);
+    super::steering_queue::draw(&app, area, &mut bottom, &mut buf, &mut targets);
     assert!(
         targets
             .iter()
@@ -2375,6 +2625,8 @@ fn painted_item_and_notice_keys_join_the_shared_frame_mark() {
     // The frame paints both rows through the shared exit: one item key
     // and one notice key reach the single mark, scheduling both.
     app.pages().ext.cache.begin_anim_frame(Some(t0), false);
+    app.set_size(WIDTH, 40);
+    app.settle();
     let area = Rect::new(0, 0, WIDTH, 40);
     let mut buf = Buffer::empty(area);
     let (_, painted) = super::render_frame(&app, area, &mut buf, None);
@@ -2777,13 +3029,13 @@ fn replying(width: u16, height: u16, text: &str) -> App {
 fn the_badge_is_a_target_over_the_cells_it_drew() {
     use crate::mouse::{Target, TargetId};
     let mut app = badged();
-    // The badge's 40 characters on the row above the input box, under
-    // the status row's status and context targets: the row's targets
-    // draw with it.
+    // The badge's 40 characters are cut to the 39-column column, on the
+    // row above the input box, under the status row's status and context
+    // targets: the row's targets draw with it.
     let (_, targets) = pointed(&mut app, 40, 12, None);
     let status = Target {
         id: TargetId::Panel(crate::app::panel::Spot::Status),
-        rect: Rect::new(1, 10, 4, 1),
+        rect: Rect::new(2, 10, 4, 1),
     };
     let context = Target {
         id: TargetId::Panel(crate::app::panel::Spot::Context),
@@ -2791,53 +3043,21 @@ fn the_badge_is_a_target_over_the_cells_it_drew() {
     };
     let badge = Target {
         id: TargetId::Badge,
-        rect: Rect::new(0, 6, 40, 1),
+        rect: Rect::new(1, 6, 39, 1),
     };
     // The open turn's prompt, its time and its blank row are stops on
     // the rows above the badge.
     let turn = Target {
         id: TargetId::Turn(0),
-        rect: Rect::new(0, 0, 39, 6),
+        rect: Rect::new(2, 0, 37, 6),
     };
     assert_eq!(targets, vec![status, context, badge, turn]);
-    // Narrower than its text, it takes the whole row.
-    let (_, targets) = pointed(&mut app, 20, 12, None);
+    // Wider than its text, it takes the text's 40 cells.
+    let (_, targets) = pointed(&mut app, 60, 12, None);
     let badge = targets
         .iter()
         .find(|target| matches!(target.id, TargetId::Badge));
-    assert_eq!(badge.map(|target| target.rect.width), Some(20));
-    // A screen with no row for the badge draws no target.
-    let (_, targets) = pointed(&mut app, 40, 1, None);
-    assert!(targets.is_empty());
-}
-
-#[test]
-fn new_messages_below_is_a_target_over_the_cells_it_drew() {
-    use crate::mouse::{Target, TargetId};
-    let now = fakes::clock::FakeClock::new().now();
-    let mut app = empty();
-    attach(&mut app, S_A);
-    app.on_line(turn_started(S_A, "one"));
-    app.on_key(Key::PageUp, now);
-    app.on_line(delta(S_A, "a_1", "streamed"));
-    // The pill is 30 cells, centred over the rows area: at 30 columns
-    // the rows are 29 wide, so it clips at the right edge with no ▌.
-    let (buf, targets) = pointed(&mut app, 30, 2, None);
-    let below = Target {
-        id: TargetId::NewBelow,
-        rect: Rect::new(0, 0, 29, 1),
-    };
-    assert_eq!(targets, vec![below]);
-    assert_eq!(buf[(0, 0)].symbol(), "▐");
-    assert!(row_text(&buf, 0).contains("↓ New messages below · End"));
-    let (_, targets) = pointed(&mut app, 10, 2, None);
-    assert_eq!(
-        targets.first().map(|target| target.rect),
-        Some(Rect::new(0, 0, 9, 1))
-    );
-    // No conversation row, no overlay and no target.
-    let (_, targets) = pointed(&mut app, 30, 1, None);
-    assert!(targets.is_empty());
+    assert_eq!(badge.map(|target| target.rect.width), Some(41));
 }
 
 #[test]
@@ -2854,7 +3074,8 @@ fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
     let mut plain = Buffer::empty(area);
     render(&app, area, &mut plain, None);
     app.on_line(turn_started(S_A, "one more"));
-    // At 60 columns the rows are 59 wide: the 30-cell pill starts at 14.
+    // At 60 columns the rows are 57 wide, from column 2: the 30-cell pill
+    // is centred over them.
     let mut buf = Buffer::empty(area);
     let targets = render(&app, area, &mut buf, None);
     let pill = text(&buf)
@@ -2862,15 +3083,16 @@ fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
         .position(|row| row.contains("↓ New messages below · End"))
         .expect("the pill");
     let row = u16::try_from(pill).unwrap_or(u16::MAX);
-    assert_eq!(buf[(14, row)].symbol(), "▐");
-    assert_eq!(buf[(14, row)].fg, crate::theme::Role::Rule.color());
-    assert_eq!(buf[(43, row)].symbol(), "▌");
-    assert_eq!(buf[(43, row)].fg, crate::theme::Role::Rule.color());
-    let label: String = (15..=42)
+    let start: u16 = 15;
+    assert_eq!(buf[(start, row)].symbol(), "▐");
+    assert_eq!(buf[(start, row)].fg, crate::theme::Role::Rule.color());
+    assert_eq!(buf[(start + 29, row)].symbol(), "▌");
+    assert_eq!(buf[(start + 29, row)].fg, crate::theme::Role::Rule.color());
+    let label: String = (start + 1..=start + 28)
         .map(|x| buf[(x, row)].symbol().to_owned())
         .collect();
     assert_eq!(label, " ↓ New messages below · End ");
-    for x in 15..=42 {
+    for x in start + 1..=start + 28 {
         assert_eq!(
             buf[(x, row)].fg,
             crate::theme::Role::Attention.color(),
@@ -2882,7 +3104,7 @@ fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
             "col {x}"
         );
     }
-    for x in 14..=43 {
+    for x in start..=start + 29 {
         assert!(
             !buf[(x, row)]
                 .symbol()
@@ -2896,12 +3118,12 @@ fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
         targets
             .iter()
             .any(|target| target.id == TargetId::NewBelow
-                && target.rect == Rect::new(14, row, 30, 1)),
+                && target.rect == Rect::new(start, row, 30, 1)),
         "{targets:?}"
     );
     // Either side of the pill the conversation's row shows through:
     // the row is never blanked.
-    for x in (0..14).chain(44..WIDTH) {
+    for x in (0..start).chain(start + 30..WIDTH) {
         assert_eq!(buf[(x, row)].symbol(), plain[(x, row)].symbol(), "col {x}");
     }
     app.on_key(Key::End, now);
@@ -2911,39 +3133,6 @@ fn the_pill_is_centred_on_the_bottom_row_in_attention_on_rule() {
         !text(&followed).contains("↓ New messages below"),
         "{}",
         text(&followed)
-    );
-}
-
-#[test]
-fn the_pill_clips_at_a_narrow_conversation() {
-    use crate::mouse::TargetId;
-    let now = fakes::clock::FakeClock::new().now();
-    let mut app = empty();
-    attach(&mut app, S_A);
-    for n in 1..=14 {
-        app.on_line(turn_started(S_A, &format!("prompt {n}")));
-    }
-    app.on_key(Key::PageUp, now);
-    app.on_line(turn_started(S_A, "one more"));
-    // At 20 columns the rows are 19 wide: the pill starts at the rows'
-    // left edge and is cut at their right one, with no closing end.
-    let (buf, targets) = pointed(&mut app, 20, HEIGHT, None);
-    let pill = text(&buf)
-        .lines()
-        .position(|row| row.contains("↓ New messages"))
-        .expect("the clipped pill");
-    let row = u16::try_from(pill).unwrap_or(u16::MAX);
-    assert_eq!(buf[(0, row)].symbol(), "▐");
-    assert!(
-        (0..20).all(|x| buf[(x, row)].symbol() != "▌"),
-        "{}",
-        row_text(&buf, row)
-    );
-    assert!(
-        targets.iter().any(
-            |target| target.id == TargetId::NewBelow && target.rect == Rect::new(0, row, 19, 1)
-        ),
-        "{targets:?}"
     );
 }
 
@@ -2958,17 +3147,26 @@ fn the_target_under_the_pointer_gets_the_hover_background_only() {
                 panic!("no cell at {x},{y}");
             };
             let mut expected = before.clone();
-            if y == 6 && x < 40 {
+            if y == 6 && x >= 1 {
                 expected.bg = Role::Hover.color();
             }
             assert_eq!(after, &expected, "cell {x},{y}");
         }
     }
-    // Off every target, the frame is the one with no pointer.
-    for pointer in [(39, 9), (0, 11), (0, 9), (39, 0)] {
+    // Off every target, the frame is the one with no pointer. The grip
+    // column lights under the pointer on its own, so the cells tried are
+    // past it and off every target the frame draws.
+    let (_, targets) = pointed(&mut app, 40, 12, None);
+    let mut tried = 0;
+    for pointer in [(39, 9), (39, 0), (1, 0), (1, 11), (2, 0)] {
+        if crate::mouse::hit(&targets, pointer.0, pointer.1).is_some() {
+            continue;
+        }
         let (off, _) = pointed(&mut app, 40, 12, Some(pointer));
         assert_eq!(off, plain, "{pointer:?}");
+        tried += 1;
     }
+    assert!(tried >= 3, "the cells off every target are tried");
 }
 
 #[test]
@@ -3040,7 +3238,7 @@ fn a_collapsed_groups_line_is_a_target_over_its_rows() {
     let group = app.targets().first().map(|(_, target)| *target);
     assert!(matches!(group, Some(Target::Group(_))), "{group:?}");
     let drawn: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
-    assert_eq!(drawn, vec![Rect::new(0, 2, WIDTH - 1, 1)]);
+    assert_eq!(drawn, vec![Rect::new(2, 2, WIDTH - 3, 1)]);
     assert_eq!(
         lines(&targets).first().map(|(target, _)| Some(*target)),
         Some(group)
@@ -3082,11 +3280,11 @@ fn ledger_rows_are_targets_over_their_rows() {
     assert_eq!(
         rects,
         vec![
-            Rect::new(0, 0, WIDTH - 1, 1),
-            Rect::new(0, 1, WIDTH - 1, 1),
-            Rect::new(0, 2, WIDTH - 1, 1),
-            Rect::new(0, 3, WIDTH - 1, 1),
-            Rect::new(0, 6, WIDTH - 1, 1),
+            Rect::new(2, 0, WIDTH - 3, 1),
+            Rect::new(2, 1, WIDTH - 3, 1),
+            Rect::new(2, 2, WIDTH - 3, 1),
+            Rect::new(2, 3, WIDTH - 3, 1),
+            Rect::new(2, 6, WIDTH - 3, 1),
         ]
     );
     let opens: Vec<_> = app
@@ -3110,7 +3308,7 @@ fn a_thought_line_is_a_target_over_its_row() {
     assert!(matches!(drawn.first(), Some((Target::Thought(_), _))));
     assert_eq!(
         drawn.first().map(|(_, rect)| *rect),
-        Some(Rect::new(0, 1, WIDTH - 1, 1))
+        Some(Rect::new(2, 1, WIDTH - 3, 1))
     );
 }
 
@@ -3122,7 +3320,7 @@ fn a_line_partly_scrolled_off_targets_only_its_rows_shown() {
     // two-row footer and the blanks between them.
     let (_, targets) = pointed(&mut app, WIDTH, 12, None);
     let rects: Vec<_> = lines(&targets).into_iter().map(|(_, rect)| rect).collect();
-    assert_eq!(rects, vec![Rect::new(0, 0, WIDTH - 1, 1)]);
+    assert_eq!(rects, vec![Rect::new(2, 0, WIDTH - 3, 1)]);
     // Six rows: the summary is wholly out of view.
     let (_, targets) = pointed(&mut app, WIDTH, 11, None);
     assert!(lines(&targets).is_empty());
@@ -3134,18 +3332,24 @@ fn the_overlay_row_hits_new_messages_below_not_the_line_under_it() {
     let now = fakes::clock::FakeClock::new().now();
     let mut app = empty();
     tool_turn(&mut app);
-    app.set_size(WIDTH, 6);
+    app.set_size(WIDTH, 10);
     app.on_key(Key::PageUp, now);
     app.on_line(turn_started(S_A, "next"));
     assert!(app.has_new());
-    // The reply's row above the overlay, with the pill below it: the
-    // pill's cells hit NewBelow, while the same row outside the pill
-    // hits nothing, and the plain row above hits nothing either.
-    let (buf, targets) = pointed(&mut app, WIDTH, 7, None);
-    assert!(text(&buf).contains("New messages below"), "{}", text(&buf));
-    assert_eq!(hit(&targets, WIDTH / 2, 1), Some(TargetId::NewBelow));
-    assert_eq!(hit(&targets, 0, 1), None);
-    assert_eq!(hit(&targets, 0, 0), None);
+    // The pill overlays a conversation row: its cells hit NewBelow, while
+    // the same row outside the pill hits nothing, and the plain row above
+    // hits nothing either.
+    let (buf, targets) = pointed(&mut app, WIDTH, 10, None);
+    let shown = text(&buf);
+    let row = shown
+        .lines()
+        .position(|line| line.contains("New messages below"))
+        .and_then(|row| u16::try_from(row).ok())
+        .expect("the pill");
+    assert!(row > 0, "{shown}");
+    assert_eq!(hit(&targets, WIDTH / 2, row), Some(TargetId::NewBelow));
+    assert_eq!(hit(&targets, 0, row), None);
+    assert_eq!(hit(&targets, 0, row - 1), None);
 }
 
 /// An empty app with `see ` and then a 312-line paste token typed.
@@ -3182,10 +3386,14 @@ fn a_paste_token_is_a_target_over_its_label_on_every_row() {
     let mut app = with_token();
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let rects = token_rects(&targets);
-    assert_eq!(rects, vec![Rect::new(8, 8, 28, 1)]);
+    assert_eq!(rects, vec![Rect::new(9, 8, 28, 1)]);
     assert_eq!(cells(&buf, &rects), LABEL);
     // Wrapped, one target per row the label takes.
-    let (buf, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let mut app = empty();
+    type_draft(&mut app, "see this long lead in ");
+    let pasted: Vec<String> = (1..=312).map(|n| format!("line {n}")).collect();
+    app.on_edit(Edit::Paste(pasted.join("\n")));
+    let (buf, targets) = pointed(&mut app, 40, HEIGHT, None);
     let rects = token_rects(&targets);
     assert_eq!(rects.len(), 2, "{rects:?}");
     assert_eq!(cells(&buf, &rects), LABEL);
@@ -3205,7 +3413,7 @@ fn a_paste_token_scrolled_out_of_the_box_is_no_target() {
     // Scrolled to its top, the token is on the box's first row.
     let (buf, targets) = pointed(&mut app, WIDTH, HEIGHT, None);
     let rects = token_rects(&targets);
-    assert_eq!(rects, vec![Rect::new(8, 5, 28, 1)]);
+    assert_eq!(rects, vec![Rect::new(9, 5, 28, 1)]);
     assert_eq!(cells(&buf, &rects), LABEL);
 }
 
@@ -3215,7 +3423,7 @@ fn a_click_on_a_token_opens_it_and_a_click_elsewhere_in_the_box_does_not() {
     use crate::keys::{Button, Mouse, MouseKind};
     use crate::mouse::Pointer;
     let mut app = with_token();
-    let (_, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let (_, targets) = pointed(&mut app, 40, HEIGHT, None);
     let mut pointer = Pointer::default();
     let mut click = |col: u16, row: u16| {
         let press = Mouse {
@@ -3252,12 +3460,12 @@ fn a_click_on_a_token_opens_it_and_a_click_elsewhere_in_the_box_does_not() {
 #[test]
 fn hovering_a_token_tints_every_cell_of_its_label_only() {
     let mut app = with_token();
-    let (plain, targets) = pointed(&mut app, 20, HEIGHT, None);
+    let (plain, targets) = pointed(&mut app, 40, HEIGHT, None);
     let rects = token_rects(&targets);
     let first = rects[0];
-    let (hovered, _) = pointed(&mut app, 20, HEIGHT, Some((first.x, first.y)));
+    let (hovered, _) = pointed(&mut app, 40, HEIGHT, Some((first.x, first.y)));
     for y in 0..HEIGHT {
-        for x in 0..20 {
+        for x in 0..40 {
             let (Some(before), Some(after)) = (plain.cell((x, y)), hovered.cell((x, y))) else {
                 panic!("no cell at {x},{y}");
             };
@@ -3306,58 +3514,59 @@ fn a_streaming_reply_renders_its_markdown_in_place() {
         u16::try_from(at.unwrap_or_else(|| panic!("{needle} on screen"))).unwrap_or(0)
     };
     use crate::theme::Role;
-    assert_eq!(fg(1, row("Plan")), Some(Role::Heading.color()));
-    assert_eq!(fg(1, row("read the")), Some(Role::Accent.color()));
-    assert_eq!(fg(3, row("read the")), Some(Role::Text.color()));
+    // The card starts two columns in: the grip and the gutter.
+    assert_eq!(fg(3, row("Plan")), Some(Role::Heading.color()));
+    assert_eq!(fg(3, row("read the")), Some(Role::Accent.color()));
+    assert_eq!(fg(5, row("read the")), Some(Role::Text.color()));
     let header = row("rust");
     assert_eq!(fg(36, header), Some(Role::Muted.color()));
     // The padding sits on the card's tint; the code rows sit on theirs.
-    assert_eq!(bg(0, header), Some(Role::Turn.color()), "header pad");
-    assert_eq!(bg(0, header + 2), Some(Role::Turn.color()), "code pad");
-    for x in 1..38 {
+    assert_eq!(bg(2, header), Some(Role::Turn.color()), "header pad");
+    assert_eq!(bg(2, header + 2), Some(Role::Turn.color()), "code pad");
+    for x in 3..38 {
         assert_eq!(bg(x, header), Some(Role::Code.color()), "header col {x}");
         assert_eq!(bg(x, header + 2), Some(Role::Code.color()), "code col {x}");
     }
-    assert_eq!(fg(11, header + 2), Some(Role::Keyword.color()));
-    assert_eq!(fg(19, header + 2), Some(Role::Number.color()));
-    assert_eq!(fg(1, row("────")), Some(Role::Rule.color()));
+    assert_eq!(fg(13, header + 2), Some(Role::Keyword.color()));
+    assert_eq!(fg(21, header + 2), Some(Role::Number.color()));
+    assert_eq!(fg(3, row("────")), Some(Role::Rule.color()));
 }
 
 #[test]
 fn a_resize_renders_the_reply_again_at_the_new_width() {
     let mut app = replying(40, 18, "```rust\nlet x = 1;\n```");
-    // At 40 columns the header renders at the card's inner width of 37.
-    assert!(text(&buffer(&app, 40, 18)).contains(&format!("rust{}click to copy", " ".repeat(19))));
-    app.set_size(20, 18);
-    // At 20 columns its language name ellipsizes.
-    assert!(text(&buffer(&app, 20, 18)).contains("r… click to copy"));
+    // At 40 columns the header renders at the card's inner width of 35.
+    assert!(text(&buffer(&app, 40, 18)).contains(&format!("rust{}click to copy", " ".repeat(17))));
+    app.set_size(60, 18);
+    // At 60 columns it renders at 55: twenty columns wider.
+    assert!(text(&buffer(&app, 60, 18)).contains(&format!("rust{}click to copy", " ".repeat(37))));
 }
 
 #[test]
 fn text_completed_replaces_and_renders_the_reply_again() {
-    let mut app = replying(40, 8, "# Draft");
+    let mut app = replying(40, 10, "# Draft");
     app.on_line(session_line(
         "s_aaaaaaaaaaaaaaaa",
         "text_completed",
         serde_json::json!({"text": "- done"}),
         Some("a_1"),
     ));
-    let shown = text(&buffer(&app, 40, 8));
+    let shown = text(&buffer(&app, 40, 10));
     assert!(shown.contains("• done"));
     assert!(!shown.contains("Draft"));
 }
 
 #[test]
 fn copied_shows_on_the_conversations_top_row_until_the_next_key() {
-    let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
-    let shown = text(&buffer(&app, 30, 10));
+    let mut app = replying(40, 10, "```rust\nlet x = 1;\n```");
+    let shown = text(&buffer(&app, 40, 10));
     let header = shown
         .lines()
         .position(|line| line.contains("rust"))
         .and_then(|at| u16::try_from(at).ok())
         .unwrap_or_default();
-    click(&mut app, 30, 10, 27, header);
-    let buf = buffer(&app, 30, 10);
+    click(&mut app, 40, 10, 37, header);
+    let buf = buffer(&app, 40, 10);
     insta::assert_snapshot!("copied", text(&buf));
     // " Copied " in `info` on the `surface` tint, on the top row with
     // the bar closed.
@@ -3380,7 +3589,7 @@ fn copied_shows_on_the_conversations_top_row_until_the_next_key() {
         assert_eq!(cell.bg, Role::Surface.color(), "Copied {dx}");
     }
     app.on_key(Key::Char('x'), fakes::clock::FakeClock::new().now());
-    assert!(!text(&buffer(&app, 30, 10)).contains("Copied"));
+    assert!(!text(&buffer(&app, 40, 10)).contains("Copied"));
 }
 
 #[test]
@@ -3408,7 +3617,7 @@ fn copied_sits_on_the_row_under_the_bar() {
                 .expect("the reply"),
         )
         .expect("a row");
-        select(&mut app, 60, 24, (0, row), (3, row));
+        select(&mut app, 60, 24, (2, row), (5, row));
         assert!(
             text(&buffer(&app, 60, 24)).contains("Copied"),
             "the drag copies"
@@ -3462,7 +3671,7 @@ fn copied_sits_on_the_top_row_while_the_results_view_is_open() {
     let _ = app.on_select(
         &Mouse {
             kind: MouseKind::Press(Button::Left),
-            col: 0,
+            col: 2,
             row,
         },
         &targets,
@@ -3473,7 +3682,7 @@ fn copied_sits_on_the_top_row_while_the_results_view_is_open() {
     let _ = app.on_select(
         &Mouse {
             kind: MouseKind::Drag(Button::Left),
-            col: 3,
+            col: 5,
             row,
         },
         &targets,
@@ -3481,7 +3690,7 @@ fn copied_sits_on_the_top_row_while_the_results_view_is_open() {
     let _ = app.on_select(
         &Mouse {
             kind: MouseKind::Release,
-            col: 3,
+            col: 5,
             row,
         },
         &targets,
@@ -3525,7 +3734,7 @@ fn copied_stays_inside_a_short_or_narrow_area() {
                 .expect("the reply"),
         )
         .expect("a row");
-        select(&mut app, 60, 24, (0, row), (3, row));
+        select(&mut app, 60, 24, (2, row), (5, row));
         assert!(
             text(&buffer(&app, 60, 24)).contains("Copied"),
             "the drag copies"
@@ -3573,7 +3782,7 @@ fn copied_draws_nothing_on_a_zero_height_area() {
             .expect("the reply"),
     )
     .expect("a row");
-    select(&mut app, 60, 24, (0, row), (3, row));
+    select(&mut app, 60, 24, (2, row), (5, row));
     assert!(
         text(&buffer(&app, 60, 24)).contains("Copied"),
         "the drag copies"
@@ -3617,17 +3826,22 @@ fn a_zero_height_conversation_draws_no_pin() {
 
 #[test]
 fn copied_needs_a_conversation_row_to_show_on() {
-    let mut app = replying(30, 10, "```rust\nlet x = 1;\n```");
-    let shown = text(&buffer(&app, 30, 10));
+    let mut app = replying(40, 10, "```rust\nlet x = 1;\n```");
+    let shown = text(&buffer(&app, 40, 10));
     let header = shown
         .lines()
         .position(|line| line.contains("rust"))
         .and_then(|at| u16::try_from(at).ok())
         .unwrap_or_default();
-    click(&mut app, 30, 10, 27, header);
+    click(&mut app, 40, 10, 36, header);
     assert!(app.copied());
-    app.set_size(30, 1);
-    assert_eq!(text(&buffer(&app, 30, 1)), "▌ › █\n");
+    // One row holds no conversation row: the floor line takes it, and
+    // the confirmation has nowhere to show.
+    app.set_size(40, 1);
+    assert_eq!(
+        text(&buffer(&app, 40, 1)),
+        "      Fiber needs 40×10 · now 40×1\n"
+    );
 }
 
 #[test]
@@ -3843,25 +4057,29 @@ fn a_turn_spanning_drawn_lines_sums_their_heights() {
         .iter()
         .find(|target| target.id == TargetId::Turn(0))
         .expect("turn 0 is drawn");
-    assert_eq!(turn.rect, Rect::new(0, 0, WIDTH - 1, 7));
+    assert_eq!(turn.rect, Rect::new(2, 0, WIDTH - 3, 7));
 }
 
 #[test]
 fn a_turn_past_the_last_row_is_clipped_to_it() {
     use crate::mouse::TargetId;
-    let now = fakes::clock::FakeClock::new().now();
     let mut app = empty();
-    tool_turn(&mut app);
-    app.set_size(WIDTH, 6);
-    app.on_key(Key::PageUp, now);
-    app.on_line(turn_started(S_A, "next"));
-    assert!(app.has_new());
-    let (_, targets) = pointed(&mut app, WIDTH, 7, None);
+    app.set_size(WIDTH, 10);
+    // Two turns taller than the five conversation rows: scrolled so the
+    // first turn's last row alone shows above the second.
+    let long = (1..=12)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.on_line(turn_started(S_A, &long));
+    app.on_line(turn_started(S_A, &long[..40]));
+    app.jump(16);
+    let (_, targets) = pointed(&mut app, WIDTH, 10, None);
     let turn = targets
         .iter()
         .find(|target| target.id == TargetId::Turn(0))
         .expect("turn 0 is drawn");
-    assert_eq!(turn.rect, Rect::new(0, 0, WIDTH - 1, 1));
+    assert_eq!(turn.rect, Rect::new(2, 0, WIDTH - 3, 1));
 }
 
 #[test]
@@ -3879,7 +4097,7 @@ fn input_with_an_image_token() {
         app.on_edit(Edit::Left);
     }
     insta::assert_snapshot!("input_with_an_image_token", screen(&app));
-    assert_eq!(cursor_at(&app), Some(Position::new(19, 8)));
+    assert_eq!(cursor_at(&app), Some(Position::new(20, 8)));
 }
 
 /// An app on home with no session, as `/settings` finds it.
@@ -3904,7 +4122,7 @@ fn a_view_target_under_the_pointer_gets_the_hover_tint_alone() {
     // The whole top row is the one close target, so the hover lifts
     // the whole row and no row under it (`docs/tui.md`, "Swapped views").
     let tint = Some(crate::theme::hover_bg(Role::Surface.color()));
-    for x in 0..WIDTH {
+    for x in 1..WIDTH {
         assert_eq!(
             hovered.cell((x, 0)).map(|cell| cell.bg),
             tint,
@@ -4227,11 +4445,11 @@ fn pinned_call(
     (app, group, call, header, first)
 }
 
-/// The conversation rows area: the gutter dropped and split from the
-/// bar column, exactly as the render path computes it (`view.rs`).
+/// The conversation rows area: the conversation area, which is already
+/// past the gutter, split from the bar column, as the render path computes
+/// it (`view.rs`).
 fn pin_rows(app: &App) -> Rect {
-    let inset = crate::layout::past_gutter(app.conversation_area(), app.chrome().gutter());
-    let (rows, _) = crate::view::scroll_bar::split(inset);
+    let (rows, _) = crate::view::scroll_bar::split(app.conversation_area());
     rows
 }
 
@@ -4436,7 +4654,7 @@ fn following_draws_no_pin() {
     let (text, target) = covered.expect("a covered first row");
     assert_eq!(
         row_text(&buf, rows.y),
-        format!("{text:<width$}", width = usize::from(buf.area.width))
+        format!("  {text:<width$}", width = usize::from(buf.area.width) - 2)
     );
     let drawn: Vec<(crate::app::Target, Rect)> = lines(&targets);
     assert!(
@@ -5054,6 +5272,9 @@ fn drag_at(
     use crate::mouse::Pointer;
     let now = fakes::clock::FakeClock::new().now();
     let mut pointer = Pointer::default();
+    // The layout is the app's own size: the screen drawn is the one set.
+    app.set_size(width, height);
+    app.settle();
     let area = Rect::new(0, 0, width, height);
     let mut report = |kind: MouseKind, (col, row): (u16, u16)| {
         let mut buf = Buffer::empty(area);
@@ -5068,6 +5289,8 @@ fn drag_at(
 /// The screen cell where `needle` first shows on a `width` by `height`
 /// screen.
 fn cell_at(app: &mut App, width: u16, height: u16, needle: &str) -> (u16, u16) {
+    app.set_size(width, height);
+    app.settle();
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(area);
     render(app, area, &mut buf, None);

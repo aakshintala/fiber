@@ -690,6 +690,25 @@ impl Shell {
                 from_spawn_reported(Ok(finished), limit, &parsed.command, report)
             }
             Ok(command::Ran::Moved(moved)) => match &self.jobs {
+                // A shell that exited with processes left running is a
+                // finished command, not a job (`docs/tools.md`, "When a
+                // command ends"). Every other move, and a person's own
+                // `background` or terminal call, keeps its job.
+                Some(_)
+                    if policy == command::MovePolicy::Foreground
+                        && matches!(moved.reason, command::MoveReason::ShellExited { .. }) =>
+                {
+                    let mut moved = moved;
+                    let mut carry = std::mem::take(&mut moved.progress.stream_carry);
+                    background::finish_inline(
+                        *moved,
+                        self.clock.as_ref(),
+                        limit,
+                        &parsed.command,
+                        emit,
+                        &mut carry,
+                    )
+                }
                 Some(jobs) => background::take(
                     *moved,
                     Arc::clone(jobs),
@@ -765,7 +784,7 @@ fn is_unconfined(arguments: &Map<String, Value>) -> bool {
 /// validated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
-    /// None of them: moves only after 30 seconds or a shell exit.
+    /// None of them: moves only after 30 seconds; a shell exit ends the call.
     Foreground,
     /// `run_in_background`.
     Background,
@@ -1048,6 +1067,19 @@ pub(crate) fn assemble_reported(
     command: Option<&str>,
     report: Option<ProtectedReport>,
 ) -> Output {
+    assemble_tailed(limit, finished, extra, command, report, None)
+}
+
+/// [`assemble_reported`] with `tail`, one line after the closing line, for
+/// a whole and a spilled output alike.
+pub(crate) fn assemble_tailed(
+    limit: Option<Limit>,
+    finished: Finished,
+    extra: Option<&str>,
+    command: Option<&str>,
+    report: Option<ProtectedReport>,
+    tail: Option<&str>,
+) -> Output {
     let notice: Vec<String> = report
         .as_ref()
         .map(ProtectedReport::warning_lines)
@@ -1058,7 +1090,8 @@ pub(crate) fn assemble_reported(
         (Some(line), true) => Some(line.to_owned()),
         (Some(line), false) => Some(format!("{line}\n{}", notice.join("\n"))),
     };
-    let mut output = assemble(limit, finished, extra.as_deref(), command);
+    let mut output = assemble_output(limit, finished, extra.as_deref(), tail);
+    output.details = command.map(|command| details(command, output.process.as_ref()));
     if let Some(inner) = report
         .as_ref()
         .filter(|report| !report.is_empty())
@@ -1081,18 +1114,23 @@ pub(crate) fn assemble(
     extra: Option<&str>,
     command: Option<&str>,
 ) -> Output {
-    let mut output = assemble_output(limit, finished, extra);
+    let mut output = assemble_output(limit, finished, extra, None);
     output.details = command.map(|command| details(command, output.process.as_ref()));
     output
 }
 
-fn assemble_output(limit: Option<Limit>, finished: Finished, extra: Option<&str>) -> Output {
+fn assemble_output(
+    limit: Option<Limit>,
+    finished: Finished,
+    extra: Option<&str>,
+    tail: Option<&str>,
+) -> Output {
     let timed_out = finished.stop == Some(StopKind::Timeout);
     if finished.capped {
         let process = process_of(&finished, timed_out);
         let failure = Failure::from(&ToolError::from(ShellError::Capped));
         let line = failure.message.clone();
-        return end(finished, extra, &line, Some(failure), process, false);
+        return end(finished, extra, &line, Some(failure), process, false, tail);
     }
     if finished.indeterminate {
         let process = process_of(&finished, timed_out);
@@ -1103,6 +1141,7 @@ fn assemble_output(limit: Option<Limit>, finished: Finished, extra: Option<&str>
             Some(Failure::from(&ToolError::from(ShellError::Indeterminate))),
             process,
             false,
+            tail,
         );
     }
     // A stop only happens where its deadline fired, so the stop path has
@@ -1113,11 +1152,11 @@ fn assemble_output(limit: Option<Limit>, finished: Finished, extra: Option<&str>
         let line = limit.line();
         let error = Some(Failure::from(&ToolError::from(limit.stopped())));
         let process = process_of(&finished, true);
-        return end(finished, extra, &line, error, process, false);
+        return end(finished, extra, &line, error, process, false, tail);
     }
     if finished.stop == Some(StopKind::Cancel) {
         let process = process_of(&finished, false);
-        return end(finished, extra, CANCELLED, None, process, false);
+        return end(finished, extra, CANCELLED, None, process, false, tail);
     }
     let Some(status) = finished.status else {
         return errored(ShellError::NotReaped);
@@ -1145,13 +1184,15 @@ fn assemble_output(limit: Option<Limit>, finished: Finished, extra: Option<&str>
             timed_out: false,
         },
         held_open,
+        tail,
     )
 }
 
 /// `finished` ended with `line` as its closing line and `error`: its whole
 /// output gets the line as text, its spilled output as the file's end.
 /// `held_open` appends its line to a whole output only: it names bytes the
-/// file does not hold.
+/// file does not hold. `tail`, when there is one, is the last line, after
+/// the closing line.
 fn end(
     finished: Finished,
     extra: Option<&str>,
@@ -1159,6 +1200,7 @@ fn end(
     error: Option<Failure>,
     process: Process,
     held_open: bool,
+    tail: Option<&str>,
 ) -> Output {
     match finished.output {
         command::Kept::Whole(output) => {
@@ -1167,10 +1209,17 @@ fn end(
                 text.push_str(HELD_OPEN);
                 text.push('\n');
             }
+            if let Some(tail) = tail {
+                text.push_str(tail);
+                text.push('\n');
+            }
             with_process(text, error, process)
         }
         command::Kept::Spilled(spill) => {
-            let spilled = spill.close(extra, line);
+            let spilled = match tail {
+                Some(tail) => spill.close(extra, &format!("{line}\n{tail}")),
+                None => spill.close(extra, line),
+            };
             Output {
                 error,
                 process: Some(process),

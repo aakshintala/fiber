@@ -35,7 +35,7 @@ fn line(kind: &str, payload: Value, action: Option<&str>, seq: Option<u64>) -> L
 fn attached(width: u16, height: u16) -> App {
     let mut app = App::new(PathBuf::from("/w"));
     app.set_size(width, height);
-    assert!(app.on_line(hello()).is_empty());
+    app.on_line(hello());
     app.attach(contract::SessionId(SESSION.to_owned()));
     app
 }
@@ -149,6 +149,15 @@ fn right(at: (u16, u16), by: u16) -> (u16, u16) {
     (at.0 + by, at.1)
 }
 
+/// A word long enough that "gamma" no longer fits the first row of a 40
+/// column screen's conversation, and wraps onto the second.
+const PAD: &str = "pppppppppppppppppppppppp";
+
+/// "alpha beta" and "gamma delta", wrapped between them by [`PAD`].
+fn wrapping_text() -> String {
+    format!("alpha beta {PAD} gamma delta")
+}
+
 /// An app showing one reply `text` at `width`, the turn done.
 fn replied(width: u16, height: u16, text: &str) -> App {
     let mut app = attached(width, height);
@@ -254,13 +263,16 @@ fn a_drag_that_returns_to_its_cell_selects_one_cell() {
 
 #[test]
 fn release_copies_the_unwrapped_text_and_shows_copied() {
-    let text = "one two three four five six seven";
-    let mut app = replied(14, 12, text);
-    let first = find(&app, "one");
-    let last = find(&app, "seven");
+    let text = (10..40)
+        .map(|n| format!("n{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut app = replied(40, 12, &text);
+    let first = find(&app, "n10");
+    let last = find(&app, "n39");
     assert!(last.1 >= first.1 + 2, "three rows: {:#?}", rows(&app));
-    let effect = select(&mut app, first, right(last, 4));
-    assert_eq!(effect, Effect::Copy(text.to_owned()));
+    let effect = select(&mut app, first, right(last, 2));
+    assert_eq!(effect, Effect::Copy(text));
     assert!(app.copied());
 }
 
@@ -284,7 +296,11 @@ fn the_highlight_stays_inside_the_area_and_off_new_below() {
     let text: Vec<String> = (0..20).map(|n| format!("paragraph {n}")).collect();
     reply(&mut app, "a_m", &text.join("\n\n"));
     let area = app.conversation_area();
-    select(&mut app, (0, area.y + 1), (39, area.bottom() - 1));
+    select(
+        &mut app,
+        (area.x, area.y + 1),
+        (area.right() - 1, area.bottom() - 1),
+    );
     // Scrolled up three rows, the selection runs past the area's bottom,
     // and new output shows "↓ New messages below" on its last row.
     let (top, _) = app.scroll();
@@ -300,23 +316,24 @@ fn the_highlight_stays_inside_the_area_and_off_new_below() {
 
 #[test]
 fn a_selection_over_a_list_copies_markers_without_hang_indent() {
-    let mut app = replied(14, 12, "- alpha beta gamma\n- delta");
+    let mut app = replied(40, 12, &format!("- alpha beta {PAD} gamma\n- delta"));
     let first = find(&app, "• alpha");
     let last = find(&app, "delta");
     assert_eq!(
         select(&mut app, first, right(last, 4)),
-        Effect::Copy("• alpha beta gamma\n• delta".to_owned())
+        Effect::Copy(format!("• alpha beta {PAD} gamma\n• delta"))
     );
 }
 
 #[test]
 fn a_code_selection_copies_without_the_gutter() {
-    let mut app = replied(30, 12, "```\nlet a = 1;\nlet b = 2;\n```");
+    let mut app = replied(40, 12, "```\nlet a = 1;\nlet b = 2;\n```");
     let first = find(&app, "let a = 1;");
     let last = find(&app, "let b = 2;");
+    let area = app.conversation_area();
     // Whole rows, the header's `copy` excluded: from the gutter of the
     // first line to the right edge of the second.
-    let effect = select(&mut app, (0, first.1), (29, last.1));
+    let effect = select(&mut app, (area.x, first.1), (area.right() - 1, last.1));
     assert_eq!(effect, Effect::Copy("let a = 1;\nlet b = 2;".to_owned()));
 }
 
@@ -325,18 +342,19 @@ fn a_bubble_copies_without_its_padding() {
     let mut app = attached(40, 10);
     prompt(&mut app, "hello world");
     let at = find(&app, "hello world");
+    let area = app.conversation_area();
     // The whole row, the bubble's pads and the blank left of it included.
     assert_eq!(
-        select(&mut app, (0, at.1), (39, at.1)),
+        select(&mut app, (area.x, at.1), (area.right() - 1, at.1)),
         Effect::Copy("hello world".to_owned())
     );
 }
 
 #[test]
 fn a_wrapped_tool_line_keeps_the_space_ratatui_dropped() {
-    // The ▣ closing line wraps in the view at 20 columns; the copy keeps
+    // The ▣ closing line wraps in the view at 40 columns; the copy keeps
     // the space the wrap dropped (`docs/tui.md`, "Selection and copy").
-    let mut app = attached(20, 10);
+    let mut app = attached(40, 10);
     prompt(&mut app, "hi");
     for action in ["a_1", "a_2", "a_3", "a_4"] {
         app.on_line(line(
@@ -347,36 +365,45 @@ fn a_wrapped_tool_line_keeps_the_space_ratatui_dropped() {
         ));
     }
     reply(&mut app, "a_m", "ok");
+    app.on_line(line(
+        "usage_recorded",
+        json!({"generation_id": "g_1", "model": "a/b",
+            "tokens": {"input": 18200, "cache_read": 0, "cache_write": {}, "output": 0},
+            "input_bytes": 1, "cost": 0.41}),
+        None,
+        None,
+    ));
     done(&mut app);
     let first = find(&app, "▣");
-    let last = find(&app, "calls");
+    let last = find(&app, "$0.41");
+    let area = app.conversation_area();
     assert_eq!(last.1, first.1 + 1, "wrapped once: {:#?}", rows(&app));
     assert_eq!(
-        select(&mut app, (0, first.1), (19, last.1)),
-        Effect::Copy("▣ completed · 4 calls".to_owned())
+        select(&mut app, (area.x, first.1), (area.right() - 1, last.1)),
+        Effect::Copy("▣ completed · 4 calls · 18.2k tokens · $0.41".to_owned())
     );
 }
 
 #[test]
 fn a_partial_first_and_last_row_copy_only_their_cells() {
-    let mut app = replied(12, 12, "alpha beta gamma delta");
+    let mut app = replied(40, 12, &wrapping_text());
     let beta = find(&app, "beta");
     let gamma = find(&app, "gamma");
     assert_eq!(gamma.1, beta.1 + 1, "{:#?}", rows(&app));
     assert_eq!(
         select(&mut app, beta, right(gamma, 2)),
-        Effect::Copy("beta gam".to_owned())
+        Effect::Copy(format!("beta {PAD} gam"))
     );
 }
 
 #[test]
 fn a_backwards_drag_copies_the_same_text() {
-    let mut app = replied(12, 12, "alpha beta gamma delta");
+    let mut app = replied(40, 12, &wrapping_text());
     let beta = find(&app, "beta");
     let gamma = find(&app, "gamma");
     assert_eq!(
         select(&mut app, right(gamma, 2), beta),
-        Effect::Copy("beta gam".to_owned())
+        Effect::Copy(format!("beta {PAD} gam"))
     );
 }
 
@@ -522,7 +549,7 @@ fn presses_outside_the_area_click_while_drags_select() {
     assert_eq!(tried(&mut app, (2, area.y)), None, "a blank row above it");
 
     // The approval panel.
-    let mut app = replied(40, 12, "hello there");
+    let mut app = replied(40, 20, "hello there");
     app.on_line(line(
         "permission_requested",
         json!({"request_id": "r_1", "effects": ["executes"], "reversible": true,
@@ -535,12 +562,11 @@ fn presses_outside_the_area_click_while_drags_select() {
     // A press alone is a click: no selection shows, so the panel keeps
     // its targets. The drag a press starts turns into a selection
     // instead (rule R2).
-    press(&mut app, (2, area.bottom()));
+    // A cell of the panel's first text row, below the conversation.
+    let on_panel = (area.x + 2, area.bottom() + 1);
+    press(&mut app, on_panel);
     assert_eq!(app.select.span(), None, "the panel");
-    assert!(
-        tried(&mut app, (2, area.bottom())).is_some(),
-        "a drag from the panel"
-    );
+    assert!(tried(&mut app, on_panel).is_some(), "a drag from the panel");
 
     // The rail, the panel and the column's header at 160x48.
     let mut app = laid_out(160, 48);
@@ -639,7 +665,9 @@ fn no_selection_on_home_or_under_a_cover() {
     }
     app.settle();
     assert!(app.session().is_none());
-    let at = find(&app, "hello");
+    assert!(app.on_home());
+    let area = app.conversation_area();
+    let at = (area.x + 1, area.y + 1);
     assert_eq!(tried(&mut app, at), None, "no session");
 
     // Home: no session attached.
@@ -687,14 +715,15 @@ fn no_selection_on_home_or_under_a_cover() {
 
 #[test]
 fn dragging_past_the_edge_clamps() {
-    let mut app = replied(20, 10, "alpha beta gamma delta epsilon");
+    let mut app = replied(40, 10, "alpha beta gamma delta epsilon");
     let area = app.conversation_area();
     let alpha = find(&app, "alpha");
     press(&mut app, alpha);
     // Past the right edge and below the area: its last cell.
     drag(&mut app, (200, 200));
     let (from, to) = app.select.span().expect("a selection");
-    assert_eq!(from.col, alpha.0);
+    // Columns count from the area's left edge.
+    assert_eq!(from.col, alpha.0 - area.x);
     assert_eq!(to.col, area.width - 1);
     let last = app.scroll().1 - 1;
     assert_eq!(to.row, last);
@@ -953,11 +982,13 @@ fn select_dropped(app: &mut App, lines: &[Line]) -> (Effect, Vec<String>) {
         .take(3)
         .map(|row| row.trim().to_owned())
         .collect();
-    press(app, (0, 0));
-    drag(app, (39, 2));
+    let area = app.conversation_area();
+    let (left, right) = (area.x, area.right() - 1);
+    press(app, (left, area.y));
+    drag(app, (right, area.y + 2));
     app.on_key(Key::End, now());
     assert!(app.pages().part(0).is_none(), "page 0 stays resident");
-    (release(app, (39, 2)), shown)
+    (release(app, (right, area.y + 2)), shown)
 }
 
 #[test]
@@ -966,14 +997,15 @@ fn a_selection_over_a_dropped_page_copies_after_it_loads() {
     let mut app = spanning_app(&lines);
     // Scrolled during the drag with PageUp: the press at the bottom, the
     // pointer at the top.
-    let bottom = app.conversation_area().bottom() - 1;
-    press(&mut app, (0, bottom));
+    let area = app.conversation_area();
+    let bottom = area.bottom() - 1;
+    press(&mut app, (area.x, bottom));
     for _ in 0..8 {
         app.on_key(Key::PageUp, now());
         load_needed(&mut app, &lines);
     }
     let top_row = rows(&app).first().cloned().unwrap_or_default();
-    drag(&mut app, (0, 0));
+    drag(&mut app, (area.x, area.y));
     app.on_key(Key::End, now());
     let (first, _) = app.select.span().expect("a selection");
     let (page, _) = app
@@ -982,7 +1014,7 @@ fn a_selection_over_a_dropped_page_copies_after_it_loads() {
         .locate(first.row)
         .expect("the top row's page");
     assert!(app.pages().part(page).is_none(), "its page stays resident");
-    assert_eq!(release(&mut app, (0, bottom)), Effect::None);
+    assert_eq!(release(&mut app, (area.x, bottom)), Effect::None);
     // The release waits on the dropped page: the copy runs once it loads.
     let waiting = app.select.pending_pages().to_vec();
     assert!(
@@ -1208,7 +1240,9 @@ fn the_conversation_area_is_the_drawn_rect() {
             .unwrap_or_default();
         assert!(before.contains("▣ completed"), "{name}: {before:?}");
         // The card's bottom edge, with the bar's glyph after it.
-        let edge = last.trim().trim_end_matches(['█', '│', '┃']);
+        // The grip column left of the area is not the card's.
+        let in_area: String = last.chars().skip(usize::from(area.x)).collect();
+        let edge = in_area.trim().trim_end_matches(['█', '│', '┃']);
         assert!(
             !edge.is_empty() && edge.chars().all(|cell| cell == '▀'),
             "{name}: {last:?}"
@@ -1237,10 +1271,11 @@ fn a_selection_starting_after_a_zero_width_character_skips_it() {
 #[test]
 fn a_selection_starting_after_a_wrapped_space_copies_no_space_before_it() {
     // The space the wrap drops has no cell and lies before the selection.
-    let mut app = replied(12, 12, "alpha beta gamma delta");
+    let mut app = replied(40, 12, &wrapping_text());
+    let beta = find(&app, "beta");
     let gamma = find(&app, "gamma");
     let delta = find(&app, "delta");
-    assert_eq!(delta.1, gamma.1 + 1, "{:#?}", rows(&app));
+    assert_eq!(gamma.1, beta.1 + 1, "{:#?}", rows(&app));
     assert_eq!(
         select(&mut app, gamma, right(delta, 4)),
         Effect::Copy("gamma delta".to_owned())

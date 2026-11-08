@@ -1210,6 +1210,7 @@ fn ledger_value(row: &tui::ext::LedgerRow<'_>) -> Value {
     };
     let mut value = json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": exit, "duration_ms": duration_ms, "lines": lines, "changes": changes, "error": error, "output": output, "answer": row.answer, "flat": row.flat});
     with_changed_by(&mut value, row.changed_by);
+    with_recipient(&mut value, row.recipient);
     value
 }
 
@@ -1219,6 +1220,15 @@ fn ledger_value(row: &tui::ext::LedgerRow<'_>) -> Value {
 fn with_changed_by(value: &mut Value, changed_by: Option<&[String]>) {
     if let (Some(names), Some(object)) = (changed_by, value.as_object_mut()) {
         object.insert("changed_by".to_owned(), json!(names));
+    }
+}
+
+/// Writes `recipient` onto a call's input only when the terminal held one:
+/// an optional key is absent when it does not apply, never `null`
+/// (`docs/tui.md`, "How a TUI extension runs").
+fn with_recipient(value: &mut Value, recipient: Option<&str>) {
+    if let (Some(text), Some(object)) = (recipient, value.as_object_mut()) {
+        object.insert("recipient".to_owned(), json!(text));
     }
 }
 
@@ -1413,6 +1423,7 @@ fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
         "asking": call.asking,
     });
     with_changed_by(&mut value, call.changed_by);
+    with_recipient(&mut value, call.recipient);
     value
 }
 

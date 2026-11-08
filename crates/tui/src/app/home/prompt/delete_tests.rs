@@ -98,11 +98,7 @@ fn recent_only(app: &mut App, session: &str, name: &str) {
     };
     let mut row = crate::home::from_status(&envelope);
     row.left = Some(crate::home::Left::Exited);
-    app.home
-        .as_mut()
-        .unwrap_or_else(|| panic!("home"))
-        .sessions
-        .recent(vec![row], true);
+    app.home.sessions.recent(vec![row], true);
 }
 
 /// A hub `session_left` for `session`, ending `how`.
@@ -215,14 +211,7 @@ fn answer_discovery(app: &mut App, command: &str, sessions: &[&str], held: &[&st
 
 /// The command's stored question, while one shows.
 fn question(app: &App) -> String {
-    let State::Asked { question, .. } = &app
-        .home
-        .as_ref()
-        .unwrap_or_else(|| panic!("home"))
-        .questions
-        .delete_command
-        .state
-    else {
+    let State::Asked { question, .. } = &app.home.questions.delete_command.state else {
         panic!("no open command question");
     };
     question.clone()
@@ -320,7 +309,7 @@ fn offline_repeat_during_lost_discovery_is_silent_and_keeps_the_first_state() {
     assert_eq!(app.draft(), "/delete");
     assert_eq!(app.notice(), prior_notice.as_deref());
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Discovering { .. }
     ));
 }
@@ -484,7 +473,7 @@ fn rejected_discovery_shows_the_refusal_not_a_question() {
     );
     assert!(!open(&app));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
 }
@@ -636,7 +625,7 @@ fn a_repeat_while_stopping_leaves_the_first_sequence_intact() {
     assert_eq!(app.draft(), "/delete");
     assert_eq!(app.notice(), Some("`/delete` is already in progress."));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Stopping { .. }
     ));
     let lines = fold_lines(&mut app, left(A, "exited"));
@@ -1136,10 +1125,7 @@ fn stale_set_after_stop_returns_home_with_stopped_rows() {
     assert!(lines.iter().any(|line| line["command"] == "recent"));
     insta::assert_snapshot!("stale_set", frame(&app));
     assert!(
-        app.home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&SessionId(A.to_owned())))
-            .is_some(),
+        app.home.sessions.row(&SessionId(A.to_owned())).is_some(),
         "the stopped row stays for a retry"
     );
 }
@@ -1212,16 +1198,9 @@ fn unanswered_delete_is_uncertain_and_is_not_retried() {
     // The lost command no longer owns the state, and reconnect does not
     // resend or retry the destructive line.
     assert!(!app.outbox.is_kept(&delete_id));
-    assert!(
-        !app.home
-            .as_ref()
-            .unwrap()
-            .questions
-            .asks
-            .contains_key(&delete_id)
-    );
+    assert!(!app.home.questions.asks.contains_key(&delete_id));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
 }
@@ -1386,11 +1365,7 @@ fn command_question_draws_only_over_its_attached_session() {
 #[test]
 fn an_attached_target_without_a_feed_row_still_shows_the_captured_question() {
     let mut app = attached();
-    app.home
-        .as_mut()
-        .unwrap()
-        .sessions
-        .remove(&SessionId(A.to_owned()));
+    app.home.sessions.remove(&SessionId(A.to_owned()));
     app.name = Some("old work".to_owned());
     let command = discovery(&mut app);
     answer_discovery(&mut app, &command, &[A], &[]);
@@ -1418,14 +1393,7 @@ fn cancelling_does_not_turn_a_later_row_delete_into_a_stop() {
     app.on_key(Key::Esc, fakes::clock::FakeClock::new().now());
     app.on_line(left(A, "exited"));
     app.go_home();
-    let key = app
-        .home
-        .as_ref()
-        .unwrap()
-        .sessions
-        .row(&SessionId(A.to_owned()))
-        .unwrap()
-        .key;
+    let key = app.home.sessions.row(&SessionId(A.to_owned())).unwrap().key;
     assert_eq!(app.home_click(Spot::Stop(key)), Effect::None);
     assert!(frame(&app).contains("Delete session"));
     let lines = sent(app.on_key(Key::Enter, fakes::clock::FakeClock::new().now()));
@@ -1514,7 +1482,7 @@ fn a_stale_row_delete_reprompt_replaces_and_cancels_the_slash_question() {
     answer_discovery(&mut app, &command, &[A], &[A]);
     app.go_home();
     assert!(open(&app));
-    app.home.as_mut().unwrap().questions.asks.insert(
+    app.home.questions.asks.insert(
         "stale-row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(A.to_owned())),
     );
@@ -1529,11 +1497,11 @@ fn a_stale_row_delete_reprompt_replaces_and_cancels_the_slash_question() {
         "The sessions this delete would remove are now `s_aaaaaaaaaaaaaaaa`, `s_bbbbbbbbbbbbbbbb`.",
     ));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.prompt(),
+        app.home.questions.prompt(),
         Some(super::super::Prompt::Delete {
             expect: Some(expect),
             ..
@@ -1548,14 +1516,7 @@ fn another_rows_delete_answer_does_not_finish_the_command() {
     app.on_line(live(B, "other work"));
     app.on_line(left(B, "exited"));
     app.go_home();
-    let key = app
-        .home
-        .as_ref()
-        .unwrap()
-        .sessions
-        .row(&SessionId(B.to_owned()))
-        .unwrap()
-        .key;
+    let key = app.home.sessions.row(&SessionId(B.to_owned())).unwrap().key;
     app.home_click(Spot::Stop(key));
     let old = confirm(&mut app);
     let old: Value = serde_json::from_str(&old[0]).unwrap();
@@ -1566,7 +1527,7 @@ fn another_rows_delete_answer_does_not_finish_the_command() {
     app.on_line(accepted(old["id"].as_str().unwrap(), json!({})));
     assert!(app.on_home());
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Deleting { .. }
     ));
     let refresh = fold_lines(
@@ -1583,7 +1544,7 @@ fn same_target_row_delete_answer_does_not_settle_slash_delete() {
     let raw = asked(&mut app, &[A], &[]);
     let slash_delete: Value = serde_json::from_str(&raw[0]).unwrap();
     let slash_id = slash_delete["id"].as_str().unwrap();
-    app.home.as_mut().unwrap().questions.asks.insert(
+    app.home.questions.asks.insert(
         "row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(A.to_owned())),
     );
@@ -1593,19 +1554,19 @@ fn same_target_row_delete_answer_does_not_settle_slash_delete() {
 
     app.on_line(accepted("row-delete", json!({})));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Deleting { .. }
     ));
     assert!(app.on_home());
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Deleting { .. }
     ));
 
     app.on_line(accepted(slash_id, json!({})));
     assert!(app.on_home());
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
 }
@@ -1621,7 +1582,7 @@ fn quit_replacing_the_unconfirmed_question_cancels_the_delete() {
     assert_eq!(app.quit(), Effect::None);
     assert!(app.quit_open());
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
     assert_eq!(
@@ -1643,14 +1604,7 @@ fn replacing_the_slash_question_with_close_all_stop_or_clear_cancels_it() {
         match replacement {
             "close all" => assert_eq!(app.ask_close_all(), Effect::None),
             "stop" => {
-                let key = app
-                    .home
-                    .as_ref()
-                    .unwrap()
-                    .sessions
-                    .row(&SessionId(A.to_owned()))
-                    .unwrap()
-                    .key;
+                let key = app.home.sessions.row(&SessionId(A.to_owned())).unwrap().key;
                 assert_eq!(app.ask_stop(key), Effect::None);
             }
             "clear" => assert_eq!(
@@ -1665,10 +1619,10 @@ fn replacing_the_slash_question_with_close_all_stop_or_clear_cancels_it() {
         }
 
         assert!(matches!(
-            app.home.as_ref().unwrap().questions.delete_command.state,
+            app.home.questions.delete_command.state,
             State::Idle
         ));
-        let prompt = app.home.as_ref().unwrap().questions.prompt();
+        let prompt = app.home.questions.prompt();
         let replaced_with_expected_prompt = match replacement {
             "close all" => matches!(prompt, Some(super::super::Prompt::CloseAll { .. })),
             "stop" => matches!(prompt, Some(super::super::Prompt::Stop { .. })),
@@ -1685,7 +1639,7 @@ fn a_stale_same_target_row_delete_answer_cancels_the_open_slash_question() {
     let command = discovery(&mut app);
     answer_discovery(&mut app, &command, &[A], &[A]);
     assert!(open(&app));
-    app.home.as_mut().unwrap().questions.asks.insert(
+    app.home.questions.asks.insert(
         "stale-row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(A.to_owned())),
     );
@@ -1697,7 +1651,7 @@ fn a_stale_same_target_row_delete_answer_cancels_the_open_slash_question() {
     app.on_line(accepted("stale-row-delete", json!({})));
     assert!(!open(&app));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
 }
@@ -1836,7 +1790,7 @@ fn an_unrelated_accepted_row_delete_leaves_the_slash_question_running() {
     let command = discovery(&mut app);
     answer_discovery(&mut app, &command, &[A], &[A]);
     assert!(open(&app));
-    app.home.as_mut().unwrap().questions.asks.insert(
+    app.home.questions.asks.insert(
         "row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(D.to_owned())),
     );
@@ -1847,10 +1801,7 @@ fn an_unrelated_accepted_row_delete_leaves_the_slash_question_running() {
     assert!(open(&app));
     assert!(frame(&app).contains("Delete old work"));
     assert!(
-        matches!(
-            app.home.as_ref().unwrap().questions.delete_command.state,
-            State::Asked { .. }
-        ),
+        matches!(app.home.questions.delete_command.state, State::Asked { .. }),
         "the command was not cancelled"
     );
     let raw = confirm(&mut app);
@@ -1885,7 +1836,7 @@ fn a_discovery_answer_for_another_command_id_changes_nothing() {
     assert!(app.notice().is_none());
     assert!(!frame(&app).contains("Delete "));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Discovering { .. }
     ));
     assert_eq!(
@@ -1905,8 +1856,6 @@ fn connected_confirm_sends_one_exact_delete_and_keeps_unrelated_closing() {
     let command = discovery(&mut app);
     assert!(answer_discovery(&mut app, &command, &[A, B], &[A]).is_empty());
     app.home
-        .as_mut()
-        .unwrap()
         .questions
         .closing
         .push((SessionId(D.to_owned()), "close-unrelated".to_owned()));
@@ -1923,7 +1872,7 @@ fn connected_confirm_sends_one_exact_delete_and_keeps_unrelated_closing() {
         json!({"session": A, "cascade": true, "expect": [A, B]})
     );
     assert_eq!(
-        app.home.as_ref().unwrap().questions.closing,
+        app.home.questions.closing,
         vec![(SessionId(D.to_owned()), "close-unrelated".to_owned())]
     );
 }
@@ -1942,7 +1891,7 @@ fn offline_confirm_sends_nothing_and_keeps_the_question() {
     assert!(open(&app));
     assert!(frame(&app).contains("Delete old work"));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Asked { .. }
     ));
 }
@@ -1962,14 +1911,10 @@ fn link_loss_during_stopping_suppresses_stopped_but_restores_waiting() {
     // marker names a live row. Neither belongs to the command.
     assert!(fold_lines(&mut app, left(B, "exited")).is_empty());
     app.home
-        .as_mut()
-        .unwrap()
         .questions
         .closing
         .push((SessionId(B.to_owned()), "close-quit-b".to_owned()));
     app.home
-        .as_mut()
-        .unwrap()
         .questions
         .closing
         .push((SessionId(C.to_owned()), "close-quit-c".to_owned()));
@@ -1979,7 +1924,7 @@ fn link_loss_during_stopping_suppresses_stopped_but_restores_waiting() {
         Some("Not deleted: the hub link dropped before old work stopped. Nothing was deleted.")
     );
     assert_eq!(
-        app.home.as_ref().unwrap().questions.closing,
+        app.home.questions.closing,
         vec![(SessionId(B.to_owned()), "close-quit-b".to_owned())]
     );
     let resumes = app.exit_lines();
@@ -2050,7 +1995,7 @@ fn unsent_delete_command_id_settles_indeterminate_exactly_once() {
         .find(|line| line.contains(&delete_id))
         .unwrap_or_else(|| panic!("the delete line"))
         .clone();
-    app.home.as_mut().unwrap().questions.asks.insert(
+    app.home.questions.asks.insert(
         "row-delete".to_owned(),
         super::super::Ask::Delete(SessionId(D.to_owned())),
     );
@@ -2061,7 +2006,7 @@ fn unsent_delete_command_id_settles_indeterminate_exactly_once() {
     app.home_unsent(&[other]);
     assert!(
         matches!(
-            app.home.as_ref().unwrap().questions.delete_command.state,
+            app.home.questions.delete_command.state,
             State::Deleting { .. }
         ),
         "an unrelated id settles nothing"
@@ -2070,16 +2015,11 @@ fn unsent_delete_command_id_settles_indeterminate_exactly_once() {
     app.home_unsent(std::slice::from_ref(&line));
     assert_eq!(app.notice(), Some("Delete status unknown"));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
     assert!(
-        !app.home
-            .as_ref()
-            .unwrap()
-            .questions
-            .asks
-            .contains_key(&delete_id),
+        !app.home.questions.asks.contains_key(&delete_id),
         "the settled ask is gone"
     );
     app.home_unsent(&[line]);
@@ -2096,12 +2036,7 @@ fn unsent_delete_command_id_settles_indeterminate_exactly_once() {
         .count();
     assert_eq!(unknown, 1, "the settlement never retries");
     assert!(
-        app.home
-            .as_ref()
-            .unwrap()
-            .questions
-            .asks
-            .contains_key("row-delete"),
+        app.home.questions.asks.contains_key("row-delete"),
         "the ordinary row-delete ask stays pending"
     );
 }
@@ -2130,7 +2065,7 @@ fn unsent_close_id_reports_link_loss_without_a_delete() {
     app.home_unsent(&[other]);
     assert!(
         matches!(
-            app.home.as_ref().unwrap().questions.delete_command.state,
+            app.home.questions.delete_command.state,
             State::Stopping { .. }
         ),
         "an unrelated id settles nothing"
@@ -2142,7 +2077,7 @@ fn unsent_close_id_reports_link_loss_without_a_delete() {
         Some("Not deleted: the hub link dropped before old work stopped. Nothing was deleted.")
     );
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
     assert!(deletes(&fold_lines(&mut app, left(A, "exited"))).is_empty());
@@ -2198,9 +2133,7 @@ fn refusal_without_usable_held_keeps_the_name_captured_at_the_question() {
 
 /// The generation of the current `/delete` command.
 fn generation(app: &App) -> u64 {
-    app.home
-        .as_ref()
-        .map_or(0, |home| home.questions.delete_command.generation)
+    app.home.questions.delete_command.generation
 }
 
 #[test]
@@ -2229,7 +2162,7 @@ fn a_refused_discovery_settles_its_tag() {
     app.on_line(rejected(&command, "stale_request", "Stale."));
     assert_eq!(app.outbox.waiting(&command), None);
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
     assert!(!open(&app));
@@ -2250,7 +2183,7 @@ fn a_delete_discovery_answer_after_the_target_left_finishes_without_a_question()
     assert_eq!(app.outbox.waiting(&command), None);
     assert!(!open(&app));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
     assert!(app.notice().is_none());
@@ -2306,7 +2239,7 @@ fn delete_final_answer_settles_its_tag() {
     assert_eq!(app.outbox.waiting(&id), None);
     assert!(refresh.iter().any(|line| line["command"] == "recent"));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
 }
@@ -2341,7 +2274,7 @@ fn the_delete_tags_are_the_only_record() {
     assert!(answer_discovery(&mut app, &command, &[A], &[]).is_empty());
     assert!(!open(&app));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Discovering { .. }
     ));
 
@@ -2371,7 +2304,7 @@ fn the_delete_tags_are_the_only_record() {
     app.on_line(rejected(&close_id, "io_failed", "late"));
     assert_eq!(app.notice(), notice.as_deref());
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Stopping { .. }
     ));
 
@@ -2387,7 +2320,7 @@ fn the_delete_tags_are_the_only_record() {
     app.outbox.settled(&id);
     fold_lines(&mut app, accepted(&id, json!({})));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Deleting { .. }
     ));
 }
@@ -2402,7 +2335,7 @@ fn a_late_discovery_answer_after_cancel_and_a_new_delete_changes_nothing() {
     assert!(answer_discovery(&mut app, &first, &[A], &[]).is_empty());
     assert!(!open(&app));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Discovering { .. }
     ));
     // The running command's own answer still opens its question.
@@ -2433,7 +2366,7 @@ fn a_late_stop_answer_from_an_earlier_command_is_ignored() {
     // stays.
     app.on_line(rejected(&stops[1].0, "io_failed", "No."));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
     // A second command reaches its own stops.
@@ -2442,7 +2375,7 @@ fn a_late_stop_answer_from_an_earlier_command_is_ignored() {
     assert!(answer_discovery(&mut app, &second, &[A, B], &[A, B]).is_empty());
     confirm(&mut app);
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Stopping { .. }
     ));
     // The first command's other stop answers late: it changes nothing of
@@ -2451,7 +2384,7 @@ fn a_late_stop_answer_from_an_earlier_command_is_ignored() {
     app.on_line(rejected(&stops[0].0, "io_failed", "Late."));
     assert_eq!(app.notice(), notice.as_deref());
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Stopping { .. }
     ));
 }
@@ -2470,7 +2403,7 @@ fn an_unsent_delete_settles_the_tagged_command() {
     app.home_unsent(&[raw[0].clone()]);
     assert_eq!(app.notice(), Some("Delete status unknown"));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
     assert_eq!(app.outbox.waiting(&id), None);
@@ -2505,17 +2438,10 @@ fn a_final_answer_tagged_for_another_generation_is_ignored() {
     app.outbox.wait("c_earlier", Waiting::DeleteFinal(earlier));
     fold_lines(&mut app, accepted("c_earlier", json!({})));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Deleting { .. }
     ));
-    assert!(
-        app.home
-            .as_ref()
-            .unwrap()
-            .sessions
-            .row(&SessionId(A.to_owned()))
-            .is_some()
-    );
+    assert!(app.home.sessions.row(&SessionId(A.to_owned())).is_some());
 }
 
 /// An app whose next `/delete` is the second command: the first was
@@ -2535,7 +2461,7 @@ fn a_reset_during_discovery_settles_the_running_commands_discovery_tag() {
     app.home_reset();
     assert_eq!(app.outbox.waiting(&command), None);
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
 }
@@ -2549,7 +2475,7 @@ fn a_reset_leaves_an_open_delete_question_alone() {
     app.home_reset();
     assert!(open(&app));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Asked { .. }
     ));
 }
@@ -2562,7 +2488,7 @@ fn an_unsent_delete_of_the_second_command_settles_it() {
     app.home_unsent(&[raw[0].clone()]);
     assert_eq!(app.notice(), Some("Delete status unknown"));
     assert!(matches!(
-        app.home.as_ref().unwrap().questions.delete_command.state,
+        app.home.questions.delete_command.state,
         State::Idle
     ));
 }
@@ -2573,10 +2499,10 @@ fn a_reset_during_the_second_commands_delete_takes_its_ask() {
     let raw = asked(&mut app, &[A], &[]);
     let deletion: Value = serde_json::from_str(&raw[0]).unwrap_or_else(|err| panic!("{err}"));
     let id = deletion["id"].as_str().unwrap_or_default().to_owned();
-    assert!(app.home.as_ref().unwrap().questions.asks.contains_key(&id));
+    assert!(app.home.questions.asks.contains_key(&id));
     app.home_reset();
     assert_eq!(app.notice(), Some("Delete status unknown"));
-    assert!(!app.home.as_ref().unwrap().questions.asks.contains_key(&id));
+    assert!(!app.home.questions.asks.contains_key(&id));
     assert_eq!(app.outbox.waiting(&id), None);
 }
 

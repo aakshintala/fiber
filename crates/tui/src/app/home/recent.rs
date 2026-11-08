@@ -370,9 +370,7 @@ impl App {
     pub(super) fn scoped_first(&mut self, project: &str) -> Vec<String> {
         let connected = self.outbox.is_up();
         let outbox = &mut self.outbox;
-        let Some(home) = self.home.as_mut() else {
-            return Vec::new();
-        };
+        let home = &mut self.home;
         home.recent
             .scoped_first(project, &mut home.sessions, connected, outbox)
     }
@@ -382,9 +380,7 @@ impl App {
     pub(super) fn scoped_page(&mut self, project: &str, before: Option<&str>) -> Vec<String> {
         let connected = self.outbox.is_up();
         let outbox = &mut self.outbox;
-        let Some(home) = self.home.as_mut() else {
-            return Vec::new();
-        };
+        let home = &mut self.home;
         home.recent
             .scoped_page(project, before, connected, outbox)
             .into_iter()
@@ -397,9 +393,7 @@ impl App {
     pub(super) fn ask_recent_first(&mut self, delete_project: Option<&str>) -> Vec<String> {
         let connected = self.outbox.is_up();
         let outbox = &mut self.outbox;
-        let Some(home) = self.home.as_mut() else {
-            return Vec::new();
-        };
+        let home = &mut self.home;
         home.recent
             .ask_recent_first(delete_project, &mut home.sessions, connected, outbox)
     }
@@ -421,7 +415,7 @@ impl App {
         let connected = self.outbox.is_up();
         let tag = self.outbox.waiting(id)?;
         let answer = {
-            let home = self.home.as_mut()?;
+            let home = &mut self.home;
             home.recent
                 .answer(&tag, accepted, payload, &mut home.sessions)?
         };
@@ -439,28 +433,20 @@ impl App {
                     // stored: only a scoped answer sets a
                     // project's count.
                     self.session_labels(&rows);
-                    if let Some(home) = self.home.as_mut() {
-                        home.sessions.recent(rows, first);
-                        home.refill_picker();
-                    }
+                    self.home.sessions.recent(rows, first);
+                    self.home.refill_picker();
                     self.list_answered(first, true);
                     // Every unscoped page fans out one scoped
                     // first page per newly seen project.
-                    let lines = self
-                        .home
-                        .as_mut()
-                        .map(|home| {
-                            let launch_project = home.launch_project().map(str::to_owned);
-                            let outbox = &mut self.outbox;
-                            home.recent.fan_out_scoped(
-                                &before,
-                                &mut home.sessions,
-                                launch_project.as_deref(),
-                                connected,
-                                outbox,
-                            )
-                        })
-                        .unwrap_or_default();
+                    let home = &mut self.home;
+                    let launch_project = home.launch_project().map(str::to_owned);
+                    let lines = home.recent.fan_out_scoped(
+                        &before,
+                        &mut home.sessions,
+                        launch_project.as_deref(),
+                        connected,
+                        &mut self.outbox,
+                    );
                     Some(lines)
                 }
                 Err(notice) => {
@@ -472,28 +458,18 @@ impl App {
             Outcome::Scoped { project, result } => match result {
                 Ok((rows, total)) => {
                     self.session_labels(&rows);
-                    let dirty = if let Some(home) = self.home.as_mut() {
-                        let dirty =
-                            home.recent
-                                .answer_scoped(&project, rows, total, &mut home.sessions);
-                        home.refill_picker();
-                        dirty
-                    } else {
-                        false
-                    };
+                    let home = &mut self.home;
+                    let dirty =
+                        home.recent
+                            .answer_scoped(&project, rows, total, &mut home.sessions);
+                    home.refill_picker();
                     let lines = if dirty {
-                        self.home
-                            .as_mut()
-                            .map(|home| {
-                                let outbox = &mut self.outbox;
-                                home.recent.follow_up_scoped(
-                                    &project,
-                                    &mut home.sessions,
-                                    connected,
-                                    outbox,
-                                )
-                            })
-                            .unwrap_or_default()
+                        home.recent.follow_up_scoped(
+                            &project,
+                            &mut home.sessions,
+                            connected,
+                            &mut self.outbox,
+                        )
                     } else {
                         Vec::new()
                     };
@@ -516,7 +492,7 @@ impl App {
     pub(super) fn page_recent(&mut self, focused: u64) -> Option<Effect> {
         let connected = self.outbox.is_up();
         let outbox = &mut self.outbox;
-        let home = self.home.as_mut()?;
+        let home = &mut self.home;
         let line = home
             .recent
             .page_recent(focused, &mut home.sessions, connected, outbox)?;

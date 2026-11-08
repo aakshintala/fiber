@@ -520,6 +520,9 @@ fn a_marked_line_under_new_messages_below_does_not_spin() {
     let (mut app, clock) = running_first();
     let origin = clock.origin();
     let now = clock.now();
+    // The layout is the app's own size, so the sixteen rows are set on it.
+    app.set_size(WIDTH, 16);
+    app.settle();
     app.set_now(origin, 0);
     app.jump(0);
     // New output at the top: the overlay takes the bottom row,
@@ -535,7 +538,7 @@ fn a_marked_line_under_new_messages_below_does_not_spin() {
     let shown = text(&buf);
     assert!(shown.contains("New messages below"), "{shown}");
     // The covered mark schedules nothing: it is the only mark on
-    // screen, and with no home there is no working line to ask.
+    // screen.
     assert_eq!(app.take_wake(), None);
     // Following again draws it: the mark spins.
     app.on_key(Key::End, now);
@@ -761,7 +764,7 @@ fn untargeted_lines_never_spin() {
     }
     assert_eq!(diffs.len(), 1, "{diffs:?}");
     let (x, _y, before, after) = &diffs[0];
-    assert_eq!((*x, before.as_str()), (1, "●"));
+    assert_eq!((*x, before.as_str()), (3, "●"));
     assert_eq!(after.as_str(), SPINNER[0]);
 }
 

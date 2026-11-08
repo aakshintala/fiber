@@ -225,7 +225,19 @@ fn wrote_keeps_session_commands_but_not_subscribe_commands_or_start() {
 
 /// An app with no home, before the hub connects.
 fn fresh() -> App {
-    App::new(PathBuf::from("/w"))
+    let mut app = App::new(PathBuf::from("/w"));
+    // A home with a model chosen, so Enter sends a `start` instead of
+    // opening the model picker.
+    app.set_home(crate::home::Launch {
+        location: crate::LaunchLocation::Local {
+            workspace: PathBuf::from("/w"),
+            project: String::new(),
+            git: false,
+        },
+        model: Some("test/model".to_owned()),
+        ..Default::default()
+    });
+    app
 }
 
 /// Types `text`, checking each key does nothing else.

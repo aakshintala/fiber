@@ -45,15 +45,13 @@ impl App {
         let mut credential = credential.as_deref();
         for level in levels {
             let (id, line) = subscribe_line(&session, *level, credential.take());
-            if self.home.is_some() {
-                self.outbox.wait(
-                    &id,
-                    super::super::outbox::Waiting::Subscribe {
-                        session: session.clone(),
-                        level: *level,
-                    },
-                );
-            }
+            self.outbox.wait(
+                &id,
+                super::super::outbox::Waiting::Subscribe {
+                    session: session.clone(),
+                    level: *level,
+                },
+            );
             ack = Some(id);
             lines.push(line);
         }
@@ -62,14 +60,8 @@ impl App {
         if ack.is_none() && !self.subscribe_pending(&session) {
             lines.push(self.ask_commands(&session));
         }
-        let ack = ack.or_else(|| {
-            self.home
-                .as_ref()
-                .and_then(|home| home.subs.pending_summary(&self.outbox, &session))
-        });
-        if let Some(home) = self.home.as_mut() {
-            home.subs.gate(session, ack, held);
-        }
+        let ack = ack.or_else(|| self.home.subs.pending_summary(&self.outbox, &session));
+        self.home.subs.gate(session, ack, held);
         lines
     }
 
@@ -81,15 +73,15 @@ impl App {
     /// at most once. A list launch stays armed until the first `recent`
     /// answer spends it.
     pub(super) fn launch_lines(&mut self) -> Vec<String> {
-        let (session, credential) = match self.home.as_mut().map(|home| &mut home.launch.open_at) {
-            Some(open_at @ OpenAt::Session(_, _)) => {
+        let (session, credential) = match &mut self.home.launch.open_at {
+            open_at @ OpenAt::Session(_, _) => {
                 let OpenAt::Session(session, credential) = std::mem::replace(open_at, OpenAt::Home)
                 else {
                     return Vec::new();
                 };
                 (session, credential)
             }
-            Some(OpenAt::Home | OpenAt::List) | None => return Vec::new(),
+            OpenAt::Home | OpenAt::List => return Vec::new(),
         };
         self.open_session(session, None, credential, false)
     }
@@ -99,9 +91,7 @@ impl App {
     /// leaving the box focused when the displayed list is empty, and a
     /// rejected one leaves the box focused. Either way the request is spent.
     pub(super) fn list_answered(&mut self, first: bool, accepted: bool) {
-        let Some(home) = self.home.as_mut() else {
-            return;
-        };
+        let home = &mut self.home;
         if home.launch.open_at != OpenAt::List || !first {
             return;
         }

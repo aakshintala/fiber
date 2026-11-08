@@ -883,8 +883,8 @@ fn a_delete_ask_settles_as_unanswered_on_reconnect() {
     assert_eq!(rows(&app), ["○  old work"]);
     assert_eq!(
         app.home
-            .as_ref()
-            .and_then(|home| home.sessions.row(&contract::SessionId(S_B.to_owned())))
+            .sessions
+            .row(&contract::SessionId(S_B.to_owned()))
             .and_then(|row| row.note.as_deref()),
         Some(UNANSWERED)
     );

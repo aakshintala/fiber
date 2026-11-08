@@ -136,15 +136,11 @@ fn working(app: &mut App, session: &str) {
 /// The working sessions, in list order.
 fn working_now(app: &App) -> Vec<String> {
     app.home
-        .as_ref()
-        .map(|home| {
-            home.sessions
-                .live()
-                .iter()
-                .map(|row| row.id.0.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+        .sessions
+        .live()
+        .iter()
+        .map(|row| row.id.0.clone())
+        .collect()
 }
 
 #[test]
@@ -162,7 +158,7 @@ fn quit_with_nothing_working_quits() {
 }
 
 #[test]
-fn quit_without_home_quits() {
+fn a_new_app_arms_then_quits_on_two_ctrl_c() {
     let mut app = App::new(PathBuf::from("/w"));
     let clock = fakes::clock::FakeClock::new();
     assert_eq!(app.on_key(Key::CtrlC, clock.now()), Effect::None);
@@ -297,9 +293,7 @@ fn clients_two_held_full_is_open_elsewhere() {
     ));
     // This connection holds the session at `full`: one of the two.
     let session = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
-    if let Some(home) = app.home.as_mut() {
-        home.subs.accept(session, crate::home::Level::Full);
-    }
+    app.home.subs.accept(session, crate::home::Level::Full);
     assert_eq!(ctrl_c(&mut app), Effect::None);
     assert_eq!(app.quit_question(), Some((1, 1)));
 }
@@ -316,9 +310,7 @@ fn clients_one_held_full_is_not() {
         0,
     ));
     let session = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
-    if let Some(home) = app.home.as_mut() {
-        home.subs.accept(session, crate::home::Level::Full);
-    }
+    app.home.subs.accept(session, crate::home::Level::Full);
     assert_eq!(ctrl_c(&mut app), Effect::None);
     assert_eq!(app.quit_question(), Some((1, 0)));
 }
@@ -357,9 +349,7 @@ fn c_subscribes_where_needed_and_closes_each_now() {
     // The second session this connection already holds at `full`: no
     // subscribe goes out for it.
     let held = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
-    if let Some(home) = app.home.as_mut() {
-        home.subs.accept(held, crate::home::Level::Full);
-    }
+    app.home.subs.accept(held, crate::home::Level::Full);
     assert_eq!(ctrl_c(&mut app), Effect::None);
     let clock = fakes::clock::FakeClock::new();
     let Effect::Exit(lines) = app.on_key(Key::Char('c'), clock.now()) else {
@@ -560,15 +550,11 @@ fn an_unsent_close_keeps_its_session_out_of_closing() {
     app.write_failed(std::slice::from_ref(&close));
     let closing: Vec<String> = app
         .home
-        .as_ref()
-        .map(|home| {
-            home.questions
-                .closing
-                .iter()
-                .map(|(session, _)| session.0.clone())
-                .collect()
-        })
-        .unwrap_or_default();
+        .questions
+        .closing
+        .iter()
+        .map(|(session, _)| session.0.clone())
+        .collect();
     assert_eq!(closing, ["s_bbbbbbbbbbbbbbbb"]);
 }
 
@@ -612,7 +598,7 @@ fn an_unsent_close_settles_only_its_tag() {
 #[test]
 fn remote_exit_lines_keep_the_hub_for_live_and_attached_sessions() {
     let mut app = home_with(80, 24, launch());
-    app.home.as_mut().unwrap().launch.location = crate::LaunchLocation::Remote {
+    app.home.launch.location = crate::LaunchLocation::Remote {
         hub: "box".to_owned(),
     };
     linked(&mut app);
@@ -685,7 +671,7 @@ fn the_attached_session_gets_a_line_without_the_feed() {
 }
 
 #[test]
-fn no_home_no_lines() {
+fn a_new_app_has_no_exit_lines() {
     let app = App::new(PathBuf::from("/w"));
     assert!(app.exit_lines().is_empty());
 }
@@ -964,14 +950,11 @@ fn close_all_replaces_an_open_delete_question_and_its_ask_still_answers() {
     // The delete question opens on the exited row's stop.
     let key = app
         .home
-        .as_ref()
-        .and_then(|home| {
-            home.sessions
-                .all()
-                .iter()
-                .find(|row| row.id.0 == "s_aaaaaaaaaaaaaaaa")
-                .map(|row| row.key)
-        })
+        .sessions
+        .all()
+        .iter()
+        .find(|row| row.id.0 == "s_aaaaaaaaaaaaaaaa")
+        .map(|row| row.key)
         .expect("exited row");
     assert_eq!(app.home_click(crate::home::Spot::Stop(key)), Effect::None);
     // Enter sends the delete; its ask waits for the hub.
@@ -1010,15 +993,11 @@ pub(super) fn rejected(id: &str, code: &str, message: &str) -> Line {
 /// Every listed row's line: what the feed and `recent` folded.
 fn listed(app: &App) -> Vec<String> {
     app.home
-        .as_ref()
-        .map(|home| {
-            home.sessions
-                .all()
-                .iter()
-                .map(|row| crate::home::line(row, home.launch_project()))
-                .collect()
-        })
-        .unwrap_or_default()
+        .sessions
+        .all()
+        .iter()
+        .map(|row| crate::home::line(row, app.home.launch_project()))
+        .collect()
 }
 
 /// The `close` lines among the outgoing commands: the ticket promises
@@ -1077,11 +1056,7 @@ fn enter_closes_every_live_session_now_and_stays_home() {
         &["s_aaaaaaaaaaaaaaaa", "s_bbbbbbbbbbbbbbbb"],
     );
     // Nothing went to `closing`: the exit lines still name both.
-    assert!(
-        app.home
-            .as_ref()
-            .is_some_and(|home| home.questions.closing.is_empty())
-    );
+    assert!(app.home.questions.closing.is_empty());
     let resumed = app.exit_lines().join("\n");
     assert!(resumed.contains("s_aaaaaaaaaaaaaaaa"), "{resumed}");
     assert!(resumed.contains("s_bbbbbbbbbbbbbbbb"), "{resumed}");
@@ -1357,9 +1332,7 @@ fn the_close_all_count_reads_sessions_working_and_elsewhere() {
     // This connection holds the second session at `full`: one client
     // less its own leaves none elsewhere.
     let held = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
-    if let Some(home) = app.home.as_mut() {
-        home.subs.accept(held, crate::home::Level::Full);
-    }
+    app.home.subs.accept(held, crate::home::Level::Full);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((3, 1, 1)));
@@ -1400,9 +1373,7 @@ fn the_close_all_elsewhere_boundary_holds_both_sides() {
         0,
     ));
     let held = SessionId("s_aaaaaaaaaaaaaaaa".to_owned());
-    if let Some(home) = app.home.as_mut() {
-        home.subs.accept(held, crate::home::Level::Full);
-    }
+    app.home.subs.accept(held, crate::home::Level::Full);
     // One client is this connection's own hold: nowhere else.
     app.on_line(live(
         "s_bbbbbbbbbbbbbbbb",
@@ -1412,9 +1383,7 @@ fn the_close_all_elsewhere_boundary_holds_both_sides() {
         0,
     ));
     let held = SessionId("s_bbbbbbbbbbbbbbbb".to_owned());
-    if let Some(home) = app.home.as_mut() {
-        home.subs.accept(held, crate::home::Level::Full);
-    }
+    app.home.subs.accept(held, crate::home::Level::Full);
     assert_eq!(slash(&mut app, "/close all"), Effect::None);
     // docs/tui.md, "Quit": "N sessions, M working, K open elsewhere" dim (live top-level sessions, how many working, how many elsewhere).
     assert_eq!(app.close_all_question(), Some((2, 2, 1)));

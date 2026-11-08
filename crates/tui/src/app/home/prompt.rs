@@ -191,10 +191,7 @@ impl App {
     /// session, Up and Down scroll its wrapped rows past the screen,
     /// Ctrl+C passes through to quit, and anything else is swallowed.
     pub(in crate::app) fn question_key(&mut self, key: &Key) -> Option<Effect> {
-        if matches!(
-            self.home.as_ref().and_then(|home| home.questions.prompt()),
-            Some(Prompt::Import)
-        ) {
+        if matches!(self.home.questions.prompt(), Some(Prompt::Import)) {
             return self.import_key(key);
         }
         match key {
@@ -239,15 +236,10 @@ impl App {
     /// Settles every delete waiting after a dropped connection: a
     /// delete is a hub command and is not resent, so each one settles
     /// as unanswered, in id order, and the command's unanswered stops
-    /// end in its stop uncertainty. With no home it does nothing.
+    /// end in its stop uncertainty.
     pub(super) fn settle_deletes(&mut self) {
-        if self.home.is_none() {
-            return;
-        }
         self.delete_command_disconnected();
-        let Some(home) = self.home.as_ref() else {
-            return;
-        };
+        let home = &self.home;
         let mut deletes: Vec<String> = home
             .questions
             .asks
@@ -274,11 +266,7 @@ impl App {
         if !self.on_home() || !self.outbox.is_up() {
             return Effect::None;
         }
-        let row = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-            .cloned();
+        let row = self.home.sessions.by_key(key).cloned();
         let Some(row) = row else {
             return Effect::None;
         };
@@ -293,15 +281,16 @@ impl App {
         }
         let session = row.id.clone();
         let mut lines = Vec::new();
-        if self.home.is_some() && self.subscribed_level(&session).is_none() {
+        if self.subscribed_level(&session).is_none() {
             lines.push(self.subscribe(&session, Level::Summary));
         }
         let id = mint();
         lines.push(session_command(&id, "close", &session, Some(json!({"now": true}))).to_string());
-        if let Some(home) = self.home.as_mut() {
-            home.questions.asks.insert(id.clone(), Ask::Stop(session));
-            self.outbox.wait(&id, super::super::Waiting::Stop);
-        }
+        self.home
+            .questions
+            .asks
+            .insert(id.clone(), Ask::Stop(session));
+        self.outbox.wait(&id, super::super::Waiting::Stop);
         Effect::Send(lines)
     }
 
@@ -309,16 +298,12 @@ impl App {
     /// the hub is permanent, so the terminal asks first, naming the
     /// session.
     fn ask_delete(&mut self, key: u64) {
-        let id = self
-            .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
-            .map(|row| row.id.clone());
+        let id = self.home.sessions.by_key(key).map(|row| row.id.clone());
         if id.is_some() {
             self.close_delete_prompt();
         }
-        if let (Some(home), Some(id)) = (self.home.as_mut(), id) {
-            home.questions.prompt = Some(Prompt::Delete {
+        if let Some(id) = id {
+            self.home.questions.prompt = Some(Prompt::Delete {
                 id,
                 expect: None,
                 scroll: 0,
@@ -332,9 +317,7 @@ impl App {
         if self.command_owns_prompt() {
             self.delete_command_cancel();
         }
-        if let Some(home) = self.home.as_mut() {
-            home.questions.prompt = None;
-        }
+        self.home.questions.prompt = None;
     }
 
     /// Closes the delete question, keeping the session: a
@@ -345,10 +328,8 @@ impl App {
         if self.command_owns_prompt() {
             self.delete_command_cancel();
         }
-        if let Some(home) = self.home.as_mut()
-            && matches!(home.questions.prompt, Some(Prompt::Delete { .. }))
-        {
-            home.questions.prompt = None;
+        if matches!(self.home.questions.prompt, Some(Prompt::Delete { .. })) {
+            self.home.questions.prompt = None;
         }
     }
 
@@ -357,11 +338,9 @@ impl App {
     /// without a new run. The quit question and no prompt stay as
     /// they are.
     pub(super) fn close_import_prompt(&mut self) {
-        if let Some(home) = self.home.as_mut() {
-            home.import_offer = false;
-            if matches!(home.questions.prompt, Some(Prompt::Import)) {
-                home.questions.prompt = None;
-            }
+        self.home.import_offer = false;
+        if matches!(self.home.questions.prompt, Some(Prompt::Import)) {
+            self.home.questions.prompt = None;
         }
     }
 
@@ -380,9 +359,7 @@ impl App {
                 )
             })
             .unwrap_or(0);
-        if let Some(home) = self.home.as_mut()
-            && let Some(Prompt::Delete { scroll, .. }) = home.questions.prompt.as_mut()
-        {
+        if let Some(Prompt::Delete { scroll, .. }) = self.home.questions.prompt.as_mut() {
             let clamped = (*scroll).min(max);
             *scroll = if down {
                 clamped.saturating_add(1).min(max)
@@ -404,8 +381,8 @@ impl App {
         };
         if self
             .home
-            .as_ref()
-            .and_then(|home| home.sessions.by_key(key))
+            .sessions
+            .by_key(key)
             .is_some_and(|row| row.left.is_some())
         {
             self.ask_delete(key);
@@ -417,21 +394,18 @@ impl App {
     /// with the confirmed set from the cascade question. With the link
     /// down nothing goes out and the question stays.
     fn send_delete(&mut self) -> Effect {
-        let ask = self
-            .home
-            .as_ref()
-            .and_then(|home| match &home.questions.prompt {
-                Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
-                Some(
-                    Prompt::Import
-                    | Prompt::Quit
-                    | Prompt::CloseAll { .. }
-                    | Prompt::Stop { .. }
-                    | Prompt::Clear { .. }
-                    | Prompt::HooksOffer { .. },
-                )
-                | None => None,
-            });
+        let ask = match &self.home.questions.prompt {
+            Some(Prompt::Delete { id, expect, .. }) => Some((id.clone(), expect.clone())),
+            Some(
+                Prompt::Import
+                | Prompt::Quit
+                | Prompt::CloseAll { .. }
+                | Prompt::Stop { .. }
+                | Prompt::Clear { .. }
+                | Prompt::HooksOffer { .. },
+            )
+            | None => None,
+        };
         let Some((id, expect)) = ask else {
             return Effect::None;
         };
@@ -439,10 +413,11 @@ impl App {
             return Effect::None;
         }
         let (command, line) = delete_line(&id, expect.as_deref());
-        if let Some(home) = self.home.as_mut() {
-            home.questions.asks.insert(command.clone(), Ask::Delete(id));
-            self.outbox.wait(&command, super::super::Waiting::Delete);
-        }
+        self.home
+            .questions
+            .asks
+            .insert(command.clone(), Ask::Delete(id));
+        self.outbox.wait(&command, super::super::Waiting::Delete);
         Effect::Send(vec![line])
     }
 
@@ -463,16 +438,14 @@ impl App {
             "args": {"source": source},
         })
         .to_string();
-        if let Some(home) = self.home.as_mut() {
-            home.questions.asks.insert(
-                command.clone(),
-                Ask::Import {
-                    source: source.to_owned(),
-                },
-            );
-            self.outbox
-                .wait(&command, super::super::Waiting::OfferImport);
-        }
+        self.home.questions.asks.insert(
+            command.clone(),
+            Ask::Import {
+                source: source.to_owned(),
+            },
+        );
+        self.outbox
+            .wait(&command, super::super::Waiting::OfferImport);
         match self
             .outbox
             .send(command, Kind::Command, Draft::default(), line)
@@ -486,9 +459,7 @@ impl App {
     /// startup: pending opens the offer while no other question holds
     /// the foot, and the flag never re-resolves after.
     pub(crate) fn set_import_offer(&mut self, pending: bool) {
-        let Some(home) = self.home.as_mut() else {
-            return;
-        };
+        let home = &mut self.home;
         home.import_offer = pending;
         if pending && home.questions.prompt.is_none() {
             home.questions.prompt = Some(Prompt::Import);
@@ -503,25 +474,21 @@ impl App {
     /// mid-run neither retracts a shown offer nor re-fires a
     /// dismissed one.
     pub(super) fn resolve_import_offer(&mut self) {
-        if !self.home.as_ref().is_some_and(|home| home.import_owed) {
+        if !self.home.import_owed {
             return;
         }
         let pending = match self.remote() {
             Some(remote) => match remote.import_pending_hub() {
                 Ok(pending) => Some(pending),
                 Err(error) => {
-                    if let Some(home) = self.home.as_mut() {
-                        home.import_owed = false;
-                    }
+                    self.home.import_owed = false;
                     self.push_notice(error.code.clone(), error.message);
                     return;
                 }
             },
             None => None,
         };
-        if let Some(home) = self.home.as_mut() {
-            home.import_owed = false;
-        }
+        self.home.import_owed = false;
         if let Some(pending) = pending {
             self.set_import_offer(pending);
         }
@@ -540,10 +507,7 @@ impl App {
         accepted: bool,
         payload: &Map<String, Value>,
     ) -> Option<Vec<String>> {
-        if !matches!(
-            self.home.as_ref()?.questions.asks.get(id),
-            Some(Ask::Import { .. })
-        ) {
+        if !matches!(self.home.questions.asks.get(id), Some(Ask::Import { .. })) {
             return None;
         }
         let source = match self.take_ask(id) {
@@ -583,10 +547,7 @@ impl App {
     /// pops a pending entry for; any other command's entry stays for
     /// its own answer.
     pub(super) fn take_ask(&mut self, id: &str) -> Option<Ask> {
-        let ask = self
-            .home
-            .as_mut()
-            .and_then(|home| home.questions.asks.remove(id));
+        let ask = self.home.questions.asks.remove(id);
         if ask.is_some() {
             self.outbox.settled(id);
             self.outbox.answered(id);
@@ -596,9 +557,7 @@ impl App {
 
     /// A refusal shows on the row, in place of its detail.
     fn note(&mut self, id: &SessionId, note: String) {
-        if let Some(home) = self.home.as_mut() {
-            home.sessions.note(id, note);
-        }
+        self.home.sessions.note(id, note);
     }
 
     /// Answers a stop or delete. An accepted delete drops the row and
@@ -630,14 +589,8 @@ impl App {
                     self.clear_prompt(&id);
                     // The row's project goes with the refresh: the
                     // removal below erases where to re-ask.
-                    let project = self
-                        .home
-                        .as_ref()
-                        .and_then(|home| home.sessions.row(&id))
-                        .map(|row| row.project.clone());
-                    if let Some(home) = self.home.as_mut() {
-                        home.sessions.remove(&id);
-                    }
+                    let project = self.home.sessions.row(&id).map(|row| row.project.clone());
+                    self.home.sessions.remove(&id);
                     return self.ask_recent_first(project.as_deref());
                 }
                 let (code, message) = refusal_parts(payload);
@@ -652,13 +605,11 @@ impl App {
                     }
                     if expect.len() > 1 {
                         self.close_delete_prompt();
-                        if let Some(home) = self.home.as_mut() {
-                            home.questions.prompt = Some(Prompt::Delete {
-                                id,
-                                expect: Some(expect),
-                                scroll: 0,
-                            });
-                        }
+                        self.home.questions.prompt = Some(Prompt::Delete {
+                            id,
+                            expect: Some(expect),
+                            scroll: 0,
+                        });
                         return Vec::new();
                     }
                 }
@@ -673,17 +624,17 @@ impl App {
     /// Closes the foot's question when it asks about `id`: an answer for
     /// an older question leaves a newer one open.
     fn clear_prompt(&mut self, id: &SessionId) {
-        let clears = self.home.as_ref().is_some_and(|home| {
-            home.questions
-                .prompt
-                .as_ref()
-                .is_some_and(|prompt| prompt.id() == Some(id))
-        });
+        let clears = self
+            .home
+            .questions
+            .prompt
+            .as_ref()
+            .is_some_and(|prompt| prompt.id() == Some(id));
         if clears && self.command_owns_prompt() {
             self.delete_command_cancel();
         }
-        if clears && let Some(home) = self.home.as_mut() {
-            home.questions.prompt = None;
+        if clears {
+            self.home.questions.prompt = None;
         }
     }
 }

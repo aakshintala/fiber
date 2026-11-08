@@ -190,7 +190,8 @@ fn a_click_on_the_top_row_closes_results_and_keeps_the_bar() {
         .iter()
         .find(|target| target.id == TargetId::CloseOverlay)
         .unwrap();
-    assert_eq!(target.rect, Rect::new(0, 0, 80, 1));
+    // The overlay row spans the column, past the grip.
+    assert_eq!(target.rect, Rect::new(1, 0, 79, 1));
     app.on_click(target.id);
     assert!(!app.results_open());
     assert!(app.find_bar().is_some());

@@ -736,7 +736,10 @@ fn hover_frames_finds_the_badge_row_at_160_by_48() {
         line.contains(&badge),
         "row {row} shows {badge:?} in {line:?}"
     );
-    let (_, bytes) = crate::hover_frames(events, 160, 48, &[(3, row), (3, 0)])
+    // A cell on the badge, past the rail.
+    let start = line.find(&badge).unwrap_or_default();
+    let col = u16::try_from(crate::format::width(&line[..start])).unwrap_or_default() + 1;
+    let (_, bytes) = crate::hover_frames(events, 160, 48, &[(col, row), (3, 0)])
         .unwrap_or_else(|error| panic!("hover_frames: {error}"));
     assert_eq!(bytes.len(), 2);
     assert!(bytes[0] > 0);
