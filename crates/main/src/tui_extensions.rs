@@ -1208,7 +1208,18 @@ fn ledger_value(row: &tui::ext::LedgerRow<'_>) -> Value {
             json!(result.output),
         ),
     };
-    json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": exit, "duration_ms": duration_ms, "lines": lines, "changes": changes, "error": error, "output": output, "answer": row.answer, "flat": row.flat})
+    let mut value = json!({"name": row.name, "arguments": row.arguments, "status": status, "exit": exit, "duration_ms": duration_ms, "lines": lines, "changes": changes, "error": error, "output": output, "answer": row.answer, "flat": row.flat});
+    with_changed_by(&mut value, row.changed_by);
+    value
+}
+
+/// Writes `changed_by` onto a call's input only when a hook rewrote the
+/// call: an optional key is absent when it does not apply, never `null`
+/// (`docs/tui.md`, "The slots").
+fn with_changed_by(value: &mut Value, changed_by: Option<&[String]>) {
+    if let (Some(names), Some(object)) = (changed_by, value.as_object_mut()) {
+        object.insert("changed_by".to_owned(), json!(names));
+    }
 }
 
 fn images_value(images: &[tui::ext::PromptImage<'_>]) -> Value {
@@ -1384,7 +1395,7 @@ fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
             images_value(&result.images),
         ),
     };
-    json!({
+    let mut value = json!({
         "name": call.name,
         "arguments": call.arguments,
         "status": status,
@@ -1400,7 +1411,9 @@ fn call_value(call: &tui::ext::TurnCall<'_>) -> Value {
         "images": images,
         "open": call.open,
         "asking": call.asking,
-    })
+    });
+    with_changed_by(&mut value, call.changed_by);
+    value
 }
 
 fn aside_value(aside: &tui::ext::TurnAside<'_>) -> Value {

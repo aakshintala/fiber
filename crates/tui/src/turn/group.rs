@@ -912,6 +912,7 @@ impl Group {
         TurnCall {
             name: row.name,
             arguments: row.arguments,
+            changed_by: row.changed_by,
             state,
             answer: row.answer,
             open: call.open,
@@ -1064,6 +1065,7 @@ impl Group {
         LedgerRow {
             name: &call.name,
             arguments: &call.arguments,
+            changed_by: call.changed_by.as_deref(),
             state,
             answer,
             flat,
