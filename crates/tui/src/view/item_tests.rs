@@ -1748,6 +1748,7 @@ fn an_item_views_transcript_draws_no_pin() {
             | crate::app::Target::Note(_)
             | crate::app::Target::Image(_)
             | crate::app::Target::Orphans(_)
+            | crate::app::Target::Shell(_)
             | crate::app::Target::Copy { .. } => None,
         })
         .expect("a group target");
@@ -1764,6 +1765,7 @@ fn an_item_views_transcript_draws_no_pin() {
             | crate::app::Target::Note(_)
             | crate::app::Target::Image(_)
             | crate::app::Target::Orphans(_)
+            | crate::app::Target::Shell(_)
             | crate::app::Target::Copy { .. } => None,
         })
         .expect("a call target");

@@ -219,6 +219,9 @@ pub(crate) enum Target {
     Call(usize),
     /// A call's whole view, opened from its more row.
     CallView(usize),
+    /// A `!` or `!!` run's output past the row cap, opened from its more
+    /// row. The number is the run's slot among its page's runs.
+    Shell(usize),
     /// A thinking block's text.
     Thought(usize),
     /// The login a failed turn offers.

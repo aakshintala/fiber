@@ -365,12 +365,13 @@ On Linux x86_64 alone:
   whether or not it touches anything else; any other `research/` path alone
   selects the docs job alone
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
-- `shellcheck --shell=bash` on every other `scripts/` shell file: `bug-red`,
-  `cache-prune`, `check`, `check-docs`, `check-resources`, `flaky-tests`, `install-shells`,
-  `leak-scan`, `paging-jig`, `release-pack`, `release-size`,
-  `stored-results`,
-  `test-bug-red`, `test-bug-red-cargo`, `test-bug-red-target-cargo`, `test-flake-report`, `test-flaky-tests`, `test-leak-probe`,
-  `test-leak-scan`, and `lib/release.sh`
+- `shellcheck --shell=bash` on every other `scripts/` shell file: a file at
+  any depth under `scripts/`, other than `scripts/install.sh`, whose first line
+  is a shebang naming `bash`, directly or through `env` with its options and
+  assignments, plus every `scripts/lib/*.sh`. `cargo xtask shellcheck-files`
+  lists them from the tree when the check runs, so a new bash script is
+  checked with nothing added here or to `scripts/check`, and the command
+  fails when it finds none
 - actionlint over every file in `.github/workflows/`, when the diff changes
   one. A workflow change runs the whole selection ("Selection"), so the job is
   always selected. No `taiki-e/install-action` tool installs actionlint, so the
@@ -509,7 +510,7 @@ network (`docs/testing.md`).
 - a relative Markdown link, or its `#anchor`, does not resolve
 - a section citation, such as `` (`docs/workflow.md`, "The gate") ``, names a
   heading the file does not have, including a citation broken across lines
-- a citation in code under `crates/`, `xtask/` or `scripts/` gives a line number (`docs/<file>.md:<n>`, `docs/<file>.md line <n>`) instead of the file and a quoted heading, or quotes a heading its file lacks, and `xtask/doc-citations.allow` does not list it
+- a citation in code under `crates/`, `xtask/` or `scripts/` gives a line number (`docs/<file>.md:<n>`, `docs/<file>.md line <n>`) instead of the file and a quoted heading, or quotes a heading its file lacks, or names the doc path without backticks, and `xtask/doc-citations.allow` does not list it
 - a backticked path under `docs/`, `crates/`, `scripts/`, `research/` or
   `.github/` does not exist. A path with a placeholder in it, such as
   `docs/<area>.md`, is not checked.
@@ -520,7 +521,7 @@ network (`docs/testing.md`).
 - a `pub(crate)` or `pub(super)` function, const or static no other file
   of its crate names (`cargo xtask visibility`)
 
-`xtask/doc-citations.allow` lists, per file, each such citation still allowed and how many times. A citation beyond its count fails, and so does an entry whose citation the code no longer holds, so the list only shrinks. `cargo xtask doc-citations --print` prints it. The check reads every text file under those three directories except the allow table itself, whose own entries would otherwise read as citations.
+`xtask/doc-citations.allow` lists, per file, each such citation still allowed and how many times. A citation beyond its count fails, and so does an entry whose citation the code no longer holds. The PR that adds a rule seeds the list with the citations already in the code, and after that the list only shrinks. `cargo xtask doc-citations --print` prints it. The check reads every text file under those three directories except the allow table itself, whose own entries would otherwise read as citations.
 
 It runs in the selection job on every pull request, not only docs-only
 ones, because the change that breaks a citation is usually a code change
