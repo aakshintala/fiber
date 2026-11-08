@@ -2138,8 +2138,9 @@ through the `input_status` slot ("Extension seams").
   could not start shows `! <command>` then `<code>: <message>` as it
   arrived. A refused run puts that row on the attached screen beside the
   notice. A session `duplicate_command` refusal draws neither a row nor a
-  notice. Shell rows show at most 20 lines, the same way an opened call
-  is.
+  notice. A run's output shows at most 20 lines, then a "N more lines"
+  row; clicking it, or Enter on it, opens the rest in place, and again
+  closes it.
 
 ### Bindings
 

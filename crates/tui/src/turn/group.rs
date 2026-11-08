@@ -294,6 +294,7 @@ impl Group {
             | Target::Note(_)
             | Target::Orphans(_)
             | Target::CallView(_)
+            | Target::Shell(_)
             | Target::Copy { .. } => None,
         };
         flag.map(|flag| *flag = open).is_some()

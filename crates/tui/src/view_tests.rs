@@ -1315,6 +1315,7 @@ fn tool_group_ledger_open_with_a_call_open() {
             | crate::app::Target::Note(_)
             | crate::app::Target::Orphans(_)
             | crate::app::Target::CallView(_)
+            | crate::app::Target::Shell(_)
             | crate::app::Target::Copy { .. } => None,
         })
         .nth(1);
@@ -3158,6 +3159,7 @@ fn ledger_rows_are_targets_over_their_rows() {
             | Target::Image(_)
             | Target::Note(_)
             | Target::Orphans(_)
+            | Target::Shell(_)
             | Target::CallView(_) => 'o',
             Target::Copy { .. } => 'y',
         })
