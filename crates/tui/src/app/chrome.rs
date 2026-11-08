@@ -231,6 +231,7 @@ impl App {
         if self.screen.wrap_at(width) {
             self.clear_selection();
         }
+        self.rewrap_call_view();
         if moved {
             self.set_regions(self.chrome.regions());
         }
