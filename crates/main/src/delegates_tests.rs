@@ -265,6 +265,120 @@ fn a_level_the_model_does_not_take_fails_with_the_thinking_message() {
     );
 }
 
+/// A level the model does not take refuses with the model's own levels on
+/// the first line, then the roles line, then the closest references, then
+/// the pointer: the order `ModelUnresolved` prints. The closest list is
+/// pinned by count and prefix only; its ranking is `suggest_tests.rs`'s.
+#[test]
+fn a_bad_level_on_a_valid_model_names_its_levels_before_the_roles_and_references() {
+    let (root, providers, _) = stored_rig(json!({"deep": "fiber:fake/m:high"}), &["work"]);
+    let config = load(
+        &root.path().join("home"),
+        &root.path().join("workspace"),
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
+    let resolve = resolver(&providers, &config, "fake/m");
+    let typed = "fiber:fake/m:medium";
+    let Err(reason) = (resolve.lookup)(typed) else {
+        panic!("a level the model does not take resolves");
+    };
+    let levels =
+        "The thinking level `medium` is not one model `fake/m` takes: it takes `low`, `high`.";
+    assert_eq!(reason, levels);
+    let closest = (resolve.closest)(typed);
+    assert_eq!(closest.len(), 3, "{closest:?}");
+    assert!(
+        closest.iter().all(|entry| entry.starts_with("fiber:fake/")),
+        "{closest:?}"
+    );
+    let message = jobs::JobsError::ModelUnresolved {
+        reason,
+        roles: resolve.roles.to_string(),
+        closest: closest.clone(),
+    }
+    .to_string();
+    let lines: Vec<&str> = message.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            levels,
+            "Roles: deep",
+            &format!("Closest references: {}", closest.join(", ")),
+            "Call delegate_models for every reference.",
+        ],
+        "{message}"
+    );
+}
+
+/// A catalogue of 41 models, one with a 3004-character id, still suggests
+/// exactly 3 references for a typo of the long one, each printed whole: the
+/// bound counts the parts of a refusal, and a suggested id is exempt from it.
+#[test]
+fn a_big_catalogue_with_a_long_id_suggests_at_most_three_each_whole() {
+    let root = fakes::TempDir::new("fd-big");
+    let home = root.path().join("home");
+    let long_id = format!("long{}", "x".repeat(3000));
+    let mut models: Vec<serde_json::Value> = (0..40)
+        .map(|n| {
+            json!({"id": format!("m{n:02}"), "protocol": "openai-responses",
+                   "base_url": "http://127.0.0.1:9/v1", "context_window": 1000})
+        })
+        .collect();
+    models.push(json!({"id": long_id, "protocol": "openai-responses",
+                       "base_url": "http://127.0.0.1:9/v1", "context_window": 1000}));
+    install_extension(
+        &home,
+        "extensions/fake",
+        json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+        &[(
+            "fake",
+            json!({"name": "fake", "credential": {"env": "FIBER_TEST_FAKE_KEY"}, "models": models}),
+        )],
+    );
+    // A stored label logs the provider in, so it is switched on without
+    // the environment variable set.
+    config::store_credential(
+        &home,
+        "fake",
+        "work",
+        &config::Secret::new("work-key".to_owned()),
+    )
+    .unwrap();
+    std::fs::write(home.join("config.json"), json!({"roles": {}}).to_string()).unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let config = load(
+        &home,
+        &workspace,
+        "test",
+        vec!["providers.fake.credential=default".to_owned()],
+    );
+    let (providers, _notices) = extensions::Providers::load(&home).unwrap();
+    let resolve = resolver(&providers, &config, "fake/m00");
+    let typed = format!("fiber:fake/long{}y", "x".repeat(2999));
+    let Err(reason) = (resolve.lookup)(&typed) else {
+        panic!("a typo of a model resolves");
+    };
+    assert_eq!(reason, format!("Unknown delegate model {typed:?}."));
+    let closest = (resolve.closest)(&typed);
+    assert_eq!(closest.len(), 3, "out of a pool of 41");
+    assert_eq!(closest[0], format!("fiber:fake/{long_id}"));
+    let message = jobs::JobsError::ModelUnresolved {
+        reason,
+        roles: resolve.roles.to_string(),
+        closest: closest.clone(),
+    }
+    .to_string();
+    let lines: Vec<&str> = message.lines().collect();
+    assert_eq!(lines.len(), 4, "{} bytes", message.len());
+    assert_eq!(
+        lines[2],
+        format!("Closest references: {}", closest.join(", "))
+    );
+    assert!(message.len() > 2048, "{} bytes", message.len());
+}
+
 #[test]
 fn an_unknown_model_lists_the_valid_references() {
     let (providers, config) = rig(json!({}));
