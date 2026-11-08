@@ -1805,8 +1805,11 @@ fn the_steward_keeps_a_live_group_listed_then_unlists_it_and_closes_the_artifact
     let block = block_of(ready.path());
     let gate = dir.path().join("exit_gate");
     fakes::fifo(&gate);
+    // The leftover execs `sleep` rather than forking it: a KILL that lands
+    // while a fork is in flight can miss the child, which then keeps the
+    // group (and the pipe) alive.
     let command = format!(
-        "mkfifo {block}; ( read -r _ < {block}; echo LATE; sleep 1000 ) & echo $$ > {ready}; echo done; read -r _ < {gate}",
+        "mkfifo {block}; ( read -r _ < {block}; echo LATE; exec sleep 1000 ) & echo $$ > {ready}; echo done; read -r _ < {gate}",
         block = quote(&block),
         ready = quote(ready.path()),
         gate = quote(&gate),
