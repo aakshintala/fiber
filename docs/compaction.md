@@ -84,7 +84,7 @@ instructions added. The request after the compaction misses the prompt cache.
 The model starts a compaction with the built-in `compact` tool:
 
 ```
-compaction { note }
+compact { note }
 ```
 
 The tool returns a tool result carrying `control.compact`, the note

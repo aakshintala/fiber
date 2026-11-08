@@ -3399,7 +3399,9 @@ fn compact_with_instructions_restarts_from_a_note_that_names_them() {
     run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
     run.ready();
     run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
-    // A first prompt attaches the session.
+    // A first prompt attaches the session. A step is one round-trip and a
+    // reply with no tool call ends the turn, so the turn makes one request
+    // (`docs/loop.md`, "One step").
     let first = run.output().len();
     run.write(b"first marker\r");
     assert!(
@@ -3410,7 +3412,9 @@ fn compact_with_instructions_restarts_from_a_note_that_names_them() {
         grid.contents.contains("First reply.")
     });
     run.turn_finished(first);
-    // The command asks the model for a note, naming the instructions.
+    // The command asks the model for a note, naming the instructions: one
+    // note request, making two in all (`docs/compaction.md`, "A person":
+    // "Fiber asks for the note exactly as for an automatic compaction").
     run.write(b"/compact focus on X\r");
     assert!(server.await_requests(2, setup.deadline), "the note request");
     let requests = server.requests();
@@ -3425,7 +3429,8 @@ fn compact_with_instructions_restarts_from_a_note_that_names_them() {
             .contains(" ⇄ compaction · you asked with /compact")
     });
     // The retired name is refused: the exact notice shows and nothing
-    // more goes out.
+    // more goes out (`docs/tui.md`, "Slash commands": an unrecognised
+    // `/name` is refused and kept in the input box), so the count stays two.
     run.write(b"/handoff\r");
     run.wait_screen("the unknown-command notice", |grid| {
         grid.contents

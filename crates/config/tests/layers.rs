@@ -330,6 +330,8 @@ fn the_retired_name_is_an_unknown_key_on_load() {
     );
     let config = setup.load(&[]).unwrap();
     let notices = config.notices();
+    // One unknown key, one notice (`docs/configuration.md`, "When Fiber
+    // reads configuration": "An unknown key is a `notice`").
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ConfigKeyIgnored);
     assert_eq!(
