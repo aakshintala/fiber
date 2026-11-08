@@ -174,6 +174,7 @@ impl ResumeStart {
 pub(crate) struct SessionInputs {
     pub(crate) prompt: Option<String>,
     pub(crate) one_turn: bool,
+    pub(crate) close_from_start: bool,
     pub(crate) start: Start,
     pub(crate) fiber_path: PathBuf,
     pub(crate) reads: Arc<crate::switch::Reads>,
@@ -184,6 +185,10 @@ pub(crate) struct SessionInputs {
 /// (`docs/permissions.md`, "Supervised sessions"). Both the fresh and
 /// the resumed path compute their effective value through here, so a
 /// supervised session stays unanswerable however it started.
+pub(crate) fn close_from_start_for(one_turn: bool, delegate: bool, case_fallback: bool) -> bool {
+    case_fallback || (one_turn && !delegate)
+}
+
 pub(crate) fn effective_answerable(base: bool, supervised: bool) -> bool {
     base && !supervised
 }
@@ -519,6 +524,9 @@ pub(crate) fn run_new(
     // reads every startup credential command runs through.
     shutdown::arm(signals, &reads);
     let fiber_path = process.exe.clone()?;
+    // Preserve whether this process was started as a delegate before its
+    // parent provenance is consumed into `Start`.
+    let close_from_start = close_from_start_for(one_turn, parent.is_some(), false);
     // A rewind's new session runs where the old one did, with the model,
     // credential and thinking level the old log's latest build recorded,
     // as a resume keeps its recorded ones (`docs/events.md`, "Rewind").
@@ -646,6 +654,7 @@ pub(crate) fn run_new(
     let inputs = SessionInputs {
         prompt,
         one_turn,
+        close_from_start,
         start,
         fiber_path: fiber_path.clone(),
         reads,
@@ -665,6 +674,7 @@ pub(crate) fn assemble_session(
     let SessionInputs {
         prompt,
         one_turn,
+        close_from_start,
         start,
         fiber_path,
         reads,
@@ -1030,6 +1040,7 @@ pub(crate) fn assemble_session(
                 dir.path(),
                 prompt,
                 one_turn,
+                close_from_start,
                 cancel,
                 &diag,
                 &current,
@@ -1520,13 +1531,16 @@ pub(crate) fn assemble_session(
                     }
                 }
             });
-            let run_one_turn = one_turn || (case_inputs.is_some() && case_driver.is_none());
+            let case_fallback = case_inputs.is_some() && case_driver.is_none();
+            let run_one_turn = one_turn || case_fallback;
+            let close_from_start = close_from_start || case_fallback;
             let code = run_turn(
                 &session,
                 &log,
                 dir.path(),
                 prompt,
                 run_one_turn,
+                close_from_start,
                 cancel,
                 &diag,
                 &current,

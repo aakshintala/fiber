@@ -86,6 +86,28 @@ fn a_failure_with_no_signal_is_reported() {
 }
 
 #[test]
+fn delegate_admission_startup_classification_keeps_asks_closed_and_delegates_open() {
+    use super::close_from_start_for;
+
+    for (one_turn, delegate, case_fallback, expected) in [
+        (false, false, false, false),
+        (false, false, true, true),
+        (false, true, false, false),
+        (false, true, true, true),
+        (true, false, false, true),
+        (true, false, true, true),
+        (true, true, false, false),
+        (true, true, true, true),
+    ] {
+        assert_eq!(
+            close_from_start_for(one_turn, delegate, case_fallback),
+            expected,
+            "one_turn={one_turn}, delegate={delegate}, case_fallback={case_fallback}"
+        );
+    }
+}
+
+#[test]
 fn effective_answerable_keeps_the_base_only_when_not_supervised() {
     use super::effective_answerable;
     // A fresh or resumed session a person may answer stays answerable.

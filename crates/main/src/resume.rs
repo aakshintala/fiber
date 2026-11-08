@@ -273,6 +273,7 @@ pub(crate) fn ask_resume(
         resuming.credential,
         Some(prompt),
         true,
+        true,
         false,
         clock,
         signals,
@@ -354,8 +355,8 @@ pub(crate) fn session_resume(
     let dir = log::SessionDir::new(&sessions, &id);
     let one_turn = prompt.is_some();
     resume_session(
-        log, &sessions, &dir, id, overrides, credential, prompt, one_turn, true, clock, signals,
-        process,
+        log, &sessions, &dir, id, overrides, credential, prompt, one_turn, false, true, clock,
+        signals, process,
     )
 }
 
@@ -378,6 +379,7 @@ fn resume_session(
     credential: Option<String>,
     prompt: Option<String>,
     one_turn: bool,
+    close_from_start: bool,
     enter_present: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
@@ -456,6 +458,7 @@ fn resume_session(
         credential,
         prompt,
         one_turn,
+        close_from_start,
         clock,
         signals,
         process,
@@ -486,6 +489,7 @@ fn resumed_session(
     credential: Option<String>,
     prompt: Option<String>,
     one_turn: bool,
+    close_from_start: bool,
     clock: Arc<dyn contract::clock::Clock>,
     signals: &Arc<doors::Signals>,
     process: &crate::startup::Process,
@@ -554,6 +558,7 @@ fn resumed_session(
     let inputs = crate::session_command::SessionInputs {
         prompt,
         one_turn,
+        close_from_start,
         start: crate::session_command::Start::Resume(resume),
         fiber_path: fiber_path.clone(),
         reads: Arc::clone(&reads),

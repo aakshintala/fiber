@@ -949,6 +949,7 @@ fn run_turn(
     dir: &Path,
     prompt: Option<String>,
     one_turn: bool,
+    close_from_start: bool,
     cancel: Arc<r#loop::TurnCancel>,
     diag: &Arc<log::diag::Diag>,
     current: &Arc<session_extensions::Current>,
@@ -984,15 +985,29 @@ fn run_turn(
     let ran = match prompt {
         // `fiber ask` runs one turn: the prompt, then `close`. It always
         // supplies a prompt; without one it would wait for a client.
-        Some(prompt) if one_turn => session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
-            match run(inbox, turn, &mut summary) {
+        Some(prompt) if one_turn && close_from_start => {
+            session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
+                match run(inbox, turn, &mut summary) {
+                    Ok(code) => {
+                        committed = code;
+                        Ok(())
+                    }
+                    Err(failure) => Err(failure),
+                }
+            })
+        }
+        Some(prompt) if one_turn => session.run_delegate(
+            log,
+            prompt,
+            Arc::new(move || door.cancel()),
+            |inbox| match run(inbox, turn, &mut summary) {
                 Ok(code) => {
                     committed = code;
                     Ok(())
                 }
                 Err(failure) => Err(failure),
-            }
-        }),
+            },
+        ),
         // The session command queues its prompt when one was supplied and
         // serves clients until idle exit or `close`.
         prompt => session.serve(prompt, Arc::new(move || door.cancel()), |inbox| {
