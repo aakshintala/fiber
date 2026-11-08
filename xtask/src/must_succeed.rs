@@ -72,9 +72,13 @@ pub(crate) const ALLOWANCES: &[Allowance] = &[
     kept("crates/doors/tests/support/mod.rs", "SLICE", SLICE),
     kept("crates/hub/src/closed_tests.rs", "SLICE", SLICE),
     kept("crates/hub/src/rejoin_tests.rs", "SLICE", SLICE),
-    kept("crates/main/tests/repository_offer.rs", "SLICE", SLICE),
     kept(
-        "crates/main/tests/hub_remote_terminal.rs",
+        "crates/main/tests/extension_host/repository_offer.rs",
+        "SLICE",
+        SLICE,
+    ),
+    kept(
+        "crates/main/tests/hub_daemon/hub_remote_terminal.rs",
         "HELLO_SLICE",
         SLICE,
     ),

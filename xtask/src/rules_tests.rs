@@ -3090,9 +3090,84 @@ fn support_tests_fails_a_shared_support_file_with_tests() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
+}
+
+/// A file of the `main` crate's tests, under `tests/`.
+fn main_test(path: &str, source: &str) -> RustFile {
+    file("main", &format!("tests/{path}"), source.to_owned())
+}
+
+const SHARED_WITH_TEST: &str = "#[test]\nfn shared_holds() {}\n";
+const REACH_SHARED: &str = "#[path = \"../support/shared.rs\"]\nmod shared;\n";
+
+#[test]
+fn support_tests_counts_each_area_root_as_a_binary() {
+    // `tests/<dir>/main.rs` is a cargo test target, so two area roots
+    // compiling one support file run its test twice.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+        main_test("b/main.rs", REACH_SHARED),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/shared.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_counts_an_area_root_beside_a_top_level_binary() {
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+        main_test("b.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert_eq!(
+        support_tests(&files),
+        [
+            "crates/main/tests/support/shared.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
+        ]
+    );
+}
+
+#[test]
+fn support_tests_passes_a_file_reached_from_one_area_root() {
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/main.rs", REACH_SHARED),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_does_not_count_a_member_of_an_area_as_a_binary() {
+    // `tests/a/other.rs` is a module file, not a target, so declaring the
+    // file from it adds no binary beside `tests/b.rs`.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test("a/other.rs", REACH_SHARED),
+        main_test("b.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
+}
+
+#[test]
+fn support_tests_does_not_count_a_nested_main_rs_as_a_binary() {
+    // Cargo discovers only `tests/<dir>/main.rs`, one level down.
+    let files = [
+        main_test("support/shared.rs", SHARED_WITH_TEST),
+        main_test(
+            "a/b/main.rs",
+            "#[path = \"../../support/shared.rs\"]\nmod shared;\n",
+        ),
+        main_test("c.rs", "#[path = \"support/shared.rs\"]\nmod shared;\n"),
+    ];
+    assert!(support_tests(&files).is_empty());
 }
 
 #[test]
@@ -3107,7 +3182,7 @@ fn support_tests_counts_every_mod_support_declarer_for_a_root_reached_file() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/pty.rs holds 1 #[test] collected by 3 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/pty.rs holds 1 #[test] collected by 3 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3143,7 +3218,7 @@ fn support_tests_fails_when_the_lib_harness_reaches_a_tested_support_file() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3189,7 +3264,7 @@ fn support_tests_counts_the_lib_harness_once_for_many_cfg_test_paths() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3239,7 +3314,7 @@ fn support_tests_counts_tests_nested_in_inline_modules() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 2 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 2 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3256,7 +3331,7 @@ fn support_tests_counts_tests_through_inline_module_declarers() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3276,7 +3351,7 @@ fn support_tests_ignores_non_test_bracket_attributes_in_the_count() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3297,7 +3372,7 @@ fn support_tests_ignores_a_single_ident_non_test_attribute() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3317,7 +3392,7 @@ fn support_tests_ignores_a_test_named_value_in_an_array() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/main/tests/support/mod.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }
@@ -3379,7 +3454,7 @@ fn support_tests_resolves_a_dotted_path_climbing_out_of_src() {
     assert_eq!(
         support_tests(&files),
         [
-            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/support_helpers.rs"
+            "crates/tools/tests/support/sandbox_home.rs holds 1 #[test] collected by 2 binaries; move it to crates/main/tests/hub_daemon/support_helpers.rs"
         ]
     );
 }

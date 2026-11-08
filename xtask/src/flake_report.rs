@@ -491,21 +491,37 @@ impl Classified {
     }
 }
 
-/// The issue title for one flake line: the aggregate `main` integration
-/// binary is keyed by its first test-module segment; a root-level `main`
-/// test falls back to `Flaky tests: main`. A binary id containing `::`,
-/// such as `main::hub_exit_window`, keeps its binary title. A unit-test
+/// The `crates/main/tests/<area>/` binaries, each `main::<area>` in the
+/// test list. A test in one is keyed by the file it lives in. The set equals
+/// the directories there that hold a `main.rs`, which a test pins.
+const MAIN_TEST_AREAS: &[&str] = &[
+    "commands",
+    "delegation",
+    "extension_host",
+    "hub_daemon",
+    "providers",
+    "screen_looks",
+    "screens",
+    "session_turns",
+    "timings",
+    "tool_calls",
+];
+
+/// The issue title for one flake line: an area binary of
+/// `crates/main/tests/` (`main::<area>`) is keyed by its first test-module
+/// segment, the file the test lives in; a root-level test in one falls back
+/// to its binary title. Any other binary id containing `::`, such as the
+/// single-file `main::hub_service`, keeps its binary title. A unit-test
 /// binary is keyed by its module path without the test name or one trailing
 /// `tests` module, appended to the binary id; root-level tests use the binary
 /// id alone.
 fn flake_title(binary: &str, test: &str) -> String {
-    if binary == "main" {
-        if let Some((first, _)) = test.split_once("::")
-            && !first.is_empty()
-        {
-            return format!("Flaky tests: main::{first}");
-        }
-        return "Flaky tests: main".to_owned();
+    if let Some(area) = binary.strip_prefix("main::")
+        && MAIN_TEST_AREAS.contains(&area)
+        && let Some((first, _)) = test.split_once("::")
+        && !first.is_empty()
+    {
+        return format!("Flaky tests: main::{first}");
     }
     if binary.contains("::") {
         return format!("Flaky tests: {binary}");

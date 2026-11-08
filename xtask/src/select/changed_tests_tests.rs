@@ -1448,16 +1448,236 @@ fn issue_test_names_dedups_keeping_first_order() {
 fn test_name_matches_keeps_its_exact_and_suffix_arms() {
     assert!(test_name_matches(
         "reviewer_setup::the_setup_saves",
-        "reviewer_setup::the_setup_saves"
+        "reviewer_setup::the_setup_saves",
+        None
     ));
     assert!(test_name_matches(
         "reviewer_setup::the_setup_saves",
-        "the_setup_saves"
+        "the_setup_saves",
+        None
     ));
     assert!(!test_name_matches(
         "reviewer_setup::the_setup_saves",
-        "other"
+        "other",
+        None
     ));
+    assert!(test_name_matches("support::probe_tests::x", "x", None));
+}
+
+#[test]
+fn test_name_matches_stays_inside_the_member_module() {
+    let hub_list = Some("hub_list");
+    assert!(test_name_matches(
+        "hub_list::a_taken_port",
+        "a_taken_port",
+        hub_list
+    ));
+    assert!(!test_name_matches(
+        "hub_remote_terminal::a_taken_port",
+        "a_taken_port",
+        hub_list
+    ));
+    // A nested module inside the member still matches, and a module that
+    // only starts with the member's name does not.
+    assert!(test_name_matches(
+        "hub_list::inner::a_taken_port",
+        "a_taken_port",
+        hub_list
+    ));
+    assert!(!test_name_matches(
+        "hub_list_extra::a_taken_port",
+        "a_taken_port",
+        hub_list
+    ));
+    assert!(!test_name_matches(
+        "hub_list::a_taken_port",
+        "other",
+        hub_list
+    ));
+}
+
+#[test]
+fn member_module_names_only_a_file_beside_an_area_root() {
+    let area = [file("main", "crates/main/tests/hub_daemon/main.rs", "")];
+    let nested = [file(
+        "main",
+        "crates/main/tests/hub_daemon/deep/main.rs",
+        "",
+    )];
+    let crate_relative = [file("main", "tests/area/main.rs", "")];
+    assert_eq!(
+        member_module("crates/main/tests/hub_daemon/hub_list.rs", &area),
+        Some("hub_list")
+    );
+    assert_eq!(member_module("tests/area/x.rs", &crate_relative), Some("x"));
+    // The root itself is no member, a file with no root beside it has no
+    // module, and `tests` must be the area's parent directory.
+    assert_eq!(
+        member_module("crates/main/tests/hub_daemon/main.rs", &area),
+        None
+    );
+    assert_eq!(
+        member_module("crates/main/tests/hub_daemon/hub_list.rs", &[]),
+        None
+    );
+    assert_eq!(
+        member_module("crates/main/tests/hub_daemon/deep/x.rs", &nested),
+        None
+    );
+    assert_eq!(member_module("crates/main/tests/hub_list.rs", &area), None);
+}
+
+const HUB_LIST: &str = "#[test]
+fn a_taken_port_is_retried_with_a_fresh_one() {
+    let port = 1;
+}
+";
+
+/// An index of one `main::hub_daemon` area binary: every source file of the
+/// area maps to the same binary, as the compiler's dep-info does.
+fn area_index(sources: &[&str], names: &[&str]) -> TestIndex {
+    let binary = TestBinary {
+        tests: names
+            .iter()
+            .map(|name| refer("main", Some("main::hub_daemon"), false, name))
+            .collect(),
+    };
+    TestIndex::from_fixtures(
+        sources
+            .iter()
+            .map(|path| ((*path).to_owned(), binary.clone()))
+            .collect(),
+    )
+}
+
+const AREA_MAIN: &str = "crates/main/tests/hub_daemon/main.rs";
+const AREA_LIST: &str = "crates/main/tests/hub_daemon/hub_list.rs";
+const AREA_REMOTE: &str = "crates/main/tests/hub_daemon/hub_remote_terminal.rs";
+
+fn area_sources() -> Vec<RustFile> {
+    vec![
+        file(
+            "main",
+            AREA_MAIN,
+            "mod hub_list;\nmod hub_remote_terminal;\n",
+        ),
+        file("main", AREA_LIST, HUB_LIST),
+        file("main", AREA_REMOTE, HUB_LIST),
+    ]
+}
+
+#[test]
+fn a_hunk_in_one_area_member_selects_only_that_members_test() {
+    // Two files of one area hold a test of the same name. A change to
+    // `hub_list.rs` must not mark the unchanged `hub_remote_terminal.rs`
+    // test as touched: the retry rule forgives only untouched tests.
+    let index = area_index(
+        &[AREA_MAIN, AREA_LIST, AREA_REMOTE],
+        &[
+            "hub_list::a_taken_port_is_retried_with_a_fresh_one",
+            "hub_remote_terminal::a_taken_port_is_retried_with_a_fresh_one",
+        ],
+    );
+    let diff = diff_file(
+        AREA_LIST,
+        "@@ -3,1 +3,1 @@\n-    let port = 0;\n+    let port = 1;\n",
+    );
+    let got = super::changed_tests(&diff, &members(), &area_sources(), &index);
+    assert_eq!(
+        got,
+        Ok(vec![refer(
+            "main",
+            Some("main::hub_daemon"),
+            false,
+            "hub_list::a_taken_port_is_retried_with_a_fresh_one"
+        )])
+    );
+    let all = super::tests_in_files(&[AREA_LIST.to_owned()], &members(), &area_sources(), &index);
+    assert_eq!(
+        all,
+        Ok(vec![refer(
+            "main",
+            Some("main::hub_daemon"),
+            false,
+            "hub_list::a_taken_port_is_retried_with_a_fresh_one"
+        )])
+    );
+}
+
+#[test]
+fn an_inline_module_inside_an_area_member_is_still_selected() {
+    let source = "mod inner {
+    #[test]
+    fn case() {
+        let x = 1;
+    }
+}
+";
+    let sources = vec![
+        file("main", AREA_MAIN, "mod hub_list;\n"),
+        file("main", AREA_LIST, source),
+    ];
+    let index = area_index(&[AREA_MAIN, AREA_LIST], &["hub_list::inner::case"]);
+    let diff = diff_file(
+        AREA_LIST,
+        "@@ -4,1 +4,1 @@\n-        let x = 0;\n+        let x = 1;\n",
+    );
+    assert_eq!(
+        super::changed_tests(&diff, &members(), &sources, &index),
+        Ok(vec![refer(
+            "main",
+            Some("main::hub_daemon"),
+            false,
+            "hub_list::inner::case"
+        )])
+    );
+}
+
+#[test]
+fn a_support_file_with_no_area_root_keeps_the_suffix_match() {
+    // `tests/support/probe_tests.rs` of a crate with no `support/main.rs`
+    // is no area member: its tests are `support::probe_tests::x`.
+    let path = "crates/extensions/tests/support/probe_tests.rs";
+    let sources = vec![file(
+        "extensions",
+        path,
+        "#[test]\nfn x() {\n    let a = 1;\n}\n",
+    )];
+    let binary = TestBinary {
+        tests: vec![refer(
+            "extensions",
+            Some("extensions::probe"),
+            false,
+            "support::probe_tests::x",
+        )],
+    };
+    let index = TestIndex::from_fixtures(vec![(path.to_owned(), binary)]);
+    let diff = diff_file(path, "@@ -3,1 +3,1 @@\n-    let a = 0;\n+    let a = 1;\n");
+    assert_eq!(
+        super::changed_tests(&diff, &members(), &sources, &index),
+        Ok(vec![refer(
+            "extensions",
+            Some("extensions::probe"),
+            false,
+            "support::probe_tests::x"
+        )])
+    );
+}
+
+#[test]
+fn a_top_level_test_file_keeps_the_exact_and_suffix_arms() {
+    let path = "crates/main/tests/x.rs";
+    let sources = vec![file("main", path, "#[test]\nfn f() {\n    let a = 1;\n}\n")];
+    let binary = TestBinary {
+        tests: vec![
+            refer("main", Some("main::x"), false, "f"),
+            refer("main", Some("main::x"), false, "inner::f"),
+        ],
+    };
+    let index = TestIndex::from_fixtures(vec![(path.to_owned(), binary)]);
+    let diff = diff_file(path, "@@ -3,1 +3,1 @@\n-    let a = 0;\n+    let a = 1;\n");
+    let got = super::changed_tests(&diff, &members(), &sources, &index).unwrap_or_default();
+    assert_eq!(got.len(), 2, "{got:?}");
 }
 
 #[test]
