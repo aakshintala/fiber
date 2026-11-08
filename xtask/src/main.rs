@@ -154,6 +154,7 @@ mod nightly_pair;
 mod rules;
 mod screen_ratchet;
 mod select;
+mod shellcheck_files;
 mod site;
 mod stale_wait_ratchet;
 mod stress;
@@ -483,6 +484,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         ),
         "nightly-pair" => nightly_pair::run(rest),
         "nightly-fixture" => nightly_fixture::run(rest),
+        "shellcheck-files" => shellcheck_files::run(rest),
         "threads" => {
             let (cpus, load) = match rest {
                 [cpus, load] => (cpus, load),
