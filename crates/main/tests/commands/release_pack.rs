@@ -871,7 +871,7 @@ impl Release {
     /// binary's version.
     #[track_caller]
     fn serve() -> Self {
-        let setup = support::Setup::new();
+        let setup = support::Setup::without_provider();
         let mut release = Self {
             setup,
             // Replaced with the responder below; every file is read
