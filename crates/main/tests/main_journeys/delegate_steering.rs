@@ -200,10 +200,11 @@ fn queued_delegate_steering_journey() {
             let body = String::from_utf8_lossy(&requests[0].body).into_owned();
             assert!(body.contains("go"), "the delegate's prompt in {body}");
             // The parent's last data is its `turn_completed`; the panel
-            // row is clicked only once the grid shows that turn's text.
+            // row is clicked only once the grid shows the `▣ completed`
+            // closing row that only the fold of that line draws.
             let delegate = delegate_session(&setup);
             run.wait_screen("the running delegate row", |grid| {
-                shows(grid, "1 running") && shows(grid, DELEGATE_ROW) && shows(grid, "Done.")
+                shows(grid, "1 running") && shows(grid, DELEGATE_ROW) && shows(grid, "▣ completed")
             });
             run.click_where("the delegate row", |grid| grid.text_at(DELEGATE_ROW));
             run.wait_screen("the delegate view", |grid| {
