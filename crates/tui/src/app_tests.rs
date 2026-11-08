@@ -2614,3 +2614,84 @@ fn first_block_notice_session_with_no_row_shows_nothing() {
     ));
     assert_eq!(app.notice(), None);
 }
+
+/// A `!` run of `seq 1 N` as its `shell_command` line.
+fn shell_run(app: &mut App, lines: usize) {
+    let output = (1..=lines)
+        .map(|n| format!("out {n:02}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    app.on_line(session_line(
+        "s_aaaaaaaaaaaaaaaa",
+        "shell_command",
+        serde_json::json!({"command": "seq", "output": output,
+            "process": {"exit_code": 0, "timed_out": false}}),
+        None,
+    ));
+}
+
+/// The run's transcript rows with `shown` output lines then `tail`.
+fn shell_rows_want(shown: usize, tail: &[&str]) -> Vec<String> {
+    let mut want = vec!["! seq".to_owned(), "sent with your next prompt".to_owned()];
+    want.extend((1..=shown).map(|n| format!("out {n:02}")));
+    want.extend(tail.iter().map(|line| (*line).to_owned()));
+    want
+}
+
+/// Renders `app` whole on an 80 by 60 screen as text.
+fn shell_tall_screen(app: &App) -> String {
+    let area = Rect::new(0, 0, 80, 60);
+    let mut buf = Buffer::empty(area);
+    crate::view::render(app, area, &mut buf, None);
+    crate::view::text(&buf)
+}
+
+/// A run with more than 20 output lines shows 20 and a "N more lines"
+/// row; a click on it, or Enter while it is focused, opens the rest in
+/// place with "show less", and the same again closes it. A run of 20
+/// lines or fewer has no more row.
+#[test]
+fn shell_cap_screen_more_row() {
+    use crate::app::Target;
+    use crate::mouse::TargetId;
+    let now = fakes::clock::FakeClock::new().now();
+    let mut app = app();
+    attach(&mut app, now, "s_aaaaaaaaaaaaaaaa");
+    app.set_size(80, 60);
+    shell_run(&mut app, 25);
+    let closed = shell_rows_want(20, &["5 more lines", "exit 0"]);
+    let open = shell_rows_want(25, &["show less", "exit 0"]);
+    assert_eq!(texts(&app), closed);
+    let screen = shell_tall_screen(&app);
+    assert!(screen.contains("5 more lines"), "{screen}");
+    assert!(!screen.contains("out 21"), "{screen}");
+    let stops = app.targets();
+    assert_eq!(stops.len(), 1, "the more row is the one focus stop");
+    let (at, target) = stops[0];
+    assert!(matches!(target, Target::Group(_)));
+    assert_eq!(
+        texts(&app).get(at).map(String::as_str),
+        Some("5 more lines")
+    );
+    // Click opens, click closes.
+    assert_eq!(app.on_click(TargetId::Line(target)), Effect::None);
+    assert_eq!(texts(&app), open);
+    let screen = shell_tall_screen(&app);
+    assert!(screen.contains("out 25") && screen.contains("show less"));
+    assert!(!screen.contains("5 more lines"), "{screen}");
+    assert_eq!(app.on_click(TargetId::Line(target)), Effect::None);
+    assert_eq!(texts(&app), closed);
+    // Enter on the focused row opens, and again closes.
+    app.focus = Some(TargetId::Line(target));
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(texts(&app), open);
+    assert_eq!(app.on_key(Key::Enter, now), Effect::None);
+    assert_eq!(texts(&app), closed);
+    // Twenty lines show whole, with no more row and no focus stop.
+    let mut small = self::app();
+    attach(&mut small, now, "s_aaaaaaaaaaaaaaaa");
+    small.set_size(80, 60);
+    shell_run(&mut small, 20);
+    assert_eq!(texts(&small), shell_rows_want(20, &["exit 0"]));
+    assert!(small.targets().is_empty());
+}
