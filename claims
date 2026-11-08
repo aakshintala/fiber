@@ -527,7 +527,6 @@ crates/tui/src/swapped.rs	fiber-4261	plan	2026-11-08T14:23:13Z	Amoghs-MacBook-Pr
 docs/configuration.md	fiber-4261	plan	2026-11-08T14:23:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/invocation.md	fiber-4261	plan	2026-11-08T14:23:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tui.md	fiber-4261	plan	2026-11-08T14:23:13Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
-crates/main/tests/keeper.rs	fiber-4351	plan	2026-11-08T14:54:45Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/tests/4351-keeper-flake	
 crates/main/src/keeper_child.rs	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/keeper_child_tests.rs	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/main/src/keeper.rs	fiber-4054	plan	2026-11-08T15:55:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
@@ -624,7 +623,6 @@ crates/main/tests/session_turns/resume.rs	fiber-4233	plan	2026-11-08T20:00:24Z	A
 crates/main/tests/session_turns/rewind.rs	fiber-4233	plan	2026-11-08T20:00:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4438
 crates/main/tests/timings/loop_timing.rs	fiber-4233	plan	2026-11-08T20:00:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4438
 crates/main/tests/tool_calls/mcp.rs	fiber-4233	plan	2026-11-08T20:00:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4438
-crates/main/tests/hub_daemon/keeper.rs	fiber-4351	plan	2026-11-08T20:18:35Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	
 crates/main/tests/delegation/delegates.rs	fiber-4182	plan	2026-11-08T20:30:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	4438,4434,4422
 crates/main/tests/screen_looks/panel_look.rs	fiber-4182	plan	2026-11-08T20:30:23Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber	4438,4434,4422
 crates/main/tests/tool_calls/tools.rs	fiber-4233	plan	2026-11-08T20:42:29Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4438
