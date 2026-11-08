@@ -327,17 +327,6 @@ fn screen(settings: &Settings) -> String {
 /// `|` before each row so leading spaces survive. A mismatch shows both.
 #[track_caller]
 fn expect(screen: &str, want: &str) {
-    if let Ok(path) = std::env::var("FIBER_BLESS") {
-        use std::io::Write;
-        let line = std::panic::Location::caller().line();
-        let mut out = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .unwrap();
-        writeln!(out, "@@@ {line}\n{screen}\n@@@@").unwrap();
-        return;
-    }
     let want: Vec<&str> = want
         .lines()
         .skip(1)
@@ -2730,4 +2719,23 @@ fn settings_metadata_screen_commands_are_registered() {
             row.command
         );
     }
+}
+
+// The two stored whole-screen snapshots: a tab with a reload cost, and a
+// number field open in its row.
+
+#[test]
+fn settings_80x24() {
+    let fake = Fake::new(rows());
+    let settings = at(&fake, "handoff.tokens");
+    insta::assert_snapshot!("settings_80x24", drawn(&settings, Some(180_000), 80, 24));
+}
+
+#[test]
+fn settings_editing() {
+    let fake = Fake::new(rows());
+    let mut settings = at(&fake, "handoff.tokens");
+    one(&mut settings, &fake, Key::Enter);
+    typed(&mut settings, &fake, "5");
+    insta::assert_snapshot!("settings_editing", drawn(&settings, None, 80, 24));
 }
