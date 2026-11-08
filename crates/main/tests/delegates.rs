@@ -10532,3 +10532,265 @@ fn killing_the_parent_backfills_unseen_usage() {
         "the resume reports exactly the appended lines"
     );
 }
+
+/// The ids of the delegates `workspace`'s sessions started, from every
+/// `delegate_started` line in their logs.
+fn started_delegates(setup: &support::Setup) -> Vec<String> {
+    let sessions = sessions_in(&setup.home(), &setup.workspace());
+    let Ok(entries) = fs::read_dir(&sessions) else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        for line in read_lines(&entry.path().join("events.jsonl")) {
+            if line["kind"] == "delegate_started" {
+                ids.push(
+                    line["payload"]["delegate_session_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    ids
+}
+
+/// The delegate `id`'s event log.
+fn delegate_log(setup: &support::Setup, id: &str) -> PathBuf {
+    sessions_in(&setup.home(), &setup.workspace())
+        .join(id)
+        .join("events.jsonl")
+}
+
+/// Whether the log at `path` holds a line of `kind` that mentions
+/// `needle`: how a test knows a message reached the delegate's turn.
+fn log_has(path: &Path, kind: &str, needle: &str) -> bool {
+    read_lines(path)
+        .iter()
+        .any(|line| line["kind"] == kind && line.to_string().contains(needle))
+}
+
+/// Opens the delegate row that holds `row` from the typed `/delegates`
+/// view and waits for its live view's breadcrumb.
+fn open_delegate_view(run: &mut Run, row: &str, breadcrumb: &str) {
+    run.write(b"/delegates\r");
+    run.wait_screen("the delegates list", delegates_list_header);
+    focus_row(run, row);
+    run.write(b"\r");
+    run.wait_screen("the delegate's view", |grid| {
+        grid.contents.contains(breadcrumb)
+    });
+}
+
+/// The terminal's environment: a fake key and truecolour.
+fn terminal_env() -> Vec<(&'static str, &'static str)> {
+    [("FIBER_TEST_FAKE_KEY", "sk-test")]
+        .into_iter()
+        .chain(support::TRUECOLOUR)
+        .collect()
+}
+
+/// A config where the hub exits a second after its last client leaves, so
+/// the run's wait sees it go.
+fn short_hub_idle(setup: &support::Setup) {
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "pa/m", "reviewer": {"model": "pa/m"},
+            "hub": {"idle_exit_ms": 1000}}),
+    );
+}
+
+/// The index of a row that draws a labelled rule whose label holds
+/// `label`, with `text` on a row below it and no other rule between.
+fn rule_over_text(grid: &Grid, label: &str, text: &str) -> Option<usize> {
+    let rule = grid
+        .rows
+        .iter()
+        .position(|row| row.contains(label) && row.contains(" · ") && row.contains('─'))?;
+    let below = grid
+        .rows
+        .iter()
+        .skip(rule + 1)
+        .position(|row| row.contains(text))?;
+    grid.rows[rule + 1..rule + 1 + below]
+        .iter()
+        .all(|row| !row.contains('─'))
+        .then_some(rule)
+}
+
+/// `docs/delegates.md`, "Talking to a delegate", and `docs/tui.md`, the
+/// turn card: a parent's `delegate_message` to a running delegate joins
+/// the delegate's turn and draws in the delegate's card as a `steer` rule
+/// over its text. The delegate's second model call is held while its view
+/// opens, so the card is folded from the live stream, not a replay.
+#[test]
+fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let parent = ProviderServer::start_responding(answering(
+        support::stream(&[spawn_call("fiber:pb/m")]),
+        text_reply("allow"),
+        "call_message",
+        |job| {
+            support::stream(&[function_call(
+                "call_message",
+                "delegate_message",
+                &json!({"id": job, "message": MARK}),
+            )])
+        },
+        support::hello(),
+    ))
+    .unwrap();
+    let child = ProviderServer::start([text_reply("first"), text_reply("after-steer")]).unwrap();
+    child.hold();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    short_hub_idle(&setup);
+
+    let mut run = Run::spawn(&setup, 160, 48, &[], &terminal_env());
+    run.ready();
+    run.write(b"scan the tree\r");
+    assert!(
+        child.await_requests(1, setup.deadline),
+        "the delegate's first step is in flight"
+    );
+    // The parent's turn ends once the message call is answered, and the
+    // answer comes after the steer is queued in the delegate's inbox.
+    run.wait_screen("the finished parent turn", |grid| {
+        grid.contents.contains("completed ·")
+    });
+    child.release_one();
+    assert!(
+        child.await_requests(2, setup.deadline),
+        "the delegate's second model call after the steer"
+    );
+    let delegate = started_delegates(&setup).remove(0);
+    let log = delegate_log(&setup, &delegate);
+    fakes::wait_until("the steering_applied line", setup.deadline, move || {
+        log_has(&log, "steering_applied", MARK)
+    });
+    open_delegate_view(&mut run, "◆ scan", "› ◆ scan");
+    let grid = run.wait_screen("the steer rule over its text", |grid| {
+        rule_over_text(grid, "steer", MARK).is_some()
+    });
+    assert!(
+        !grid.contents.contains("Fiber ·"),
+        "no labelled rule beside the steer: {}",
+        grid.contents
+    );
+    child.release();
+    quit(run);
+}
+
+/// `docs/tui.md`, "Non-driver messages stay in the card": a session
+/// message to a running delegate draws as a labelled rule carrying the
+/// sender, not as a `steer` rule. The sender is the receiver's sibling,
+/// and the message goes to the receiver's own door as `session_message`
+/// sends it. The receiver's second model call is held while its view
+/// opens, so the card is folded from the live stream, not a replay.
+#[test]
+fn a_siblings_session_message_draws_a_labelled_rule_with_its_name_in_the_delegates_card() {
+    const MARK2: &str = "sibling-marker-3c5e8d12";
+    let setup = support::Setup::new();
+    let _guard = arm(&setup);
+    let spawned = Arc::new(AtomicBool::new(false));
+    let parent = ProviderServer::start_responding(move |request: &Request| {
+        let text = String::from_utf8_lossy(&request.body);
+        if !text.contains(r#""name":"delegate_spawn""#) {
+            return text_reply("allow");
+        }
+        if text.contains("Started delegate") || spawned.swap(true, Ordering::SeqCst) {
+            return support::hello();
+        }
+        support::stream(&[
+            spawn_scan("one", "fiber:pb/m"),
+            spawn_scan("two", "fiber:pb/m"),
+        ])
+    })
+    .unwrap();
+    // Both delegates share the server: only the receiver's second call
+    // carries the sibling's text.
+    let child = ProviderServer::start_responding(|request: &Request| {
+        if String::from_utf8_lossy(&request.body).contains(MARK2) {
+            text_reply("after-message")
+        } else {
+            text_reply("first")
+        }
+    })
+    .unwrap();
+    child.hold();
+    providers(&setup, &parent, &child);
+    standing_allow(&setup);
+    short_hub_idle(&setup);
+
+    let mut run = Run::spawn(&setup, 160, 48, &[], &terminal_env());
+    run.ready();
+    run.write(b"start the scans\r");
+    assert!(
+        child.await_requests(2, setup.deadline),
+        "both delegates' first steps are in flight"
+    );
+    run.wait_screen("the finished parent turn", |grid| {
+        grid.contents.contains("completed ·")
+    });
+    let ids = started_delegates(&setup);
+    let by_prompt = |prompt: &str| {
+        ids.iter()
+            .find(|id| {
+                fs::read_to_string(delegate_log(&setup, id))
+                    .unwrap_or_default()
+                    .contains(prompt)
+            })
+            .unwrap_or_else(|| panic!("a delegate started on {prompt:?} in {ids:?}"))
+            .clone()
+    };
+    let receiver = by_prompt("run scan one");
+    let sender = by_prompt("run scan two");
+    assert_ne!(receiver, sender);
+
+    let socket = support::Socket::connect(setup.deadline, &setup.session_socket(&receiver));
+    socket.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"summary"}}"#);
+    support::recv_answer(&socket, "c_sub", "the subscription");
+    socket.send(
+        &json!({"id": "c_msg", "command": "message",
+            "args": {"from_session_id": sender, "text": MARK2}})
+        .to_string(),
+    );
+    let answer = support::recv_answer(&socket, "c_msg", "the message take");
+    assert_eq!(answer["kind"], "command_accepted", "{answer}");
+    // Both first calls go; the receiver's second call parks on the hold.
+    child.release_one();
+    child.release_one();
+    assert!(
+        child.await_requests(3, setup.deadline),
+        "the receiver's second model call after the message"
+    );
+    let log = delegate_log(&setup, &receiver);
+    fakes::wait_until("the steering_applied line", setup.deadline, {
+        let log = log.clone();
+        move || log_has(&log, "steering_applied", MARK2)
+    });
+    let applied = read_lines(&log)
+        .into_iter()
+        .find(|line| line["kind"] == "steering_applied")
+        .unwrap();
+    assert_eq!(applied["payload"]["source"], "session", "{applied}");
+    assert_eq!(applied["payload"]["from_session_id"], sender, "{applied}");
+
+    open_delegate_view(&mut run, "scan one", "› ◆ scan");
+    // The label is the sender's current name, else its id
+    // (`docs/tui.md`, "Non-driver messages stay in the card"). A
+    // delegate carries no session name, so the id is the label.
+    let grid = run.wait_screen("the labelled rule over the sibling's text", |grid| {
+        rule_over_text(grid, &sender, MARK2).is_some()
+    });
+    let rule = rule_over_text(&grid, &sender, MARK2).unwrap();
+    assert!(
+        !grid.rows[rule].contains("steer"),
+        "a session message is no steer rule: {}",
+        grid.contents
+    );
+    child.release();
+    quit(run);
+}
