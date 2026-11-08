@@ -366,7 +366,12 @@ fn rust_comment(line: &str, state: &mut LexState) -> String {
                 out.push(if state.block_depth == 0 { '\0' } else { ' ' });
                 remaining = rest;
             } else {
-                remaining = push_next_char(remaining, &mut out);
+                if let Some((ch, rest)) = take_char(remaining) {
+                    out.push(ch);
+                    remaining = rest;
+                } else {
+                    break;
+                }
             }
         } else if let Some(hashes) = state.raw_hashes {
             let close = format!("\"{}", "#".repeat(hashes));
@@ -412,14 +417,6 @@ fn raw_string_start(source: &str) -> Option<(usize, &str)> {
     let hashes = hashes_start.chars().take_while(|ch| *ch == '#').count();
     let quote = hashes_start.get(hashes..)?.strip_prefix('"')?;
     Some((hashes, quote))
-}
-
-fn push_next_char<'a>(source: &'a str, out: &mut String) -> &'a str {
-    let Some((ch, rest)) = take_char(source) else {
-        return "";
-    };
-    out.push(ch);
-    rest
 }
 
 fn take_char(source: &str) -> Option<(char, &str)> {

@@ -284,6 +284,90 @@ fn zero_additions_deletions_no_newline_markers_and_raw_strings_are_clean() {
 }
 
 #[test]
+fn ignores_non_source_paths_and_checks_hunk_structure_and_ranges() {
+    let diff = "diff --git a/notes.txt b/notes.txt\n--- a/notes.txt\n+++ b/notes.txt\n@@ -0,0 +1 @@\n+previously\n";
+    assert!(check_diff(diff, &BTreeMap::new()).unwrap().is_empty());
+
+    let zero_new_side = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +0,0 @@\n-// previously\n";
+    assert!(
+        check_diff(zero_new_side, &sources(&[("src/a.rs", "")]))
+            .unwrap()
+            .is_empty()
+    );
+    let malformed_range = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -0,0 +0,1 @@\n+// previously\n";
+    assert!(
+        check_diff(
+            malformed_range,
+            &sources(&[("src/a.rs", "// previously\n")])
+        )
+        .is_err()
+    );
+
+    let shifted = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,0 +2 @@\n+// previously\n";
+    assert_eq!(
+        check_diff(
+            shifted,
+            &sources(&[("src/a.rs", "ordinary\n// previously\n")])
+        )
+        .unwrap(),
+        ["src/a.rs:2: comment narrates history"]
+    );
+}
+
+#[test]
+fn shell_lexing_handles_hash_quotes_escapes_and_heredoc_terminators() {
+    for (line, source) in [
+        ("echo x#previously", "echo x#previously\n"),
+        (r##"echo "# previously""##, "echo \"# previously\"\n"),
+        (
+            r##"echo "escaped \\" # previously""##,
+            "echo \"escaped \\\\ # previously\"\n",
+        ),
+        ("echo ok # previously", "echo ok # previously\n"),
+    ] {
+        let result = added(
+            "scripts/check",
+            &format!("@@ -0,0 +1 @@\n+{line}\n"),
+            source,
+        )
+        .unwrap();
+        if line == "echo ok # previously" {
+            assert_eq!(result, ["scripts/check:1: comment narrates history"]);
+        } else {
+            assert!(result.is_empty(), "{line}: {result:?}");
+        }
+    }
+
+    let source = "cat <<'END' <<-TWO\n# data\nEND\n# more data\n\tTWO\n# previously real comment\n";
+    let diff = "diff --git a/scripts/check b/scripts/check\n--- a/scripts/check\n+++ b/scripts/check\n@@ -0,0 +6 @@\n+# previously real comment\n";
+    assert_eq!(
+        check_diff(diff, &sources(&[("scripts/check", source)])).unwrap(),
+        ["scripts/check:6: comment narrates history"]
+    );
+
+    let invalid = "cat <<\n# previously real comment\n";
+    assert_eq!(
+        added(
+            "scripts/check",
+            "@@ -0,0 +2 @@\n+# previously real comment\n",
+            invalid
+        )
+        .unwrap(),
+        ["scripts/check:2: comment narrates history"]
+    );
+}
+
+#[test]
+fn multiline_nested_block_comment_closes_before_trailing_comment() {
+    let source = "/* outer\n /* nested */\nstill comment */ let x = 1; // now uses cache\n";
+    let diff = "diff --git a/src/lib.rs b/src/lib.rs\n--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -0,0 +3 @@\n+still comment */ let x = 1; // now uses cache\n";
+    assert_eq!(
+        check_diff(diff, &sources(&[("src/lib.rs", source)])).unwrap(),
+        ["src/lib.rs:3: comment narrates history"]
+    );
+}
+
+#[test]
 fn malformed_patch_is_an_error_not_a_clean_result() {
     let bad = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,2 +1,2 @@\n+// now uses cache\n";
     assert!(check_diff(bad, &sources(&[("src/a.rs", "// now uses cache\n")])).is_err());
