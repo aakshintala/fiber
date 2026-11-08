@@ -2192,12 +2192,22 @@ fn refusal_without_usable_held_keeps_the_name_captured_at_the_question() {
     );
 }
 
+/// The generation of the current `/delete` command.
+fn generation(app: &App) -> u64 {
+    app.home
+        .as_ref()
+        .map_or(0, |home| home.questions.delete_command.generation)
+}
+
 #[test]
 fn discovery_answers_register_a_tag_and_settle_it() {
     use crate::app::Waiting;
     let mut app = attached();
     let command = discovery(&mut app);
-    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    assert_eq!(
+        app.outbox.waiting(&command),
+        Some(Waiting::DeleteDiscovery(generation(&app)))
+    );
     answer_discovery(&mut app, &command, &[A], &[]);
     assert_eq!(app.outbox.waiting(&command), None);
     assert!(open(&app));
@@ -2208,7 +2218,10 @@ fn a_refused_discovery_settles_its_tag() {
     use crate::app::Waiting;
     let mut app = attached();
     let command = discovery(&mut app);
-    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    assert_eq!(
+        app.outbox.waiting(&command),
+        Some(Waiting::DeleteDiscovery(generation(&app)))
+    );
     app.on_line(rejected(&command, "stale_request", "Stale."));
     assert_eq!(app.outbox.waiting(&command), None);
     assert!(matches!(
@@ -2223,7 +2236,10 @@ fn a_delete_discovery_answer_after_the_target_left_finishes_without_a_question()
     use crate::app::Waiting;
     let mut app = attached();
     let command = discovery(&mut app);
-    assert_eq!(app.outbox.waiting(&command), Some(Waiting::DeleteDiscovery));
+    assert_eq!(
+        app.outbox.waiting(&command),
+        Some(Waiting::DeleteDiscovery(generation(&app)))
+    );
     app.on_line(left(A, "exited"));
     app.go_home();
     answer_discovery(&mut app, &command, &[A], &[]);
@@ -2251,7 +2267,13 @@ fn delete_stop_answers_settle_their_tags() {
     let close = closes(&parsed);
     assert_eq!(close.len(), 1);
     let close_id = close[0]["id"].as_str().unwrap_or_default().to_owned();
-    assert_eq!(app.outbox.waiting(&close_id), Some(Waiting::DeleteStop));
+    assert_eq!(
+        app.outbox.waiting(&close_id),
+        Some(Waiting::DeleteStop {
+            generation: generation(&app),
+            session: SessionId(A.to_owned()),
+        })
+    );
     assert!(app.on_line(accepted(&close_id, json!({}))).is_empty());
     assert_eq!(app.outbox.waiting(&close_id), None);
     // The stop still waits on the feed's `session_left`; the delete
@@ -2259,7 +2281,10 @@ fn delete_stop_answers_settle_their_tags() {
     let deletion = deletes(&fold_lines(&mut app, left(A, "exited")));
     assert_eq!(deletion.len(), 1);
     let delete_id = deletion[0]["id"].as_str().unwrap_or_default().to_owned();
-    assert_eq!(app.outbox.waiting(&delete_id), Some(Waiting::DeleteFinal));
+    assert_eq!(
+        app.outbox.waiting(&delete_id),
+        Some(Waiting::DeleteFinal(generation(&app)))
+    );
 }
 
 #[test]
@@ -2269,7 +2294,10 @@ fn delete_final_answer_settles_its_tag() {
     let raw = asked(&mut app, &[A], &[]);
     let deletion: Value = serde_json::from_str(&raw[0]).unwrap_or_else(|err| panic!("{err}"));
     let id = deletion["id"].as_str().unwrap_or_default().to_owned();
-    assert_eq!(app.outbox.waiting(&id), Some(Waiting::DeleteFinal));
+    assert_eq!(
+        app.outbox.waiting(&id),
+        Some(Waiting::DeleteFinal(generation(&app)))
+    );
     let refresh = fold_lines(&mut app, accepted(&id, json!({})));
     assert_eq!(app.outbox.waiting(&id), None);
     assert!(refresh.iter().any(|line| line["command"] == "recent"));

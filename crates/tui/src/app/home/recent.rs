@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::super::{
     App, Effect, mint,
-    outbox::{Outbox, Waiting},
+    outbox::{Outbox, RecentAsk, Waiting},
 };
 use super::{refusal, refusal_code};
 use crate::home::{Row, Sessions, recent_rows};
@@ -86,7 +86,7 @@ impl Recent {
         let feed = mint();
         let recent = mint();
         outbox.wait(&feed, Waiting::Feed);
-        outbox.wait(&recent, Waiting::Recent);
+        outbox.wait(&recent, Waiting::Recent(RecentAsk::First));
         self.feed_id = Some(feed.clone());
         self.recent_ask = Some((recent.clone(), true));
         Some(vec![
@@ -164,7 +164,7 @@ impl Recent {
         if let Some((old, _)) = self.recent_ask.replace((id.clone(), true)) {
             outbox.settled(&old);
         }
-        outbox.wait(&id, Waiting::Recent);
+        outbox.wait(&id, Waiting::Recent(RecentAsk::First));
         let mut out = vec![recent_line(&id, None, None)];
         if let Some(project) = delete_project {
             out.extend(self.scoped_first(project, sessions, connected, outbox));
@@ -193,7 +193,7 @@ impl Recent {
         }
         let id = mint();
         self.scoped_asks.insert(id.clone(), project.to_owned());
-        outbox.wait(&id, Waiting::Recent);
+        outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.to_owned())));
         vec![recent_line(&id, Some(project), None)]
     }
 
@@ -284,7 +284,7 @@ impl Recent {
         }
         let id = mint();
         self.scoped_asks.insert(id.clone(), project.to_owned());
-        outbox.wait(&id, Waiting::Recent);
+        outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.to_owned())));
         Some(recent_line(&id, Some(project), before))
     }
 
@@ -328,7 +328,7 @@ impl Recent {
             .clone();
         let id = mint();
         self.recent_ask = Some((id.clone(), false));
-        outbox.wait(&id, Waiting::Recent);
+        outbox.wait(&id, Waiting::Recent(RecentAsk::Page));
         Some(recent_line(&id, None, Some(before.as_str())))
     }
 
@@ -358,7 +358,7 @@ impl Recent {
             }
             let id = mint();
             self.scoped_asks.insert(id.clone(), project.clone());
-            outbox.wait(&id, Waiting::Recent);
+            outbox.wait(&id, Waiting::Recent(RecentAsk::Scoped(project.clone())));
             out.push(recent_line(&id, Some(&project), None));
         }
         out

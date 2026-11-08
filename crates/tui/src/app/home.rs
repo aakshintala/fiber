@@ -760,11 +760,12 @@ impl App {
                         Some(super::Waiting::ChangeWorkspace(_)) => return None,
                         Some(super::Waiting::ClearClose) => return None,
                         Some(super::Waiting::History) => return None,
-                        Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                        Some(super::Waiting::ImageFetch { .. })
+                        | Some(super::Waiting::ImageDisplay { .. }) => {
                             return None;
                         }
                         Some(super::Waiting::Abandoned) => return None,
-                        Some(super::Waiting::Directories) => {
+                        Some(super::Waiting::Directories(..)) => {
                             // The picker's `directories` answers fold in
                             // first, while the picker that sent them is
                             // still open; a stale tag falls through to
@@ -773,7 +774,7 @@ impl App {
                                 return Some(lines);
                             }
                         }
-                        Some(super::Waiting::Subscribe) => {
+                        Some(super::Waiting::Subscribe { .. }) => {
                             // A hub subscribe answer has no source
                             // session and matches by id.
                             if let Some(lines) =
@@ -791,9 +792,9 @@ impl App {
                             }
                         }
                         Some(
-                            super::Waiting::DeleteDiscovery
-                            | super::Waiting::DeleteStop
-                            | super::Waiting::DeleteFinal,
+                            super::Waiting::DeleteDiscovery(..)
+                            | super::Waiting::DeleteStop { .. }
+                            | super::Waiting::DeleteFinal(..),
                         ) => {
                             // The command's discovery and confirmed stops
                             // fold before unrelated ask handling.
@@ -808,7 +809,7 @@ impl App {
                                 return Some(self.answer_ask(ask, accepted, &hub.payload));
                             }
                         }
-                        Some(super::Waiting::Feed) | Some(super::Waiting::Recent) => {
+                        Some(super::Waiting::Feed) | Some(super::Waiting::Recent(..)) => {
                             // Feed and recent answers correlate here, after
                             // the other command owners; a tag names which
                             // entry folds the payload.
@@ -940,7 +941,7 @@ impl App {
                     let accepted = answer.accepted;
                     let id = answer.id;
                     match &answer.waiting {
-                        Some(super::Waiting::Subscribe) => {
+                        Some(super::Waiting::Subscribe { .. }) => {
                             // A session answer names its source session:
                             // only the session the subscribe went out
                             // for folds it here.
@@ -958,9 +959,9 @@ impl App {
                             }
                         }
                         Some(
-                            super::Waiting::DeleteDiscovery
-                            | super::Waiting::DeleteStop
-                            | super::Waiting::DeleteFinal,
+                            super::Waiting::DeleteDiscovery(..)
+                            | super::Waiting::DeleteStop { .. }
+                            | super::Waiting::DeleteFinal(..),
                         ) => {
                             // The command's discovery and confirmed stops
                             // fold before unrelated ask handling.
@@ -988,9 +989,9 @@ impl App {
                             return Some(Vec::new());
                         }
                         Some(
-                            super::Waiting::Directories
+                            super::Waiting::Directories(..)
                             | super::Waiting::Feed
-                            | super::Waiting::Recent
+                            | super::Waiting::Recent(..)
                             | super::Waiting::Dismiss(_)
                             | super::Waiting::Fork
                             | super::Waiting::RewindHistory
@@ -999,8 +1000,8 @@ impl App {
                             | super::Waiting::ClearStart
                             | super::Waiting::ClearClose
                             | super::Waiting::History
-                            | super::Waiting::ImageFetch
-                            | super::Waiting::ImageDisplay
+                            | super::Waiting::ImageFetch { .. }
+                            | super::Waiting::ImageDisplay { .. }
                             | super::Waiting::Sessions
                             | super::Waiting::Abandoned,
                         )

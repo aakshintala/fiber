@@ -196,8 +196,13 @@ impl App {
         let (id, line) = subscribe_line(session, level, None);
         if let Some(home) = self.home.as_mut() {
             home.subs.sent(id.clone(), session.clone(), level);
-            self.outbox
-                .wait(&id, super::super::outbox::Waiting::Subscribe);
+            self.outbox.wait(
+                &id,
+                super::super::outbox::Waiting::Subscribe {
+                    session: session.clone(),
+                    level,
+                },
+            );
         }
         line
     }
@@ -593,8 +598,13 @@ impl App {
         if let Some(home) = self.home.as_mut() {
             home.subs.sent(id.clone(), session.clone(), Level::Full);
             home.subs.raise(id.clone());
-            self.outbox
-                .wait(&id, super::super::outbox::Waiting::Subscribe);
+            self.outbox.wait(
+                &id,
+                super::super::outbox::Waiting::Subscribe {
+                    session: session.clone(),
+                    level: Level::Full,
+                },
+            );
         }
         if due.is_some() {
             let busy = matches!(&self.phase, Phase::Attached { busy: true, .. });

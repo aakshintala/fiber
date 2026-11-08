@@ -356,7 +356,7 @@ impl App {
             .due(mint)
             .into_iter()
             .map(|(id, dir)| {
-                outbox.wait(&id, super::super::outbox::Waiting::Directories);
+                outbox.wait(&id, super::super::outbox::Waiting::Directories(dir.clone()));
                 directories_line(&id, &dir)
             })
             .collect()
@@ -484,8 +484,9 @@ impl App {
     /// The chips read again on the next pass: the hub and its levels
     /// are gone, so the next link owes a fresh read.
     pub(in crate::app) fn picker_disconnected(&mut self) {
-        self.outbox
-            .forget(&super::super::outbox::Waiting::Directories);
+        self.outbox.settle_where(|waiting| {
+            matches!(waiting, super::super::outbox::Waiting::Directories(_))
+        });
         if let Some(home) = self.home.as_mut() {
             home.chooser.chip_read = ChipRead::Owed;
         }

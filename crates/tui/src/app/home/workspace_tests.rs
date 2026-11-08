@@ -1343,7 +1343,10 @@ fn directories_answers_register_a_tag_and_settle_it() {
     open(&mut app);
     let sent = type_path(&mut app, "/");
     assert_eq!(sent.len(), 1);
-    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    assert_eq!(
+        app.outbox.waiting(&sent[0].0),
+        Some(Waiting::Directories("/".to_owned()))
+    );
     answer(&mut app, &sent[0].0, &["a1"], "/");
     assert_eq!(app.outbox.waiting(&sent[0].0), None);
     assert_eq!(focused(&app), Some("a1".to_owned()));
@@ -1355,7 +1358,10 @@ fn a_directories_refusal_settles_its_tag_with_no_notice() {
     let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
-    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    assert_eq!(
+        app.outbox.waiting(&sent[0].0),
+        Some(Waiting::Directories("/".to_owned()))
+    );
     app.on_line(refused(&sent[0].0, "nope"));
     assert_eq!(app.outbox.waiting(&sent[0].0), None);
     assert!(app.notice().is_none());
@@ -1367,7 +1373,10 @@ fn a_second_directories_answer_changes_nothing() {
     let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
-    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    assert_eq!(
+        app.outbox.waiting(&sent[0].0),
+        Some(Waiting::Directories("/".to_owned()))
+    );
     answer(&mut app, &sent[0].0, &["a1"], "/");
     assert_eq!(completions(&app), vec!["a1".to_owned()]);
     answer(&mut app, &sent[0].0, &["zz"], "/");
@@ -1381,7 +1390,10 @@ fn a_disconnect_forgets_directories_tags() {
     let mut app = home_with(80, 24, launch());
     open(&mut app);
     let sent = type_path(&mut app, "/");
-    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    assert_eq!(
+        app.outbox.waiting(&sent[0].0),
+        Some(Waiting::Directories("/".to_owned()))
+    );
     app.disconnected();
     assert_eq!(app.outbox.waiting(&sent[0].0), None);
     let notice = app.notice().map(str::to_owned);
@@ -1405,7 +1417,10 @@ fn a_closed_picker_leaves_a_stale_directories_tag_that_falls_through() {
     assert!(!picker_open(&app));
     // The picker's entry is gone with the picker; its tag stays, and
     // the late answer falls through with no fold and no notice.
-    assert_eq!(app.outbox.waiting(&sent[0].0), Some(Waiting::Directories));
+    assert_eq!(
+        app.outbox.waiting(&sent[0].0),
+        Some(Waiting::Directories("/".to_owned()))
+    );
     assert!(
         app.on_line(accepted(
             &sent[0].0,

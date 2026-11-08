@@ -7047,7 +7047,10 @@ fn feed_and_recent_register_tags_settled_by_their_answers() {
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
     assert_eq!(app.outbox.waiting(feed), Some(Waiting::Feed));
-    assert_eq!(app.outbox.waiting(recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
     app.on_line(accepted(feed, json!({"sessions": []})));
     assert_eq!(app.outbox.waiting(feed), None);
     assert!(rows(&app).is_empty());
@@ -7065,7 +7068,10 @@ fn feed_and_recent_refusals_settle_their_tags() {
         .as_str()
         .unwrap_or_else(|| panic!("recent id"));
     assert_eq!(app.outbox.waiting(feed), Some(Waiting::Feed));
-    assert_eq!(app.outbox.waiting(recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
     assert!(app.on_line(refused(feed, "no feed")).is_empty());
     assert_eq!(app.outbox.waiting(feed), None);
     assert!(app.on_line(refused(recent, "no recent")).is_empty());
@@ -7079,7 +7085,10 @@ fn a_second_recent_answer_changes_nothing() {
     use crate::app::Waiting;
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
-    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(&recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
     app.on_line(accepted(
         &recent,
         json!({"sessions": [{
@@ -7117,7 +7126,10 @@ fn a_feed_id_answered_by_a_recent_payload_changes_no_row() {
     ));
     assert_eq!(app.outbox.waiting(&feed), None);
     assert!(rows(&app).is_empty());
-    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(&recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
 }
 
 #[test]
@@ -7125,7 +7137,10 @@ fn an_unscoped_recent_id_answered_by_a_scoped_payload_folds_unscoped() {
     use crate::app::Waiting;
     let mut app = home_with(80, 24, launch());
     let (_, recent) = linked(&mut app);
-    assert_eq!(app.outbox.waiting(&recent), Some(Waiting::Recent));
+    assert_eq!(
+        app.outbox.waiting(&recent),
+        Some(Waiting::Recent(crate::app::outbox::RecentAsk::First))
+    );
     // The unscoped total is never stored: even with a total in its
     // payload, the new project still fans out its scoped ask.
     let out = commands(app.on_line(accepted(

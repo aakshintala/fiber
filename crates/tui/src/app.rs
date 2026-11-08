@@ -1639,7 +1639,7 @@ impl App {
                             return lines;
                         }
                     }
-                    Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                    Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                         if self.image_answered(id, answer.payload.get("result")) {
                             return Vec::new();
                         }
@@ -1654,16 +1654,16 @@ impl App {
                     Some(Waiting::Sessions) => {}
                     Some(Waiting::Abandoned) => {}
                     Some(
-                        Waiting::Directories
-                        | Waiting::Subscribe
+                        Waiting::Directories(..)
+                        | Waiting::Subscribe { .. }
                         | Waiting::Stop
                         | Waiting::Delete
                         | Waiting::OfferImport
-                        | Waiting::DeleteDiscovery
-                        | Waiting::DeleteStop
-                        | Waiting::DeleteFinal
+                        | Waiting::DeleteDiscovery(..)
+                        | Waiting::DeleteStop { .. }
+                        | Waiting::DeleteFinal(..)
                         | Waiting::Feed
-                        | Waiting::Recent
+                        | Waiting::Recent(..)
                         | Waiting::Close,
                     ) => {}
                     Some(
@@ -1716,7 +1716,7 @@ impl App {
                             }
                         }
                         Some(Waiting::ClearClose) => self.clear_close_settled(id),
-                        Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => {
+                        Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => {
                             if self.image_rejected(id, &message) {
                                 return Vec::new();
                             }
@@ -1761,16 +1761,16 @@ impl App {
                             self.outbox.settled(id);
                         }
                         Some(
-                            Waiting::Directories
-                            | Waiting::Subscribe
+                            Waiting::Directories(..)
+                            | Waiting::Subscribe { .. }
                             | Waiting::Stop
                             | Waiting::Delete
                             | Waiting::OfferImport
-                            | Waiting::DeleteDiscovery
-                            | Waiting::DeleteStop
-                            | Waiting::DeleteFinal
+                            | Waiting::DeleteDiscovery(..)
+                            | Waiting::DeleteStop { .. }
+                            | Waiting::DeleteFinal(..)
                             | Waiting::Feed
-                            | Waiting::Recent
+                            | Waiting::Recent(..)
                             | Waiting::Close,
                         ) => {}
                         None => {}
@@ -2025,20 +2025,20 @@ impl App {
             Some(Waiting::RewindSend) => None,
             Some(Waiting::ClearStart) => None,
             Some(Waiting::History) => None,
-            Some(Waiting::ImageFetch) | Some(Waiting::ImageDisplay) => None,
+            Some(Waiting::ImageFetch { .. }) | Some(Waiting::ImageDisplay { .. }) => None,
             Some(Waiting::Sessions) => None,
             Some(Waiting::Abandoned) => None,
             Some(
-                Waiting::Directories
-                | Waiting::Subscribe
+                Waiting::Directories(..)
+                | Waiting::Subscribe { .. }
                 | Waiting::Stop
                 | Waiting::Delete
                 | Waiting::OfferImport
-                | Waiting::DeleteDiscovery
-                | Waiting::DeleteStop
-                | Waiting::DeleteFinal
+                | Waiting::DeleteDiscovery(..)
+                | Waiting::DeleteStop { .. }
+                | Waiting::DeleteFinal(..)
                 | Waiting::Feed
-                | Waiting::Recent
+                | Waiting::Recent(..)
                 | Waiting::Close,
             ) => None,
             Some(

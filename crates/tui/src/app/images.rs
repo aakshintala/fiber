@@ -126,8 +126,14 @@ impl App {
             "args": {"session": session.0, "path": path},
         })
         .to_string();
-        self.outbox
-            .wait(&command_id, super::outbox::Waiting::ImageFetch);
+        self.outbox.wait(
+            &command_id,
+            super::outbox::Waiting::ImageFetch {
+                id,
+                session: session.0.clone(),
+                path: path.clone(),
+            },
+        );
         self.images.fetches.insert(
             command_id,
             Fetch {
@@ -148,9 +154,13 @@ impl App {
         // The tag is the authority: an answer for an id with no image
         // tag takes the untagged path, even when routing detail lingers.
         let waiting = self.outbox.waiting(id);
-        if waiting != Some(super::outbox::Waiting::ImageFetch)
-            && waiting != Some(super::outbox::Waiting::ImageDisplay)
-        {
+        if !matches!(
+            waiting,
+            Some(
+                super::outbox::Waiting::ImageFetch { .. }
+                    | super::outbox::Waiting::ImageDisplay { .. }
+            )
+        ) {
             return false;
         }
         let display = self
@@ -387,9 +397,13 @@ impl App {
         // The tag is the authority: a rejection for an id with no image
         // tag takes the untagged path, even when routing detail lingers.
         let waiting = self.outbox.waiting(id);
-        if waiting != Some(super::outbox::Waiting::ImageFetch)
-            && waiting != Some(super::outbox::Waiting::ImageDisplay)
-        {
+        if !matches!(
+            waiting,
+            Some(
+                super::outbox::Waiting::ImageFetch { .. }
+                    | super::outbox::Waiting::ImageDisplay { .. }
+            )
+        ) {
             return false;
         }
         let failed = self
@@ -484,8 +498,13 @@ impl App {
             })
             .to_string();
             self.images.out.display.push(line);
-            self.outbox
-                .wait(&command_id, super::outbox::Waiting::ImageDisplay);
+            self.outbox.wait(
+                &command_id,
+                super::outbox::Waiting::ImageDisplay {
+                    session: session.clone(),
+                    path: path.clone(),
+                },
+            );
             fetch.command = command_id;
             fetch.state = DisplayState::Asked;
         }
@@ -512,8 +531,13 @@ impl App {
             .filter(|fetch| fetch.state == DisplayState::Shown)
             .map(|fetch| fetch.id)
             .collect();
-        self.outbox.forget(&super::outbox::Waiting::ImageFetch);
-        self.outbox.forget(&super::outbox::Waiting::ImageDisplay);
+        self.outbox.settle_where(|waiting| {
+            matches!(
+                waiting,
+                super::outbox::Waiting::ImageFetch { .. }
+                    | super::outbox::Waiting::ImageDisplay { .. }
+            )
+        });
         self.images.fetches.clear();
         self.images.refused.clear();
         self.images.display.clear();
@@ -589,8 +613,13 @@ impl App {
                 "args": {"session": part.session.0, "path": part.path},
             })
             .to_string();
-            self.outbox
-                .wait(&command_id, super::outbox::Waiting::ImageDisplay);
+            self.outbox.wait(
+                &command_id,
+                super::outbox::Waiting::ImageDisplay {
+                    session: key.0.clone(),
+                    path: key.1.clone(),
+                },
+            );
             self.images.display.insert(
                 key,
                 Display {
@@ -610,7 +639,8 @@ impl App {
     /// again when drawn with the link up. That is a new connection,
     /// not a retry.
     pub(in crate::app) fn images_disconnected(&mut self) {
-        self.outbox.forget(&super::outbox::Waiting::ImageFetch);
+        self.outbox
+            .settle_where(|waiting| matches!(waiting, super::outbox::Waiting::ImageFetch { .. }));
         self.images.fetches.clear();
     }
 

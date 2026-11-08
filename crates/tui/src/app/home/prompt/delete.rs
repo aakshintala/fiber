@@ -124,8 +124,10 @@ impl App {
                 name,
             },
         };
-        self.outbox
-            .wait(&command, super::super::super::Waiting::DeleteDiscovery);
+        self.outbox.wait(
+            &command,
+            super::super::super::Waiting::DeleteDiscovery(generation),
+        );
         self.draft.clear();
         Effect::Send(vec![line])
     }
@@ -448,8 +450,13 @@ impl App {
                 home.questions
                     .closing
                     .push((session.clone(), close.clone()));
-                self.outbox
-                    .wait(close, super::super::super::Waiting::DeleteStop);
+                self.outbox.wait(
+                    close,
+                    super::super::super::Waiting::DeleteStop {
+                        generation: home.questions.delete_command.generation,
+                        session: session.clone(),
+                    },
+                );
             }
             home.questions.delete_command.state = State::Stopping {
                 target,
@@ -518,8 +525,10 @@ impl App {
             home.questions
                 .asks
                 .insert(command.clone(), super::Ask::Delete(target.clone()));
-            self.outbox
-                .wait(&command, super::super::super::Waiting::DeleteFinal);
+            self.outbox.wait(
+                &command,
+                super::super::super::Waiting::DeleteFinal(home.questions.delete_command.generation),
+            );
             home.questions.delete_command.state = State::Deleting {
                 command,
                 target,

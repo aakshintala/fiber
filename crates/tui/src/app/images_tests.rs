@@ -23,7 +23,14 @@ fn image_fetch_answer_reaches_its_handler_and_settles_its_tag() {
         started_with_image(&mut app, "picture.png");
         let request: Value = serde_json::from_str(&click(&mut app)).unwrap();
         let id = request["id"].as_str().unwrap();
-        assert_eq!(app.outbox.waiting(id), Some(Waiting::ImageFetch));
+        assert_eq!(
+            app.outbox.waiting(id),
+            Some(Waiting::ImageFetch {
+                id: 1,
+                session: SESSION.to_owned(),
+                path: "picture.png".to_owned(),
+            })
+        );
         if accepted {
             accept(&mut app, id, json!({"data":"bytes"}));
             let views = app.take_image_views();
@@ -53,7 +60,10 @@ fn a_display_image_second_answer_takes_the_untagged_path() {
     let id = request["id"].as_str().unwrap();
     assert_eq!(
         app.outbox.waiting(id),
-        Some(crate::app::Waiting::ImageDisplay)
+        Some(crate::app::Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "picture.png".to_owned(),
+        })
     );
     accept(
         &mut app,
@@ -82,10 +92,10 @@ fn an_answer_or_rejection_for_an_unknown_id_returns_false() {
         Some(&accepted("c_unknown", "QUJD", "image/png"))
     ));
     assert!(!app.image_rejected("c_unknown", "no such file."));
-    assert_eq!(
+    assert!(matches!(
         app.outbox.waiting(&id),
-        Some(crate::app::Waiting::ImageDisplay)
-    );
+        Some(crate::app::Waiting::ImageDisplay { .. })
+    ));
     assert_eq!(app.notice(), None);
     // The live fetch still answers.
     assert!(app.image_answered(&id, Some(&accepted(&id, "QUJD", "image/png"))));
@@ -1267,7 +1277,10 @@ fn a_handover_reask_registers_one_tag_for_its_new_id() {
     assert_ne!(new_id, id);
     assert_eq!(
         app.outbox.waiting(new_id),
-        Some(crate::app::Waiting::ImageDisplay)
+        Some(crate::app::Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "artifacts/shot.png".to_owned(),
+        })
     );
     assert_eq!(app.outbox.waiting(&id), None);
     assert!(app.image_answered(new_id, Some(&accepted(new_id, "QUJD", "image/png"))));
@@ -1302,7 +1315,10 @@ fn a_redraw_after_a_dropped_transmit_reasks_with_one_tag() {
     assert_ne!(new_id, id);
     assert_eq!(
         app.outbox.waiting(new_id),
-        Some(crate::app::Waiting::ImageDisplay)
+        Some(crate::app::Waiting::ImageDisplay {
+            session: SESSION.to_owned(),
+            path: "artifacts/shot.png".to_owned(),
+        })
     );
     assert!(app.image_answered(new_id, Some(&accepted(new_id, "QUJD", "image/png"))));
     assert!(!app.take_image_out().items.is_empty());

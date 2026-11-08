@@ -908,22 +908,23 @@ impl App {
                     Some(super::Waiting::ClearStart) => return Vec::new(),
                     Some(super::Waiting::ClearClose) => return Vec::new(),
                     Some(super::Waiting::History) => return Vec::new(),
-                    Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                    Some(super::Waiting::ImageFetch { .. })
+                    | Some(super::Waiting::ImageDisplay { .. }) => {
                         return Vec::new();
                     }
                     Some(super::Waiting::Sessions) => return Vec::new(),
                     Some(super::Waiting::Abandoned) => return Vec::new(),
                     Some(
-                        super::Waiting::Directories
-                        | super::Waiting::Subscribe
+                        super::Waiting::Directories(..)
+                        | super::Waiting::Subscribe { .. }
                         | super::Waiting::Stop
                         | super::Waiting::Delete
                         | super::Waiting::OfferImport
-                        | super::Waiting::DeleteDiscovery
-                        | super::Waiting::DeleteStop
-                        | super::Waiting::DeleteFinal
+                        | super::Waiting::DeleteDiscovery(..)
+                        | super::Waiting::DeleteStop { .. }
+                        | super::Waiting::DeleteFinal(..)
                         | super::Waiting::Feed
-                        | super::Waiting::Recent
+                        | super::Waiting::Recent(..)
                         | super::Waiting::Close,
                     ) => return Vec::new(),
                     Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {
@@ -980,22 +981,23 @@ impl App {
                     Some(super::Waiting::ClearStart) => return Vec::new(),
                     Some(super::Waiting::ClearClose) => return Vec::new(),
                     Some(super::Waiting::History) => return Vec::new(),
-                    Some(super::Waiting::ImageFetch) | Some(super::Waiting::ImageDisplay) => {
+                    Some(super::Waiting::ImageFetch { .. })
+                    | Some(super::Waiting::ImageDisplay { .. }) => {
                         return Vec::new();
                     }
                     Some(super::Waiting::Sessions) => return Vec::new(),
                     Some(super::Waiting::Abandoned) => return Vec::new(),
                     Some(
-                        super::Waiting::Directories
-                        | super::Waiting::Subscribe
+                        super::Waiting::Directories(..)
+                        | super::Waiting::Subscribe { .. }
                         | super::Waiting::Stop
                         | super::Waiting::Delete
                         | super::Waiting::OfferImport
-                        | super::Waiting::DeleteDiscovery
-                        | super::Waiting::DeleteStop
-                        | super::Waiting::DeleteFinal
+                        | super::Waiting::DeleteDiscovery(..)
+                        | super::Waiting::DeleteStop { .. }
+                        | super::Waiting::DeleteFinal(..)
                         | super::Waiting::Feed
-                        | super::Waiting::Recent
+                        | super::Waiting::Recent(..)
                         | super::Waiting::Close,
                     ) => return Vec::new(),
                     Some(super::Waiting::Figures) | Some(super::Waiting::Diff) => {

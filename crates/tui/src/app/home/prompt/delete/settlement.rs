@@ -143,7 +143,8 @@ impl App {
         let Some((waiting, fallback)) = waiting else {
             return;
         };
-        self.outbox.forget(&crate::app::Waiting::DeleteStop);
+        self.outbox
+            .settle_where(|waiting| matches!(waiting, crate::app::Waiting::DeleteStop { .. }));
         let display = waiting
             .first()
             .and_then(|id| {
