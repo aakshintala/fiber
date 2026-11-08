@@ -1285,11 +1285,12 @@ says so, "<verb> once" and "<verb> N times": read files, searched patterns,
 listed directories, edited files, wrote files, ran commands, started
 delegates, checked jobs, asked questions, fetched pages, searched the web,
 loaded skills, looked up tools, messaged delegates, messaged sessions,
-looked at sessions, called tools. The first word is capitalised. Read,
-edited and written files count distinct paths, and asked questions count
-questions, not calls. `delegate_models` counts as a delegate, and
+looked at sessions, saved reviewer notes, called tools. The first word is
+capitalised. Read, edited and written files count distinct paths, and asked
+questions count questions, not calls. `delegate_models` counts as a delegate, and
 `handoff`, `name_session`, `session_list` and `session_search` count as
-one kind, looked at sessions. An edit's totals follow it, "+N" in
+one kind, looked at sessions, and `reviewer_notes_save` is its own, saved
+reviewer notes. An edit's totals follow it, "+N" in
 `added` and "−N" in `removed`, both dim. Then ", thought N times" ("thought
 once"); while calls run, " · " and their targets, dim; while the model
 thinks, " · Thinking: <heading>" dim and italic. Right-aligned, dim, the
@@ -1342,6 +1343,7 @@ fails when it differs from the code.
 | `jobs` | jobs | checked N jobs | checked 1 job |
 | `name_session` | session | looked at sessions N times | looked at sessions once |
 | `read` | read | read N files | read 1 file |
+| `reviewer_notes_save` | notes | saved reviewer notes N times | saved reviewer notes once |
 | `session_list` | session | looked at sessions N times | looked at sessions once |
 | `session_message` | message | messaged sessions N times | messaged sessions once |
 | `session_search` | session | looked at sessions N times | looked at sessions once |
