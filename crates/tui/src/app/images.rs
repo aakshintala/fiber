@@ -6,21 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde_json::{Value, json};
 
-use super::{App, Effect, Target, mint};
+use super::{App, Effect, Target, Waiting, mint};
 use crate::event_loop::kitty_writer;
 use crate::image;
-
-/// One `read_file` out for a viewer open: what its answer needs to
-/// queue the open.
-struct Fetch {
-    /// The image's id on the screen that drew it.
-    id: u32,
-    /// The session the image came from, for the viewer's copy.
-    session: String,
-    /// The logged path, for the `read_file` line: the fetch's
-    /// identity, so a refusal survives the swap's new ids.
-    path: String,
-}
 
 /// Whether an inline image's bytes are asked for, converting, shown,
 /// or failed: a converting, shown or failed image is not asked for
@@ -34,13 +22,11 @@ enum DisplayState {
 }
 
 /// A display fetch for an inline image, by its `(session, path)`: the
-/// `read_file` command out, the placeholder id its answer draws under,
-/// and the session generation that asked, so a late answer draws
-/// nowhere stale.
+/// placeholder id its answer draws under, and the session generation
+/// that asked, so a late answer draws nowhere stale. The `read_file`
+/// command out is only its outbox `ImageDisplay` tag.
 #[derive(Clone)]
 struct Display {
-    /// The `read_file` command's id: the answer's dispatch key.
-    command: String,
     /// The placeholder id the answer transmits under.
     id: u32,
     /// The session generation that asked.
@@ -53,12 +39,12 @@ struct Display {
     height: u32,
 }
 
-/// What the app holds per session for its images: the viewer fetches
-/// out, the views queued for the loop, and the session generation,
-/// so a late viewer completion after a session change is dropped.
+/// What the app holds per session for its images: the views queued for
+/// the loop, and the session generation, so a late viewer completion
+/// after a session change is dropped. The viewer fetches out are only
+/// their outbox `ImageFetch` tags.
 #[derive(Default)]
 pub(crate) struct Images {
-    fetches: BTreeMap<String, Fetch>,
     /// Images whose file would not open, by `(session, path)`: missing,
     /// too large or refused. They stay their line, with the notice said
     /// once, and are not asked for again in that segment.
@@ -105,11 +91,13 @@ impl App {
             .images
             .refused
             .contains(&(session.0.clone(), path.clone()))
-            || self
-                .images
-                .fetches
-                .values()
-                .any(|fetch| fetch.session == session.0 && fetch.path == path)
+            || self.outbox.tags().any(|(_, waiting)| {
+                matches!(
+                    waiting,
+                    Waiting::ImageFetch { session: fetching, path: fetched, .. }
+                        if *fetching == session.0 && *fetched == path
+                )
+            })
         {
             return Effect::None;
         }
@@ -128,15 +116,7 @@ impl App {
         .to_string();
         self.outbox.wait(
             &command_id,
-            super::outbox::Waiting::ImageFetch {
-                id,
-                session: session.0.clone(),
-                path: path.clone(),
-            },
-        );
-        self.images.fetches.insert(
-            command_id,
-            Fetch {
+            Waiting::ImageFetch {
                 id,
                 session: session.0.clone(),
                 path,
@@ -152,51 +132,45 @@ impl App {
     /// (`docs/tui.md`, "Images"). True when `id` was ours.
     pub(in crate::app) fn image_answered(&mut self, id: &str, result: Option<&Value>) -> bool {
         // The tag is the authority: an answer for an id with no image
-        // tag takes the untagged path, even when routing detail lingers.
-        let waiting = self.outbox.waiting(id);
-        if !matches!(
-            waiting,
-            Some(
-                super::outbox::Waiting::ImageFetch { .. }
-                    | super::outbox::Waiting::ImageDisplay { .. }
-            )
-        ) {
-            return false;
+        // tag takes the untagged path.
+        match self.outbox.waiting(id) {
+            Some(Waiting::ImageDisplay { session, path }) => {
+                let key = (session, path);
+                if !self.images.display.contains_key(&key) {
+                    return false;
+                }
+                self.outbox.settled(id);
+                self.display_answered(key, result)
+            }
+            Some(Waiting::ImageFetch {
+                id: viewed,
+                session,
+                path,
+            }) => {
+                self.outbox.settled(id);
+                // The tag was the whole record of this command: nothing
+                // else settles its pending entry.
+                self.outbox.answered(id);
+                let name = file_name(&path);
+                let Some(data) = result
+                    .and_then(|result| result.get("data"))
+                    .and_then(Value::as_str)
+                else {
+                    self.images.refused.insert((session, path));
+                    self.cant_open(&name, "the answer carried no file");
+                    return true;
+                };
+                self.images.out.view.push(image::View {
+                    id: viewed,
+                    name,
+                    session,
+                    data: data.to_owned(),
+                    generation: self.images.generation,
+                });
+                true
+            }
+            _ => false,
         }
-        let display = self
-            .images
-            .display
-            .iter()
-            .find(|(_, fetch)| fetch.command == id)
-            .map(|(key, _)| key.clone());
-        if let Some(key) = display {
-            self.outbox.settled(id);
-            return self.display_answered(key, result);
-        }
-        let Some(fetch) = self.images.fetches.remove(id) else {
-            return false;
-        };
-        self.outbox.settled(id);
-        let name = file_name(&fetch.path);
-        let Some(data) = result
-            .and_then(|result| result.get("data"))
-            .and_then(Value::as_str)
-        else {
-            let name = file_name(&fetch.path);
-            self.images
-                .refused
-                .insert((fetch.session.clone(), fetch.path));
-            self.cant_open(&name, "the answer carried no file");
-            return true;
-        };
-        self.images.out.view.push(image::View {
-            id: fetch.id,
-            name,
-            session: fetch.session,
-            data: data.to_owned(),
-            generation: self.images.generation,
-        });
-        true
     }
 
     /// A `read_file` for a viewer open was rejected: one notice says
@@ -395,45 +369,33 @@ impl App {
 
     pub(in crate::app) fn image_rejected(&mut self, id: &str, message: &str) -> bool {
         // The tag is the authority: a rejection for an id with no image
-        // tag takes the untagged path, even when routing detail lingers.
-        let waiting = self.outbox.waiting(id);
-        if !matches!(
-            waiting,
-            Some(
-                super::outbox::Waiting::ImageFetch { .. }
-                    | super::outbox::Waiting::ImageDisplay { .. }
-            )
-        ) {
-            return false;
-        }
-        let failed = self
-            .images
-            .display
-            .iter()
-            .find(|(_, fetch)| fetch.command == id)
-            .map(|(key, fetch)| (key.clone(), (*fetch).clone()));
-        if let Some((key, fetch)) = failed {
-            self.outbox.settled(id);
-            self.images.display.remove(&key);
-            // Only an asked image fails: a converting image's worker
-            // decides, so a duplicate or late rejection changes nothing.
-            if fetch.state == DisplayState::Asked {
-                self.fail_display(&key, message, fetch);
-            } else {
-                self.images.display.insert(key, fetch);
+        // tag takes the untagged path.
+        match self.outbox.waiting(id) {
+            Some(Waiting::ImageDisplay { session, path }) => {
+                let key = (session, path);
+                let Some(fetch) = self.images.display.remove(&key) else {
+                    return false;
+                };
+                self.outbox.settled(id);
+                // Only an asked image fails: a converting image's worker
+                // decides, so a duplicate or late rejection changes nothing.
+                if fetch.state == DisplayState::Asked {
+                    self.fail_display(&key, message, fetch);
+                } else {
+                    self.images.display.insert(key, fetch);
+                }
+                true
             }
-            return true;
+            Some(Waiting::ImageFetch { session, path, .. }) => {
+                self.outbox.settled(id);
+                self.outbox.answered(id);
+                let name = file_name(&path);
+                self.images.refused.insert((session, path));
+                self.cant_open(&name, message);
+                true
+            }
+            _ => false,
         }
-        let Some(fetch) = self.images.fetches.remove(id) else {
-            return false;
-        };
-        self.outbox.settled(id);
-        let name = file_name(&fetch.path);
-        self.images
-            .refused
-            .insert((fetch.session.clone(), fetch.path));
-        self.cant_open(&name, message);
-        true
     }
 
     /// A viewer worker finished opening image `id`: nothing on success,
@@ -498,14 +460,22 @@ impl App {
             })
             .to_string();
             self.images.out.display.push(line);
+            // The key's earlier ask, if any tag of it lives, must not
+            // answer the new record.
+            self.outbox.settle_where(|waiting| {
+                matches!(
+                    waiting,
+                    Waiting::ImageDisplay { session: asked, path: listed }
+                        if asked == session && listed == path
+                )
+            });
             self.outbox.wait(
                 &command_id,
-                super::outbox::Waiting::ImageDisplay {
+                Waiting::ImageDisplay {
                     session: session.clone(),
                     path: path.clone(),
                 },
             );
-            fetch.command = command_id;
             fetch.state = DisplayState::Asked;
         }
     }
@@ -534,11 +504,9 @@ impl App {
         self.outbox.settle_where(|waiting| {
             matches!(
                 waiting,
-                super::outbox::Waiting::ImageFetch { .. }
-                    | super::outbox::Waiting::ImageDisplay { .. }
+                Waiting::ImageFetch { .. } | Waiting::ImageDisplay { .. }
             )
         });
-        self.images.fetches.clear();
         self.images.refused.clear();
         self.images.display.clear();
         // The queued conversions go with the registry, while the running
@@ -613,9 +581,16 @@ impl App {
                 "args": {"session": part.session.0, "path": part.path},
             })
             .to_string();
+            self.outbox.settle_where(|waiting| {
+                matches!(
+                    waiting,
+                    Waiting::ImageDisplay { session: asked, path: listed }
+                        if *asked == key.0 && *listed == key.1
+                )
+            });
             self.outbox.wait(
                 &command_id,
-                super::outbox::Waiting::ImageDisplay {
+                Waiting::ImageDisplay {
                     session: key.0.clone(),
                     path: key.1.clone(),
                 },
@@ -623,7 +598,6 @@ impl App {
             self.images.display.insert(
                 key,
                 Display {
-                    command: command_id.clone(),
                     id,
                     generation: self.images.generation,
                     state: DisplayState::Asked,
@@ -635,13 +609,11 @@ impl App {
         }
     }
 
-    /// Drops the viewer fetches with the connection: they are asked
-    /// again when drawn with the link up. That is a new connection,
-    /// not a retry.
+    /// Drops the viewer fetches with the connection: a later click asks
+    /// again, as a new request, not a retry. The display fetches stay.
     pub(in crate::app) fn images_disconnected(&mut self) {
         self.outbox
-            .settle_where(|waiting| matches!(waiting, super::outbox::Waiting::ImageFetch { .. }));
-        self.images.fetches.clear();
+            .settle_where(|waiting| matches!(waiting, Waiting::ImageFetch { .. }));
     }
 
     /// The whole image line `id` names, uncut: what `y` copies.
