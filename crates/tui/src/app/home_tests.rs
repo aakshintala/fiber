@@ -7286,7 +7286,18 @@ fn set_home_replaces_the_seeded_home() {
     app.on_line(hello());
     let asked = match app.on_key(Key::Up, crate::app::testkit::now()) {
         Effect::Send(lines) => commands(lines),
-        _ => Vec::new(),
+        Effect::None
+        | Effect::Quit
+        | Effect::Exit(_)
+        | Effect::ListFiles
+        | Effect::Search { .. }
+        | Effect::Editor { .. }
+        | Effect::Copy(_)
+        | Effect::FindPause { .. }
+        | Effect::OpenLink(_)
+        | Effect::ReadImage(_)
+        | Effect::Feedback { .. }
+        | Effect::OpenFile(_) => Vec::new(),
     };
     assert_eq!(asked.len(), 1, "{asked:?}");
     assert_eq!(asked[0]["command"], "prompt_history");
