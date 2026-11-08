@@ -85,12 +85,20 @@ fiber.tool("codemode", {
       -- gate keeps every other tool's row byte-identical, even when its
       -- content carries a receipt-shaped sentence. Delegate answers are
       -- text-only, so a first part of another shape ends the search.
-      if name == "delegate_spawn" or name == "delegate_fork" then
-        local first = outcome.content[1]
-        if type(first) == "table" and first.type == "text" and type(first.text) == "string" then
+      local first = outcome.content[1]
+      if type(first) == "table" and first.type == "text" and type(first.text) == "string" then
+        if name == "delegate_spawn" or name == "delegate_fork" then
           -- The log path keeps spaces from the project key or home
           -- directory, so only the id prefix is matched.
           local id = first.text:match("^Started delegate (%S+)%. Its log is ")
+          if id ~= nil then
+            row.job = id
+          end
+        elseif name == "shell" then
+          -- Background, monitor and terminal receipts put the id on the
+          -- second line; match only its prefix so paths may contain spaces.
+          local receipt = first.text:match("^[^\n]*\n([^\n]*)")
+          local id = receipt and receipt:match("^Job (%S+)%. Output: ")
           if id ~= nil then
             row.job = id
           end
