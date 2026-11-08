@@ -2,12 +2,12 @@
 //! commands"): the attached session's dry run, the immutable question
 //! it opens, and the confirmed stop/delete correlation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
 mod settlement;
-use super::super::super::{App, Effect, Phase, mint};
+use super::super::super::{App, Effect, Phase, Waiting, mint};
 use super::super::{refusal, refusal_code};
 use super::Prompt;
 use crate::home::title;
@@ -16,8 +16,10 @@ use contract::SessionId;
 
 /// `/delete`'s feature-owned lifecycle under home's questions: one
 /// command at a time, each phase exclusive. The candidate set is
-/// immutable once the hub answers the discovery dry run.
-// debt: the command, stop and delete ids kept in this state beside the outbox `DeleteDiscovery`, `DeleteStop` and `DeleteFinal` tags by hand, the outbox tags become the sole record once the command lookup runs off the tag alone once #4127 lands.
+/// immutable once the hub answers the discovery dry run. The command's
+/// hub asks live only as outbox tags carrying `generation`: an answer
+/// folds when its tag's generation is this one and the state is the
+/// tag's phase.
 #[derive(Debug, Default)]
 pub(super) struct DeleteCommand {
     generation: u64,
@@ -32,11 +34,7 @@ enum State {
     #[default]
     Idle,
     /// The cascading dry run is out; its answer opens the question.
-    Discovering {
-        command: String,
-        target: SessionId,
-        name: String,
-    },
+    Discovering { target: SessionId, name: String },
     /// The hub named the confirmed set; Enter stops the held ones.
     Asked {
         target: SessionId,
@@ -53,11 +51,9 @@ enum State {
         sessions: Vec<SessionId>,
         name: String,
         waiting: Vec<SessionId>,
-        closes: BTreeMap<String, SessionId>,
     },
     /// Every held id stopped; the exact-set delete waits for its answer.
     Deleting {
-        command: String,
         target: SessionId,
         sessions: Vec<SessionId>,
         name: String,
@@ -119,15 +115,12 @@ impl App {
         home.questions.delete_command = DeleteCommand {
             generation,
             state: State::Discovering {
-                command: command.clone(),
                 target: session,
                 name,
             },
         };
-        self.outbox.wait(
-            &command,
-            super::super::super::Waiting::DeleteDiscovery(generation),
-        );
+        self.outbox
+            .wait(&command, Waiting::DeleteDiscovery(generation));
         self.draft.clear();
         Effect::Send(vec![line])
     }
@@ -223,22 +216,38 @@ impl App {
     }
 
     /// Folds the command's hub answers: the discovery dry run, then each
-    /// confirmed stop. `None` when `id` is no command line.
+    /// confirmed stop and the delete, by the tag `id` carries. `None`
+    /// when `id` is no line of the running command: an earlier command's
+    /// tag, or one for a phase the command is not in.
     pub(in crate::app) fn delete_command_answer(
         &mut self,
         id: &str,
         accepted: bool,
         payload: &Map<String, Value>,
     ) -> Option<Vec<String>> {
-        if self.delete_deleting_command(id) {
+        let tag = self.outbox.waiting(id)?;
+        if let Waiting::DeleteFinal(generation) = tag {
+            if !self.delete_deleting_command(generation) {
+                return None;
+            }
             self.take_ask(id);
             return self.delete_command_delete_answer(accepted, payload);
         }
-        if self.delete_command_close(id, accepted, payload) {
+        if let Waiting::DeleteStop {
+            generation,
+            session,
+        } = &tag
+        {
+            if !self.delete_command_close(*generation, session, id, accepted, payload) {
+                return None;
+            }
             self.take_ask(id);
             return Some(Vec::new());
         }
-        let (target, name) = self.delete_discovery_parts(id)?;
+        let Waiting::DeleteDiscovery(generation) = tag else {
+            return None;
+        };
+        let (target, name) = self.delete_discovery_parts(generation)?;
         self.outbox.settled(id);
         if !accepted {
             self.delete_command_finish(false);
@@ -286,20 +295,18 @@ impl App {
     }
 
     /// The discovery's target and captured name, while its answer is
-    /// still the one the command waits on.
-    fn delete_discovery_parts(&self, id: &str) -> Option<(SessionId, String)> {
+    /// still the one the command waits on: the running command's, in the
+    /// discovery phase.
+    fn delete_discovery_parts(&self, generation: u64) -> Option<(SessionId, String)> {
         let home = self.home.as_ref()?;
+        if home.questions.delete_command.generation != generation {
+            return None;
+        }
         match &home.questions.delete_command.state {
-            State::Discovering {
-                command,
-                target,
-                name,
-            } if command == id => Some((target.clone(), name.clone())),
-            State::Idle
-            | State::Discovering { .. }
-            | State::Asked { .. }
-            | State::Stopping { .. }
-            | State::Deleting { .. } => None,
+            State::Discovering { target, name } => Some((target.clone(), name.clone())),
+            State::Idle | State::Asked { .. } | State::Stopping { .. } | State::Deleting { .. } => {
+                None
+            }
         }
     }
 
@@ -314,31 +321,28 @@ impl App {
 
     /// Folds a confirmed stop's answer: an acceptance still waits on the
     /// feed's `session_left`; a refusal stops nothing further and names
-    /// the session still running. True when `id` closed for the command.
+    /// the session still running. True when the stop `id` of `session`
+    /// belongs to the running command, which is stopping.
     fn delete_command_close(
         &mut self,
+        generation: u64,
+        session: &SessionId,
         id: &str,
         accepted: bool,
         payload: &Map<String, Value>,
     ) -> bool {
-        let session =
-            self.home
-                .as_mut()
-                .and_then(|home| match &mut home.questions.delete_command.state {
-                    State::Stopping { closes, .. } => closes.remove(id),
-                    State::Idle
-                    | State::Discovering { .. }
-                    | State::Asked { .. }
-                    | State::Deleting { .. } => None,
-                });
-        let Some(session) = session else {
+        let stopping = self.home.as_ref().is_some_and(|home| {
+            home.questions.delete_command.generation == generation
+                && matches!(home.questions.delete_command.state, State::Stopping { .. })
+        });
+        if !stopping {
             return false;
-        };
+        }
         self.outbox.settled(id);
         if accepted {
             return true;
         }
-        let display = self.delete_display(&session);
+        let display = self.delete_display(session);
         let message = format!(
             "Stop refused for {display}: {}. Nothing was deleted.",
             refusal(payload)
@@ -452,7 +456,7 @@ impl App {
                     .push((session.clone(), close.clone()));
                 self.outbox.wait(
                     close,
-                    super::super::super::Waiting::DeleteStop {
+                    Waiting::DeleteStop {
                         generation: home.questions.delete_command.generation,
                         session: session.clone(),
                     },
@@ -463,23 +467,18 @@ impl App {
                 sessions,
                 name,
                 waiting,
-                closes: pairs
-                    .into_iter()
-                    .map(|(session, close)| (close, session))
-                    .collect(),
             };
         }
         self.go_home();
         Effect::Send(lines)
     }
 
-    /// Whether `id` is the exact command answer owned by the deleting sequence.
-    fn delete_deleting_command(&self, id: &str) -> bool {
+    /// Whether the running command is `generation`'s and is deleting:
+    /// the phase that owns the exact-set delete's answer.
+    fn delete_deleting_command(&self, generation: u64) -> bool {
         self.home.as_ref().is_some_and(|home| {
-            matches!(
-                &home.questions.delete_command.state,
-                State::Deleting { command, .. } if command == id
-            )
+            home.questions.delete_command.generation == generation
+                && matches!(home.questions.delete_command.state, State::Deleting { .. })
         })
     }
 
@@ -527,10 +526,9 @@ impl App {
                 .insert(command.clone(), super::Ask::Delete(target.clone()));
             self.outbox.wait(
                 &command,
-                super::super::super::Waiting::DeleteFinal(home.questions.delete_command.generation),
+                Waiting::DeleteFinal(home.questions.delete_command.generation),
             );
             home.questions.delete_command.state = State::Deleting {
-                command,
                 target,
                 sessions: sessions.clone(),
                 name,
@@ -611,6 +609,24 @@ impl App {
             .retain(|(session, _)| !sessions.contains(session));
     }
 
+    /// The ids of the running command's tags of one kind, in send order:
+    /// `generation_of` reads the generation off a tag of that kind, and
+    /// only the running command's generation counts.
+    fn delete_tag_ids(&self, generation_of: impl Fn(&Waiting) -> Option<u64>) -> Vec<String> {
+        let Some(running) = self
+            .home
+            .as_ref()
+            .map(|home| home.questions.delete_command.generation)
+        else {
+            return Vec::new();
+        };
+        self.outbox
+            .tags()
+            .filter(|(_, tag)| generation_of(tag) == Some(running))
+            .map(|(id, _)| id.to_owned())
+            .collect()
+    }
+
     /// The row's sanitized title, or its id without one, for notices.
     fn delete_display(&self, id: &SessionId) -> String {
         self.home
@@ -618,6 +634,33 @@ impl App {
             .and_then(|home| home.sessions.row(id))
             .map(title)
             .unwrap_or_else(|| id.0.clone())
+    }
+}
+
+/// The generation a `DeleteDiscovery` tag carries.
+fn discovery_generation(tag: &Waiting) -> Option<u64> {
+    if let Waiting::DeleteDiscovery(generation) = tag {
+        Some(*generation)
+    } else {
+        None
+    }
+}
+
+/// The generation a `DeleteFinal` tag carries.
+fn final_generation(tag: &Waiting) -> Option<u64> {
+    if let Waiting::DeleteFinal(generation) = tag {
+        Some(*generation)
+    } else {
+        None
+    }
+}
+
+/// The generation a `DeleteStop` tag carries.
+fn stop_generation(tag: &Waiting) -> Option<u64> {
+    if let Waiting::DeleteStop { generation, .. } = tag {
+        Some(*generation)
+    } else {
+        None
     }
 }
 

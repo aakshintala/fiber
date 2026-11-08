@@ -9,7 +9,9 @@ use crate::app::App;
 use contract::ErrorCode;
 use contract::SessionId;
 
-use super::{State, refusal, refusal_code};
+use super::{
+    State, discovery_generation, final_generation, refusal, refusal_code, stop_generation,
+};
 
 impl App {
     /// Settles the command's exact-set delete: accepted removes every
@@ -86,42 +88,30 @@ impl App {
     /// discovery silently. The exact ask is removed before generic row
     /// delete settlement can see it.
     pub(in crate::app::home::prompt) fn delete_command_disconnected(&mut self) {
-        let deleting =
-            self.home
-                .as_ref()
-                .and_then(|home| match &home.questions.delete_command.state {
-                    State::Deleting {
-                        command, sessions, ..
-                    } => Some((command.clone(), sessions.clone())),
-                    State::Idle
-                    | State::Discovering { .. }
-                    | State::Asked { .. }
-                    | State::Stopping { .. } => None,
-                });
-        if let Some((command, _sessions)) = deleting {
-            self.take_ask(&command);
+        let deleting = self.home.as_ref().is_some_and(|home| {
+            matches!(home.questions.delete_command.state, State::Deleting { .. })
+        });
+        if deleting {
+            for command in self.delete_tag_ids(final_generation) {
+                self.take_ask(&command);
+            }
             self.delete_command_delete_unknown();
             return;
         }
-        let discovering =
-            self.home
-                .as_ref()
-                .and_then(|home| match &home.questions.delete_command.state {
-                    State::Discovering { command, .. } => Some(command.clone()),
-                    State::Idle
-                    | State::Asked { .. }
-                    | State::Stopping { .. }
-                    | State::Deleting { .. } => None,
-                });
-        if let Some(home) = self.home.as_mut()
-            && matches!(
+        let discovering = self.home.as_ref().is_some_and(|home| {
+            matches!(
                 home.questions.delete_command.state,
                 State::Discovering { .. }
             )
-        {
+        });
+        if !discovering {
+            return;
+        }
+        let commands = self.delete_tag_ids(discovery_generation);
+        if let Some(home) = self.home.as_mut() {
             home.questions.delete_command.state = State::Idle;
         }
-        if let Some(command) = discovering {
+        for command in commands {
             self.outbox.settled(&command);
         }
     }
@@ -169,37 +159,32 @@ impl App {
     }
 
     /// Settles only this command's exact unsent delete ask, or an unsent
-    /// close. An ambiguous delete write is never retried.
-    pub(in crate::app::home::prompt) fn delete_command_unsent(&mut self, unsent: &[String]) {
-        let deletion =
-            self.home
-                .as_ref()
-                .and_then(|home| match &home.questions.delete_command.state {
-                    State::Deleting {
-                        command, sessions, ..
-                    } if unsent.contains(command) => Some((command.clone(), sessions.clone())),
-                    State::Idle
-                    | State::Discovering { .. }
-                    | State::Asked { .. }
-                    | State::Stopping { .. }
-                    | State::Deleting { .. } => None,
-                });
-        if let Some((command, _sessions)) = deletion {
-            self.take_ask(&command);
+    /// close among `stops`, the command's stop ids read before the unsent
+    /// closes' tags settled. An ambiguous delete write is never retried.
+    pub(in crate::app::home::prompt) fn delete_command_unsent(
+        &mut self,
+        unsent: &[String],
+        stops: &[String],
+    ) {
+        let deleting = self.home.as_ref().is_some_and(|home| {
+            matches!(home.questions.delete_command.state, State::Deleting { .. })
+        });
+        let deletes = self.delete_tag_ids(final_generation);
+        if deleting && let Some(command) = deletes.iter().find(|command| unsent.contains(command)) {
+            self.take_ask(command);
             self.delete_command_delete_unknown();
             return;
         }
-        let mine = self.delete_waiting_close_ids().unwrap_or_default();
-        if mine.iter().any(|close| unsent.contains(close)) {
+        if stops.iter().any(|close| unsent.contains(close)) {
             self.delete_command_link_lost();
         }
     }
 
     /// The stopping command's close command ids, while stops are out.
-    fn delete_waiting_close_ids(&self) -> Option<Vec<String>> {
+    pub(in crate::app::home::prompt) fn delete_waiting_close_ids(&self) -> Option<Vec<String>> {
         let home = self.home.as_ref()?;
         match &home.questions.delete_command.state {
-            State::Stopping { closes, .. } => Some(closes.keys().cloned().collect()),
+            State::Stopping { .. } => Some(self.delete_tag_ids(stop_generation)),
             State::Idle
             | State::Discovering { .. }
             | State::Asked { .. }

@@ -396,6 +396,9 @@ impl App {
                     .and_then(|line| line.get("id").and_then(Value::as_str).map(str::to_owned))
             })
             .collect();
+        // The running command's stop tags are read before the loop below
+        // settles the unsent closes' tags.
+        let stops = self.delete_waiting_close_ids().unwrap_or_default();
         if let Some(home) = self.home.as_mut() {
             let mut dropped = Vec::new();
             home.questions.closing.retain(|(_, close)| {
@@ -409,7 +412,7 @@ impl App {
                 self.outbox.settled(&id);
             }
         }
-        self.delete_command_unsent(&ids);
+        self.delete_command_unsent(&ids, &stops);
     }
 
     /// The sessions working now, in list order, the attached one last
