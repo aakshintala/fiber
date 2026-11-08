@@ -6,6 +6,9 @@ now, not a plan. It is settled by
 [The tool contract: what every tool shares](https://github.com/aakshintala/fiber/issues/14);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
+The first-party `codemode` extension adds one tool that runs a script calling
+the session's other tools (`docs/extensions.md`, "Code mode").
+
 Vocabulary is `GLOSSARY.md`. Tool call, effect, artifact, participant, seam,
 extension and event mean what it says there and nothing else. How effects are
 judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
