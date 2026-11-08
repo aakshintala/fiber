@@ -2668,3 +2668,98 @@ fn wheel_over_doctor_scrolls_the_list_not_the_conversation() {
         "a selection still on screen stays where it was"
     );
 }
+
+// The screen rows, the launch overrides and the `-c` guard, through the app.
+
+/// Presses Right until the open view is on `tab`, then Down `down` rows,
+/// and returns what Enter on that row does.
+fn enter_row(app: &mut App, tab: SettingsTab, down: usize) -> Effect {
+    let at = SettingsTab::ALL.iter().position(|t| *t == tab).unwrap();
+    for _ in 0..at {
+        app.on_edit(Edit::Right);
+    }
+    for _ in 0..down {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    app.on_key(Key::Enter, now())
+}
+
+#[test]
+fn enter_on_each_screen_row_opens_its_screen_and_writes_no_key() {
+    use crate::settings_view::Screen;
+
+    for screen_ in Screen::ALL {
+        let seam = Arc::new(Fake::new(Vec::new()));
+        let mut app = connected(seam.clone());
+        app.open_config_view(ConfigView::Settings);
+        let tab = screen_.row().and_then(|row| row.metadata.tab).unwrap();
+        // The screen rows of a tab follow its keys, in table order; the
+        // seam holds no keys.
+        let down = Screen::ALL
+            .into_iter()
+            .take_while(|other| *other != screen_)
+            .filter(|other| other.row().and_then(|row| row.metadata.tab) == Some(tab))
+            .count();
+        let effect = enter_row(&mut app, tab, down);
+        let command = screen_.row().map(|row| row.command).unwrap();
+        match screen_ {
+            Screen::Keys => assert!(app.keys_screen_open(), "{command}"),
+            Screen::Rules => {
+                let frame = app.config_view_screen().expect("a view is open");
+                assert_ne!(frame.title, "Settings", "{command}");
+            }
+            Screen::Credentials | Screen::Tools | Screen::Skills | Screen::Mcp => {
+                let sent = sent(effect);
+                assert_eq!(sent.len(), 1, "{command}");
+                let asked = match screen_ {
+                    Screen::Credentials => "credentials",
+                    Screen::Tools => "tools",
+                    Screen::Skills => "skills",
+                    _ => "mcp_servers",
+                };
+                assert_eq!(sent[0]["command"], asked, "{command}");
+            }
+        }
+        assert!(seam.writes().is_empty(), "{command}");
+    }
+}
+
+#[test]
+fn the_launch_overrides_go_with_every_read_of_settings() {
+    let seam = fake();
+    let mut app = home(seam.clone());
+    app.set_launch_overrides(vec![
+        "handoff.tokens=1".to_owned(),
+        "tui.theme=solar".to_owned(),
+    ]);
+    app.open_config_view(ConfigView::Settings);
+    app.open_config_view(ConfigView::Theme);
+    let asked = seam.settings_queries.lock().unwrap().clone();
+    assert!(asked.len() >= 2, "{asked:?}");
+    assert!(
+        asked.iter().all(|(_, overrides)| overrides
+            == &["handoff.tokens=1".to_owned(), "tui.theme=solar".to_owned()]),
+        "{asked:?}"
+    );
+}
+
+#[test]
+fn a_key_set_by_dash_c_takes_no_enter_tab_or_delete_through_the_app() {
+    let seam = Arc::new(Fake::new(vec![appearance(controlled(
+        "handoff.tokens",
+        Shown::Value("5".to_owned()),
+        "-c",
+        WriteScope::Any { repo: true },
+        SettingControl::Number,
+    ))]));
+    let mut app = home(seam.clone());
+    app.open_config_view(ConfigView::Settings);
+    let before = screen(&app);
+    for key in [Key::Enter, Key::Tab] {
+        assert_eq!(app.on_key(key, now()), Effect::None);
+    }
+    assert_eq!(app.on_edit(Edit::Delete), Effect::None);
+    assert_eq!(screen(&app), before, "no field opened, nothing changed");
+    assert!(seam.writes().is_empty());
+    assert!(seam.resets.lock().unwrap().is_empty());
+}
