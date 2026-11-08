@@ -417,11 +417,15 @@ impl LuaProvider {
     /// Whether the provider source is newer than its cached model list.
     /// No cache is not stale: discovery on first use already supplied it.
     pub(crate) fn source_is_newer(&self) -> bool {
-        let now = self.extension.clock().wall();
-        let Ok(Some(age)) = config::model_cache_age(self.extension.home(), &self.name, now) else {
+        let cache_file = self
+            .extension
+            .home()
+            .join("cache/models")
+            .join(format!("{}.json", self.name));
+        let Ok(metadata) = std::fs::metadata(cache_file) else {
             return false;
         };
-        let Some(cached_at) = now.checked_sub(age) else {
+        let Ok(cached_at) = metadata.modified() else {
             return false;
         };
         match Self::source_newest_mtime(self.dir()) {

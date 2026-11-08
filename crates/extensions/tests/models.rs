@@ -1384,12 +1384,21 @@ fn a_fresh_list_is_not_refreshed_and_lua_never_runs() {
 
 #[test]
 fn source_newer_than_cache_triggers_discovery_and_equal_or_older_does_not() {
-    for (offset, expected) in [(-1_i64, false), (0, false), (1, true)] {
+    for (offset, cache_is_future, expected) in [
+        (-1_i64, false, false),
+        (0, false, false),
+        (1, false, true),
+        (0, true, false),
+    ] {
         let setup = Setup::new();
         let home = setup.home();
         let clock = fakes::clock::FakeClock::new();
         wrote(&home, "acme", &["old"]);
-        let cache_mtime = clock.wall() - std::time::Duration::from_secs(2);
+        let cache_mtime = if cache_is_future {
+            clock.wall() + std::time::Duration::from_secs(1)
+        } else {
+            clock.wall() - std::time::Duration::from_secs(2)
+        };
         set_cache_mtime(&home, "acme", cache_mtime);
         let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
         let source_mtime = if offset < 0 {
