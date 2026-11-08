@@ -13,9 +13,10 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use contract::Envelope;
 use contract::events::{
-    Anchor, AssistantMessageCompleted, InputItem, MessageOutcome, ReasoningCompleted,
-    RetryScheduled, SteeringApplied, TextCompleted, TextDelta, ToolCallArgumentsDelta,
-    ToolCallCompleted, ToolCallRequested, TurnCompleted, TurnStarted, UsageRecorded,
+    Anchor, AssistantMessageCompleted, InputItem, MessageOutcome, PermissionResolved,
+    ReasoningCompleted, RetryScheduled, SteeringApplied, TextCompleted, TextDelta,
+    ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnCompleted,
+    TurnStarted, UsageRecorded,
 };
 use contract::shapes::{Origin, Sender};
 use ratatui::text::Line;
@@ -466,6 +467,25 @@ impl Turn {
         })
     }
 
+    /// The arguments a `before_tool` hook rewrote for `action`, and the
+    /// extensions that took attribution (`docs/events.md`, "`changed_by`"):
+    /// the call's arguments become the rewrite, so every reader of them
+    /// agrees. An empty list names no one. Timing and `asking` stay;
+    /// false when the call is not in this turn.
+    pub(crate) fn rewritten(
+        &mut self,
+        action: &str,
+        arguments: serde_json::Map<String, Value>,
+        changed_by: Option<Vec<String>>,
+    ) -> bool {
+        let Some(call) = self.groups_mut().find_map(|group| group.call(action)) else {
+            return false;
+        };
+        call.arguments = Value::Object(arguments);
+        call.changed_by = changed_by.filter(|names| !names.is_empty());
+        true
+    }
+
     /// `tool_call_completed`; false when the call is not in this turn.
     /// `session` stamps the call's images with their segment, so one
     /// path in two segments draws two images.
@@ -871,10 +891,18 @@ fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action:
     // Completions may follow their turn's end, so they search back
     // through every card; streaming goes only to the open one.
     match envelope.kind() {
-        EventKind::ToolCallStarted => turns
-            .iter_mut()
-            .rev()
-            .any(|turn| turn.call_started(action, ts)),
+        EventKind::ToolCallStarted => {
+            // A payload that does not decode still starts its call.
+            let mut rewrite = read!(envelope, ToolCallStarted)
+                .and_then(|started| Some((started.arguments?, started.changed_by)));
+            turns.iter_mut().rev().any(|turn| {
+                let started = turn.call_started(action, ts);
+                if started && let Some((arguments, changed_by)) = rewrite.take() {
+                    turn.rewritten(action, arguments, changed_by);
+                }
+                started
+            })
+        }
         EventKind::ToolCallCompleted => read!(envelope, ToolCallCompleted).is_some_and(|done| {
             turns
                 .iter_mut()
@@ -883,10 +911,22 @@ fn fold_action(turns: &mut [Turn], fold: &mut Fold, envelope: &Envelope, action:
         }),
         EventKind::PermissionRequested | EventKind::PermissionResolved => {
             let asking = envelope.kind() == EventKind::PermissionRequested;
-            turns
-                .iter_mut()
-                .rev()
-                .any(|turn| turn.permission(action, asking))
+            // A reviewed call's decision with no request holds the
+            // rewrite no `tool_call_started` does when the call is denied.
+            let mut rewrite = if asking {
+                None
+            } else {
+                read!(envelope, PermissionResolved)
+                    .and_then(|resolved| resolved.call)
+                    .and_then(|call| Some((call.arguments?, call.changed_by)))
+            };
+            turns.iter_mut().rev().any(|turn| {
+                let found = turn.permission(action, asking);
+                if found && let Some((arguments, changed_by)) = rewrite.take() {
+                    turn.rewritten(action, arguments, changed_by);
+                }
+                found
+            })
         }
         EventKind::ReasoningCompleted => read!(envelope, ReasoningCompleted).is_some_and(|done| {
             let mut text = Some(done.text);
