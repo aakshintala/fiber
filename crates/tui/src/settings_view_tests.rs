@@ -8,12 +8,15 @@ use std::path::{Path, PathBuf};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
-use super::{Act, Applies, Ctx, Settings, applies, applies_text, as_typed, layers};
+use super::{
+    Act, Applies, Ctx, SCREEN_ROWS, ScreenRow, Settings, applies, applies_text, as_typed, layers,
+};
 use crate::ThemeSetting;
 use crate::configure::{Layer, SettingRow, Shown, WriteScope};
 use crate::configure_fake::{Fake, file, row};
 use crate::keys::{Edit, Key};
 use crate::swapped::{Ink, Spot, render};
+use contract::settings::SettingsTab;
 
 /// A value shown as compact JSON.
 fn value(json: &str) -> Shown {
@@ -1083,4 +1086,138 @@ fn wheel_over_short_choices_stays_without_choosing() {
         "a clamped choices wheel stays without choosing"
     );
     assert!(matches!(settings.wheel(true, &context), Act::Stay));
+}
+
+/// One screen row as the contract spells it: label, tab, command, covered
+/// schema entries.
+type Contract = (
+    &'static str,
+    SettingsTab,
+    &'static str,
+    &'static [&'static str],
+);
+
+const SCREENS: [Contract; 6] = [
+    (
+        "Key bindings",
+        SettingsTab::Appearance,
+        "/keys",
+        &["keys.*"],
+    ),
+    (
+        "Credentials",
+        SettingsTab::Models,
+        "/credential",
+        &["providers.*.credential"],
+    ),
+    ("Rules", SettingsTab::Permissions, "/rules", &[]),
+    (
+        "Tools",
+        SettingsTab::Permissions,
+        "/tools",
+        &[
+            "tools.*.max_result_bytes",
+            "tools.*.deferred",
+            "extensions.*.tools.enabled",
+            "extensions.*.tools.disabled",
+        ],
+    ),
+    (
+        "Skills",
+        SettingsTab::Sessions,
+        "/skills",
+        &["skills.disabled"],
+    ),
+    (
+        "MCP servers",
+        SettingsTab::Sessions,
+        "/mcp",
+        &[
+            "mcp.servers.*.command",
+            "mcp.servers.*.args",
+            "mcp.servers.*.env",
+            "mcp.servers.*.url",
+            "mcp.servers.*.required",
+            "mcp.servers.*.startup_timeout_ms",
+            "mcp.servers.*.timeout_ms",
+            "mcp.servers.*.declare_in_full",
+            "mcp.servers.*.tools.enabled",
+            "mcp.servers.*.tools.disabled",
+            "mcp.servers.*.tools.*.hints",
+        ],
+    ),
+];
+
+#[test]
+fn settings_metadata_screen_rows_are_complete() {
+    for row in SCREEN_ROWS {
+        let ScreenRow { metadata, .. } = row;
+        assert!(metadata.tab.is_some(), "`{}` has no tab", metadata.label);
+        for (name, text) in [
+            ("label", metadata.label),
+            ("description", metadata.description),
+        ] {
+            assert!(!text.trim().is_empty(), "`{}` has no {name}", row.command);
+            assert_eq!(text.trim(), text, "`{}` {name} has spaces", row.command);
+            assert!(
+                !text.contains('\n'),
+                "`{}` {name} is more than one line",
+                row.command
+            );
+        }
+    }
+}
+
+#[test]
+fn settings_metadata_screen_rows_match_the_contract() {
+    // The contract orders the rows, not the entries a row covers.
+    let covered_set = |covers: &[&'static str]| {
+        let mut set = covers.to_vec();
+        set.sort_unstable();
+        set.dedup();
+        set
+    };
+    let rows: Vec<_> = SCREEN_ROWS
+        .iter()
+        .map(|row| {
+            let tab = row.metadata.tab.expect("a screen row has a tab");
+            (
+                row.metadata.label,
+                tab,
+                row.command,
+                covered_set(row.covers),
+            )
+        })
+        .collect();
+    let want: Vec<_> = SCREENS
+        .iter()
+        .map(|&(label, tab, command, covers)| (label, tab, command, covered_set(covers)))
+        .collect();
+    assert_eq!(rows, want, "label, tab, command and coverage, in order");
+
+    // The set comparison above hides a repeated entry.
+    let mut covered: Vec<&str> = SCREEN_ROWS
+        .iter()
+        .flat_map(|row| row.covers)
+        .copied()
+        .collect();
+    let all = covered.len();
+    covered.sort_unstable();
+    covered.dedup();
+    assert_eq!(covered.len(), all, "a path is covered twice");
+}
+
+#[test]
+fn settings_metadata_screen_commands_are_registered() {
+    for row in SCREEN_ROWS {
+        let name = row
+            .command
+            .strip_prefix('/')
+            .unwrap_or_else(|| panic!("`{}` is not a slash command", row.command));
+        assert!(
+            contract::commands::BUILT_IN_COMMANDS.contains(&name),
+            "`{}` is not a built-in command",
+            row.command
+        );
+    }
 }
