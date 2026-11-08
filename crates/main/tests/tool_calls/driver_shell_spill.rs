@@ -101,7 +101,7 @@ fn driver_shell_past_a_mebibyte_returns_its_complete_artifact() {
 
     let client = Socket::connect(setup.deadline, &setup.session_socket(&session_id));
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"summary"}}"#);
-    let sub = support::recv(&client, "the subscribe acknowledgement");
+    let sub = support::recv_answer(&client, "c_sub", "the subscribe acknowledgement");
     assert_eq!(sub["kind"], "command_accepted", "{sub}");
     assert_eq!(sub["payload"]["command_id"], "c_sub");
 

@@ -303,6 +303,96 @@ fn the_harness_joins_a_marker_split_across_reads() {
     }
 }
 
+/// The live grid's text.
+fn live(shared: &support::pty::Shared) -> String {
+    // settled: the caller's publish returned, so no reader thread races
+    shared.grid().contents
+}
+
+/// The retained frame's text, if one is kept.
+fn kept(shared: &support::pty::Shared) -> Option<String> {
+    // settled: the caller's publish returned, so no reader thread races
+    shared.retained().map(|grid| grid.contents)
+}
+
+/// One synchronized frame drawing `text` at the home position.
+fn frame(text: &str) -> Vec<u8> {
+    [BEGIN, b"\x1b[H", text.as_bytes(), END].concat()
+}
+
+/// One synchronized frame that clears the screen.
+fn clearing_frame() -> Vec<u8> {
+    [BEGIN, b"\x1b[2J\x1b[H", END].concat()
+}
+
+/// A read holding a frame that draws the armed needle and the frame that
+/// clears it keeps the first: the live grid shows only the last frame.
+#[test]
+fn a_retained_frame_survives_a_later_frame_in_the_same_read() {
+    let mut shared = support::pty::Shared::new(20, 5);
+    shared.retain("notice");
+    shared.publish(&[frame("notice"), clearing_frame()].concat());
+    let live = live(&shared);
+    assert!(
+        !live.contains("notice"),
+        "the live grid shows the clearing frame: {live:?}",
+    );
+    let kept = kept(&shared).expect("the notice frame is retained");
+    assert!(
+        kept.contains("notice"),
+        "the retained grid is the notice frame: {kept:?}",
+    );
+}
+
+/// A read that closes the needle's frame and opens the next takes no live
+/// snapshot, yet the closed frame is retained.
+#[test]
+fn a_retained_frame_survives_the_next_frame_opening_in_the_same_read() {
+    let mut shared = support::pty::Shared::new(20, 5);
+    let blank = live(&shared);
+    shared.retain("notice");
+    shared.publish(&[frame("notice"), BEGIN.to_vec(), b"\x1b[2Jpart".to_vec()].concat());
+    assert_eq!(
+        live(&shared),
+        blank,
+        "no live snapshot lands with a block open at the read's end"
+    );
+    let kept = kept(&shared).expect("the notice frame is retained");
+    assert!(
+        kept.contains("notice") && !kept.contains("part"),
+        "the retained grid is the closed frame alone: {kept:?}",
+    );
+}
+
+/// The closing marker split across two reads still closes the frame at the
+/// offset of its last byte, so the retained grid holds the frame and none
+/// of what follows.
+#[test]
+fn a_retained_frame_survives_a_closing_marker_split_across_reads() {
+    for split in 1..END.len() {
+        let mut shared = support::pty::Shared::new(20, 5);
+        shared.retain("notice");
+        let first = [BEGIN, b"\x1b[Hnotice", &END[..split]].concat();
+        let second = [&END[split..], &clearing_frame()].concat();
+        shared.publish(&first);
+        assert!(
+            kept(&shared).is_none(),
+            "the frame is still open at split {split}"
+        );
+        shared.publish(&second);
+        let kept = kept(&shared)
+            .unwrap_or_else(|| panic!("the notice frame is retained at split {split}"));
+        assert!(
+            kept.contains("notice"),
+            "the retained grid is the notice frame at split {split}: {kept:?}",
+        );
+        assert!(
+            !live(&shared).contains("notice"),
+            "the live grid shows the clearing frame at split {split}"
+        );
+    }
+}
+
 /// A stream without mode 2026 snapshots after every read, as before.
 #[test]
 fn the_harness_snapshots_a_stream_without_markers_after_each_read() {

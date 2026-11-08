@@ -75,3 +75,27 @@ fn usage_is_copied_from_the_exit_line() {
     let finished = line.delegate_finished(&job_id());
     assert_eq!(finished.usage, usage());
 }
+
+#[test]
+fn the_final_message_file_is_artifacts_final_md() {
+    assert_eq!(super::FINAL_MESSAGE, "artifacts/final.md");
+}
+
+#[test]
+fn a_settled_finish_names_no_file_and_an_old_line_replays_without_one() {
+    let mut finished = exited(0, Some("Done."), None).delegate_finished(&job_id());
+    assert_eq!(finished.artifact_absolute, None);
+    // An absent path is not written.
+    let line = serde_json::to_value(&finished).unwrap();
+    assert!(line.get("artifact_absolute").is_none(), "{line}");
+    // A present path round-trips, and a line without the field replays as
+    // none.
+    finished.artifact_absolute = Some("/s/artifacts/final.md".into());
+    let mut line = serde_json::to_value(&finished).unwrap();
+    assert_eq!(line["artifact_absolute"], "/s/artifacts/final.md");
+    let back: super::super::DelegateFinished = serde_json::from_value(line.clone()).unwrap();
+    assert_eq!(back, finished);
+    line.as_object_mut().unwrap().remove("artifact_absolute");
+    let old: super::super::DelegateFinished = serde_json::from_value(line).unwrap();
+    assert_eq!(old.artifact_absolute, None);
+}

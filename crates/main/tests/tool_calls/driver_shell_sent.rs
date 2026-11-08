@@ -22,8 +22,9 @@ use std::thread;
 use fakes::{ProviderServer, Watchdog};
 use serde_json::{Value, json};
 use support::{
-    Running, SessionGuard, Setup, Socket, close_session, connect_hub, expired, function_call,
-    hello, recv, recv_answer, session_dir, start_session, stream, subscribe_direct, until,
+    Running, SessionGuard, Setup, Socket, close_session, close_subscribed_session, connect_hub,
+    expired, function_call, hello, recv_answer, session_dir, start_session, stream,
+    subscribe_direct, until,
 };
 
 #[track_caller]
@@ -257,7 +258,7 @@ fn driver_shell_sent_past_a_mebibyte_logs_its_complete_artifact() {
         "the only artifact is the driver's"
     );
 
-    close_session(&client);
+    close_subscribed_session(&client);
     drop(client);
     exit_cleanly(running);
 }
@@ -277,7 +278,7 @@ fn driver_shell_sent_ending_after_settle_answers_closing_and_logs_nothing() {
 
     let client = Socket::connect(setup.deadline, &setup.session_socket(&session_id));
     client.send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#);
-    let sub = recv(&client, "the subscribe acknowledgement");
+    let sub = recv_answer(&client, "c_sub", "the subscribe acknowledgement");
     assert_eq!(sub["kind"], "command_accepted", "{sub}");
 
     // The shell still blocks when the released turn ends and `close`

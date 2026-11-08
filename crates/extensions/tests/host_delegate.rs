@@ -191,6 +191,7 @@ fn finished(id: &str) -> Event {
         job_id: JobId(id.into()),
         text: "done".into(),
         artifact: None,
+        artifact_absolute: None,
         questions: None,
         usage: contract::shapes::Usage {
             tokens: contract::shapes::Tokens {

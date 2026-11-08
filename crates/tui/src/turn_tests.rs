@@ -1065,7 +1065,7 @@ fn the_ledger_is_one_row_per_call_split_by_step() {
             "       ✓ read     a.rs                              1 line".to_owned(),
             "     2 ✓ edit     src/a.rs                           +3 −1".to_owned(),
             "       ✗ shell    cargo t           nonzero_exit: exit 101".to_owned(),
-            "       ✗ other    u                                 denied".to_owned(),
+            "       ✗ fetch    u                                 denied".to_owned(),
             "       ⊘ other                                   cancelled".to_owned(),
             "       ○ read     z.rs                             running".to_owned(),
             "".to_owned(),
@@ -1185,7 +1185,7 @@ fn opening_a_call_shows_its_error_reason_diff_or_output() {
             true,
         ),
         (
-            "       ✗ other    u                                 denied",
+            "       ✗ fetch    u                                 denied",
             vec!["         not allowed"],
             true,
         ),

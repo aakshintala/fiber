@@ -2948,3 +2948,62 @@ fn hub_threads_names_a_zombie_as_text() {
         "an empty snapshot on an exited hub is not a clean drain: {message}"
     );
 }
+
+/// A `session_status` has no position against the session's other lines
+/// (`docs/testing.md`, "Event streams"), so it may arrive before the
+/// subscribe acknowledgement:
+/// `close_session` matches the acknowledgement by its command id.
+#[test]
+fn close_session_reads_its_acknowledgement_by_command_id() {
+    let deadline = Deadline::after(fakes::MUST_SUCCEED_WITHIN);
+    let (mine, peer) = UnixStream::pair().unwrap();
+    let (sent_tx, sent) = mpsc::channel();
+    thread::spawn(move || {
+        let mut peer = peer;
+        let mut reader = BufReader::new(peer.try_clone().unwrap());
+        let subscribe = read_line(&mut reader, deadline, "the subscribe line")
+            .unwrap()
+            .unwrap();
+        sent_tx.send(subscribe).unwrap_or(());
+        for line in [
+            "{\"kind\":\"session_status\",\"payload\":{\"state\":\"idle\"}}\n",
+            "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_close_sub\"}}\n",
+        ] {
+            write_line(&mut peer, deadline, line.as_bytes(), "the fixed lines").unwrap();
+        }
+        if let Ok(Some(close)) = read_line(&mut reader, deadline, "the close line") {
+            sent_tx.send(close).unwrap_or(());
+        }
+    });
+    let client = Socket::from(deadline, mine);
+    close_session(&client);
+    let ids: Vec<String> = [(); 2]
+        .iter()
+        .map(|()| {
+            let line = deadline.recv_or_fail(&sent, "a line the peer read");
+            serde_json::from_str::<Value>(&line).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(ids, ["c_close_sub", "c_close"]);
+}
+
+/// `recv_answer` returns the line for its command id, keeps the lines it
+/// passed for the next `recv` in order, and drops `attention` lines.
+#[test]
+fn recv_answer_skips_a_leading_status_and_keeps_it_for_the_next_recv() {
+    let client = replay_peer(vec![
+        "{\"kind\":\"attention\",\"payload\":{}}\n",
+        "{\"kind\":\"session_status\",\"payload\":{\"state\":\"idle\"}}\n",
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_other\"}}\n",
+        "{\"kind\":\"command_accepted\",\"payload\":{\"command_id\":\"c_want\"}}\n",
+    ]);
+    let answer = recv_answer(&client, "c_want", "the wanted answer");
+    assert_eq!(answer["payload"]["command_id"], "c_want");
+    let status = recv(&client, "the kept status");
+    assert_eq!(status["kind"], "session_status");
+    let other = recv(&client, "the kept other answer");
+    assert_eq!(other["payload"]["command_id"], "c_other");
+}
