@@ -4,7 +4,7 @@
 //! "When Fiber reads configuration"). Screens are drawn through the real
 //! frame renderer and compared whole.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;

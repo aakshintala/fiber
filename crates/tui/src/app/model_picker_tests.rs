@@ -5264,3 +5264,149 @@ fn an_untagged_model_answer_leaves_a_credential_tag_alone() {
         Some(Waiting::CredentialSwitch)
     );
 }
+
+// The picker opened from a `/settings` model row saves its choice to that
+// row and does nothing else.
+
+/// A seam with the two model rows on the Models tab.
+fn model_rows_seam() -> Arc<crate::configure_fake::Fake> {
+    use crate::configure::{SettingControl, Shown, WriteScope};
+    use crate::configure_fake::{controlled, placed};
+    use contract::settings::SettingsTab::Models;
+
+    let model = |key: &str, label: &str, layer: &str| {
+        placed(
+            controlled(
+                key,
+                Shown::Value("\"old/ref\"".to_owned()),
+                layer,
+                WriteScope::GlobalOnly,
+                SettingControl::Model,
+            ),
+            Models,
+            label,
+        )
+    };
+    Arc::new(crate::configure_fake::Fake::new(vec![
+        model("model", "Default model", "global"),
+        model("reviewer.model", "Reviewer model", "global"),
+    ]))
+}
+
+/// `app` with `/settings` open on the Models tab and the picker open from
+/// the row at `down` rows below the first.
+fn settings_picker(app: &mut App, down: usize) {
+    app.on_models(Ok(three()));
+    app.open_config_view(super::super::ConfigView::Settings);
+    for _ in 0..2 {
+        assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    }
+    for _ in 0..down {
+        assert_eq!(app.on_key(Key::Down, now()), Effect::None);
+    }
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open());
+    assert!(app.config_view_open(), "the picker opens over /settings");
+}
+
+/// The saved writes as (key, text).
+fn saved(seam: &crate::configure_fake::Fake) -> Vec<(String, String)> {
+    seam.writes()
+        .into_iter()
+        .map(|(_, _, key, text)| (key, text))
+        .collect()
+}
+
+#[test]
+fn a_settings_model_choice_saves_its_reference_to_the_row_on_home_and_attached() {
+    for attach in [false, true] {
+        for (down, key) in [(0, "model"), (1, "reviewer.model")] {
+            let seam = model_rows_seam();
+            let mut app = if attach { attached() } else { home() };
+            app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+            let before = app.home_model();
+            settings_picker(&mut app, down);
+            // The first picker row is acme/m1.
+            assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+            assert_eq!(
+                saved(&seam),
+                [(key.to_owned(), "\"acme/m1\"".to_owned())],
+                "attached {attach}, {key}"
+            );
+            assert!(!app.model_picker_open(), "{key}");
+            assert!(app.config_view_open(), "settings stays open: {key}");
+            assert_eq!(app.home_model(), before, "the home chip is unchanged");
+        }
+    }
+}
+
+#[test]
+fn a_settings_model_choice_commands_no_session_and_writes_no_thinking_key() {
+    let seam = model_rows_seam();
+    let mut app = attached();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 0);
+    // acme/m1 has levels: a level chip may be picked, and it only shapes
+    // the reference.
+    assert_eq!(app.on_edit(Edit::Right), Effect::None);
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(saved(&seam).len(), 1, "{:?}", saved(&seam));
+    assert_eq!(saved(&seam)[0].0, "model");
+    assert!(
+        !saved(&seam)[0].1.contains("thinking"),
+        "no thinking key is written"
+    );
+}
+
+#[test]
+fn the_session_only_key_in_a_settings_picker_saves_nothing_and_keeps_it_open() {
+    let seam = model_rows_seam();
+    let mut app = home();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 0);
+    assert_eq!(app.on_action("session_only"), Effect::None);
+    assert!(saved(&seam).is_empty());
+    assert!(app.model_picker_open());
+    // The picker still chooses afterwards.
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(saved(&seam).len(), 1);
+}
+
+#[test]
+fn a_refused_settings_model_save_keeps_the_picker_for_a_retry() {
+    let seam = model_rows_seam();
+    let mut app = home();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 0);
+    *seam.refuse.lock().unwrap() = Some("disk full".to_owned());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(app.model_picker_open(), "the picker stays for a retry");
+    // The refused attempt is the only write so far, to the row's key.
+    let attempt = ("model".to_owned(), "\"acme/m1\"".to_owned());
+    assert_eq!(saved(&seam), [attempt.clone()]);
+    *seam.refuse.lock().unwrap() = None;
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert_eq!(saved(&seam), [attempt.clone(), attempt]);
+}
+
+#[test]
+fn closing_a_settings_picker_writes_nothing_and_leaves_no_target_behind() {
+    let seam = model_rows_seam();
+    let mut app = home();
+    app.set_configure(seam.clone() as Arc<dyn crate::Configure>);
+    settings_picker(&mut app, 0);
+    assert_eq!(app.on_key(Key::Esc, now()), Effect::None);
+    assert!(!app.model_picker_open());
+    assert!(app.config_view_open(), "settings is back with its row");
+    assert!(saved(&seam).is_empty());
+    // An ordinary picker opened next chooses as it always did: the home
+    // model, not the settings row.
+    app.open_model_picker(crate::model_picker::Mode::Choose);
+    assert!(!app.config_view_open());
+    assert_eq!(app.on_key(Key::Enter, now()), Effect::None);
+    assert_eq!(
+        app.home_model().map(|(model, _)| model),
+        Some("acme/m1".to_owned())
+    );
+}
