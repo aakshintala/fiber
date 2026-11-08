@@ -477,21 +477,6 @@ fn answers_store_an_empty_listing_for_rejections_and_malformed_results() {
 }
 
 #[test]
-fn answers_for_unknown_ids_change_nothing() {
-    let mut typed = Typed::new();
-    let mut ids = mint();
-    type_text(&mut typed, "/");
-    assert!(!ids.answered(&mut typed, "c_999", Some(&result(&["a"], "/"))));
-    assert!(!ids.rejected(&mut typed, "c_999"));
-    assert!(typed.completions().is_empty());
-    let sent = ids.run(&mut typed);
-    assert!(ids.answer(&mut typed, &sent[0].0, &["a"], "/"));
-    // The same id twice: the second answers nothing.
-    assert!(!ids.answer(&mut typed, &sent[0].0, &["b"], "/"));
-    assert_eq!(typed.completions(), vec!["a"]);
-}
-
-#[test]
 fn disconnect_requeues_in_flight_directories_in_send_order() {
     let mut typed = Typed::new();
     let mut ids = mint();

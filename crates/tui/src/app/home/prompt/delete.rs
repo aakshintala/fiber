@@ -238,11 +238,10 @@ impl App {
             session,
         } = &tag
         {
-            if !self.delete_command_close(*generation, session, id, accepted, payload) {
-                return None;
-            }
-            self.take_ask(id);
-            return Some(Vec::new());
+            // A command's stops register no ask, only their tag.
+            return self
+                .delete_command_close(*generation, session, id, accepted, payload)
+                .then(Vec::new);
         }
         let Waiting::DeleteDiscovery(generation) = tag else {
             return None;

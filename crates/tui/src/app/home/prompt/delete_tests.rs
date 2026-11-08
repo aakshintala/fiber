@@ -2517,3 +2517,81 @@ fn a_final_answer_tagged_for_another_generation_is_ignored() {
             .is_some()
     );
 }
+
+/// An app whose next `/delete` is the second command: the first was
+/// cancelled, so the running generation is 2 and no tag reads 1 by luck.
+fn attached_second_command() -> App {
+    let mut app = attached();
+    discovery(&mut app);
+    app.delete_command_cancel();
+    app
+}
+
+#[test]
+fn a_reset_during_discovery_settles_the_running_commands_discovery_tag() {
+    let mut app = attached_second_command();
+    let command = discovery(&mut app);
+    assert_eq!(generation(&app), 2);
+    app.home_reset();
+    assert_eq!(app.outbox.waiting(&command), None);
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Idle
+    ));
+}
+
+#[test]
+fn a_reset_leaves_an_open_delete_question_alone() {
+    let mut app = attached();
+    let command = discovery(&mut app);
+    answer_discovery(&mut app, &command, &[A], &[]);
+    assert!(open(&app));
+    app.home_reset();
+    assert!(open(&app));
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Asked { .. }
+    ));
+}
+
+#[test]
+fn an_unsent_delete_of_the_second_command_settles_it() {
+    let mut app = attached_second_command();
+    let raw = asked(&mut app, &[A], &[]);
+    assert_eq!(generation(&app), 2);
+    app.home_unsent(&[raw[0].clone()]);
+    assert_eq!(app.notice(), Some("Delete status unknown"));
+    assert!(matches!(
+        app.home.as_ref().unwrap().questions.delete_command.state,
+        State::Idle
+    ));
+}
+
+#[test]
+fn a_reset_during_the_second_commands_delete_takes_its_ask() {
+    let mut app = attached_second_command();
+    let raw = asked(&mut app, &[A], &[]);
+    let deletion: Value = serde_json::from_str(&raw[0]).unwrap_or_else(|err| panic!("{err}"));
+    let id = deletion["id"].as_str().unwrap_or_default().to_owned();
+    assert!(app.home.as_ref().unwrap().questions.asks.contains_key(&id));
+    app.home_reset();
+    assert_eq!(app.notice(), Some("Delete status unknown"));
+    assert!(!app.home.as_ref().unwrap().questions.asks.contains_key(&id));
+    assert_eq!(app.outbox.waiting(&id), None);
+}
+
+#[test]
+fn the_second_commands_close_ids_are_its_stop_tags() {
+    let mut app = attached_second_command();
+    let raw = asked(&mut app, &[A], &[A]);
+    let lines: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap_or_default())
+        .collect();
+    let close_id = closes(&lines)[0]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(generation(&app), 2);
+    assert_eq!(app.delete_waiting_close_ids(), Some(vec![close_id]));
+}

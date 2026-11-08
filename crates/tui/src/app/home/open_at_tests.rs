@@ -1262,6 +1262,9 @@ fn a_late_subscribe_answer_after_reset_matches_nothing() {
     let mut app = home_at(OpenAt::Home);
     let session = id("s_aaaaaaaaaaaaaaaa");
     let full = subscribe_id(&mut app, &session, Level::Full);
+    assert!(app.outbox.waiting(&full).is_some());
+    assert!(app.subscribe_pending(&session));
+    assert_eq!(app.subscribed_level(&session), Some(Level::Full));
     app.home_reset();
     assert_eq!(app.outbox.waiting(&full), None);
     assert!(!app.subscribe_pending(&session));
@@ -1276,8 +1279,13 @@ fn a_reset_forgets_a_lowering_sent_just_before_it() {
     let session = id("s_aaaaaaaaaaaaaaaa");
     let full = subscribe_id(&mut app, &session, Level::Full);
     app.on_line(session_accepted("s_aaaaaaaaaaaaaaaa", &full));
-    subscribe_id(&mut app, &session, Level::Summary);
+    let summary = subscribe_id(&mut app, &session, Level::Summary);
+    assert!(holds_full(&app, &session));
+    assert!(app.outbox.waiting(&summary).is_some());
+    assert!(app.subscribe_pending(&session));
+    assert_eq!(app.subscribed_level(&session), Some(Level::Summary));
     app.home_reset();
+    assert_eq!(app.outbox.waiting(&summary), None);
     assert!(!app.subscribe_pending(&session));
     assert_eq!(app.subscribed_level(&session), None);
 }
