@@ -3388,6 +3388,65 @@ fn unknown_slash_is_refused_while_paths_and_fresh_skills_are_sent() {
     quit_live(run);
 }
 
+/// `/compact focus on X` restarts the context from a note requested with
+/// those instructions and draws the compaction band; `/handoff`, the name
+/// this command no longer has, is an unknown command that sends nothing.
+#[test]
+fn compact_with_instructions_restarts_from_a_note_that_names_them() {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start([reply("First reply."), reply("The note.")]).unwrap();
+    provider(&setup, &server);
+    let mut run = terminal(&setup, 120, 32, &[], &[]);
+    run.wait_screen("the first frame", |grid| grid.contents.contains("›"));
+    run.ready();
+    run.wait_bytes(0, KITTY_PUSH, "kitty keyboard flags pushed");
+    // A first prompt attaches the session.
+    let first = run.output().len();
+    run.write(b"first marker\r");
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first turn's request"
+    );
+    run.wait_screen("the first reply", |grid| {
+        grid.contents.contains("First reply.")
+    });
+    run.turn_finished(first);
+    // The command asks the model for a note, naming the instructions.
+    run.write(b"/compact focus on X\r");
+    assert!(server.await_requests(2, setup.deadline), "the note request");
+    let requests = server.requests();
+    let texts = user_texts(&requests[1].body);
+    let at = texts
+        .iter()
+        .position(|text| text.contains("The person asked that the next stretch of work focus on:"))
+        .unwrap_or_else(|| panic!("the focus section is in the note request: {texts:?}"));
+    assert!(texts[at].ends_with("focus on X"), "{:?}", texts[at]);
+    run.wait_screen("the compaction band", |grid| {
+        grid.contents
+            .contains(" ⇄ compaction · you asked with /compact")
+    });
+    // The retired name is refused: the exact notice shows and nothing
+    // more goes out.
+    run.write(b"/handoff\r");
+    run.wait_screen("the unknown-command notice", |grid| {
+        grid.contents
+            .contains("Unknown command /handoff. Type / for the list.")
+    });
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2, "the refused command sent nothing");
+    for (at, request) in requests.iter().enumerate() {
+        for text in user_texts(&request.body) {
+            assert!(
+                !text.contains("/handoff"),
+                "request {at} carries the refused text: {text}"
+            );
+        }
+    }
+    // The refused draft is kept; clear it before quitting.
+    run.write(b"\x03");
+    quit_live(run);
+}
+
 /// `/hooks` lists one hook from the first-party configuration registrar,
 /// one ordinary extension hook and one watcher, and names its empty state
 /// with none registered.
