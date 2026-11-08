@@ -627,6 +627,17 @@ fn a_page_walks_the_same_stops() {
 }
 
 #[test]
+fn first_run_model_focus_waits_for_explicit_navigation() {
+    let mut picker = picker(Mode::Choose, &["acme/m1"], &[]);
+    picker.unselect_for_first_run();
+    assert_eq!(picker.focus(), None);
+    assert_eq!(picker.choice(false), None);
+    picker.move_row(1);
+    assert_eq!(picker.focus(), Some(Stop::Model(0)));
+    assert!(picker.choice(false).is_some());
+}
+
+#[test]
 fn with_no_model_nothing_is_focused_until_down() {
     let mut picker = picker(Mode::Choose, &[], &["openai", "zeta"]);
     assert_eq!(picker.focus(), None);

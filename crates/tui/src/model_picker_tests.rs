@@ -66,6 +66,20 @@ fn view_of(picker: &ModelPicker) -> PickerView {
 }
 
 #[test]
+fn first_run_picker_has_no_choice_until_explicit_navigation() {
+    let mut picker = ModelPicker::default();
+    picker.catalogue.models = vec![entry("acme/only", &[], None, None)];
+    picker.open(Mode::Choose, None);
+    picker.unselect_for_first_run();
+
+    assert_eq!(view_of(&picker).focused, None);
+    assert_eq!(picker.choice(false), None);
+
+    picker.move_row(1);
+    assert!(picker.choice(false).is_some());
+}
+
+#[test]
 fn rows_group_by_provider_in_catalogue_order() {
     let models = catalogue();
     assert_eq!(visible(&models, &[], false), [0, 1, 2, 3, 4]);

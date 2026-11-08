@@ -51,6 +51,7 @@ impl App {
         if first_run {
             if has_credential {
                 self.start_model_pick();
+                self.model_picker.unselect_for_first_run();
             } else {
                 self.open_first_run_login();
             }
