@@ -130,9 +130,12 @@ impl Kind {
             }
             Self::StrList => SettingControl::StringList,
             Self::RepositoryExtensions => SettingControl::RepositoryExtensions,
-            Self::StrOrStrList | Self::Role | Self::EnvMap | Self::BoolMap | Self::Credential => {
-                SettingControl::Json
-            }
+            Self::StrOrStrList
+            | Self::Role
+            | Self::EnvMap
+            | Self::BoolMap
+            | Self::Credential
+            | Self::RequestTags => SettingControl::Json,
         }
     }
 
