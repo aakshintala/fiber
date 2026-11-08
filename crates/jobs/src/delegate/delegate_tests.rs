@@ -351,8 +351,7 @@ fn an_unknown_model_lists_roles_closest_and_pointer() {
 
 /// A level the model does not take names that model's levels first, then
 /// the roles line, up to 3 closest references and the pointer, with no
-/// reference beyond the closest 3. The message names `fiber:` exactly 3
-/// times, all in the closest: the reason names `fake/m` without the prefix.
+/// reference beyond the closest 3. The whole-message equality pins all of it.
 #[test]
 fn a_bad_thinking_level_names_its_levels_before_the_roles_and_closest() {
     let rig = rig();
@@ -367,18 +366,6 @@ fn a_bad_thinking_level_names_its_levels_before_the_roles_and_closest() {
     assert_eq!(
         error.message,
         format!("{LEVEL_REASON}\n{ROLES_LINE}\n{CLOSEST_LINE}\n{POINTER_LINE}")
-    );
-    assert_eq!(error.message.lines().next(), Some(LEVEL_REASON));
-    assert!(
-        !error.message.contains("fiber:fake/other"),
-        "{}",
-        error.message
-    );
-    assert_eq!(
-        error.message.matches("fiber:").count(),
-        3,
-        "{}",
-        error.message
     );
     // The model reads the failure in the content, not the error.
     let text = output.content.iter().map(text_of).collect::<String>();
