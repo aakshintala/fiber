@@ -503,8 +503,12 @@ impl App {
     /// session's row. Both drop focus and any steering selection first,
     /// so the entry bar or the row takes focus. `session_only` chooses
     /// in the open model picker for this session only, or saves the open
-    /// checklist as `scoped_models`. Anything else does nothing.
+    /// checklist as `scoped_models`. `interrupt_turn` cancels the turn on
+    /// screen. Anything else does nothing.
     pub(super) fn on_action(&mut self, id: &'static str) -> Effect {
+        if id == "interrupt_turn" {
+            return self.interrupt_turn();
+        }
         if id == "session_only" {
             if self.top_surface() != Surface::Picker {
                 return Effect::None;
