@@ -48,6 +48,7 @@ fn resolve() -> Resolve {
         lookup: Arc::new(|model: &str| match model {
             "fiber:fake/m" => Ok("fake/m".to_owned()),
             "deep" => Ok("fake/m:high".to_owned()),
+            "fiber:fake/m:low" => Err(LEVEL_REASON.to_owned()),
             _ => Err(format!("Unknown delegate model {model:?}.")),
         }),
         catalogue: Arc::from(CATALOGUE),
@@ -91,6 +92,13 @@ const CATALOGUE: &str = "Session model: fiber:fake/m\nRoles:\ndeep: fiber:fake/m
 
 /// The roles line the stub's refusals carry: the one configured role.
 const ROLES_LINE: &str = "Roles: deep";
+
+/// The reason for a level the model does not take, in the shape
+/// `extensions::thinking_refusal` builds; `main`'s
+/// `a_bad_level_on_a_valid_model_names_its_levels_before_the_roles_and_references`
+/// pins the real one.
+const LEVEL_REASON: &str =
+    "The thinking level `low` is not one model `fake/m` takes: it takes `high`.";
 
 /// The pointer every model refusal ends with.
 const POINTER_LINE: &str = "Call delegate_models for every reference.";
@@ -337,17 +345,16 @@ fn an_unknown_model_lists_roles_closest_and_pointer() {
     );
 }
 
-/// A level the model does not take fails in the same shape: the roles
-/// line, up to 3 closest references and the pointer, with no reference
-/// beyond the closest 3. The message names `fiber:` exactly 4 times: once
-/// for the typed model in the reason, 3 times for the closest.
+/// A level the model does not take names that model's levels first, then
+/// the roles line, up to 3 closest references and the pointer, with no
+/// reference beyond the closest 3. The message names `fiber:` exactly 3
+/// times, all in the closest: the reason names `fake/m` without the prefix.
 #[test]
-fn a_bad_thinking_level_holds_no_reference_beyond_the_closest_three() {
+fn a_bad_thinking_level_names_its_levels_before_the_roles_and_closest() {
     let rig = rig();
     let spawned = tool(&rig);
-    let model = "fiber:fake/m:low";
     let output = spawned.run(
-        &arguments(model),
+        &arguments("fiber:fake/m:low"),
         &fakes::CancelToken::new(),
         &Recorder::default(),
     );
@@ -355,8 +362,9 @@ fn a_bad_thinking_level_holds_no_reference_beyond_the_closest_three() {
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
     assert_eq!(
         error.message,
-        format!("Unknown delegate model {model:?}.\n{ROLES_LINE}\n{CLOSEST_LINE}\n{POINTER_LINE}")
+        format!("{LEVEL_REASON}\n{ROLES_LINE}\n{CLOSEST_LINE}\n{POINTER_LINE}")
     );
+    assert_eq!(error.message.lines().next(), Some(LEVEL_REASON));
     assert!(
         !error.message.contains("fiber:fake/other"),
         "{}",
@@ -364,7 +372,7 @@ fn a_bad_thinking_level_holds_no_reference_beyond_the_closest_three() {
     );
     assert_eq!(
         error.message.matches("fiber:").count(),
-        4,
+        3,
         "{}",
         error.message
     );
