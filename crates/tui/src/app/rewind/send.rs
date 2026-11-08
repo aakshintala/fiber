@@ -272,7 +272,6 @@ impl App {
             | Waiting::ConfigAsk
             | Waiting::Credentials
             | Waiting::CredentialSwitch
-            | Waiting::ProposeNotes
             | Waiting::JobStop
             | Waiting::JobInput => false,
         }
@@ -328,7 +327,6 @@ impl App {
             | Waiting::ConfigAsk
             | Waiting::Credentials
             | Waiting::CredentialSwitch
-            | Waiting::ProposeNotes
             | Waiting::JobStop
             | Waiting::JobInput => return None,
         }

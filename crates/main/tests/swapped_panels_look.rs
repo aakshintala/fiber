@@ -132,7 +132,7 @@ fn click(run: &mut Run, x: u16, y: u16) {
 
 /// The `/tools` row for `notes_save`: its text from the name on.
 fn tool_row(grid: &Grid) -> Option<(u16, String)> {
-    let y = find_row(grid, "notes_save · full · ")?;
+    let y = find_row(grid, " notes_save · full · ")?;
     let x = col_at_or(grid, y, "notes_save · full · ")?;
     let text: String = (x..160).map(|x| grid.cell(x, y).symbol.clone()).collect();
     Some((y, text.trim_end().to_owned()))

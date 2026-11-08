@@ -35,6 +35,7 @@ mod read_signals;
 mod reap;
 mod reload;
 mod resume;
+mod reviewer_evidence;
 mod rewind;
 mod session_command;
 mod session_extensions;
@@ -241,6 +242,9 @@ fn run() -> i32 {
                 hub.as_deref(),
                 &process,
             ),
+        },
+        cli::Invocation::Run(Some(cli::Commands::Reviewer(command)), _) => match command {
+            cli::ReviewerCommands::Evidence { json } => reviewer_evidence::run(json, &process),
         },
         cli::Invocation::Run(Some(cli::Commands::Models(args)), _) => {
             models_entry(args, &process, read_signals::CancelOnSignal::new)

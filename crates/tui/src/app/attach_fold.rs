@@ -526,14 +526,6 @@ impl App {
                     return false;
                 };
                 let session = SessionId(session.to_owned());
-                if matches!(
-                    line.kind(),
-                    HubEventKind::StreamReopened
-                        | HubEventKind::StreamClosed
-                        | HubEventKind::SessionLeft
-                ) {
-                    self.reviewer_setup_stream_lost(&session);
-                }
                 match line.kind() {
                     HubEventKind::StreamReopened => {
                         // The cause ended for this session: its notice goes.

@@ -946,7 +946,6 @@ impl App {
                         | super::Waiting::ConfigAsk
                         | super::Waiting::Credentials
                         | super::Waiting::CredentialSwitch
-                        | super::Waiting::ProposeNotes
                         | super::Waiting::JobStop
                         | super::Waiting::JobInput,
                     ) => return Vec::new(),
@@ -1029,7 +1028,6 @@ impl App {
                         | super::Waiting::ConfigAsk
                         | super::Waiting::Credentials
                         | super::Waiting::CredentialSwitch
-                        | super::Waiting::ProposeNotes
                         | super::Waiting::JobStop
                         | super::Waiting::JobInput,
                     ) => return Vec::new(),

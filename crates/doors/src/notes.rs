@@ -84,7 +84,7 @@ pub(crate) fn run(conn: &mut Conn, id: CommandId, args: ProposeNotesArgs) {
 /// never fails: an unreadable log or workspace gives what was read before
 /// the failure, and a missing shell, a non-shell gate or an unreadable
 /// configuration gives no allow tallies.
-pub(crate) fn gather(
+pub fn gather(
     home: &Path,
     dir: &Path,
     workspace: &Path,

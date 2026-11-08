@@ -1301,6 +1301,41 @@ question stays on one line. A cancelled form is the single line `declined`.
 A declined form is an answer, not a failure: the call completes with status
 `completed`. The structured answers are on `interaction_resolved`.
 
+## Saving reviewer notes
+
+The model saves reviewer notes with `reviewer_notes_save`. It drafts the
+notes as `lines`: one item per bullet or read-only entry.
+
+| Argument | Rule |
+|---|---|
+| `lines` | the draft lines, one item per bullet or read-only entry |
+| `topic` | the heading the line belongs under: `source_control`, `internal_hosts`, `internal_tools`, `routine_actions`, `never` or `read_only_commands` |
+| `layer` | the layer the line belongs in: `global` or `project` |
+| `text` | the bullet text, or the entry line for `read_only_commands` |
+
+Read-only command lines under the `read_only_commands` topic parse as
+entries; every other topic merges its sent lines into its layer's notes:
+what the layer owns less what was sent is struck, what was sent is added,
+for that topic only.
+
+Before anything is written, the call reads both layers and raises one
+`confirm` carrying the diff and the entries it would write. Entries
+identical to the layer's own table converge and are left out; a changed
+entry, an unparseable read-only line or a malformed table fails before the
+confirm. The confirm never suspends: the person is already deciding. On yes
+the call writes the files of the layers that changed and names each written file with its
+added and removed counts; on no, or when nothing changed, it reports
+`unchanged` and writes nothing. A declined confirm is the single line
+`declined`.
+
+The tool needs the person's confirm, so in a program-driven session it
+refuses naming `fiber ask`. The tool declares no effect, so it never
+reaches a reviewer (`docs/permissions.md`, "Fast paths").
+
+`reviewer_notes_save` is strict: its schema uses only the strict keywords.
+Its serialized definition stays under 1200 bytes, and it counts toward the
+built-in budget ("Size budget in CI").
+
 ## Web fetch and web search
 
 Settled by
@@ -1854,7 +1889,7 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-`handoff` (`docs/handoff.md`), `name_session`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
+`handoff` (`docs/handoff.md`), `name_session`, `reviewer_notes_save`, `session_list`, `session_message`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.

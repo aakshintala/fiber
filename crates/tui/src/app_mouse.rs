@@ -281,11 +281,6 @@ impl App {
             self.scroll_report_rows(!up, WHEEL_ROWS);
             return Effect::None;
         }
-        // The reviewer setup takes the wheel and does nothing with it: the
-        // conversation under the panel stays where it is.
-        if order.contains(&Surface::ReviewerSetup) {
-            return Effect::None;
-        }
         // The hooks offer consumes the wheel while it is on top: its
         // names query draws no frame, so the frame-only guard below
         // would let the wheel reach the home list, the panel or the

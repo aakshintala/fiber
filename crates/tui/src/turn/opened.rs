@@ -165,6 +165,7 @@ fn message_rows(call: &Call, width: u16, bodies: &mut Vec<Body>) {
         | Kind::Skill
         | Kind::Tools
         | Kind::Session
+        | Kind::Notes
         | Kind::Other => return,
     };
     let argument = |key: &str| {
