@@ -2622,5 +2622,8 @@ fn is_block(envelope: &Envelope) -> bool {
 }
 
 #[cfg(test)]
+mod delegate_steering_tests;
+
+#[cfg(test)]
 #[path = "app_tests.rs"]
 mod tests;
