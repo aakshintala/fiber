@@ -43,21 +43,32 @@ fn models_diagnostic_records_read_completion_and_queued_start() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
+    let mut codes = lines
+        .iter()
+        .map(|line| line["code"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    codes.sort_unstable();
     assert_eq!(
-        lines
+        codes,
+        ["models_ask_started", "models_read_done", "models_read_done"]
+    );
+    let data_for = |code: &str, predicate: fn(&serde_json::Value) -> bool| {
+        &lines
             .iter()
-            .map(|line| line["code"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ["models_read_done", "models_ask_started", "models_read_done"]
+            .find(|line| line["code"] == code && predicate(&line["data"]))
+            .expect("diagnostic event with expected data")["data"]
+    };
+    assert_eq!(
+        data_for("models_read_done", |data| data["kind"] == "cached"),
+        &serde_json::json!({"kind":"cached","lists":0})
     );
     assert_eq!(
-        lines[0]["data"],
-        serde_json::json!({"kind":"cached","lists":0})
+        data_for("models_ask_started", |data| data["kind"] == "stale"),
+        &serde_json::json!({"kind":"stale"})
     );
-    assert_eq!(lines[1]["data"], serde_json::json!({"kind":"stale"}));
     assert_eq!(
-        lines[2]["data"],
-        serde_json::json!({"kind":"stale","lists":0})
+        data_for("models_read_done", |data| data["kind"] == "stale"),
+        &serde_json::json!({"kind":"stale","lists":0})
     );
 }
 

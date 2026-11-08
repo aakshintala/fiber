@@ -2,6 +2,7 @@
 
 use super::{Input, Loop, Screen, hub::Connection};
 use crate::app::App;
+use crate::catalogue::{Catalogue, ModelEntry};
 use crate::keys::Event;
 use crate::link::Line;
 use crate::pty_watch::{watch, watched};
@@ -292,6 +293,42 @@ fn models_diagnostic_records_post_apply_catalogue_size() {
     let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
     assert_eq!(line["code"], "models_applied");
     assert_eq!(line["data"], serde_json::json!({"catalogue_size":0}));
+}
+
+#[test]
+fn models_diagnostic_records_nonempty_post_apply_catalogue_size() {
+    let home = fakes::TempDir::new("tui-models-applied-nonempty");
+    let diag = Arc::new(diag::diag::Diag::new(
+        home.path(),
+        diag::diag::Process::Tui,
+        diag::diag::Level::Debug,
+        fakes::clock::FakeClock::new(),
+    ));
+    let (mut lp, _) = new_loop(TestBackend::new(60, 12), None);
+    lp.diag = diag;
+    lp.handle_inner(Input::Models(Ok(Catalogue {
+        models: vec![ModelEntry {
+            reference: "p/m".to_owned(),
+            provider: "p".to_owned(),
+            id: "m".to_owned(),
+            name: None,
+            levels: Vec::new(),
+            default_level: None,
+            configured: None,
+            roles: Vec::new(),
+            price: None,
+        }],
+        ..Catalogue::default()
+    })));
+    let text = std::fs::read_to_string(
+        home.path()
+            .join("logs")
+            .join(format!("tui-{}.log", std::process::id())),
+    )
+    .unwrap();
+    let line: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
+    assert_eq!(line["code"], "models_applied");
+    assert_eq!(line["data"], serde_json::json!({"catalogue_size":1}));
 }
 
 #[test]
