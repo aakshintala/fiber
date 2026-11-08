@@ -122,9 +122,10 @@ pub use configure::{
     BrowserLogin, Configure, ConfigureError, FileOutcome, FileSaved, HostGap, HostSaved, KeyEdit,
     Layer, LoginKind, LoginNeed, LoginShow, LoginTarget, LogoutRow, NotesFile, NotesSaved,
     NotesWrite, ProviderInstall, ReadOnlyEntry, ReviewerModels, ReviewerNotes, Revoked, RuleRow,
-    RulesScope, RulesSection, Saved, SettingControl, SettingPresentation, SettingRow, Shown,
-    SkillsDisabled, Stored, SwitchScope, ToolGroup, ToolLists, ToolSwitches, WriteScope,
+    RulesScope, RulesSection, Saved, SettingRow, Shown, SkillsDisabled, Stored, SwitchScope,
+    ToolGroup, ToolLists, ToolSwitches, WriteScope,
 };
+pub use configure::{SettingControl, SettingPresentation};
 pub use contract::feedback::{FeedbackDone, WriteFeedback};
 
 pub use home::{Launch, LaunchLocation};
