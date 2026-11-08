@@ -389,8 +389,8 @@ crates/main/tests/extension_host/extension_lazy_commands.rs	1	docs/extensions.md
 crates/main/tests/extension_host/extension_lazy_commands.rs	2	docs/extensions.md:1381-83
 crates/main/tests/extension_host/extension_lazy_commands.rs	1	docs/extensions.md:313-16
 crates/main/tests/extension_host/extension_lazy_commands.rs	1	docs/extensions.md:70-71
+crates/main/tests/extension_host/hooks.rs	1	docs/compaction.md, "What the model sees after a compaction"
 crates/main/tests/extension_host/hooks.rs	1	docs/errors.md`, "Notices"
-crates/main/tests/extension_host/hooks.rs	1	docs/handoff.md, "What the model sees after a handoff"
 crates/main/tests/extension_host/hooks_entries.rs	2	docs/errors.md:85-91
 crates/main/tests/extension_host/hooks_entries.rs	1	docs/errors.md`, "Notices"
 crates/main/tests/extension_host/hooks_entries.rs	1	docs/events.md:1154-1155
@@ -452,6 +452,7 @@ crates/main/tests/hub_daemon/stream_closed_notice.rs	1	docs/events.md`, "session
 crates/main/tests/hub_daemon/support_helpers.rs	1	docs/testing.md, "Testing"
 crates/main/tests/hub_daemon/support_helpers.rs	1	docs/testing.md`,\n    // "Races are forced, not waited for"
 crates/main/tests/hub_daemon/support_helpers.rs	10	docs/testing/screens.md, "Screens"
+crates/main/tests/main_journeys.rs	2	docs/compaction.md, "What the model sees after a compaction"
 crates/main/tests/main_journeys.rs	1	docs/errors.md`,\n            // "Notices"
 crates/main/tests/main_journeys.rs	1	docs/errors.md`, "Notices"
 crates/main/tests/main_journeys.rs	1	docs/extensions.md:1797, 1805-1807
@@ -472,9 +473,9 @@ crates/main/tests/screens/terminal.rs	1	docs/invocation.md:291
 crates/main/tests/screens/terminal.rs	1	docs/invocation.md`, "Three signals, one\n/// path"
 crates/main/tests/screens/terminal_overrides.rs	1	docs/invocation.md`, "Sessions"
 crates/main/tests/screens/wheel_garble.rs	2	docs/tui.md, "Turns"
+crates/main/tests/session_turns/compaction_kept.rs	4	docs/compaction.md, "What the model sees after a compaction"
+crates/main/tests/session_turns/compaction_kept.rs	1	docs/permissions.md, "At a compaction"
 crates/main/tests/session_turns/continue_session.rs	1	docs/invocation.md`, "`start` `continues`"
-crates/main/tests/session_turns/handoff_kept.rs	4	docs/handoff.md, "What the model sees after a handoff"
-crates/main/tests/session_turns/handoff_kept.rs	1	docs/permissions.md, "At a handoff"
 crates/main/tests/session_turns/history_page_failed.rs	1	docs/testing.md, "Waits and\n    // timeouts"
 crates/main/tests/session_turns/resume.rs	1	docs/events.md`,\n    // "Only the window a consumer actually needs is parsed"
 crates/main/tests/session_turns/resume.rs	1	docs/invocation.md,\n    // "Driver commands"

@@ -1955,7 +1955,10 @@ fn a_compaction_runs_session_start_with_reason_compaction() {
         hello(),
     ])
     .unwrap();
-    setup.hooks_provider_with_extra(&server, &json!({"handoff": {"tokens": 10, "nudge": false}}));
+    setup.hooks_provider_with_extra(
+        &server,
+        &json!({"compaction": {"tokens": 10, "nudge": false}}),
+    );
     fs::write(
         setup.workspace().join("note.txt"),
         "the password is hunter2\n",
@@ -2038,7 +2041,10 @@ fn a_blocking_session_start_failure_at_a_compaction_fails_the_compaction_and_the
         hello(),
     ])
     .unwrap();
-    setup.hooks_provider_with_extra(&server, &json!({"handoff": {"tokens": 10, "nudge": false}}));
+    setup.hooks_provider_with_extra(
+        &server,
+        &json!({"compaction": {"tokens": 10, "nudge": false}}),
+    );
     fs::write(
         setup.workspace().join("note.txt"),
         "the password is hunter2\n",
