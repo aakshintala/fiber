@@ -379,3 +379,8 @@ crates/cli/src/models_tests.rs	fiber-4326	plan	2026-11-08T08:06:52Z	Amoghs-MacBo
 crates/extensions/src/providers.rs	fiber-4326	grant	2026-11-08T08:10:51Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4326-source-newer-cache-stale	
 crates/extensions/tests/models.rs	fiber-4326	grant	2026-11-08T08:11:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4326-source-newer-cache-stale	
 docs/delegates.md	fiber-4326	grant	2026-11-08T08:11:26Z	roundhouse-7010-plus-1:/srv/lanes/fiber-worktrees/extensions/4326-source-newer-cache-stale	
+crates/tui/src/steering.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/app/items.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/tui/src/view/input_box_tests.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+crates/main/tests/main_journeys.rs	fiber-4187	plan	2026-11-08T08:54:18Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
