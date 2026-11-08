@@ -52,11 +52,16 @@ fn progress_finished_figures_need_a_summary_and_an_end_and_saturate() {
     for (ended, elapsed) in [(1999, 0), (2000, 0), (2001, 1)] {
         let mut app = attached();
         assert_eq!(app.panel_state().finished_figures(&job), None);
-        app.panel_state.keep_last(job.clone(), 6, 2000);
+        app.panel_state
+            .keep_last(job.clone(), 6, 2000, Some((Some(0.42), 1.10)));
         assert_eq!(app.panel_state().finished_figures(&job), None);
         app.on_line(ts_line(SESSION, "delegate_finished", ended, json!({"job_id": "j_1", "text": "done",
             "usage": {"tokens": {"input": 0, "cache_read": 0, "cache_write": {}, "output": 0}, "cost": null, "subscription_cost": 0.0}})));
         assert_eq!(app.panel_state().finished_figures(&job), Some((6, elapsed)));
+        assert_eq!(
+            app.panel_state().finished_cost(&job),
+            Some((Some(0.42), 1.10))
+        );
         app.on_line(ts_line(
             SESSION,
             "job_started",
@@ -64,8 +69,9 @@ fn progress_finished_figures_need_a_summary_and_an_end_and_saturate() {
             json!({"job_id": "j_1", "description": "again", "output_path": "/tmp/out"}),
         ));
         assert_eq!(app.panel_state().finished_figures(&job), None);
-        app.panel_state.keep_last(job.clone(), 1, 3000);
+        app.panel_state.keep_last(job.clone(), 1, 3000, None);
         assert_eq!(app.panel_state().finished_figures(&job), None);
+        assert_eq!(app.panel_state().finished_cost(&job), None);
     }
 }
 

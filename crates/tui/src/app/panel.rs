@@ -150,7 +150,7 @@ pub(crate) struct PanelState {
     /// the card keeps showing it as done (`docs/tui.md`, "The panel").
     finished: BTreeMap<JobId, Outcome>,
     ended: BTreeMap<JobId, u64>,
-    last: BTreeMap<JobId, (u64, u64)>,
+    last: BTreeMap<JobId, (u64, u64, Option<(Option<f64>, f64)>)>,
     jobs_open: bool,
     due: bool,
     asked: Option<String>,
@@ -568,15 +568,26 @@ impl PanelState {
     }
 
     /// Keeps the last readable summary before the delegate's row is dropped.
-    pub(super) fn keep_last(&mut self, job: JobId, calls: u64, started: u64) {
-        self.last.insert(job, (calls, started));
+    pub(super) fn keep_last(
+        &mut self,
+        job: JobId,
+        calls: u64,
+        started: u64,
+        spend: Option<(Option<f64>, f64)>,
+    ) {
+        self.last.insert(job, (calls, started, spend));
     }
 
     /// The finished delegate's calls and elapsed milliseconds, when known.
     pub(crate) fn finished_figures(&self, job: &JobId) -> Option<(u64, u64)> {
-        let (calls, started) = self.last.get(job)?;
+        let (calls, started, _) = self.last.get(job)?;
         let ended = self.ended.get(job)?;
         Some((*calls, ended.saturating_sub(*started)))
+    }
+
+    /// The finished delegate's last reported billed and subscription totals.
+    pub(crate) fn finished_cost(&self, job: &JobId) -> Option<(Option<f64>, f64)> {
+        self.last.get(job)?.2
     }
 
     /// Finished delegates in job start order, each with its job's
