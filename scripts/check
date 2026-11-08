@@ -378,8 +378,16 @@ EOF
         crates/main/tests/install_fixture/bin/uname \
         crates/main/tests/install_fixture/bin/sysctl \
         crates/main/tests/release_pack_fixture/bin/gh
-      shellcheck --shell=bash scripts/check scripts/flaky-tests scripts/test-flaky-tests scripts/test-flake-report scripts/test-retry-filter scripts/test-stress-plan scripts/leak-scan scripts/test-leak-scan scripts/look-diff scripts/test-look-diff scripts/test-leak-probe scripts/bug-red scripts/test-bug-red scripts/test-bug-red-cargo scripts/test-bug-red-target-cargo scripts/cache-prune scripts/check-docs scripts/check-resources scripts/class-data scripts/test-class-data scripts/install-shells scripts/mutants-rotation scripts/test-mutants-rotation scripts/mutants-shard-finish scripts/test-mutants-shard-finish scripts/paging-jig scripts/release-size scripts/release-pack scripts/stored-results scripts/lib/release.sh
-      shellcheck --shell=bash scripts/test-journey-report
+      # The bash files come from `cargo xtask shellcheck-files` (docs/ci.md,
+      # "On every pull request that changes code"), so a new script is
+      # checked unnamed. A plain assignment, so a failing list stops the
+      # gate under set -e.
+      bash_files=$(cargo xtask shellcheck-files)
+      bash_args=()
+      while IFS= read -r file; do
+        bash_args+=("$file")
+      done <<< "$bash_files"
+      shellcheck --shell=bash "${bash_args[@]}"
     else
       echo "== shellcheck: Linux only (docs/ci.md), not run here"
     fi

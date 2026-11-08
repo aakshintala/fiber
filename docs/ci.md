@@ -366,12 +366,13 @@ On Linux x86_64 alone:
   whether or not it touches anything else; any other `research/` path alone
   selects the docs job alone
 - `shellcheck --shell=sh` on `scripts/install.sh` and its test stubs
-- `shellcheck --shell=bash` on every other `scripts/` shell file: `bug-red`,
-  `cache-prune`, `check`, `check-docs`, `check-resources`, `flaky-tests`, `install-shells`,
-  `leak-scan`, `paging-jig`, `release-pack`, `release-size`,
-  `stored-results`,
-  `test-bug-red`, `test-bug-red-cargo`, `test-bug-red-target-cargo`, `test-flake-report`, `test-flaky-tests`, `test-leak-probe`,
-  `test-leak-scan`, and `lib/release.sh`
+- `shellcheck --shell=bash` on every other `scripts/` shell file: a file at
+  any depth under `scripts/`, other than `scripts/install.sh`, whose first line
+  is a shebang naming `bash`, directly or through `env` with its options and
+  assignments, plus every `scripts/lib/*.sh`. `cargo xtask shellcheck-files`
+  lists them from the tree when the check runs, so a new bash script is
+  checked with nothing added here or to `scripts/check`, and the command
+  fails when it finds none
 - actionlint over every file in `.github/workflows/`, when the diff changes
   one. A workflow change runs the whole selection ("Selection"), so the job is
   always selected. No `taiki-e/install-action` tool installs actionlint, so the
