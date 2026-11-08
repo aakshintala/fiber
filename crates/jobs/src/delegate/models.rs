@@ -139,7 +139,6 @@ impl Tool for DelegateModels {
                         retry_after_ms: None,
                         provider: None,
                     }),
-                    content: Vec::new(),
                     ..Output::default()
                 };
             }
