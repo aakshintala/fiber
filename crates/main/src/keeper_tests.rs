@@ -9,7 +9,6 @@
 use super::*;
 use contract::keeper::{HostStdin, Stream};
 use fakes::clock::FakeClock;
-use std::io::Read as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn deadline() -> fakes::Deadline {

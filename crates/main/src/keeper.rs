@@ -1,7 +1,7 @@
 //! Session-side keeper lifetime, line transport and bounded start attempts.
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -17,7 +17,7 @@ use contract::clock::{Clock, Wake};
 use contract::keeper::{CommandHost, FromKeeper, HostError, HostEvent, Spawn, Started, ToKeeper};
 use contract::{JobId, SessionId};
 
-const KEEPER_START: Duration = Duration::from_millis(5000);
+pub(crate) const KEEPER_START: Duration = Duration::from_millis(5000);
 type Spawner = Arc<dyn Fn() -> io::Result<Connection> + Send + Sync>;
 struct Connection {
     stream: UnixStream,
@@ -46,6 +46,103 @@ pub(crate) struct Host {
     #[cfg(test)]
     client_sender: mpsc::Sender<Weak<Client>>,
 }
+/// Reads one line from a peer within the wire's line cap, without its line
+/// feed. `Ok(None)` is a clean end; a line cut short or longer than the cap
+/// is `InvalidData`, never handed on to a parser.
+pub(crate) fn read_frame<R: BufRead>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {
+    let cap = support::framing::MAX_LINE;
+    let mut line = Vec::new();
+    let read = Read::by_ref(reader)
+        .take(u64::try_from(cap).unwrap_or(u64::MAX).saturating_add(1))
+        .read_until(b'\n', &mut line)?;
+    if read == 0 {
+        return Ok(None);
+    }
+    if line.pop() != Some(b'\n') || line.len() > cap {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "a line is cut short or longer than its cap",
+        ));
+    }
+    Ok(Some(line))
+}
+
+/// The next request a candidate sends the keeper.
+pub(crate) fn read_request<R: BufRead>(reader: &mut R) -> io::Result<Option<ToKeeper>> {
+    read_frame(reader)?
+        .map(|line| serde_json::from_slice(&line).map_err(io::Error::from))
+        .transpose()
+}
+
+/// The next line the keeper sends a session.
+#[cfg(test)]
+pub(crate) fn read_reply<R: BufRead>(reader: &mut R) -> io::Result<Option<FromKeeper>> {
+    read_frame(reader)?
+        .map(|line| serde_json::from_slice(&line).map_err(io::Error::from))
+        .transpose()
+}
+
+/// Closes a connection at a deadline on the injected clock unless it is
+/// finished first, so a read blocked on the connection ends instead of
+/// outliving its wait.
+pub(crate) struct Expiry {
+    done: Arc<AtomicBool>,
+    fired: Arc<AtomicBool>,
+    parker: Arc<support::clock::Parker>,
+    worker: thread::JoinHandle<()>,
+}
+
+impl Expiry {
+    pub(crate) fn start(clock: &Arc<dyn Clock>, stream: &UnixStream, within: Duration) -> Self {
+        let parker = Arc::new(support::clock::Parker::new());
+        let wake: Arc<dyn Wake> = parker.clone();
+        clock.subscribe(Arc::downgrade(&wake));
+        let until = clock.now().checked_add(within);
+        let done = Arc::new(AtomicBool::new(false));
+        let fired = Arc::new(AtomicBool::new(false));
+        let worker = thread::spawn({
+            let (clock, parker) = (Arc::clone(clock), Arc::clone(&parker));
+            let (done, fired) = (Arc::clone(&done), Arc::clone(&fired));
+            let stream = stream.try_clone().ok();
+            move || {
+                loop {
+                    let seen = parker.generation();
+                    if done.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if until.is_some_and(|at| clock.now() >= at) {
+                        fired.store(true, Ordering::Release);
+                        if let Some(stream) = &stream {
+                            match stream.shutdown(std::net::Shutdown::Both) {
+                                Ok(()) | Err(_) => {}
+                            }
+                        }
+                        return;
+                    }
+                    parker.park(&*clock, until, seen);
+                }
+            }
+        });
+        Self {
+            done,
+            fired,
+            parker,
+            worker,
+        }
+    }
+
+    /// Cancels the wait and joins its thread. True when the deadline had
+    /// already closed the connection.
+    pub(crate) fn finish(self) -> bool {
+        self.done.store(true, Ordering::Release);
+        self.parker.bump();
+        match self.worker.join() {
+            Ok(()) | Err(_) => {}
+        }
+        self.fired.load(Ordering::Acquire)
+    }
+}
+
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
