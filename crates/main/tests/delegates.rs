@@ -9293,7 +9293,7 @@ fn wake_schedule_accepts_a_notice_joining_the_running_turn() {
 }
 
 #[test]
-fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
+fn delegate_admission_resumed_delegate_takes_a_message_and_exits_with_a_client_attached() {
     let setup = support::Setup::new();
     let guard = arm(&setup);
     let (completion_tx, completion_rx) = mpsc::channel();
@@ -9336,6 +9336,7 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
             "ask_user",
             &json!({"questions": [{"header": ASK_COLOR_HEADER, "question": ASK_COLOR_TEXT}]}),
         )]),
+        text_reply(PORCH_DONE),
         text_reply(PORCH_DONE),
     ])
     .unwrap();
@@ -9456,6 +9457,36 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
     assert!(
         bodies[1].contains(ANSWER_LINE_BODY),
         "the resumed run carries the verbatim answer line"
+    );
+    let resumed_socket = support::Socket::connect(setup.deadline, &setup.session_socket(&delegate));
+    resumed_socket.send(r#"{"id":"c_resume_sub","command":"subscribe","args":{"level":"full"}}"#);
+    support::recv_answer(
+        &resumed_socket,
+        "c_resume_sub",
+        "the resumed delegate subscription",
+    );
+    resumed_socket.send(
+        &json!({"id": "c_resume_message", "command": "message",
+            "args": {"from_session_id": parent_id, "text": "resumed-message-marker"}})
+        .to_string(),
+    );
+    child.release_one();
+    let resumed_message = support::recv_answer(
+        &resumed_socket,
+        "c_resume_message",
+        "the resumed delegate message take",
+    );
+    assert_eq!(
+        resumed_message["kind"], "command_accepted",
+        "{resumed_message}"
+    );
+    fakes::wait_until(
+        "the resumed delegate applies its session message",
+        setup.deadline,
+        {
+            let child_log = delegate_log(&setup, &delegate);
+            move || log_has(&child_log, "steering_applied", "resumed-message-marker")
+        },
     );
     child.release();
     let mut batch = support::until(&main, "the resumed job completes", |line| {
@@ -9608,7 +9639,17 @@ fn delegate_ask_user_reaches_parent_through_wake_and_answers_resume_it() {
             .join("events.jsonl"),
     );
     let mut expected = ASK_CHILD_DURABLE.to_vec();
-    expected.extend(RESUMED_CHILD_DURABLE);
+    expected.extend(&RESUMED_CHILD_DURABLE[..9]);
+    expected.extend([
+        "steering_applied",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
     support::assert_kinds_multiset(
         &durable_lines(&child_lines),
         &expected,
@@ -10804,7 +10845,7 @@ fn a_parents_delegate_message_draws_a_steer_rule_in_the_delegates_card() {
 /// as `session_message` sends it. The receiver's second model call is held
 /// while its view opens, so the card is folded from the live stream, not a replay.
 #[test]
-fn a_siblings_session_message_draws_a_labelled_rule_with_its_name_in_the_delegates_card() {
+fn delegate_admission_siblings_session_message_draws_a_labelled_rule() {
     const MARK2: &str = "sibling-marker-3c5e8d12";
     let setup = support::Setup::new();
     let _guard = arm(&setup);
@@ -10900,6 +10941,25 @@ fn a_siblings_session_message_draws_a_labelled_rule_with_its_name_in_the_delegat
                     .any(|row| row.contains("steer") && row.contains(" · "))
         },
     );
+    socket.send(r#"{"id":"c_close","command":"close"}"#);
+    socket.send(
+        &json!({"id": "c_after_close", "command": "message",
+            "args": {"from_session_id": sender, "text": "after-close"}})
+        .to_string(),
+    );
+    let refused = support::recv_answer(&socket, "c_after_close", "the post-close message refusal");
+    assert_eq!(refused["kind"], "command_rejected", "{refused}");
+    assert_eq!(refused["payload"]["code"], "closing", "{refused}");
+    assert_eq!(
+        refused["payload"]["message"], "The session is closing and takes no session message.",
+        "{refused}"
+    );
     child.release();
+    let close_answer = support::recv_answer(&socket, "c_close", "the close acknowledgement");
+    assert_eq!(close_answer["kind"], "command_accepted", "{close_answer}");
+    fakes::wait_until("the delegate exit line", setup.deadline, {
+        let log = log.clone();
+        move || log_has(&log, "fiber_exited", "")
+    });
     quit(run);
 }
