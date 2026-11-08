@@ -38,9 +38,9 @@ use tools::Shell;
 /// follows the machine's load, not the test: at a load of 40 to 100 on 11
 /// cores 5 s was not enough. 20 s is the per-wait bound `crates/main/tests`
 /// use. A later startup marker (for example the second line proving `sleep`
-/// exec'd before the exit) keeps `CHILD_START`; other later lines come from
+/// exec'd before the exit) keeps `DEADLINE`; other later lines come from
 /// the running command and keep `fakes::MUST_SUCCEED_WITHIN`.
-const CHILD_START: Duration = Duration::from_secs(20);
+const DEADLINE: Duration = Duration::from_secs(20);
 
 /// One bound for a whole `print_steps` sequence.
 const STEPS: Duration = Duration::from_secs(15);
@@ -489,7 +489,7 @@ fn the_call_waits_until_the_group_is_empty() {
         hold = quote(&hold),
     );
     let running = start(dir.path().to_path_buf(), command, None, CancelToken::new());
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _child = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -521,7 +521,7 @@ fn a_timeout_is_not_stopped_until_the_deadline() {
         Some(1000),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(group_alive(pgid));
@@ -560,7 +560,7 @@ fn with_no_timeout_the_run_parks_at_ten_minutes() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -606,7 +606,7 @@ fn a_cancel_after_the_timeout_fired_stays_a_timeout() {
         Some(1000),
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
@@ -638,7 +638,7 @@ fn a_command_that_ignores_sigterm_is_killed_after_the_grace() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     cancel.cancel();
@@ -675,7 +675,7 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let pids = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let holders = life.watch();
@@ -711,7 +711,7 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
         None,
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let holder = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     let holders = life.watch();
@@ -754,7 +754,7 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
         None,
         cancel.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let escapee = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN))[0];
     let holders = life.watch();
@@ -1106,7 +1106,7 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1160,7 +1160,7 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1210,7 +1210,7 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let move_at = running.start + Duration::from_secs(30);
@@ -1280,7 +1280,7 @@ fn the_background_command_moves_a_running_call_before_thirty_seconds() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -1355,7 +1355,7 @@ fn a_call_that_moved_by_thirty_seconds_is_not_moved_again() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
@@ -1393,7 +1393,7 @@ fn a_run_in_background_call_is_not_registered_as_foreground() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1419,7 +1419,7 @@ fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -1515,7 +1515,7 @@ fn shell_exits(
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     release_after_done(&run, &gate);
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1668,7 +1668,7 @@ fn leftover_output_after_the_shell_exited_lands_in_the_named_artifact() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     release_after_done(&run, &gate);
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1738,7 +1738,7 @@ fn a_moved_job_times_out_from_the_commands_start() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1819,7 +1819,7 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
         Arc::clone(&jobs),
         watched.clone(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -1902,7 +1902,7 @@ fn a_background_command_whose_open_fails_leaves_no_registration() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -1946,7 +1946,7 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
         jobs,
         CancelToken::new(),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     // The background call had no `timeout_ms`, so the resumed foreground
@@ -2075,7 +2075,7 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(
@@ -2180,7 +2180,7 @@ fn the_receipt_waits_250_ms_for_output_on_the_clock() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let due = running.start + Duration::from_millis(250);
     assert!(
@@ -2227,7 +2227,7 @@ fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let due = running.start + Duration::from_millis(250);
     running.clock.advance_when_parked(
@@ -2283,7 +2283,7 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
         Some(5_000),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     assert!(running.clock.await_parked(
@@ -2355,7 +2355,7 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     running.clock.advance_when_parked(
@@ -2547,7 +2547,7 @@ fn a_monitor_moves_at_once_with_its_receipt() {
         None,
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2593,7 +2593,7 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2673,7 +2673,7 @@ fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let output = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2726,7 +2726,7 @@ fn an_incomplete_last_line_is_flushed_before_the_end() {
         block = quote(&block),
     );
     let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2784,7 +2784,7 @@ fn a_suppressed_count_still_pending_is_sent_before_the_end() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2829,7 +2829,7 @@ fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2886,7 +2886,7 @@ fn output_that_pauses_for_two_seconds_ends_the_run_and_does_not_flood() {
         Some(LONG_DEADLINE_MS),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -2925,7 +2925,7 @@ fn a_monitor_ends_at_its_deadline_as_a_timeout() {
         Some(1_000),
         Arc::clone(&jobs),
     );
-    let pgid = ready.wait(fakes::Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(fakes::Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(fakes::Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let _receipt = Deadline::after(fakes::MUST_SUCCEED_WITHIN)
@@ -4373,7 +4373,7 @@ fn macos_confined_background_call_moves_only_after_its_marker() {
         jobs.clone(),
         sandbox,
     );
-    let pgid = ready.wait(Deadline::after(CHILD_START))[0];
+    let pgid = ready.wait(Deadline::after(DEADLINE))[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(Deadline::after(fakes::MUST_SUCCEED_WITHIN));
     let receipt = match Deadline::after(fakes::MUST_SUCCEED_WITHIN).recv(&running.output) {
@@ -4561,7 +4561,7 @@ fn background_without_timeout_runs_until_stopped() {
         Arc::clone(&jobs),
         CancelToken::new(),
     );
-    // CHILD_START's 20 s inline: budget-bounds resolves only direct
+    // DEADLINE's 20 s inline: budget-bounds resolves only direct
     // literals, and startup under load needs the full bound.
     let pgid = ready.wait(fakes::Deadline::after(Duration::from_secs(20)))[0];
     let watchdog = Watchdog::group(pgid);
