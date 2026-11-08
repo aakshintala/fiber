@@ -768,11 +768,11 @@ fn macos_samples_parse_to_bytes() {
 
 /// T6: the fixture end to end and the binary-level reinstall proof. A
 /// fixture release holds the T2-packed archives served over loopback
-/// HTTP: the target archive carries the real `fiber` binary, so
-/// `scripts/install.sh --base-url` installs it and its `release-install`
-/// stages the docs and every top-level archive directory as a first-party
-/// extension, with the full-SHA record. No `git` and no network beyond
-/// the fixture take part.
+/// HTTP: the target archive carries a stub `fiber` that runs the built
+/// binary, so `scripts/install.sh --base-url` installs it and its
+/// `release-install` stages the docs and every top-level archive
+/// directory as a first-party extension, with the full-SHA record. No
+/// `git` and no network beyond the fixture take part.
 ///
 /// The version the binaries under test were built as.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -782,6 +782,16 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// built binary fails far outside the bound and block-size differences
 /// between `tar` implementations cannot reach it.
 const TARGET_ARCHIVE_LIMIT: u64 = 64 * 1024;
+
+/// The `fiber` the fixture packs: a script that `exec`s the built binary
+/// at `built` with the caller's arguments. The tests read the archive's
+/// shape and run the installed `fiber`, never the binary's bytes, so
+/// packing the built binary would only gzip tens of megabytes under the
+/// pack's deadline. `built` is single-quoted for `sh`.
+fn stub_fiber(built: &Path) -> String {
+    let quoted = built.to_string_lossy().replace('\'', "'\\''");
+    format!("#!/bin/sh\nexec '{quoted}' \"$@\"\n")
+}
 
 /// The release target `scripts/install.sh` picks on this host.
 fn host_target() -> &'static str {
@@ -872,9 +882,9 @@ impl Release {
 
     /// Packs a fixture release with the T2 script and serves it from
     /// `release/download/v<version>/`: the target archive carries the
-    /// real `fiber` binary, the docs archive a README, and the extensions
-    /// archive one provider and one extension with manifests at this
-    /// binary's version.
+    /// stub `fiber` (see [`stub_fiber`]), the docs archive a README, and
+    /// the extensions archive one provider and one extension with
+    /// manifests at this binary's version.
     #[track_caller]
     fn serve() -> Self {
         let setup = support::Setup::new();
@@ -909,11 +919,10 @@ impl Release {
         );
         release.write("tree/docs/README.md", b"fixture docs");
         release.write("tree/docs/guide.md", b"guide");
-        fs::copy(
-            PathBuf::from(env!("CARGO_BIN_EXE_fiber")),
-            release.root("tree/bin/fiber"),
-        )
-        .unwrap();
+        release.write(
+            "tree/bin/fiber",
+            stub_fiber(Path::new(env!("CARGO_BIN_EXE_fiber"))).as_bytes(),
+        );
         fs::set_permissions(
             release.root("tree/bin/fiber"),
             fs::Permissions::from_mode(0o755),
@@ -1620,5 +1629,13 @@ fn rehearsal_cleanup_refuses_an_unexpected_release_state() {
         !pack.calls().lines().any(|line| line.starts_with("delete")),
         "a delete ran on an unexpected state: {}",
         pack.calls()
+    );
+}
+
+#[test]
+fn the_stub_quotes_the_built_path_for_sh() {
+    assert_eq!(
+        stub_fiber(Path::new("/a b/it's/fiber")),
+        "#!/bin/sh\nexec '/a b/it'\\''s/fiber' \"$@\"\n"
     );
 }
