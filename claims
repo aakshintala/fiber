@@ -375,3 +375,5 @@ crates/tools/src/shell/output.rs	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-Mac
 crates/tools/src/shell/background_tests.rs	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 crates/tools/tests/shell.rs	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
 docs/tools.md	fiber-4238	plan	2026-11-08T09:34:07Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/extensions.md	fiber-4282	plan	2026-11-08T09:50:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
+docs/tools.md	fiber-4282	plan	2026-11-08T09:50:51Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
