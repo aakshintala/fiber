@@ -271,10 +271,12 @@ fn screen_pages_visible_rows() {
     assert!(page_loads >= 1, "the visible message needs a page load");
 
     let shown = app.shown(top, 48);
+    // The semicolon-terminated row is unique to `long_row`; ordinary `words`
+    // text shares its prefix but does not pin the long-row fixture.
     assert!(
         shown.lines.iter().any(|(line, _, _)| {
             line.to_string()
-                .contains("the session log holds every durable line")
+                .contains("the session log holds every durable line and the terminal pages it;")
         }),
         "the visible rows contain the long message"
     );
