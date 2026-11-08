@@ -586,6 +586,50 @@ programs unseen
 that a well-behaved extension's tool runs get the same denies, hooks and log
 as the model's, not to contain an extension.
 
+### Code mode
+
+`codemode` is a first-party Lua extension that registers one tool, `codemode`,
+which runs a Lua script. The script calls tools with `host.tool` ("Running a
+tool"), filters what they return and prints only what the model needs. Every
+other tool the session can call is reachable this way: a built-in, an MCP
+server's tool or another extension's. `codemode` itself is not, by the rule in
+"Running a tool" that a tool cannot run itself.
+
+- **Input.** An object with one required string, `source`, the Lua to run:
+  `{"source": "print('hi')"}`. The script's output is what it passes to
+  `print`; a chunk's return value is ignored. `host.tool` is its only host
+  call.
+- **It is on by default.** It is part of a fresh install ("A fresh install")
+  and loads unless switched off. Admission is the outer call's: the tool
+  declares `executes`, so the reviewer sees the script. It has a 60 s timeout.
+- **Three ways to turn it off, each different.**
+  - `extensions."codemode".enabled = false` stops the extension's parts
+    loading, in every project when set globally or in one project's file
+    (`docs/configuration.md`, "Keys"). The package stays installed.
+  - The `/tools` switch turns off the `codemode` tool alone, for this project
+    or everywhere, by writing `tools.enabled` or `tools.disabled`. It takes
+    effect on reload, and the view says what the reload's cache rebuild costs
+    (`docs/tui.md`, the `/tools` entry).
+  - `fiber extension remove codemode` uninstalls the package.
+- **What the model gets back.** The script's printed lines, then one status
+  line, then one ledger row per inner call that finished.
+  - The result is bounded like any other (`docs/tools.md`, "Bounded results"):
+    at the 16 KiB default, a cut keeps the first and last 8 KiB, so the status
+    line and the ledger survive, and the whole output goes to the session's
+    `artifacts/`.
+  - The status line is `Script finished`, or `Script failed: <error>` when the
+    script did not load or raised an error. Lines printed before a failure are
+    kept.
+  - A ledger row is `- <tool> <status>`: the inner call's tool name and its
+    outcome status. The row adds the inner call's `artifact` path when its
+    outcome carries one, and the job id when a `delegate_spawn` or
+    `delegate_fork` call started a delegate. A call that raised instead of
+    returning leaves no row. An inner call's output reaches the script whole,
+    so a row has a path only when the outcome supplies an artifact, such as
+    one an `after_tool` hook wrote; an ordinary uncut call has none.
+- **In the terminal**, the outer call shows its inner calls nested under it
+  (`docs/tui.md`, "Tool groups and the ledger").
+
 ## State
 
 An extension keeps what it knows in four places, by what the thing describes.
@@ -1926,7 +1970,7 @@ start ("Loading, and cost when nothing is loaded").
 ### A fresh install
 
 A fresh install has every first-party extension: the eleven providers,
-the Claude Code and cursor-agent harnesses, `hooks`, `init` (`docs/system-prompt.md`, "Skills"), `memory` (`docs/memory.md`) and `export`. They arrive in the release's extensions archive, which `install.sh`
+the Claude Code and cursor-agent harnesses, `hooks`, `init` (`docs/system-prompt.md`, "Skills"), `memory` (`docs/memory.md`), `export` and `codemode` ("Code mode"). They arrive in the release's extensions archive, which `install.sh`
 installs into Fiber home's `extensions/` (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and
