@@ -172,6 +172,33 @@ a person removed the provider they chose, home shows the same lines `fiber docto
 with its fix, above the input box (`docs/invocation.md`, "Commands and flags"). A person
 who runs `fiber` before reading anything is told what to do next.
 
+### First run
+
+`fiber setup` asks the questions a new install needs (`docs/invocation.md`,
+"Commands and flags"). A person who skipped it, or whose install ran without a
+terminal, opens the terminal with nothing configured. The terminal then does
+the missing steps itself, in this order, each one only if it is not done:
+
+1. **Signing in.** No installed provider has a usable credential, counting a
+   key read from the environment such as `OPENCODE_API_KEY`. The terminal
+   opens on home with the `/login` overlay up ("Logging in"). It opens this
+   way on every launch until a credential exists, and keeps no record of
+   having opened. A remote terminal reads the hub's credentials.
+2. **The model.** No model is configured ("Choosing the model" in
+   `docs/model-routing.md`). Once the login's last step saves, the overlay
+   closes and the model picker opens ("The model picker"), with no row
+   chosen for the person. Saving writes the config default.
+3. **The import offer** shows on home as above, once.
+
+A login opened this way closes when its last step saves. A `/login` the
+person typed goes back to the provider list as described in "Logging in".
+
+Esc on the login overlay leaves home with the blocker lines above the input
+box ("When a session cannot start", above). Clicking a credential blocker
+line opens `/login`. Enter on home while no provider has a credential keeps
+the draft in the box and opens `/login`. After the login, the draft is still
+there to send.
+
 ### The logo
 
 The logo is `⌇ fiber 0.0.1`: the ⌇ in the accent colour, the name in the
@@ -1285,11 +1312,12 @@ says so, "<verb> once" and "<verb> N times": read files, searched patterns,
 listed directories, edited files, wrote files, ran commands, started
 delegates, checked jobs, asked questions, fetched pages, searched the web,
 loaded skills, looked up tools, messaged delegates, messaged sessions,
-looked at sessions, called tools. The first word is capitalised. Read,
-edited and written files count distinct paths, and asked questions count
-questions, not calls. `delegate_models` counts as a delegate, and
+looked at sessions, saved reviewer notes, called tools. The first word is
+capitalised. Read, edited and written files count distinct paths, and asked
+questions count questions, not calls. `delegate_models` counts as a delegate, and
 `handoff`, `name_session`, `session_list` and `session_search` count as
-one kind, looked at sessions. An edit's totals follow it, "+N" in
+one kind, looked at sessions, and `reviewer_notes_save` is its own, saved
+reviewer notes. An edit's totals follow it, "+N" in
 `added` and "−N" in `removed`, both dim. Then ", thought N times" ("thought
 once"); while calls run, " · " and their targets, dim; while the model
 thinks, " · Thinking: <heading>" dim and italic. Right-aligned, dim, the
@@ -1342,6 +1370,7 @@ fails when it differs from the code.
 | `jobs` | jobs | checked N jobs | checked 1 job |
 | `name_session` | session | looked at sessions N times | looked at sessions once |
 | `read` | read | read N files | read 1 file |
+| `reviewer_notes_save` | notes | saved reviewer notes N times | saved reviewer notes once |
 | `session_list` | session | looked at sessions N times | looked at sessions once |
 | `session_message` | message | messaged sessions N times | messaged sessions once |
 | `session_search` | session | looked at sessions N times | looked at sessions once |
@@ -1570,9 +1599,9 @@ and an expiry wakes the loop even with no input.
 | `models_loading` | condition | The model list arrives. |
 | `no_jobs_running` | event | Fades 10 s after it shows. |
 | `no_model` | event | Fades 10 s after it shows. |
-| `notes_unchanged` | event | Fades 10 s after it shows. |
 | `repository_code_skipped` | event | Fades 10 s after it shows. |
 | `reviewer_selection_failed` | event | Fades 10 s after it shows. |
+| `reviewer_setup` | event | Fades 10 s after it shows. |
 | `session_held` | event | Fades 10 s after it shows. |
 | `session_not_found` | event | Fades 10 s after it shows. |
 | `skill_invalid` | event | Fades 10 s after it shows. |
@@ -1951,10 +1980,9 @@ what it started keeps running. Large images go to the terminal in chunks (Images
   drops its `ESC [`, and reading goes on from that byte. Invalid UTF-8 drops
   one byte and keeps the rest.
 - **Every action has a key.** Every action also has a mouse target or a slash
-  command, except editing the draft in the input box and search, choosing
-  in the model picker or the credential picker for this session only, and
-  keeping, editing, striking and flipping a line's layer in the reviewer
-  setup. A mouse target is drawn only where one fits naturally, never as a
+  command, except editing the draft in the input box and search, and choosing
+  in the model picker or the credential picker for this session only.
+  A mouse target is drawn only where one fits naturally, never as a
   button added only so the mouse has a way in. A key that needs the kitty
   keyboard protocol also has one that does not, so every action keeps a key
   on any terminal.
@@ -1965,16 +1993,11 @@ what it started keeps running. Large images go to the terminal in chunks (Images
 - **PageUp and PageDown move one screen** wherever something scrolls: the
   conversation, every view, every picker and every list. A screen is the
   scrolling region's own visible rows, not the terminal's height.
-- **The reviewer setup** opens with `/reviewer-setup`. Inside it Enter, Esc,
-  ↑ ↓, PgUp PgDn (on the diff), Tab, `x`, `e`, `r` and `n` act as the
-  panel's legend says. The ✕ and a press outside the panel, which is Esc,
-  are its mouse targets, and the mouse wheel does nothing while it is open.
-  Enter on a diff that would change neither layer's file, notes or read-only
-  entries closes the setup with one notice, `notes_unchanged`, and writes no
-  file.
-  The notice that names the command, shown the first time in a session the
-  reviewer blocks a call while both layers of the notes are empty, closes on
-  any key, and that key goes nowhere else.
+- **The reviewer setup** is the `reviewer-setup` skill (`docs/permissions.md`,
+  "Setting up the notes"): typing `/reviewer-setup` loads it, and the
+  session's agent drafts the notes with you. The first time in a session the
+  reviewer blocks a call while both layers of the notes are empty, a notice
+  names the skill.
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
   filtered as the person types. Each row is a name, a one-line description, a
@@ -2195,8 +2218,8 @@ Every action acts in some of six contexts, and the terminal is in exactly one
 of them when a key arrives:
 
 - Overlay: something on top has the keyboard. That is the quit question, the
-  close-all and stop questions, the import report, the reviewer setup, the
-  `/delete` question on an attached session, the session-list delete question
+  close-all and stop questions, the import report, the `/delete` question on
+  an attached session, the session-list delete question
   on home, the workspace picker, the key map, an approval or question, an
   offer, the hooks install offer, the Ctrl+R panel, or a notice's whole text;
   or the `/` or `@` completion panel while focus is not
@@ -2322,7 +2345,6 @@ later release still applies.
 | `/panel` | Shows or hides the panel ("The panel"). |
 | `/rail` | Shows or hides the rail ("The rail"). |
 | `/rules`, `/permissions` | Opens the standing rules. |
-| `/reviewer-setup` | Sets up the reviewer's notes with you (`docs/permissions.md`, "Setting up the notes"). |
 | `/settings`, `/config` | Opens the configuration keys. |
 | `/theme [<name>]` | Opens the theme picker; with a name, sets the theme at once and saves `tui.theme`. |
 | `/keys`, `/keybindings`, `/keymap` | Opens the rebinding screen ("Bindings"). |
@@ -2637,8 +2659,7 @@ key map, the quit question, the close-all question, the stop question, the
 hooks install offer, the `/delete` question on an attached session, the
 session-list delete question on home, the workspace picker, the `/login`
 overlay, the Ctrl+R panel, a notice's whole text, the import report, the
-reviewer setup, the `/` and `@` completion panels, and
-the model picker inside its view.
+`/` and `@` completion panels, and the model picker inside its view.
 
 - **The frame** is a `surface` slab with a ▄ edge above and a ▀ edge below,
   and no border glyphs. Each row that holds text opens with two blank

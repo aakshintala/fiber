@@ -836,7 +836,6 @@ impl App {
                             | super::Waiting::ConfigAsk
                             | super::Waiting::Credentials
                             | super::Waiting::CredentialSwitch
-                            | super::Waiting::ProposeNotes
                             | super::Waiting::JobStop
                             | super::Waiting::JobInput,
                         ) => return None,
@@ -1018,7 +1017,6 @@ impl App {
                             | super::Waiting::ConfigAsk
                             | super::Waiting::Credentials
                             | super::Waiting::CredentialSwitch
-                            | super::Waiting::ProposeNotes
                             | super::Waiting::JobStop
                             | super::Waiting::JobInput,
                         ) => {}
@@ -1057,6 +1055,18 @@ impl App {
                         | contract::events::EventKind::CommandRejected
                 ) && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
                     && let Some((Kind::Import(_), _)) = self.outbox.pending.get(id)
+                {
+                    return None;
+                }
+                // A refusal settles through its pending entry too:
+                // dropping it at the gate loses its notice and its
+                // draft, so a refused prompt never surfaces and its
+                // follow-up never routes. A refusal for another
+                // session's id has no pending entry here, so it stays
+                // behind the gate and settles nothing.
+                if envelope.kind() == contract::events::EventKind::CommandRejected
+                    && let Some(id) = envelope.payload.get("command_id").and_then(Value::as_str)
+                    && self.outbox.pending.contains_key(id)
                 {
                     return None;
                 }

@@ -108,8 +108,6 @@ pub(crate) enum Waiting {
     Credentials,
     /// A `credential` switch saving its label.
     CredentialSwitch,
-    /// A reviewer setup `propose_notes` ask.
-    ProposeNotes,
     /// An item view's `job_stop`.
     JobStop,
     /// An item view's `job_input`.

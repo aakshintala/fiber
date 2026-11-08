@@ -84,6 +84,7 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
             "continue",
             "sessions",
             "models",
+            "reviewer",
             "extension",
             "mcp",
             "setup",
@@ -117,6 +118,8 @@ const GRAMMAR: &[(&str, &[&str], &[&str])] = &[
         ],
     ),
     ("models", &[], &["--json", "-h", "--help"]),
+    ("reviewer", &["evidence"], &["-h", "--help"]),
+    ("reviewer evidence", &[], &["--json", "-h", "--help"]),
     ("resume", &[], &["--credential", "--hub", "-h", "--help"]),
     ("continue", &[], &["--hub", "-h", "--help"]),
     (

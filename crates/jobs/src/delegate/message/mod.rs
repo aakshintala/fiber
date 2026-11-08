@@ -583,7 +583,6 @@ impl DelegateMessage {
             | ErrorCode::NotFound
             | ErrorCode::NotStepBoundary
             | ErrorCode::NotSubscribed
-            | ErrorCode::NotesUnchanged
             | ErrorCode::Orphaned
             | ErrorCode::OutputCap
             | ErrorCode::OutputTruncated
@@ -597,6 +596,7 @@ impl DelegateMessage {
             | ErrorCode::Refused
             | ErrorCode::RepositoryCodeSkipped
             | ErrorCode::ReviewerSelectionFailed
+            | ErrorCode::ReviewerSetup
             | ErrorCode::Sandbox
             | ErrorCode::SessionHasDependents
             | ErrorCode::SessionHeld

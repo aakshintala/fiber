@@ -16,11 +16,12 @@ use contract::clock::Clock;
 use contract::events::EventKind;
 use fakes::Deadline;
 use fakes::clock::FakeClock;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -7091,6 +7092,186 @@ fn fetch_cursor_advances_past_a_window_answered_below_its_start() {
         windows,
         vec![(5, 9), (6, 9), (7, 9), (8, 9), (9, 9)],
         "each window starts past the last window's start"
+    );
+    drop(lp);
+}
+
+/// A history answer covering none of its window ends the fetch as
+/// a failed range: `page_in` fails the range once instead of
+/// re-requesting a window that never fills (#4192).
+#[test]
+fn fetch_fails_a_window_answered_empty() {
+    use contract::Seq;
+    use std::ops::RangeInclusive;
+    let (mut lp, theirs, tx, rx) = opened();
+    demand_top(&mut lp);
+    let needed = lp.app.needs();
+    assert!(!needed.is_empty(), "the top page still needs its lines");
+    let (segment, span) = needed[0].clone();
+    // One `history` command answers 256 lines at most: the span's
+    // first chunk, answered empty.
+    let from = span.start().0;
+    let end = from
+        .saturating_add(super::super::hub::HISTORY_LINES - 1)
+        .min(span.end().0);
+    let range: RangeInclusive<Seq> = Seq(from)..=Seq(end);
+    let seen = serve(
+        theirs,
+        tx,
+        Box::new(move |command: &serde_json::Value| {
+            if command["command"] != "history" {
+                return Vec::new();
+            }
+            let id = command["id"].as_str().unwrap_or_default().to_owned();
+            vec![Input::Hub(Line::Session(command_answer(&id, Vec::new())))]
+        }),
+    );
+    let fetched = lp.hub.fetch(
+        &rx,
+        &segment,
+        &range,
+        &mut lp.app,
+        &lp.tick,
+        lp.clock.as_ref(),
+        lp.tick.armed(),
+    );
+    assert_eq!(
+        fetched,
+        Err("the answer held none of its lines".to_owned()),
+        "an empty answer fails the range instead of returning no lines"
+    );
+    let windows: Vec<(u64, u64)> = seen
+        .lock()
+        .unwrap_or_else(|err| panic!("seen: {err}"))
+        .iter()
+        .filter(|command| command["command"] == "history")
+        .map(|command| {
+            (
+                command["args"]["from_seq"].as_u64().unwrap_or(u64::MAX),
+                command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX),
+            )
+        })
+        .collect();
+    assert_eq!(
+        windows,
+        vec![(from, end)],
+        "the failed range goes out once, never again"
+    );
+    drop(lp);
+}
+
+/// Counts the commands `seen` holds by name.
+fn command_counts(seen: &Arc<Mutex<Vec<Value>>>) -> std::collections::BTreeMap<String, usize> {
+    let mut counts = std::collections::BTreeMap::new();
+    for command in seen
+        .lock()
+        .unwrap_or_else(|err| panic!("seen: {err}"))
+        .iter()
+    {
+        *counts
+            .entry(command["command"].as_str().unwrap_or_default().to_owned())
+            .or_insert(0) += 1;
+    }
+    counts
+}
+
+/// A refused resume surfaces its reason as a notice, returns the
+/// draft, and the loop still handles a follow-up input; a refusal for
+/// another session's id settles nothing on the attached session
+/// (#4192).
+#[test]
+fn failed_resume_keeps_draft_and_loop() {
+    let log = exited_log();
+    let (mut lp, theirs, tx, rx, summary) = opened_exited(&log[..307]);
+    opening_as(&mut lp.app, &summary, 318);
+    // The first `prompt` command gets a `session_not_found` refusal
+    // naming the attached session, then the follow-up Enter and the
+    // quit: one sender keeps the refusal first, so the follow-up runs
+    // after the refusal restores the draft. Later prompts go
+    // unanswered. A foreign refusal names an unknown command id on
+    // another session.
+    let mut refused = false;
+    let seen = serve(
+        theirs,
+        tx.clone(),
+        Box::new(move |command: &serde_json::Value| {
+            if command["command"] != "history" {
+                if command["command"] == "prompt" && !refused {
+                    refused = true;
+                    let id = command["id"].as_str().unwrap_or_default().to_owned();
+                    let rejected = line(
+                        "command_rejected",
+                        None,
+                        None,
+                        json!({"command_id": id, "code": "session_not_found",
+                            "message": "No such session."}),
+                    );
+                    return vec![
+                        Input::Hub(Line::Session(rejected)),
+                        Input::Bytes(b"\r".to_vec()),
+                        quit(),
+                    ];
+                }
+                return Vec::new();
+            }
+            let from = command["args"]["from_seq"].as_u64().unwrap_or(0);
+            let to = command["args"]["to_seq"].as_u64().unwrap_or(u64::MAX);
+            let id = command["id"].as_str().unwrap_or_default().to_owned();
+            vec![Input::Hub(Line::Session(command_answer(
+                &id,
+                super::tail_history(&log, from, to),
+            )))]
+        }),
+    );
+    let (done_tx, done) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("attach-run".to_owned())
+        .spawn(move || {
+            let code = lp.run(&rx);
+            done_tx
+                .send((code, lp))
+                .unwrap_or_else(|err| panic!("send: {err}"));
+        })
+        .unwrap_or_else(|err| panic!("spawn: {err}"));
+    tx.send(Input::Bytes(b"take up the resumed work".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    tx.send(Input::Bytes(b"\r".to_vec()))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    // A foreign refusal settles nothing: the draft stays empty and no
+    // prompt goes out for it.
+    let foreign = line(
+        "command_rejected",
+        None,
+        None,
+        json!({"command_id": "c_ffffffffffffffff", "code": "session_not_found",
+            "message": "Foreign refusal.", "session_id": "s_bbbbbbbbbbbbbbbb"}),
+    );
+    tx.send(Input::Hub(Line::Session(foreign)))
+        .unwrap_or_else(|err| panic!("send: {err}"));
+    let (code, lp) = Deadline::after(DEADLINE).recv_or_fail(&done, "the loop to quit");
+    assert_eq!(code, 0, "the loop still quits after a refused resume");
+    let counts = command_counts(&seen);
+    assert_eq!(
+        counts.get("prompt"),
+        Some(&2),
+        "the follow-up prompt goes out after the refusal: {counts:?}"
+    );
+    assert_eq!(lp.app.draft(), "", "the follow-up Enter consumes the draft");
+    assert!(
+        lp.app.notices().iter().any(|line| matches!(
+            line,
+            crate::app::NoticeLine::Notice { code, text, .. }
+            if *code == contract::ErrorCode::SessionNotFound && text == "No such session."
+        )),
+        "the refused resume surfaces its reason as a notice"
+    );
+    assert!(
+        !lp
+            .app
+            .notices()
+            .iter()
+            .any(|line| matches!(line, crate::app::NoticeLine::Notice { text, .. } if text == "Foreign refusal.")),
+        "a refusal for another session's id settles nothing locally"
     );
     drop(lp);
 }

@@ -365,6 +365,7 @@ impl Group {
                     kinds.messaged_sessions = kinds.messaged_sessions.saturating_add(1);
                 }
                 Kind::Session => kinds.sessions = kinds.sessions.saturating_add(1),
+                Kind::Notes => kinds.saved_notes = kinds.saved_notes.saturating_add(1),
                 Kind::Other => kinds.called = kinds.called.saturating_add(1),
                 Kind::Edit => {
                     match call.arguments.get("path").and_then(Value::as_str) {
@@ -1179,6 +1180,7 @@ impl Group {
             | Kind::DelegateMessage
             | Kind::SessionMessage
             | Kind::Session
+            | Kind::Notes
             | Kind::Other => vec![dim_span(completed.output.to_owned())],
         }
     }

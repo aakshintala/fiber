@@ -1,0 +1,12 @@
+{
+  "total_count": 1,
+  "check_runs": [
+    {
+      "name": "CI (draft)",
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-06T19:30:00Z",
+      "id": 10
+    }
+  ]
+}

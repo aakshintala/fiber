@@ -437,6 +437,10 @@ fn install_docs_skills(home: &Path) {
             "using-fiber",
             include_str!("../../../../docs/skills/using-fiber/SKILL.md"),
         ),
+        (
+            "reviewer-setup",
+            include_str!("../../../docs/skills/reviewer-setup/SKILL.md"),
+        ),
     ] {
         let dir = home.join("docs/skills").join(name);
         fs::create_dir_all(&dir).unwrap();
@@ -485,6 +489,11 @@ fn the_opening_message_lists_the_built_in_skills_from_home_docs() {
             (
                 "cache-warming".to_owned(),
                 docs.join("cache-warming/SKILL.md").display().to_string(),
+                "builtin".to_owned(),
+            ),
+            (
+                "reviewer-setup".to_owned(),
+                docs.join("reviewer-setup/SKILL.md").display().to_string(),
                 "builtin".to_owned(),
             ),
             (
@@ -833,6 +842,7 @@ Sessions:
   sessions export <id> [<path>]                                                                                   Write the session's log and its artifacts to <path>
   sessions prune [--hub <name>] [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]               Delete old sessions, worktrees and diagnostic logs
   models [<search>] [--json]                                                                                      List the models the installed providers serve
+  reviewer evidence --json                                                                                        Print the evidence behind the reviewer's notes as JSON
 
 Fiber itself:
   setup [--provider <name>]... [--model <model>] [--thinking <level>] [--import <claude-code | codex>]... [--completions <shell> | --no-completions] [--hub | --no-hub]  Ask the questions a new install needs, applying each answer
@@ -2713,6 +2723,7 @@ fn two_runs_send_byte_identical_preambles() {
             "jobs",
             "name_session",
             "read",
+            "reviewer_notes_save",
             "session_list",
             "session_message",
             "session_search",
@@ -4200,4 +4211,53 @@ fn a_per_run_credential_label_is_the_diagnosed_one() {
         lines.next().unwrap().contains("credentials/fake/work"),
         "{message}"
     );
+}
+
+/// An `openai-responses` stream calling `reviewer_notes_save`.
+fn reviewer_notes_save_call() -> Response {
+    let arguments =
+        json!({"lines": [{"topic": "internal_hosts", "layer": "global", "text": "corp.example"}]})
+            .to_string();
+    let events = [
+        json!({"type": "response.output_item.done", "item": {
+            "type": "function_call", "id": "fc_1", "call_id": "call_1",
+            "name": "reviewer_notes_save", "arguments": arguments}}),
+        json!({"type": "response.completed", "response": {
+            "id": "resp_1", "status": "completed",
+            "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}}}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+#[test]
+fn reviewer_notes_save_in_an_ask_session_refuses_naming_fiber_ask() {
+    let setup = Setup::new_with_started_deadline();
+    let server = ProviderServer::start([reviewer_notes_save_call(), hello()]).unwrap();
+    setup.provider(&server);
+
+    let before = std::fs::read(setup.home().join("config.json")).ok();
+
+    let run = setup.run_with_stdin(&["ask", "save the notes"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the save runs and refuses");
+    let rendered = serde_json::to_string(completed).unwrap();
+    assert!(
+        rendered.contains("reviewer_notes_save"),
+        "the refused call is the save: {rendered}"
+    );
+    assert!(
+        rendered.contains("fiber ask"),
+        "the refusal names fiber ask: {rendered}"
+    );
+    // Nothing written: the refused save leaves the global file's bytes alone.
+    assert_eq!(std::fs::read(setup.home().join("config.json")).ok(), before);
 }
