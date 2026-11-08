@@ -196,6 +196,7 @@ fn provider(protocol: Protocol) -> Result<Arc<dyn Provider>, String> {
         workspace: std::path::PathBuf::new(),
         clock: fakes::clock::FakeClock::new(),
         cache_diagnostics: false,
+        databricks_request_tags: None,
     };
     crate::connect(model, None, None, None, &here)
         .map_err(|failure| format!("{:?}: {}", failure.code, failure.message))
