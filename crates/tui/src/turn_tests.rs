@@ -2612,6 +2612,11 @@ fn hook_rewrite_turns(actions: &[&[&str]]) -> (Vec<super::Turn>, super::Fold) {
                 },
                 0,
                 &mut fold,
+                &crate::turn::Recipients {
+                    sessions: &Default::default(),
+                    delegates: &Default::default(),
+                    page: None,
+                },
             );
         }
         turns.push(turn);
@@ -2637,7 +2642,17 @@ fn hook_rewrite_line(
         seq: None,
         payload: payload.as_object().cloned().unwrap_or_default(),
     };
-    super::fold_action(turns, fold, &envelope, action)
+    super::fold_action(
+        turns,
+        fold,
+        &envelope,
+        action,
+        &crate::turn::Recipients {
+            sessions: &Default::default(),
+            delegates: &Default::default(),
+            page: None,
+        },
+    )
 }
 
 /// The call `action` in `turns`.

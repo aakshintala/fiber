@@ -942,6 +942,7 @@ fn a_ledger_row_input_holds_recipient_only_when_held() {
     let args = json!({"id": "j_abc", "message": "hi"});
     let table = |recipient| {
         input_value(&Input::LedgerRow(tui::ext::LedgerRow {
+            changed_by: None,
             name: "delegate_message",
             arguments: &args,
             state: CallState::Pending,
@@ -1124,6 +1125,7 @@ fn every_call_state_projects_its_documented_shape() {
 fn a_card_call_input_holds_recipient_only_when_held() {
     let args = json!({"id": "j_abc", "message": "hi"});
     let call = |recipient| tui::ext::TurnCall {
+        changed_by: None,
         name: "delegate_message",
         arguments: &args,
         state: CallState::Pending,
@@ -3077,6 +3079,7 @@ fn hook_rewrite_ledger(changed_by: Option<&[String]>) -> Value {
         arguments: &args,
         state: tui::ext::CallState::Running,
         answer: None,
+        recipient: None,
         flat: false,
     }))
 }
@@ -3101,6 +3104,7 @@ fn hook_rewrite_card_call(changed_by: Option<&[String]>) -> Value {
                     arguments: &args,
                     state: tui::ext::CallState::Running,
                     answer: None,
+                    recipient: None,
                     open: false,
                     asking: false,
                 }],
