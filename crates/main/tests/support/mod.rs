@@ -1298,6 +1298,16 @@ pub(crate) fn recv_answer(client: &Socket, id: &str, what: &str) -> Value {
     let mut passed = Vec::new();
     let answer = loop {
         match client.next_through(&wait, what, &passed) {
+            // A shell run's own lines carry its command id too, and none of
+            // them is its answer.
+            Some(line)
+                if matches!(
+                    line.get("kind").and_then(Value::as_str),
+                    Some("shell_command_started" | "shell_command_delta" | "shell_command")
+                ) =>
+            {
+                passed.push(line);
+            }
             Some(line) if line["payload"]["command_id"] == id => break line,
             Some(line) if line.get("kind").and_then(Value::as_str) == Some("attention") => {}
             Some(line) => passed.push(line),
