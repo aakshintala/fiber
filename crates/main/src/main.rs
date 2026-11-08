@@ -62,6 +62,9 @@ mod lua_warm_tests;
 #[cfg(test)]
 mod model_host_tests;
 #[cfg(test)]
+#[path = "model_list_stall_tests.rs"]
+mod model_list_stall_tests;
+#[cfg(test)]
 #[path = "read_signals_entry_tests.rs"]
 mod read_signals_entry_tests;
 #[cfg(test)]

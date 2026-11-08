@@ -1910,6 +1910,10 @@ impl<B: Backend> Loop<B> {
 mod tests;
 
 #[cfg(test)]
+#[path = "event_loop_catalogue_tests.rs"]
+mod catalogue_tests;
+
+#[cfg(test)]
 #[path = "event_loop_login_tests.rs"]
 mod login_tests;
 

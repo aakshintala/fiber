@@ -190,6 +190,12 @@ impl Reader {
         }
     }
 
+    /// The queued refresh, observed by forced-interleaving tests.
+    #[cfg(test)]
+    pub(crate) fn queued_for_test(&self) -> Option<Refresh> {
+        self.queued
+    }
+
     /// Asks for a read at `refresh`: it starts at once, unless one runs,
     /// when the widest asked waits. Without a read, asking does nothing.
     pub(crate) fn ask(&mut self, refresh: Refresh, out: &Sender<crate::Input>) {
