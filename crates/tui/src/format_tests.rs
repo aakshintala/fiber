@@ -7,7 +7,7 @@ use ratatui::text::Line;
 
 use super::{
     Kind, Kinds, capitalise, content_text, count, cut, duration, heading, headline, kind, money,
-    seconds, spend_against_budget, summary, tokens, warning_line, wrap, wrap_joined,
+    seconds, spend_against_budget, summary, tokens, via, warning_line, wrap, wrap_joined,
 };
 use crate::theme::{Role, style};
 
@@ -1282,4 +1282,14 @@ fn docs_kind_table_matches_code() {
         assert!(tools.contains(name), "{name} has no row in the table");
     }
     assert_eq!(tools.len(), contract::tool::BUILT_IN_TOOLS.len());
+}
+
+#[test]
+fn via_names_the_extensions_that_rewrote_a_call() {
+    assert_eq!(via(&["guard".to_owned()]).as_deref(), Some("via guard"));
+    assert_eq!(
+        via(&["guard".to_owned(), "audit".to_owned()]).as_deref(),
+        Some("via guard, audit")
+    );
+    assert_eq!(via(&[]), None);
 }

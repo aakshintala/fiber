@@ -14,7 +14,7 @@ use crate::ext::{
     CallState, GroupLine, Input, LedgerResult, LedgerRow, PromptImage, RowError, TurnCall,
     TurnCallResult, TurnFailed, TurnGroup, TurnGroupState, TurnSection, TurnStreaming, TurnThought,
 };
-use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary};
+use crate::format::{Kind, Kinds, count, dim, heading, kind, label, opened, summary, via};
 use crate::rows::{RowText, Rows};
 use crate::theme::{Role, style};
 
@@ -1089,7 +1089,12 @@ impl Group {
             CallState::Unknown => ("?", style(Role::Attention)),
             CallState::Pending | CallState::Running => ("○", style(Role::Attention)),
         };
-        let result = self.builtin_result(row);
+        let mut result = self.builtin_result(row);
+        // A rewritten call names who rewrote it after its result, so the
+        // target is cut before the mark is.
+        if let Some(mark) = row.changed_by.and_then(via) {
+            result.push(dim_span(format!(" · {mark}")));
+        }
         // Past the gutter, the glyph, one space and nine of
         // kind leave the target and the result `after_gutter - 13`
         // cells. The target is cut with "…" to what the result leaves;
