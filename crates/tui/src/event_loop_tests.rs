@@ -20,7 +20,7 @@ use std::time::Duration;
 
 /// The launch description `run` tests start from: `/w`, outside git.
 pub(super) fn launch() -> super::Launch {
-    super::Launch {
+    let mut launch = super::Launch {
         location: crate::LaunchLocation::Local {
             workspace: PathBuf::from("/w"),
             project: "-w".to_owned(),
@@ -36,7 +36,59 @@ pub(super) fn launch() -> super::Launch {
         panel_share: 21.0,
         panel_cards: Vec::new(),
         ..Default::default()
-    }
+    };
+    launch.models = Some(test_catalogue());
+    launch.configure = Some(Arc::new(crate::configure_fake::Fake::new(Vec::new())));
+    launch
+}
+
+/// A no-provider, no-model launch for first-run tests.
+pub(super) fn launch_without_model() -> super::Launch {
+    let mut launch = launch();
+    launch.model = None;
+    launch.models = Some(Arc::new(|_| Ok(Catalogue::default())));
+    launch.configure = Some(Arc::new(crate::configure_fake::Fake::new(Vec::new())));
+    launch
+}
+
+fn test_catalogue() -> crate::ReadModels {
+    Arc::new(|_| {
+        Ok(Catalogue {
+            models: vec![ModelEntry {
+                reference: "p/m".to_owned(),
+                provider: "p".to_owned(),
+                id: "m".to_owned(),
+                name: None,
+                levels: Vec::new(),
+                default_level: None,
+                configured: None,
+                roles: Vec::new(),
+                price: None,
+            }],
+            ..Default::default()
+        })
+    })
+}
+
+#[test]
+fn launch_starts_with_configured_test_catalogue() {
+    let launch = launch();
+    assert_eq!(launch.model.as_deref(), Some("p/m"));
+    let catalogue = launch.models.as_ref().unwrap()(crate::Refresh::Cached).unwrap();
+    assert_eq!(catalogue.models.len(), 1);
+    assert_eq!(catalogue.models[0].provider, "p");
+    assert_eq!(catalogue.models[0].reference, "p/m");
+    assert!(catalogue.logged_out.is_empty());
+    assert!(launch.configure.is_some());
+}
+
+#[test]
+fn launch_without_model_has_no_provider_or_catalogue() {
+    let launch = launch_without_model();
+    assert!(launch.model.is_none());
+    let catalogue = launch.models.as_ref().unwrap()(crate::Refresh::Cached).unwrap();
+    assert!(catalogue.models.is_empty());
+    assert!(catalogue.logged_out.is_empty());
 }
 
 /// One named wall-clock deadline for every blocking wait.
@@ -3292,8 +3344,7 @@ fn with_no_model_the_picker_opens_at_start() {
         }
         Ok(one_model())
     });
-    let mut launch = launch();
-    launch.model = None;
+    let mut launch = launch_without_model();
     launch.models = Some(read);
     launch.configure = Some(seam.clone() as std::sync::Arc<dyn crate::Configure>);
     let (done, finished) = mpsc::channel();
