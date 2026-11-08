@@ -659,3 +659,4 @@ crates/main/tests/session_turns/resume.rs	fiber-4233	plan	2026-11-08T20:00:24Z	A
 crates/main/tests/session_turns/rewind.rs	fiber-4233	plan	2026-11-08T20:00:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4438
 crates/main/tests/timings/loop_timing.rs	fiber-4233	plan	2026-11-08T20:00:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4438
 crates/main/tests/tool_calls/mcp.rs	fiber-4233	plan	2026-11-08T20:00:24Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	4438
+crates/tui/src/event_loop/pause.rs	fiber-4435	plan	2026-11-08T20:08:01Z	Amoghs-MacBook-Pro:/Users/aakshintala/work/fiber-worktrees/flywheel	
