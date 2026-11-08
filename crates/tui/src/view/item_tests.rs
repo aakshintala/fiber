@@ -1619,6 +1619,13 @@ fn no_selection_starts_in_a_view_without_a_transcript() {
 /// Refuses the open delegate's subscribe, so its view shows the refusal
 /// message "Could not open: already full" on the stop row.
 fn refused_open(app: &mut App) {
+    let id = click_open(app);
+    refuse(app, id);
+}
+
+/// Opens the delegate's view with a click on its panel row, returning the
+/// id of the `subscribe` it sent.
+fn click_open(app: &mut App) -> String {
     let serial = app
         .serial_of_job(&contract::JobId("j_1".to_owned()))
         .unwrap_or_else(|| panic!("a serial"));
@@ -1642,12 +1649,15 @@ fn refused_open(app: &mut App) {
         | crate::app::Effect::ReadImage(_)
         | crate::app::Effect::Feedback { .. } => panic!("opening sends"),
     };
-    let id = out
-        .iter()
+    out.iter()
         .find(|line| line["command"] == "subscribe")
         .and_then(|line| line["id"].as_str())
         .unwrap_or_else(|| panic!("an id"))
-        .to_owned();
+        .to_owned()
+}
+
+/// The hub refuses the subscribe `id`: "already full".
+fn refuse(app: &mut App, id: String) {
     let mut payload = serde_json::Map::new();
     payload.insert("command_id".to_owned(), Value::String(id));
     payload.insert(
@@ -1683,6 +1693,51 @@ fn a_refusal_message_draws_on_the_stop_row() {
         .find(|row| row.contains("■ stop s_dddddddddddddddd"))
         .unwrap_or_else(|| panic!("the stop row"));
     assert!(stop.contains("Could not open: already full"));
+}
+
+#[test]
+fn an_interrupt_label_shortens_the_message_cut_to_keep_the_stop_whole() {
+    let mut app = home(60, 24);
+    opened(&mut app);
+    start_delegate(&mut app, 0);
+    // A delegate line clears a refusal, so the refusal answers last.
+    let id = click_open(&mut app);
+    app.on_line(delegate_line(
+        "turn_started",
+        0,
+        json!({"input": [{
+            "type": "message", "source": "driver",
+            "content": [{"type": "text", "text": "go"}]}]}),
+    ));
+    refuse(&mut app, id);
+    // The row holds the 28-cell refusal, " · ", the label, " · " and the
+    // 25-cell stop only if the message is cut by the label's width too.
+    let area = Rect::new(0, 0, 60, 5);
+    let mut buf = Buffer::empty(area);
+    let mut targets = Vec::new();
+    super::draw_header(&app, area, &mut buf, &mut targets);
+    let text = crate::view::text(&buf);
+    let row = text.lines().nth(4).unwrap_or_default();
+    let label = "⏸ interrupt";
+    assert!(
+        row.starts_with("Could not o")
+            && row.ends_with(&format!("{label} · ■ stop s_dddddddddddddddd")),
+        "{row}"
+    );
+    let label_width = u16::try_from(crate::format::width(label)).unwrap_or(u16::MAX);
+    let find = |id: TargetId| {
+        targets
+            .iter()
+            .find(|target| target.id == id)
+            .unwrap_or_else(|| panic!("no {id:?} target"))
+            .rect
+    };
+    let interrupt = find(TargetId::Interrupt);
+    let stop = find(TargetId::Item(Spot::Stop));
+    assert_eq!(interrupt.width, label_width);
+    assert_eq!(stop.x, interrupt.x + label_width + 3);
+    assert_eq!(stop.width, 25);
+    assert_eq!(stop.x + stop.width, 60);
 }
 
 #[test]

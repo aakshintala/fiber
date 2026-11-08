@@ -183,13 +183,13 @@ fn draw_delegate_card(
     card_row(buf, area.x, y, wide, &parts);
     if let Some(label) = interrupt {
         let room = area.right().saturating_sub(interrupt_at);
-        let shown = cell(format::width(label)).min(room);
-        if shown > 0 {
-            targets.push(Target {
-                id: TargetId::Interrupt,
-                rect: Rect::new(interrupt_at, y, shown, 1),
-            });
-        }
+        // The message cut keeps the label inside the row, so `room` is
+        // never 0 here; like the stop target, a zero-width row would
+        // leave an empty rect, which hits nothing.
+        targets.push(Target {
+            id: TargetId::Interrupt,
+            rect: Rect::new(interrupt_at, y, cell(format::width(label)).min(room), 1),
+        });
     }
     targets.push(Target {
         id: TargetId::Item(Spot::Stop),

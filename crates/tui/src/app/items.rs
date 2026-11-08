@@ -245,6 +245,15 @@ impl App {
         self.items.open.as_ref().map(|open| open.job_id.clone())
     }
 
+    /// Whether the open item is a delegate of any harness, not a plain job.
+    fn item_is_delegate(&self) -> bool {
+        self.items
+            .open
+            .as_ref()
+            .and_then(|open| self.items.jobs.get(&open.job_id))
+            .is_some_and(|record| record.delegate.is_some())
+    }
+
     /// Whether `session` is the open fiber delegate's session.
     pub(super) fn is_item_session(&self, session: &SessionId) -> bool {
         let Some(open) = self.items.open.as_ref() else {
@@ -381,12 +390,14 @@ impl App {
     /// The session whose turn the on-screen conversation runs, while the
     /// terminal is connected to interrupt it: a delegate's own in its
     /// view, else the attached session's when busy, whatever else is open
-    /// over it.
+    /// over it. A delegate's view of another harness has no turn to
+    /// interrupt and never falls back to its parent; an ordinary job's
+    /// view shows the attached conversation and does.
     pub(super) fn interrupt_session(&self) -> Option<SessionId> {
         if !self.connected() {
             return None;
         }
-        if self.item_transcript() {
+        if self.item_transcript() || self.item_is_delegate() {
             return self.item_turn_session();
         }
         match &self.phase {

@@ -107,6 +107,8 @@ fn alt_i_sends_nothing_while_disconnected() {
     let mut app = home();
     opened(&mut app);
     parent_turn(&mut app);
+    // The positive control: connected, the same stroke cancels.
+    assert_eq!(cancels(&press(&mut app, "alt+i")), [SESSION]);
     app.disconnected();
     assert!(press(&mut app, "alt+i").is_empty());
 }
@@ -137,6 +139,10 @@ fn alt_i_in_an_idle_delegate_view_never_cancels_the_busy_parent() {
     let mut app = delegate_view();
     parent_turn(&mut app);
     assert!(press(&mut app, "alt+i").is_empty());
+    // The positive control: the delegate's turn starting makes the same
+    // stroke cancel the delegate, still not the parent.
+    delegate_turn(&mut app);
+    assert_eq!(cancels(&press(&mut app, "alt+i")), [DELEGATE_A]);
 }
 
 #[test]
@@ -410,6 +416,16 @@ fn another_harness_delegate_offers_no_delegate_targets() {
     assert!(!text.contains("⏸ interrupt"), "{text}");
     assert!(interrupt_targets(&targets).is_empty());
     assert!(press(&mut app, "alt+i").is_empty());
+    // A busy parent is not the delegate's turn: nothing goes out, from
+    // the key or from the working line's click.
+    parent_turn(&mut app);
+    assert!(press(&mut app, "alt+i").is_empty());
+    assert_eq!(app.on_click(TargetId::Interrupt), Effect::None);
+    // The positive control: closing the view brings the parent's own
+    // interrupt back.
+    app.on_key(Key::Esc, now());
+    assert!(!app.item_open());
+    assert_eq!(cancels(&press(&mut app, "alt+i")), [SESSION]);
 }
 
 #[test]
