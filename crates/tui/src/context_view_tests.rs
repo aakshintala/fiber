@@ -182,7 +182,7 @@ fn the_doc_numbers_draw_bold_sizes_a_role_bar_and_an_attention_label() {
             .iter()
             .map(|(text, _, _)| text.as_str())
             .collect::<String>(),
-        format!("{}compaction 400k", " ".repeat(68))
+        format!("{}compaction 400k", " ".repeat(65))
     );
     assert_eq!(
         frame.rows[2].last(),

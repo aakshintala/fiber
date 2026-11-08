@@ -5,7 +5,7 @@ expression: "drawn(&settings, None, 80, 24)"
  Settings  /settings                                                 Esc returns
   key                                value                    layer
   diagnostics.level                  info                     default
-› compaction.tokens                     400000                   default
+› compaction.tokens                  400000                   default
   model                              a/b                      global
   providers.openai.credentials.work  command op               global
   repository_extensions              unset                    default

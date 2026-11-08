@@ -3,9 +3,9 @@ source: crates/tui/src/app/config_views_tests.rs
 expression: painted_text(&restored)
 ---
   Settings  /settings                                                Esc returns
-   key             value   layer
+   key                value   layer
    compaction.tokens  400000  default
- › tui.theme       dark    global
+ › tui.theme          dark    global
 
 
 

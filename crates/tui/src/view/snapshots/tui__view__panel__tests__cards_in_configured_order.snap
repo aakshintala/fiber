@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/panel_tests.rs
-assertion_line: 1210
 expression: "super::super::text(&buf)"
 ---
 
@@ -10,7 +9,7 @@ expression: "super::super::text(&buf)"
 
    test/model                high
    ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│         500
-   compacts at 800   50% of window
+   compacts at 800  50% of window
    then a summary, fresh context
    tokens in / out     1.1k / 200
    cache hits                  9%

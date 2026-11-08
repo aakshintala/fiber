@@ -1,6 +1,5 @@
 ---
 source: crates/main/tests/call_view.rs
-assertion_line: 248
 expression: "snapshot_text(&setup, &grid, &[])"
 ---
   Shell  awk 'BEGIN { for (i = 1; i < 500; i++) print sprintf("%03d %220s", i, "x"); print "TA" "IL" }'            Esc returns
@@ -10,7 +9,7 @@ expression: "snapshot_text(&setup, &grid, &[])"
  466
  467                                                                                                                             scripted/s.json
  468                                                                                                                             ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆│           —
- 469                                                                                                                             compacts at 400.0k            —
+ 469                                                                                                                             compacts at 400.0k           —
  470                                                                                                                             then a summary, fresh context
  471                                                                                                                             tokens in / out          0 / 0
  472                                                                                                                             cache hits                   —

@@ -9,7 +9,7 @@ expression: text(&screen(&app))
 ▌ ⎇ main                                                                                                                                                         git  main
 ▌ $0.41                 11%                                                                                                                                      test/model
 ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀                                                                                                                                     ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆                  119
-▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                     compacts at —             11% of window
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄                                                                                                                                     compacts at —            11% of window
 ▌ 3 ● WORKING            2h                                                                                                                                      then a summary, fresh context
 ▌ write the rail                                                                                                                                                 tokens in / out                  1 / 2
 ▌ ⎇ detached                                                                                                                                                     cache hits                          0%

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/src/view/rail_tests.rs
-assertion_line: 1248
 expression: text(&buf)
 ---
 
@@ -10,7 +9,7 @@ expression: text(&buf)
 
                                                                                                                                  test/model
                                                                                                                                  ▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆▆            —
-                                                                                                                                 compacts at —                 —
+                                                                                                                                 compacts at —                —
                                                                                                                                  then a summary, fresh context
                                                                                                                                  tokens in / out          1 / 2
                                                                                                                                  cache hits                  0%

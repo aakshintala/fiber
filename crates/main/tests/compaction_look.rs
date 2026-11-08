@@ -72,10 +72,10 @@ fn band_cells(grid: &Grid) -> Option<(u16, usize, usize, usize)> {
     // " ⇄ " and "compaction" in secondary and bold; the trigger dim.
     let secondary = |col: usize| grid.cell(col as u16, band).fg == SECONDARY;
     let bold = |col: usize| grid.cell(col as u16, band).bold;
-    if !(left..left + 10).all(|col| secondary(col) && bold(col)) {
+    if !(left..left + 13).all(|col| secondary(col) && bold(col)) {
         return None;
     }
-    if !(left + 10..left + 30).all(|col| grid.cell(col as u16, band).dim) {
+    if !(left + 13..left + 33).all(|col| grid.cell(col as u16, band).dim) {
         return None;
     }
     // Right-aligned, the sizes bold and the clock dim; the clock reads
@@ -177,11 +177,11 @@ fn the_compaction_band_matches_the_doc() {
     for col in left..left + 3 {
         assert_eq!(grid.cell(col, band).fg, SECONDARY, "col {col}");
     }
-    for col in left + 3..left + 10 {
+    for col in left + 3..left + 13 {
         assert_eq!(grid.cell(col, band).fg, SECONDARY, "col {col}");
         assert!(grid.cell(col, band).bold, "col {col}");
     }
-    for col in left + 10..left + 30 {
+    for col in left + 13..left + 33 {
         assert!(grid.cell(col, band).dim, "col {col}");
     }
     // Right-aligned, the sizes bold and the clock dim; the clock reads

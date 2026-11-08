@@ -662,11 +662,11 @@ fn pct_and_bar_floor() {
     // styles do (see the roles test).
     let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(15) + "119";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // The compaction row fits with three of pad, nothing cut.
+    // The compaction row fits with two of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "compacts at 800         11% of window"),
+            .any(|row| *row == "compacts at 800        11% of window"),
         "{drawn:?}"
     );
     assert!(
@@ -693,7 +693,7 @@ fn context_rows_need_a_window_and_a_status() {
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "compacts at 800".to_owned() + &" ".repeat(21) + "—"),
+            .any(|row| *row == "compacts at 800".to_owned() + &" ".repeat(20) + "—"),
         "{drawn:?}"
     );
     assert!(
@@ -735,7 +735,7 @@ fn a_zero_context_window_holds_the_empty_bar() {
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(23) + "—"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(22) + "—"),
         "{drawn:?}"
     );
 }
@@ -756,7 +756,7 @@ fn a_full_context_fills_every_cell() {
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(10) + "100% of window"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(9) + "100% of window"),
         "{drawn:?}"
     );
 }
@@ -805,11 +805,11 @@ fn the_marker_follows_the_seventeen_cells() {
     let drawn = texts(&app, 40);
     let bar = "\u{2586}".repeat(17) + "\u{2502}" + &" ".repeat(15) + "500";
     assert!(drawn.contains(&bar), "{drawn:?}");
-    // The compaction row fits with two of pad, nothing cut.
+    // The compaction row fits with one of pad, nothing cut.
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "compacts at 1.0k        50% of window"),
+            .any(|row| *row == "compacts at 1.0k       50% of window"),
         "{drawn:?}"
     );
 }
@@ -2220,7 +2220,7 @@ fn the_session_card_reserves_its_rows_from_the_first_frame() {
     assert!(
         drawn
             .iter()
-            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(23) + "—"),
+            .any(|row| *row == "compacts at —".to_owned() + &" ".repeat(22) + "—"),
         "{drawn:?}"
     );
     // Zero turns are known, not unknown.
@@ -2313,7 +2313,7 @@ fn session_card_rows_match_the_doc_at_width_34() {
             "git  main".to_owned(),
             "test/model".to_owned() + &" ".repeat(16) + "high",
             bar,
-            "compacts at 800   50% of window".to_owned(),
+            "compacts at 800  50% of window".to_owned(),
             "then a summary, fresh context".to_owned(),
             "tokens in / out".to_owned() + &" ".repeat(5) + "1.1k / 200",
             "cache hits".to_owned() + &" ".repeat(18) + "9%",
