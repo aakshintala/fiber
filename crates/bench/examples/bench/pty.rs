@@ -1,4 +1,4 @@
-//! The terminal in a pseudo-terminal, as `crates/main/tests/terminal.rs`
+//! The terminal in a pseudo-terminal, as `crates/main/tests/screens/terminal.rs`
 //! runs it: bare `fiber` with standard input, output and error on the
 //! terminal side, `TERM=xterm-256color`, and one reader thread feeding
 //! what it draws to the screen the waits read. While recording, the

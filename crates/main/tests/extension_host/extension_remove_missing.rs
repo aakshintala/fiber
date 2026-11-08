@@ -1,0 +1,114 @@
+//! Binary-level test of `fiber extension remove` on a name nothing is
+//! installed under (`docs/extensions.md`, "Installing"): it fails with
+//! exit 1, names the extension and the directory it
+//! looked for, and deletes nothing.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use crate::support;
+
+use std::fs;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+
+use serde_json::json;
+use support::{Deadline, Output, Setup, spawn_watched};
+
+impl Setup {
+    fn new_with_home() -> Self {
+        let setup = Self {
+            deadline: Deadline::start(),
+            root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-ext-remove-missing"),
+        };
+        fs::create_dir_all(setup.home()).unwrap();
+        setup
+    }
+
+    /// A source package named `acme`, version `v1`.
+    fn extension_remove_missing_source(&self) -> String {
+        let path = self.root.path().join("src");
+        fs::create_dir_all(&path).unwrap();
+        fs::write(
+            path.join("extension.json"),
+            json!({"name": "acme", "version": "v1", "fiber": "0.0.0", "api": 1}).to_string(),
+        )
+        .unwrap();
+        path.to_str().unwrap().to_owned()
+    }
+
+    #[track_caller]
+    fn extension_remove_missing_extension(&self, args: &[&str]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args(["extension"])
+            .args(args)
+            .current_dir(self.root.path())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.root.path())
+            .env("FIBER_HOME", self.home())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber extension {}` to exit", args.join(" ")),
+            ),
+        };
+        watchdog.stand_down(self.deadline.cleanup_phase());
+        Output::from(output)
+    }
+}
+
+#[test]
+fn removing_a_name_nothing_is_installed_under_fails() {
+    let setup = Setup::new_with_home();
+    let run = setup.extension_remove_missing_extension(&["remove", "muse"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(!run.stderr.contains("removed"), "{}", run.stderr);
+    assert!(run.stderr.contains("is not installed"), "{}", run.stderr);
+    assert!(run.stderr.contains("providers/muse"), "{}", run.stderr);
+    assert!(run.stderr.contains("extensions/muse"), "{}", run.stderr);
+}
+
+#[test]
+fn a_leftover_directory_under_another_name_is_not_touched() {
+    let setup = Setup::new_with_home();
+    let other = setup.home().join("extensions/github.com-acme-muse");
+    fs::create_dir_all(&other).unwrap();
+    let run = setup.extension_remove_missing_extension(&["remove", "muse"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(other.exists());
+}
+
+/// A healthy install whose directory has another name than its slug, as an
+/// older layout left it: the record names `acme`, `extensions/acme/` is gone.
+#[test]
+fn a_record_in_a_directory_with_another_name_is_not_removed() {
+    let setup = Setup::new_with_home();
+    let run = setup
+        .extension_remove_missing_extension(&["install", &setup.extension_remove_missing_source()]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let legacy = setup.home().join("extensions/legacy-acme");
+    fs::rename(setup.home().join("extensions/acme"), &legacy).unwrap();
+    let run = setup.extension_remove_missing_extension(&["remove", "acme"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(!run.stderr.contains("removed"), "{}", run.stderr);
+    assert!(run.stderr.contains("extensions/acme"), "{}", run.stderr);
+    assert!(legacy.join("extension.json").exists());
+}

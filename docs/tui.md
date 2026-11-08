@@ -649,7 +649,13 @@ a click on it returns too. The mouse wheel over a view moves its visible rows 3 
   that delegate. The breadcrumb is bold. The status card is a `surface`
   slab: "harness <name>", then " · model <model> · <level>" dim; under it,
   dim, the calls, "elapsed <time>" and "session <id>"; then "■ stop <session id>" in
-  `error`. The input box's hint reads "steering goes to ◆ <description>",
+  `error`. While the delegate's turn runs, "⏸ interrupt" in `attention`
+  comes before the stop target, and the working line shows in the view as it
+  does in the conversation, ending " · ⌥I or click to interrupt" (the first
+  key bound to `interrupt_turn`, or " · click to interrupt" with none): a
+  click on either interrupts the delegate's turn, not the delegate. Both
+  disappear while the delegate is idle or finished. Esc still closes the view.
+  The input box's hint reads "steering goes to ◆ <description>",
   dim. A delegate that has not bound its socket yet answers
   `session_not_found`; while its parent lists it running, the terminal asks
   again every 500 ms. A delegate or job that has finished opens the same
@@ -1508,7 +1514,12 @@ and dim, "editing a queued message · Enter amends · ⌥X drops · Esc stops".
 
 ### Interrupts
 
-Esc interrupts the turn when nothing is open ("Keys"). The interrupt shows only
+Esc interrupts the turn when nothing is open ("Keys"). `interrupt_turn`, ⌥I,
+interrupts the turn of the conversation on screen, whatever is open over it,
+except the `/keys` screen: in a delegate's view, the delegate's turn, and
+elsewhere the attached session's, leaving the overlay open. In a delegate's view a click on the
+working line or on "⏸ interrupt" does the same, and Esc keeps closing the view.
+The interrupt shows only
 on the ▣ line that closes the card; there is no separate "Interrupted" line. A
 call it stopped reads `cancelled` in its ledger row. With steering messages queued, they start
 the next turn at once (`docs/architecture.md`, "Cancellation"), so Esc means
@@ -2190,6 +2201,7 @@ through the `input_status` slot ("Extension seams").
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
 | Delete the selected exited, or a live one with Delete session in the session list | `delete_session` | Delete, or Shift+Backspace, on the row | click a live row's ✕ |
+| Interrupt the turn on screen, whatever is open over it, except the `/keys` screen | `interrupt_turn` | ⌥I | click a delegate's "⏸ interrupt" or its working line; click "Esc to interrupt" |
 | Archive the selected exited session in the session list | `archive_session` | Backspace on the row | click an exited row's ✕; `/archive` |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Move focus from an empty input box into the rail | `focus_rail` | ← in an empty box | |
@@ -2280,7 +2292,7 @@ of them when a key arrives:
 
 A global action acts in all six. The rest act only where they are listed:
 
-- Global: `close_or_interrupt`, `clear_then_quit`, `rail_row_n`,
+- Global: `close_or_interrupt`, `clear_then_quit`, `interrupt_turn`, `rail_row_n`,
   `toggle_ledgers`, `toggle_panel`, `toggle_rail`, `jump_to_end`,
   `next_request`, `key_map`.
 - Picker: `session_only`, `show_all`, `refresh_lists`.
@@ -3251,8 +3263,9 @@ failure raises the same input an extension draws.
 The `extension_failed` switched-off notice always draws built-in: a
 notice extension cannot hide its own switch-off failure.
 
-**`working_line`** draws the working line. It reads the attached session,
-even with a delegate transcript on screen.
+**`working_line`** draws the working line. It reads the session whose
+conversation is on screen: the attached session, or in a delegate's view the
+delegate.
 
 | Field | What it holds |
 |---|---|
