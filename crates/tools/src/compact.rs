@@ -37,7 +37,7 @@ impl Tool for Compact {
                 "properties": {
                     "note": {
                         "type": "string",
-                        "description": "The compaction note: what the next context needs to continue."
+                        "description": "The note: what the next context needs to continue."
                     }
                 },
                 "required": ["note"],
