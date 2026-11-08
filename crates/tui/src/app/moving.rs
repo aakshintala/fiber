@@ -71,11 +71,24 @@ impl App {
         self.motion.set_reduced(on);
     }
 
-    /// What the working line says, while a turn runs: home is set, the
-    /// turn is busy, the reconnect banner is not showing, and the feed
-    /// row is not a live wait. A row that left with a stale waiting
-    /// state still shows the line while the phase stays busy.
+    /// What the working line says, while a turn runs on the conversation
+    /// on screen. In a delegate's view that is the delegate's own running
+    /// turn, read from the shown pages; elsewhere the attached session's:
+    /// home is set, the turn is busy, the reconnect banner is not showing,
+    /// and the feed row is not a live wait. A row that left with a stale
+    /// waiting state still shows the line while the phase stays busy.
     pub(crate) fn working_line(&self) -> Option<Working> {
+        if self.banner().is_some() {
+            return None;
+        }
+        if self.item_transcript() {
+            self.item_turn_session()?;
+            let pages = self.pages();
+            return Some(Working {
+                started_ms: pages.running_started(),
+                retry: pages.open_turn()?.pending_retry().cloned(),
+            });
+        }
         let home = &self.home;
         let Phase::Attached {
             session,
@@ -84,15 +97,10 @@ impl App {
         else {
             return None;
         };
-        if self.banner().is_some() {
-            return None;
-        }
         let row = home.sessions.row(session)?;
         if row.left.is_none() && row.state == State::Waiting {
             return None;
         }
-        // The working line follows the attached session, never the open
-        // delegate's transcript.
         let pages = self.attached_screen().pages();
         Some(Working {
             started_ms: pages.running_started(),

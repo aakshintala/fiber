@@ -1,0 +1,4582 @@
+//! Binary-level tests of the internal session command
+//! (`docs/invocation.md`, "Processes"): the built `fiber` runs in its own
+//! process group with its own `FIBER_HOME`, holding an ordinary provider
+//! whose base URL is the fake server.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use crate::support;
+
+use std::fs;
+use std::io::{BufRead, BufReader, ErrorKind};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::{Child, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
+use std::time::Duration;
+
+use fakes::{ProviderServer, Response, Watchdog};
+use serde_json::{Value, json};
+use support::{
+    Deadline, KillGroup, PIXEL, PIXEL_BASE64, Setup, assert_kinds_multiset,
+    assert_session_process_boundaries, complete_lines, function_call, git, hello, kinds, stream,
+    text_reply, wait_for_effect_after_accept, write_json,
+};
+
+impl Setup {
+    fn session_command_new_with_fm_root() -> Self {
+        let deadline = Deadline::start();
+        let root = fakes::TempDir::new("fm");
+        fs::create_dir_all(root.path().join("h")).unwrap();
+        fs::create_dir_all(root.path().join("w")).unwrap();
+        Self { deadline, root }
+    }
+
+    /// Installs the provider with the fake model declaring `input`
+    /// `["text", "image"]`, so a pasted image is sent as an image part.
+    fn provider_with_images(&self, server: &ProviderServer) {
+        self.provider_with(&json!({"input": ["text", "image"]}), server);
+    }
+
+    fn provider_with(&self, model_extra: &Value, server: &ProviderServer) {
+        let source = self.root.path().join("src");
+        write_json(
+            &source.join("extension.json"),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1, "providers": {"fake": [format!("{}/v1", server.url())]}}),
+        );
+        let mut model = json!({"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url()), "context_window": 100000});
+        for (key, value) in model_extra.as_object().unwrap() {
+            model[key] = value.clone();
+        }
+        write_json(
+            &source.join("providers/fake.json"),
+            &json!({
+                "name": "fake",
+                "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+                "models": [model]
+            }),
+        );
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+        write_json(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m"}),
+        );
+    }
+
+    /// An idle session exits at once: `session.idle_exit_ms` 0, keeping the
+    /// configured model.
+    fn no_idle(&self) {
+        write_json(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m", "session": {"idle_exit_ms": 0}}),
+        );
+    }
+
+    /// The session's directory, from its id.
+    fn session_dir(&self, id: &str) -> PathBuf {
+        log::sessions_dir(&self.home(), &worktree::project(&self.workspace())).join(id)
+    }
+
+    fn session_command_socket(&self, id: &str) -> PathBuf {
+        self.home().join("run").join(id)
+    }
+
+    /// Starts `fiber session --id <id> --workspace <workspace>` with
+    /// `extra` appended, in its own process group, its stdout drained on a
+    /// thread and its stderr kept for a failure.
+    #[track_caller]
+    fn session_command_start_session(&self, id: &str, extra: &[&str]) -> Running {
+        let workspace = self.workspace();
+        self.start_session_in(id, &workspace, extra)
+    }
+
+    /// [`Setup::start_session`] in `workspace`: a second workspace is a
+    /// second project, so the same id names another project's session.
+    #[track_caller]
+    fn start_session_in(&self, id: &str, workspace: &Path, extra: &[&str]) -> Running {
+        let mut args = vec!["session", "--id", id, "--workspace"];
+        args.push(workspace.to_str().unwrap());
+        args.extend(extra);
+        self.spawn_session(&args, Stdio::null()).0
+    }
+
+    /// Spawns `fiber` with `args` and `stdin`, draining stdout on a thread
+    /// and keeping stderr for a failure: [`Setup::start_session_in`] and
+    /// the delegate tests share it.
+    #[track_caller]
+    fn spawn_session(
+        &self,
+        args: &[&str],
+        stdin: Stdio,
+    ) -> (Running, Option<std::process::ChildStdin>) {
+        let mut command = self.fiber(args);
+        command.stdin(stdin);
+        let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take();
+        let group = child.id();
+        let guard = KillGroup(group);
+        let watchdog = Watchdog::group(group);
+        let stdout = child.stdout.take().unwrap();
+        let stderr_pipe = child.stderr.take().unwrap();
+        let (tx, lines) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                match tx.send(line.unwrap()) {
+                    Ok(()) => {}
+                    Err(mpsc::SendError(_)) => break,
+                }
+            }
+        });
+        let (err_tx, stderr_rx) = mpsc::channel();
+        let stderr_snapshot = Arc::new(Mutex::new(String::new()));
+        let stderr_copy = Arc::clone(&stderr_snapshot);
+        thread::spawn(move || {
+            let mut pipe = BufReader::new(stderr_pipe);
+            let text = support::drain_stderr_to_snapshot(&mut pipe, &stderr_copy);
+            match err_tx.send(text) {
+                Ok(()) | Err(mpsc::SendError(_)) => {}
+            }
+        });
+        (
+            Running {
+                child,
+                watchdog,
+                group,
+                guard,
+                lines,
+                stderr: stderr_rx,
+                stderr_snapshot,
+                first: Vec::new(),
+                deadline: self.deadline,
+                diag: None,
+            },
+            stdin,
+        )
+    }
+
+    /// Starts `fiber session` in delegate mode with stdin piped: the caller
+    /// holds the returned stdin open for the run, or drops it to take the
+    /// lifeline path. The idle exit is the config's, so the tests set it
+    /// high and the exit proves the run ended on its own.
+    #[track_caller]
+    fn start_delegate(
+        &self,
+        id: &str,
+        parent: &str,
+        delegate: &str,
+        extra: &[&str],
+    ) -> (Running, std::process::ChildStdin) {
+        let workspace = self.workspace();
+        let mut args = vec![
+            "session",
+            "--id",
+            id,
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--model",
+            "fake/m",
+            "--prompt",
+            "hi",
+            "--parent",
+            parent,
+            "--delegate-id",
+            delegate,
+        ];
+        args.extend(extra);
+        let (running, stdin) = self.spawn_session(&args, Stdio::piped());
+        (running, stdin.unwrap())
+    }
+
+    /// The session exits only when its run ends: `session.idle_exit_ms`
+    /// high, keeping the configured model.
+    fn slow_idle(&self) {
+        write_json(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m", "session": {"idle_exit_ms": 3600000}}),
+        );
+    }
+
+    /// Runs `fiber` once with `args`, waiting under the test's [`Deadline`]. The
+    /// wait runs on a thread and is received under the deadline, so a
+    /// hang reports what it waited for (`docs/testing.md`, "Waits and
+    /// timeouts").
+    #[track_caller]
+    fn run(&self, args: &[&str]) -> (Option<i32>, Vec<Value>, String) {
+        let mut command = self.fiber(args);
+        let child = command.spawn().unwrap();
+        let group = child.id();
+        let guard = KillGroup(group);
+        let watchdog = Watchdog::group(group);
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(mpsc::RecvTimeoutError::Timeout) => support::expired(
+                self.deadline,
+                group,
+                &finished,
+                &format!("`fiber {}` to exit", args.join(" ")),
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!(
+                    "the `fiber {}` wait thread ended before it exited",
+                    args.join(" ")
+                )
+            }
+        };
+        assert!(
+            !fakes::group_alive(group),
+            "`fiber` left a process in its group behind"
+        );
+        std::mem::forget(guard);
+        watchdog.stand_down(self.deadline.cleanup_phase());
+        let lines = String::from_utf8(output.stdout).unwrap();
+        let parsed = lines
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        (
+            output.status.code(),
+            parsed,
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    }
+}
+
+/// A running `fiber session`: its stdout drained line by line, its stderr
+/// kept for a failure.
+struct Running {
+    child: Child,
+    watchdog: Watchdog,
+    group: u32,
+    guard: KillGroup,
+    lines: mpsc::Receiver<String>,
+    stderr: mpsc::Receiver<String>,
+    /// The stderr text so far, appended by the drain thread: the timeout
+    /// dump reads it while the session still runs.
+    stderr_snapshot: Arc<Mutex<String>>,
+    /// Stdout lines taken as the readiness signal, as written, prepended
+    /// to what [`Running::wait`] returns.
+    first: Vec<String>,
+    deadline: Deadline,
+    /// The timeout dump's log directory, carried onto the socket at
+    /// [`Running::connect`].
+    diag: Option<PathBuf>,
+}
+
+impl Running {
+    /// Waits under the test's [`Deadline`] for the child's first stdout line, then
+    /// connects once. The socket is bound in `Session::open` before the
+    /// loop writes that line, so the line is the signal the socket
+    /// accepts (`docs/testing.md`, "Waits and timeouts").
+    /// Registers the session log directory for the timeout dump: the next
+    /// [`Running::connect`] carries it and the stderr snapshot onto the
+    /// socket. Without it the socket keeps the old timeout message.
+    fn set_diag(&mut self, log_dir: PathBuf) {
+        self.diag = Some(log_dir);
+    }
+
+    #[track_caller]
+    fn connect(&mut self, socket: &Path) -> Socket {
+        let line = match self.deadline.recv(&self.lines) {
+            Ok(line) => line,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited until the deadline for the session's first stdout line")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the session exited before its first stdout line")
+            }
+        };
+        self.first.push(line);
+        let mut client = Socket::connect(self.deadline, socket)
+            .expect("the session's socket accepted before the deadline");
+        if let Some(log_dir) = self.diag.clone() {
+            client.set_diag(support::Diag::new(
+                Arc::clone(&self.stderr_snapshot),
+                log_dir,
+            ));
+        }
+        client
+    }
+
+    /// Reads stdout lines until one of `kind` arrives, each taking what
+    /// remains of the test's [`Deadline`], and keeps every line for [`Running::wait`]. Only kinds the
+    /// loop writes before waiting for a prompt qualify: `preamble_built`
+    /// and later need a turn, which needs the test's prompt.
+    #[track_caller]
+    fn wait_for(&mut self, kind: &str) {
+        loop {
+            let line = match self.deadline.recv(&self.lines) {
+                Ok(line) => line,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("waited until the deadline for {kind} on the session's stdout")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("the session's stdout closed before {kind}")
+                }
+            };
+            let value: Value = serde_json::from_str(&line).unwrap();
+            let done = value["kind"] == kind;
+            self.first.push(line);
+            if done {
+                return;
+            }
+        }
+    }
+
+    /// Waits under the test's [`Deadline`] for the process to exit, and asserts that
+    /// nothing it started is left in its group.
+    #[track_caller]
+    fn wait(self) -> (ExitStatus, Vec<Value>, String) {
+        let (status, raw, stderr) = self.wait_raw();
+        let out = raw
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        (status, out, stderr)
+    }
+
+    /// [`Running::wait`], with stdout's lines as written.
+    #[track_caller]
+    fn wait_raw(mut self) -> (ExitStatus, Vec<String>, String) {
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(self.child.wait()).unwrap());
+        let status = match self.deadline.recv(&finished) {
+            Ok(status) => status.unwrap(),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                support::expired(self.deadline, self.group, &finished, "the session to exit")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!("the session's wait thread ended before the session exited")
+            }
+        };
+        assert!(
+            !fakes::group_alive(self.group),
+            "the session left a process in its group behind"
+        );
+        std::mem::forget(self.guard);
+        // The process is gone, so its stdout is closed: the drain ends
+        // and every line arrives, each taking what remains of the test's
+        // deadline. A deadline
+        // with no line is a hang, not the end: only the drain thread
+        // ending (the channel disconnecting) ends the run. Lines taken
+        // as the readiness signal come first.
+        let mut out = std::mem::take(&mut self.first);
+        loop {
+            match self.deadline.recv(&self.lines) {
+                Ok(line) => out.push(line),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("waited until the deadline for the session's stdout to close")
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        let stderr = match self.deadline.recv(&self.stderr) {
+            Ok(text) => text,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited until the deadline for the session's stderr")
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => String::new(),
+        };
+        self.watchdog.stand_down(self.deadline.cleanup_phase());
+        (status, out, stderr)
+    }
+}
+
+/// A client on the session's socket that tells a read deadline from the
+/// session closing the socket. Every read and write takes what remains of
+/// the test's [`Deadline`]: expiry panics naming what was awaited, while the session closing the socket
+/// ends [`until_session_close`] and panics from [`recv`] and [`until_session`] naming
+/// the wait the close cut short.
+struct Socket {
+    write: Mutex<UnixStream>,
+    read: Mutex<BufReader<UnixStream>>,
+    /// Context for the timeout dump, carried from [`Running::connect`].
+    diag: Option<support::Diag>,
+    deadline: Deadline,
+}
+
+impl Socket {
+    /// Connects to `path` on a thread bounded by the deadline.
+    #[track_caller]
+    fn connect(deadline: Deadline, path: &Path) -> std::io::Result<Self> {
+        let target = path.to_owned();
+        let write = support::bounded(
+            deadline,
+            &format!("a connection to {}", path.display()),
+            move || UnixStream::connect(target),
+        )?;
+        let read = write.try_clone()?;
+        Ok(Self {
+            write: Mutex::new(write),
+            read: Mutex::new(BufReader::new(read)),
+            diag: None,
+            deadline,
+        })
+    }
+
+    fn set_diag(&mut self, diag: support::Diag) {
+        self.diag = Some(diag);
+    }
+
+    /// Replaces the socket's deadline: a test that proved one wait expires
+    /// proves it on a zero or short bound instead of spending what remains
+    /// of the test's own deadline (`docs/testing.md`, "Waits and timeouts").
+    fn set_deadline(&mut self, deadline: Deadline) {
+        self.deadline = deadline;
+    }
+
+    #[track_caller]
+    fn send(&self, line: &str) {
+        let mut bytes = line.as_bytes().to_vec();
+        if !line.ends_with('\n') {
+            bytes.push(b'\n');
+        }
+        let mut write = self.write.lock().unwrap();
+        if let Err(error) = support::write_line(&mut write, self.deadline, &bytes, "sending a line")
+        {
+            panic!("writing the session socket: {error}");
+        }
+    }
+
+    /// One socket line: a line, or `None` when the session closed the
+    /// socket. The deadline passing with neither panics naming `what`,
+    /// with the lines before it.
+    fn next(&self, what: &str, got: &[Value]) -> Option<Value> {
+        match support::read_line(&mut self.read.lock().unwrap(), self.deadline, what) {
+            Ok(None) => None,
+            Ok(Some(buf)) => {
+                let line = buf.trim_end_matches(&['\r', '\n'][..]).to_owned();
+                Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
+            }
+            Err(error) if error.kind() == ErrorKind::TimedOut => match &self.diag {
+                Some(diag) => panic!("{}", diag.report(what, got)),
+                None => panic!("waited until the deadline for {what}; got {got:?}"),
+            },
+            Err(error) => {
+                panic!("reading the session socket while waiting for {what}: {error}")
+            }
+        }
+    }
+}
+
+#[track_caller]
+fn send(client: &Socket, line: &str) {
+    client.send(line);
+}
+
+fn recv(client: &Socket, what: &str) -> Value {
+    match client.next(what, &[]) {
+        Some(line) => line,
+        None => panic!("the session closed the socket while waiting for {what}"),
+    }
+}
+
+/// Collects socket lines until the session closes the socket, each taking
+/// what remains of the test's [`Deadline`].
+fn until_session_close(client: &Socket) -> Vec<Value> {
+    let mut lines = Vec::new();
+    while let Some(line) = client.next("the session to close the socket", &lines) {
+        lines.push(line);
+    }
+    lines
+}
+
+/// The socket's event kinds for one prompt and `close`: the subscribe, the
+/// prompt's turn, and the close. The prompt-over-the-socket, skill and
+/// same-id tests run exactly this shape, so they share it.
+const SOCKET_KINDS_ONE_TURN_AND_CLOSE: [&str; 18] = [
+    "command_accepted",
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "command_accepted",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "command_accepted",
+    "fiber_exited",
+];
+
+/// The verbatim count rule the multiset calls cite
+/// (`docs/testing.md`, "Event streams").
+const COUNT_DOC: &str = "docs/testing.md:95: - the event kinds as a set with counts, so a duplicated or missing event fails";
+
+/// The combined citation the `job_delta` exclusion carries: the narrow
+/// exception (`docs/testing.md`, "Event streams") and the ephemeral-progress
+/// definition it names (`docs/events.md:1333`).
+const IGNORE_JOB_DELTA_DOC: &str = "docs/testing.md, Event streams: A documented variable-progress kind, such as `job_delta`, may be excluded from the multiset only when its count is not under test.; docs/events.md:1333: Ephemeral. Progress for clients, paced as `tool_call_delta` is.";
+
+/// Verbatim lifecycle sources for the session-boundary assertions below.
+const SESSION_FIRST_DOC: &str =
+    "docs/events.md:339: Durable. The first line of every session's log.";
+const PROCESS_START_DOC: &str = "docs/events.md:285-286: Durable. The first line a process writes when it resumes a session; in a new session it follows `session_started`, which is always the log's first line.";
+const PROCESS_END_DOC: &str =
+    "docs/events.md:296: Durable. The last line a process writes for a session.";
+
+#[track_caller]
+fn assert_session_edges(setup: &Setup, id: &str) {
+    let log = support::complete_lines(
+        &fs::read_to_string(setup.session_dir(id).join("events.jsonl")).unwrap(),
+    );
+    assert_session_process_boundaries(
+        &log,
+        id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+}
+
+/// The same run's stdout kinds: the loop's own lines, without the
+/// socket's `command_accepted` echoes.
+const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 15] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
+/// Collects lines up to this connection's own `clients` line. The
+/// session writes it after the subscribe acknowledgement, with no order
+/// against lines the loop writes meanwhile (`docs/events.md`, `clients`).
+fn until_clients(client: &Socket) -> Vec<Value> {
+    until_session(client, "the clients line", |line| line["kind"] == "clients")
+}
+
+/// Collects lines until `done`, each taking what remains of the test's
+/// [`Deadline`]: expiry panics
+/// naming `what`, and the socket closing first panics too.
+fn until_session(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+    let mut lines = Vec::new();
+    loop {
+        let line = match client.next(what, &lines) {
+            Some(line) => line,
+            None => {
+                panic!("the session closed the socket while waiting for {what}; got {lines:?}")
+            }
+        };
+        let stop = done(&line);
+        lines.push(line);
+        if stop {
+            return lines;
+        }
+    }
+}
+
+#[test]
+fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    // Behind the loop's startup: `extensions_loaded` is on stdout, so
+    // every startup line is in the log and `clients` lands after them.
+    // The loop parks waiting for a prompt, so nothing else moves.
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let rest = until_session(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let turn_started = rest
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    assert_eq!(
+        turn_started["payload"]["input"][0]["content"][0]["text"],
+        "hi"
+    );
+    assert!(
+        rest.iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the fake model's text arrived: {rest:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(!setup.session_command_socket(&id).exists());
+    // The session was prompted, so its directory remains.
+    assert!(setup.session_dir(&id).join("events.jsonl").is_file());
+    let mut stream = vec![sub];
+    stream.extend(rest);
+    stream.extend(tail);
+    assert_kinds_multiset(
+        &stream,
+        &SOCKET_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(&out, &STDOUT_KINDS_ONE_TURN_AND_CLOSE, &[], None, COUNT_DOC);
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // The `review-pr` skill, as `tests/delegation/ask.rs` installs it: the prompt
+    // driver command expands the same way (`see #532`).
+    let dir = setup.root.path().join("w/.agents/skills/review-pr");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: review-pr\ndescription: Reviews a pull request.\n---\nReview the pull request named in the arguments.\n",
+    )
+    .unwrap();
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    // Behind the loop's startup: `extensions_loaded` is on stdout, so
+    // every startup line is in the log and `clients` lands after them.
+    // The loop parks waiting for a prompt, so nothing else moves.
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"/review-pr 42"}]}}"#,
+    );
+    let rest = until_session(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let expanded = "Review the pull request named in the arguments.\n\n42";
+    let turn_started = rest
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    assert_eq!(
+        turn_started["payload"]["input"][0]["content"][0]["text"],
+        expanded
+    );
+    // The fake provider's received user message carries the expanded text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        String::from_utf8_lossy(&requests[0].body)
+            .contains(&serde_json::to_string(expanded).unwrap())
+    );
+    assert!(
+        rest.iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the fake model's text arrived: {rest:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(!setup.session_command_socket(&id).exists());
+    // The session was prompted, so its directory remains.
+    assert!(setup.session_dir(&id).join("events.jsonl").is_file());
+    let mut stream = vec![sub];
+    stream.extend(rest);
+    stream.extend(tail);
+    assert_kinds_multiset(
+        &stream,
+        &SOCKET_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(&out, &STDOUT_KINDS_ONE_TURN_AND_CLOSE, &[], None, COUNT_DOC);
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn an_idle_session_exits_with_a_client_still_connected() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    setup.no_idle();
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &["--prompt", "hi"]);
+
+    // The turn is held at the provider, so the client subscribes once the
+    // request is in flight: every line before it is written, and the held
+    // reply writes nothing until it is released.
+    let client = running.connect(&setup.session_command_socket(&id));
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the held response was requested"
+    );
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    // `clients` is written after the acknowledgement, so the reply is
+    // released only once it has arrived; otherwise the deltas may come first.
+    let attached = until_clients(&client);
+    server.release();
+
+    let tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    let mut stream = vec![sub];
+    stream.extend(attached);
+    stream.extend(tail);
+    // One `clients` line for this full connection attaching
+    // (`docs/events.md`, `clients`); the count is fixed, so it is pinned
+    // against the raw lines (`docs/testing.md`, "Event streams").
+    assert_eq!(
+        stream
+            .iter()
+            .filter(|line| line["kind"] == "clients")
+            .count(),
+        1,
+        "the client attached once: {stream:?}"
+    );
+    // The turn's kinds as a set: the subscribe, the held prompt's turn and
+    // the close. The one `clients` line is fixed, so it is counted too.
+    assert_kinds_multiset(
+        &stream,
+        &[
+            "clients",
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(
+        &out,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    // Default idle: the session stays up after its first turn. The first
+    // response is held so the client subscribes before that turn
+    // completes; the hold stays on for the second turn's request.
+    server.hold();
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &["--prompt", "hi"]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the held first response was requested"
+    );
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    let attached = until_clients(&client);
+    server.release_one();
+    let first = until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let started = attached
+        .iter()
+        .chain(&first)
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the queued prompt started a turn");
+    assert_eq!(started["payload"]["input"][0]["content"][0]["text"], "hi");
+    assert!(
+        first
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the first turn ran: {first:?}"
+    );
+
+    // The session keeps serving: a second prompt over the socket runs a
+    // second turn. With `one_turn` forced on, the session would have
+    // closed after the first turn and this prompt would never run.
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"again"}]}}"#,
+    );
+    assert!(
+        server.await_requests(2, setup.deadline),
+        "the held second response was requested"
+    );
+    server.release();
+    let second = until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let restarted = second
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the second prompt started a turn");
+    assert_eq!(
+        restarted["payload"]["input"][0]["content"][0]["text"],
+        "again"
+    );
+    assert!(
+        second
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the second turn ran: {second:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    assert_eq!(
+        tail.last()
+            .expect("the close was answered and the session exited")["kind"],
+        "fiber_exited"
+    );
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(!setup.session_command_socket(&id).exists());
+    assert_eq!(server.requests().len(), 2);
+    let mut stream = vec![sub];
+    stream.extend(attached);
+    stream.extend(first);
+    stream.extend(second);
+    stream.extend(tail);
+    assert_kinds_multiset(
+        &stream,
+        &[
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(
+        &out,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn a_served_session_whose_last_turn_failed_exits_0() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // A zero budget fails the turn before the provider is called, and
+    // idle exit 0 ends the session once that turn is done.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "budget": {"usd": 0}, "session": {"idle_exit_ms": 0}}),
+    );
+    let id = doors::mint("s_");
+    let running = setup.session_command_start_session(&id, &["--prompt", "hi"]);
+
+    let (status, raw, stderr) = running.wait_raw();
+    let out: Vec<Value> = raw
+        .iter()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert!(
+        status.success(),
+        "{status}; fiber_exited: {}; stderr: {stderr}",
+        out.last().unwrap()
+    );
+    assert_eq!(stderr, "");
+    assert_kinds_multiset(
+        &out,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+    // Its client saw the failure on the turn's own `turn_completed`.
+    let completed = out
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["outcome"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "budget_exceeded");
+    // The process itself did not fail (`docs/errors.md`, "What a caller
+    // gets"): exit 0, no `error` and no final message.
+    let exited = &out.last().unwrap()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited.get("error"), None);
+    assert_eq!(exited.get("text"), None);
+    assert!(server.requests().is_empty());
+
+    // Stdout filtered to this session's durable lines is the log, byte for
+    // byte.
+    let durable: String = raw
+        .iter()
+        .zip(&out)
+        .filter(|(_, l)| l.get("seq").is_some() && l["session_id"] == id.as_str())
+        .map(|(raw, _)| format!("{raw}\n"))
+        .collect();
+    assert_eq!(
+        fs::read_to_string(setup.session_dir(&id).join("events.jsonl")).unwrap(),
+        durable
+    );
+}
+
+#[test]
+fn a_session_that_never_got_a_prompt_leaves_nothing_behind() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    setup.no_idle();
+    let id = doors::mint("s_");
+    let running = setup.session_command_start_session(&id, &[]);
+
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    // No prompt, so no preamble and no turn: the opening lines, then the exit.
+    // Stdout is the whole session here: nothing was ever written to a
+    // session directory, so the lifecycle edges are asserted on it.
+    assert_kinds_multiset(
+        &out,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &out,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+    assert!(
+        !setup.session_dir(&id).exists(),
+        "a session with no turn_started deletes its own directory"
+    );
+    assert!(!setup.session_command_socket(&id).exists());
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_bad_id_is_a_usage_error_and_creates_nothing() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let workspace = setup.workspace();
+    let (code, lines, stderr) = setup.run(&[
+        "session",
+        "--id",
+        "../x",
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+
+    assert_eq!(code, Some(2));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "fiber_exited");
+    assert_eq!(lines[0].get("session_id"), None);
+    assert_eq!(lines[0]["payload"]["exit_code"], 2);
+    assert!(stderr.contains("session id"), "{stderr}");
+    assert!(!setup.home().join("projects").exists());
+    assert!(!setup.home().join("run").exists());
+}
+
+#[test]
+fn an_id_whose_session_directory_exists_fails_before_any_session_line() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let dir = setup.session_dir(&id);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("marker"), "untouched\n").unwrap();
+
+    let workspace = setup.workspace();
+    let (code, lines, stderr) = setup.run(&[
+        "session",
+        "--id",
+        &id,
+        "--workspace",
+        workspace.to_str().unwrap(),
+    ]);
+
+    assert_ne!(code, Some(0), "stderr: {stderr}");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "fiber_exited");
+    assert_eq!(lines[0].get("session_id"), None);
+    assert_eq!(
+        fs::read_to_string(dir.join("marker")).unwrap(),
+        "untouched\n"
+    );
+    assert_eq!(
+        fs::read_dir(&dir).unwrap().count(),
+        1,
+        "the existing directory is untouched"
+    );
+    assert!(!setup.session_command_socket(&id).exists());
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn an_escalation_reaches_a_connected_client_and_its_allow_runs_the_call() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // A standing ask for this exact command: with a client connected the
+    // loop must ask a person (`docs/permissions.md`, "Headless").
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    // Behind the loop's startup: `extensions_loaded` is on stdout, so
+    // every startup line is in the log and `clients` lands after them.
+    // The loop parks waiting for a prompt, so nothing else moves.
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
+    );
+    let asked = until_session(&client, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().expect("the escalation was requested");
+    assert_eq!(request["payload"]["step"], "standing_ask");
+    assert_eq!(request["payload"]["standing_rule"]["prefix"], "echo hi");
+    let request_id = request["payload"]["request_id"].as_str().unwrap();
+    send(
+        &client,
+        &format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{request_id}","decision":"allow"}}}}"#
+        ),
+    );
+    let decided = until_session(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let resolved = decided
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the reply resolved the request");
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    assert_eq!(resolved["payload"]["decided_by"], "person");
+    let completed = decided
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the allowed call ran");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(
+        decided
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the turn finished after the allowed call: {decided:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    let mut stream = vec![sub];
+    stream.extend(asked);
+    stream.extend(decided);
+    stream.extend(tail);
+    assert_kinds_multiset(
+        &stream,
+        &[
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "command_accepted",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(
+        &out,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn a_second_session_with_the_same_id_fails_and_leaves_the_first_alone() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // Another workspace is another project, so the same id passes the
+    // project-local session check and reaches the shared socket.
+    let other = setup.root.path().join("w2");
+    fs::create_dir_all(&other).unwrap();
+    let id = doors::mint("s_");
+    let mut first = setup.session_command_start_session(&id, &[]);
+    let client = first.connect(&setup.session_command_socket(&id));
+
+    let (code, lines, stderr) = setup.run(&[
+        "session",
+        "--id",
+        &id,
+        "--workspace",
+        other.to_str().unwrap(),
+    ]);
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "fiber_exited");
+    assert_eq!(lines[0].get("session_id"), None);
+    assert_eq!(lines[0]["payload"]["exit_code"], 1);
+    assert_eq!(lines[0]["payload"]["error"]["code"], "session_held");
+    // The second session's own directory is removed, and the first
+    // session's socket still answers.
+    let second_dir = log::sessions_dir(&setup.home(), &worktree::project(&other)).join(&id);
+    assert!(!second_dir.exists());
+    assert!(setup.session_command_socket(&id).exists());
+
+    // The first session serves its socket after the refusal. Behind its
+    // startup: `extensions_loaded` is on stdout, so `clients` lands after
+    // every startup line. The loop parks waiting for a prompt.
+    first.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let rest = until_session(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        rest.iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the first session answered after the refusal: {rest:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = first.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    let mut stream = vec![sub];
+    stream.extend(rest);
+    stream.extend(tail);
+    assert_kinds_multiset(
+        &stream,
+        &SOCKET_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(&out, &STDOUT_KINDS_ONE_TURN_AND_CLOSE, &[], None, COUNT_DOC);
+    assert_session_edges(&setup, &id);
+}
+
+/// Starts a session on a standing ask that idle-exits on it at once, and
+/// returns the request it stopped on, after restoring the default idle
+/// delay for the resume.
+#[track_caller]
+fn suspend_on_an_approval(setup: &Setup, id: &str) -> String {
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    setup.no_idle();
+    let running = setup.session_command_start_session(id, &["--prompt", "run it"]);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    let pending = exited["payload"]["suspended_on"]
+        .as_str()
+        .expect("the session exited suspended on the approval")
+        .to_owned();
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m"}),
+    );
+    pending
+}
+
+#[test]
+fn a_resumed_session_raises_its_request_again_and_a_reply_runs_the_call() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let pending = suspend_on_an_approval(&setup, &id);
+
+    let mut running = setup.session_command_start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    // The replay holds the first process's request; the resumed process
+    // raises it again after its own `fiber_started`.
+    let mut resumed = false;
+    let replay = until_session(&client, "the re-raised permission_requested", |line| {
+        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
+            resumed = true;
+        }
+        resumed && line["kind"] == "permission_requested"
+    });
+    let raised = replay.last().unwrap();
+    assert_eq!(raised["payload"]["request_id"], pending.as_str());
+
+    // A second resume while this one runs fails on the held lock and
+    // writes nothing to the log.
+    let (code, lines, stderr) = setup.run(&[
+        "session",
+        "--id",
+        &id,
+        "--workspace",
+        setup.workspace().to_str().unwrap(),
+        "--resume",
+    ]);
+    assert_eq!(code, Some(1), "stderr: {stderr}");
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["payload"]["error"]["code"], "session_held");
+
+    send(
+        &client,
+        &format!(
+            r#"{{"id":"c_reply","command":"reply","args":{{"request_id":"{pending}","decision":"allow"}}}}"#
+        ),
+    );
+    let decided = until_session(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let accepted = decided
+        .iter()
+        .find(|line| line["kind"] == "command_accepted")
+        .expect("the reply was accepted");
+    assert_eq!(accepted["payload"]["command_id"], "c_reply");
+    let resolved = decided
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the reply resolved the request");
+    assert_eq!(resolved["payload"]["request_id"], pending.as_str());
+    assert_eq!(resolved["payload"]["decision"], "allow");
+    assert_eq!(resolved["payload"]["decided_by"], "person");
+    let completed = decided
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the allowed call ran");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(
+        decided
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the turn finished after the allowed call: {decided:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    // Half-close the write side after the close: the session ends the
+    // connection without waiting out the writer grace.
+    client
+        .write
+        .lock()
+        .unwrap()
+        .shutdown(std::net::Shutdown::Write)
+        .unwrap();
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+
+    // One log, one writer at a time: one `session_started`, the second
+    // `fiber_started` resumed, and `seq` carrying on without a gap.
+    let text = fs::read_to_string(setup.session_dir(&id).join("events.jsonl")).unwrap();
+    let lines: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "session_started")
+            .count(),
+        1
+    );
+    let started: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .collect();
+    assert_eq!(started.len(), 2);
+    assert_eq!(started[1]["payload"]["resumed"], true);
+    let seqs: Vec<u64> = lines
+        .iter()
+        .map(|line| line["seq"].as_u64().unwrap())
+        .collect();
+    assert!(
+        seqs.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "{seqs:?}"
+    );
+}
+
+/// Installs `fiber.test/<short>` with `init` as its entry script, as a
+/// session start would: a later `reload` picks its commands up.
+fn install_lua(setup: &Setup, short: &str, init: &str) {
+    let source = setup.root.path().join("src").join(short);
+    fs::create_dir_all(&source).unwrap();
+    write_json(
+        &source.join("extension.json"),
+        &json!({"name": format!("fiber.test/{short}"), "version": "v2.0.0", "fiber": "0.1.0", "api": 1}),
+    );
+    fs::write(source.join("init.lua"), init).unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+}
+
+/// Writes a skill under the workspace's `.agents/skills/<name>/`.
+fn workspace_skill(setup: &Setup, name: &str, header: &str) {
+    let dir = setup.workspace().join(".agents/skills").join(name);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\n{header}---\nBody.\n"),
+    )
+    .unwrap();
+}
+
+/// Writes a skill under Fiber home's `skills/<name>/`.
+fn personal_skill(setup: &Setup, name: &str, header: &str) {
+    let dir = setup.home().join("skills").join(name);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        format!("---\nname: {name}\n{header}---\nBody.\n"),
+    )
+    .unwrap();
+}
+
+/// Subscribes `client`, sends `skills`, and returns the event stream and answer.
+#[track_caller]
+fn skills_answer(client: &Socket) -> (Vec<Value>, Value) {
+    send(
+        client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(client, r#"{"id":"c_skills","command":"skills"}"#);
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the skills answer",
+        "c_skills",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    (lines, result)
+}
+
+/// Subscribes `client`, sends `commands`, and returns the event stream and answer.
+#[track_caller]
+fn commands_answer(client: &Socket) -> (Vec<Value>, Value) {
+    send(
+        client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    send(client, r#"{"id":"c_cmds","command":"commands"}"#);
+    // The admission only proves the command was taken: the wait ends at the
+    // id-matched answer carrying the result, so a bare admission without
+    // one never ends it.
+    let lines = wait_for_effect_after_accept(
+        "the commands answer",
+        "c_cmds",
+        |what, got| client.next(what, got),
+        |line| line["payload"].get("result").is_some(),
+    );
+    assert_eq!(
+        lines.last().unwrap()["kind"],
+        "command_accepted",
+        "{lines:?}"
+    );
+    let result = lines.last().unwrap()["payload"]["result"].clone();
+    (lines, result)
+}
+
+#[test]
+fn commands_answers_with_the_workspaces_skills_and_templates() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    workspace_skill(
+        &setup,
+        "review-pr",
+        "description: Reviews a pull request.\n",
+    );
+    workspace_skill(
+        &setup,
+        "ship",
+        "description: Ships it.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    let (_, result) = commands_answer(&client);
+    assert_eq!(
+        result,
+        json!({"commands": [
+            {"name": "review-pr", "description": "Reviews a pull request.", "tag": "skill"},
+            {"name": "ship", "description": "Ships it.", "argument_hint": "<tag>",
+             "tag": "template"}]})
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn a_resumed_session_answers_commands_from_its_recorded_workspace() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    suspend_on_an_approval(&setup, &id);
+    workspace_skill(&setup, "later", "description: Added before the resume.\n");
+
+    let mut running = setup.session_command_start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    let (_, result) = commands_answer(&client);
+    assert_eq!(
+        result,
+        json!({"commands": [
+            {"name": "later", "description": "Added before the resume.", "tag": "skill"}]})
+    );
+    // Dropping `running` kills the session, still waiting on the approval.
+}
+
+#[test]
+fn skills_answers_from_two_sources_with_the_shadowed_and_switched_off_marked() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    workspace_skill(&setup, "review", "description: Repository review.\n");
+    personal_skill(&setup, "review", "description: Personal review.\n");
+    personal_skill(
+        &setup,
+        "old",
+        "description: Tidies.\ndisable-model-invocation: true\n",
+    );
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "skills": {"disabled": ["old"]}}),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    let (mut events, result) = skills_answer(&client);
+    // Discovery logs canonical places, and the test root may sit behind a
+    // symlinked temporary directory.
+    let winner = setup
+        .workspace()
+        .canonicalize()
+        .unwrap()
+        .join(".agents/skills/review/SKILL.md")
+        .display()
+        .to_string();
+    let loser = setup
+        .home()
+        .canonicalize()
+        .unwrap()
+        .join("skills/review/SKILL.md")
+        .display()
+        .to_string();
+    let old = setup
+        .home()
+        .canonicalize()
+        .unwrap()
+        .join("skills/old/SKILL.md")
+        .display()
+        .to_string();
+    assert_eq!(
+        result,
+        json!({"skills": [
+            {"name": "review", "description": "Repository review.", "path": winner,
+             "source": "repository", "model_invocable": true, "disabled": false,
+             "shadows": [loser]},
+            {"name": "review", "description": "Personal review.", "path": loser,
+             "source": "personal", "model_invocable": true, "disabled": false,
+             "shadows": [], "shadowed_by": winner},
+            {"name": "old", "description": "Tidies.", "path": old,
+             "source": "personal", "model_invocable": false, "disabled": true,
+             "shadows": []}]})
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    events.extend(until_session_close(&client));
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_kinds_multiset(
+        &events,
+        &[
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    // Stdout is the whole session here: this session was never prompted,
+    // so nothing was written to a session directory.
+    assert_kinds_multiset(
+        &out,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &out,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+}
+
+#[test]
+fn a_resumed_session_answers_skills_from_its_recorded_workspace() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let pending = suspend_on_an_approval(&setup, &id);
+    workspace_skill(&setup, "later", "description: Added before the resume.\n");
+
+    let mut running = setup.session_command_start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    // Capture the replayed request before asking for skills: it can arrive
+    // before that command's answer and be consumed with it.
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let mut resumed = false;
+    let mut events = until_session(&client, "the re-raised permission request", |line| {
+        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
+            resumed = true;
+        }
+        resumed
+            && line["kind"] == "permission_requested"
+            && line["payload"]["request_id"] == pending.as_str()
+    });
+    assert_eq!(
+        events.last().unwrap()["payload"]["request_id"],
+        pending.as_str()
+    );
+
+    send(&client, r#"{"id":"c_skills","command":"skills"}"#);
+    let skills = until_session(&client, "the skills answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_skills"
+    });
+    let result = skills.last().unwrap()["payload"]["result"].clone();
+    let path = setup
+        .workspace()
+        .canonicalize()
+        .unwrap()
+        .join(".agents/skills/later/SKILL.md")
+        .display()
+        .to_string();
+    assert_eq!(
+        result,
+        json!({"skills": [
+            {"name": "later", "description": "Added before the resume.",
+             "path": path, "source": "repository", "model_invocable": true,
+             "disabled": false, "shadows": []}]})
+    );
+    events.extend(skills);
+    send(
+        &client,
+        r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+    );
+    events.extend(until_session(&client, "the close answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close_now"
+    }));
+    events.extend(until_session_close(&client));
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    for stream in [&events, &out] {
+        assert_eq!(
+            stream
+                .iter()
+                .filter(|line| line["kind"] == "clients")
+                .count(),
+            1,
+            "the resumed client was counted once"
+        );
+    }
+    // The resumed `clients` line is fixed, so it is counted too; the
+    // resumed-process stdout capture stays a multiset, with the complete
+    // durable log asserting the lifecycle edges below.
+    assert_kinds_multiset(
+        &events,
+        &[
+            "clients",
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(
+        &out,
+        &[
+            "clients",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "fiber_exited",
+        ],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+/// The acknowledgement or rejection naming `id`.
+fn answer(client: &Socket, id: &str) -> Value {
+    until_session(client, "the answer", |line| {
+        line["payload"].get("command_id") == Some(&json!(id))
+    })
+    .into_iter()
+    .next_back()
+    .unwrap()
+}
+
+fn image_prompt(id: &str, text: &str, data: &str) -> String {
+    format!(
+        "{{\"id\":\"{id}\",\"command\":\"prompt\",\"args\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{text}\"}},{{\"type\":\"image\",\"data\":\"{data}\",\"mime_type\":\"image/png\"}}]}}}}"
+    )
+}
+
+#[test]
+fn a_pasted_image_is_stored_logged_by_path_and_sent_as_an_image_part() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_images(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    recv(&client, "the subscribe acknowledgement");
+    send(&client, &image_prompt("c_prompt", "look", PIXEL_BASE64));
+    let rest = until_session(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let turn_started = rest
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    let image = &turn_started["payload"]["input"][0]["content"][1];
+    assert_eq!(image["type"], "image");
+    let path = image["path"].as_str().unwrap();
+    assert!(
+        path.starts_with("artifacts/i_") && path.ends_with(".png"),
+        "{path}"
+    );
+    assert_eq!(image["mime_type"], "image/png");
+    assert_eq!(
+        (image["width"].clone(), image["height"].clone()),
+        (json!(1), json!(1))
+    );
+
+    let session = setup.session_dir(&id);
+    // The artifact is the processed file: here, the input byte for byte.
+    assert_eq!(fs::read(session.join(path)).unwrap(), PIXEL);
+    // The log names the file and never holds its bytes.
+    let log = fs::read(session.join("events.jsonl")).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&log).contains(PIXEL_BASE64),
+        "the log holds the image's base64"
+    );
+    assert!(
+        !log.windows(PIXEL.len()).any(|window| window == PIXEL),
+        "the log holds the image's bytes"
+    );
+
+    // The first request carries the image as an image part of the text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let user = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["role"] == "user"
+                && item["content"]
+                    .as_array()
+                    .is_some_and(|content| content.iter().any(|part| part["type"] == "input_image"))
+        })
+        .expect("the request carries the pasted image");
+    assert_eq!(
+        user["content"],
+        json!([
+            {"type": "input_text", "text": "look"},
+            {"type": "input_image", "image_url": format!("data:image/png;base64,{PIXEL_BASE64}")},
+        ])
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn a_steered_image_is_applied_and_sent_on_the_next_request() {
+    let setup = Setup::session_command_new_with_fm_root();
+    // The first reply runs a short shell call. The reply is held
+    // until a `tools` answer proves the steer - image and all - is
+    // stored and queued, so the image is in the inbox before the
+    // first step ends: the hold and the `tools` answer force the
+    // order, and the steer is delivered and applied at the step
+    // boundary, inside the turn. A standing rule allows the command
+    // without asking.
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_1",
+            "shell",
+            &json!({"command": "echo hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    server.hold();
+    setup.provider_with_images(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    recv(&client, "the subscribe acknowledgement");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"go"}]}}"#,
+    );
+    assert!(
+        server.await_requests(1, setup.deadline),
+        "the first request is in flight"
+    );
+    send(
+        &client,
+        &format!(
+            "{{\"id\":\"c_steer\",\"command\":\"steer\",\"args\":{{\"content\":[{{\"type\":\"image\",\"data\":\"{PIXEL_BASE64}\",\"mime_type\":\"image/png\"}}]}}}}"
+        ),
+    );
+    // The turn stays open on the held reply while the reader stores
+    // the image and queues the steer. The steer is answered at once,
+    // before the `tools` probe on the same connection is even read, so
+    // its answer is waited for first: it proves the image was stored
+    // and the steer queued, and the `tools` answer after it proves the
+    // reader moved on in line order. The hold and the release order
+    // force it: the release lets the reply through only after both
+    // answers are in.
+    send(&client, r#"{"id":"c_tools","command":"tools"}"#);
+    let accepted = answer(&client, "c_steer");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    let _queued = answer(&client, "c_tools");
+    server.release();
+
+    let mut saw_applied = false;
+    let rest = until_session(
+        &client,
+        "the steer applied and the turn completed",
+        |line| {
+            if line["kind"] == "steering_applied" {
+                saw_applied = true;
+            }
+            line["kind"] == "turn_completed" && saw_applied
+        },
+    );
+    assert!(
+        rest.iter().any(|line| line["kind"] == "steering_applied"),
+        "the steer was applied: {:?}",
+        kinds(&rest)
+    );
+    let applied = rest
+        .iter()
+        .find(|line| line["kind"] == "steering_applied")
+        .expect("the steer was applied");
+    let image = &applied["payload"]["content"][0];
+    assert_eq!(image["type"], "image");
+    assert!(
+        image["path"].as_str().unwrap().starts_with("artifacts/i_"),
+        "{image}"
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let user = body["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["role"] == "user"
+                && item["content"]
+                    .as_array()
+                    .is_some_and(|content| content.iter().any(|part| part["type"] == "input_image"))
+        })
+        .expect("the second request carries the steered image");
+    assert!(
+        user["content"].as_array().unwrap().iter().any(|part| {
+            part["type"] == "input_image"
+                && part["image_url"] == format!("data:image/png;base64,{PIXEL_BASE64}")
+        }),
+        "{user}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn unreadable_pasted_images_are_rejected_without_a_turn() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider_with_images(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    recv(&client, "the subscribe acknowledgement");
+    // Not an image.
+    send(
+        &client,
+        r#"{"id":"c_1","command":"prompt","args":{"content":[{"type":"image","data":"bm90IGFuIGltYWdl","mime_type":"image/png"}]}}"#,
+    );
+    let first = answer(&client, "c_1");
+    assert_eq!(first["kind"], "command_rejected", "{first}");
+    assert_eq!(first["payload"]["code"], "invalid_arguments");
+    assert!(
+        first["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Image 1 cannot be read: "),
+        "{first}"
+    );
+    // Over 50 megapixels: an 8000x7000 header and no pixels.
+    send(
+        &client,
+        r#"{"id":"c_2","command":"prompt","args":{"content":[{"type":"image","data":"iVBORw0KGgoAAAANSUhEUgAAH0AAABtYCAIAAACSWZ5GAAAAA0lEQVR4nAB+3LJc","mime_type":"image/png"}]}}"#,
+    );
+    let second = answer(&client, "c_2");
+    assert_eq!(second["kind"], "command_rejected", "{second}");
+    assert_eq!(second["payload"]["code"], "invalid_arguments");
+    assert_eq!(
+        second["payload"]["message"],
+        "Image 1 cannot be read: 8000x7000 is 56000000 pixels; the limit is 50000000"
+    );
+    // The second image fails: the counter counts image parts only.
+    send(
+        &client,
+        &format!(
+            "{{\"id\":\"c_3\",\"command\":\"prompt\",\"args\":{{\"content\":[{{\"type\":\"image\",\"data\":\"{PIXEL_BASE64}\",\"mime_type\":\"image/png\"}},{{\"type\":\"image\",\"data\":\"bm90IGFuIGltYWdl\",\"mime_type\":\"image/png\"}}]}}}}"
+        ),
+    );
+    let third = answer(&client, "c_3");
+    assert_eq!(third["kind"], "command_rejected", "{third}");
+    assert_eq!(third["payload"]["code"], "invalid_arguments");
+    assert!(
+        third["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Image 2 cannot be read: "),
+        "{third}"
+    );
+    assert!(server.requests().is_empty(), "no turn ran");
+    let events = fs::read(setup.session_dir(&id).join("events.jsonl")).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&events).contains("turn_started"),
+        "no turn started"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+/// The ordered stdout kinds every `close` test's session opens with:
+/// startup and the prompt's turn starting. Independently triggered lines
+/// are set aside (`docs/testing.md`, "Event streams").
+const CLOSE_START: [&str; 6] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+];
+
+/// The stdout kinds of the backgrounding step: the model backgrounds a
+/// shell call, which the standing rule allows, and the job starts.
+const CLOSE_BG_STEP: [&str; 9] = [
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "permission_resolved",
+    "tool_call_started",
+    "job_started",
+    "tool_call_completed",
+];
+
+/// The stdout kinds of a `Hello.` reply step and its turn end.
+const CLOSE_REPLY: [&str; 8] = [
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
+/// The stdout kinds of a turn a `close` with `now` interrupts mid-request:
+/// the step starts, the assistant message starts, the cancelled call writes
+/// its usage, and the shutdown ends the turn.
+const CLOSE_HELD: [&str; 4] = [
+    "step_started",
+    "assistant_message_started",
+    "usage_recorded",
+    "turn_completed",
+];
+
+/// A background job that writes its group id to `<ready>`, then runs
+/// forever: `close` with `now` must stop it.
+const JOB_SCRIPT_FOREVER: &str = "echo $$ > '<ready>'\nwhile :; do sleep 0.05; done\n";
+
+/// A background job that writes its group id to `<ready>`, then runs until
+/// `go` appears in the workspace: `close` without `now` waits for it.
+const JOB_SCRIPT_UNTIL_GO: &str = "echo $$ > '<ready>'\nwhile [ ! -e go ]; do sleep 0.05; done\n";
+
+/// The background call every `close` test's first response makes.
+fn bg_call() -> Value {
+    function_call(
+        "call_bg",
+        "shell",
+        &json!({"command": "sh job.sh", "run_in_background": true}),
+    )
+}
+
+/// Starts a session whose `c_prompt` backgrounds `script`, and returns the
+/// running session, its subscribed client and the background job's group.
+/// `script` names the ready FIFO as `<ready>`. Once the prompt is sent,
+/// `after_prompt` runs before the job's ready line is awaited: the held
+/// mid-turn test releases one held response there, so the job starts while
+/// the next request stays held.
+#[track_caller]
+fn job_session(
+    setup: &Setup,
+    script: &str,
+    server: &ProviderServer,
+    after_prompt: impl FnOnce(),
+) -> (Running, Socket, u32, String) {
+    let fifo = setup.root.path().join("ready.fifo");
+    fakes::fifo(&fifo);
+    let ready = fakes::children::Ready::at(&fifo, &|| setup.deadline.left());
+    fs::write(
+        setup.workspace().join("job.sh"),
+        script.replace("<ready>", &ready.path().display().to_string()),
+    )
+    .unwrap();
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sh job.sh"})
+        ),
+    )
+    .unwrap();
+    setup.provider(server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    running.set_diag(setup.session_dir(&id));
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"start the job"}]}}"#,
+    );
+    after_prompt();
+    let job_group = ready.wait(setup.deadline)[0];
+    // The session must stop the job: dropping the watchdog here would kill
+    // the group first, so it is forgotten and only fires if the test
+    // process dies.
+    std::mem::forget(Watchdog::group(job_group));
+    (running, client, job_group, id)
+}
+
+#[test]
+fn session_socket_timeout_dumps_received_lines_stderr_and_log_tail() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    running.set_diag(setup.session_dir(&id));
+    let mut client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    // The prompt's acceptance arrives on the test's deadline; the held
+    // model never answers, so the socket never closes: the close wait then
+    // expires on a zero bound instead of spending what remains of the
+    // test's deadline (`docs/testing.md`, "Waits and timeouts").
+    let mut got = until_session(&client, "the prompt's acceptance", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_prompt"
+    });
+    client.set_deadline(Deadline::after(Duration::ZERO));
+    let expired = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        for _ in 0..1000 {
+            match client.next("the session to close the socket", &got) {
+                Some(line) => got.push(line),
+                None => panic!(
+                    "the session closed the socket while waiting for the timeout; got {got:?}"
+                ),
+            }
+        }
+        panic!("the held model answered while waiting for the timeout; got {got:?}");
+    }))
+    .unwrap_err();
+    let message = expired
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_default();
+    support::assert_timeout_dump(&message);
+    // The success-path deadline is spent proving the dump: free the held
+    // turn, then kill and reap the session on the cleanup bound.
+    server.release();
+    drop(client);
+    let group = running.group;
+    let cleanup = running.deadline.cleanup_phase();
+    fakes::kill_group(group, "KILL").unwrap();
+    let mut child = running.child;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || match done.send(child.wait()) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    match cleanup.recv(&finished) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited until the cleanup deadline to reap the session"),
+    };
+    assert!(
+        fakes::group_empties(group, cleanup),
+        "the session left a process in its group behind"
+    );
+    running.watchdog.stand_down(cleanup);
+    std::mem::forget(running.guard);
+}
+
+#[test]
+fn stdout_projection_also_sets_aside_job_deltas() {
+    let lines = support::expected(&[
+        "clients",
+        "fiber_started",
+        "session_status",
+        "job_delta",
+        "attention",
+        "date_changed",
+        "fiber_exited",
+    ]);
+    // The set-aside list is fixed (`docs/testing.md`, "Event streams"):
+    // `clients`, `session_status`, `attention` and `date_changed` never
+    // reach the multiset unless counted, whatever positions they held.
+    assert_kinds_multiset(
+        &lines,
+        &["fiber_started", "job_delta", "fiber_exited"],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(
+        &lines,
+        &["fiber_started", "fiber_exited"],
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
+}
+
+/// A `close` with `now`, answered `command_accepted`.
+#[track_caller]
+fn send_close_now(client: &Socket) {
+    send(
+        client,
+        r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+    );
+    let accepted = answer(client, "c_close_now");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+}
+
+fn assert_exited_0(status: ExitStatus, out: &[Value], stderr: &str) -> Value {
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    exited.clone()
+}
+
+/// `fiber_exited` carries no `error`, `text` or `suspended_on`.
+fn assert_exited_clean(exited: &Value) {
+    assert_eq!(exited["payload"].get("error"), None);
+    assert_eq!(exited["payload"].get("text"), None);
+    assert_eq!(exited["payload"].get("suspended_on"), None);
+}
+
+#[test]
+fn close_now_mid_turn_stops_the_turn_and_a_background_job_and_exits_0() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
+    server.hold();
+    let (running, client, job_group, id) =
+        job_session(&setup, JOB_SCRIPT_FOREVER, &server, || server.release_one());
+    // The first response is through, the job runs, and the second request
+    // is held: the turn is in flight.
+    assert!(
+        server.await_requests(2, setup.deadline),
+        "the held second response was requested"
+    );
+    send_close_now(&client);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    server.release();
+    assert_exited_clean(&assert_exited_0(status, &out, &stderr));
+    let turn = out
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .expect("the interrupted turn completed");
+    assert_eq!(turn["payload"]["outcome"], "interrupted");
+    let job = out
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .expect("the background job completed");
+    assert_eq!(job["payload"]["status"], "cancelled");
+    assert!(
+        !fakes::group_alive(job_group),
+        "the job's group outlived the session"
+    );
+    assert_eq!(server.requests().len(), 2);
+    assert_kinds_multiset(
+        &out,
+        &[
+            CLOSE_START.as_slice(),
+            CLOSE_BG_STEP.as_slice(),
+            CLOSE_HELD.as_slice(),
+            &["job_completed", "fiber_exited"],
+        ]
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn close_now_while_idle_with_a_job_starts_no_turn() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello()]).unwrap();
+    let (running, client, job_group, id) = job_session(&setup, JOB_SCRIPT_FOREVER, &server, || {});
+    // The prompt's turn completed: the session is idle with the job running.
+    let _done = until_session(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send_close_now(&client);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_clean(&assert_exited_0(status, &out, &stderr));
+    let job = out
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .expect("the background job completed");
+    assert_eq!(job["payload"]["status"], "cancelled");
+    assert!(
+        !fakes::group_alive(job_group),
+        "the job's group outlived the session"
+    );
+    assert_eq!(server.requests().len(), 2, "no ending-notice request ran");
+    assert_kinds_multiset(
+        &out,
+        &[
+            CLOSE_START.as_slice(),
+            CLOSE_BG_STEP.as_slice(),
+            CLOSE_REPLY.as_slice(),
+            &["job_completed", "fiber_exited"],
+        ]
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+/// The background call this test's first response makes: `cat` on a
+/// pseudo-terminal, waiting for typed input.
+fn tty_call() -> Value {
+    function_call("call_tty", "shell", &json!({"command": "cat", "tty": true}))
+}
+
+#[test]
+fn job_input_types_into_a_tty_job_and_its_output_arrives() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[tty_call()]), hello()]).unwrap();
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "cat"})
+        ),
+    )
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"start the editor"}]}}"#,
+    );
+    let started = until_session(&client, "the job_started line", |line| {
+        line["kind"] == "job_started"
+    });
+    let job_id = started.last().unwrap()["payload"]["job_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    send(
+        &client,
+        &format!(
+            "{{\"id\":\"c_in\",\"command\":\"job_input\",\"args\":{{\"job_id\":\"{job_id}\",\"text\":\"hi\\r\"}}}}"
+        ),
+    );
+    // One wait collects the acknowledgement, the typed echo and the
+    // prompt's turn end together, in either order: each can arrive first,
+    // so no earlier observation is discarded.
+    let mut accepted = false;
+    let mut echoed = false;
+    let mut ended = false;
+    let lines = until_session(
+        &client,
+        "the input's acknowledgement, echo and turn end",
+        |line| {
+            if line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_in" {
+                accepted = true;
+            }
+            if line["kind"] == "job_delta"
+                && line["payload"]["job_id"] == job_id.as_str()
+                && line["payload"]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("hi"))
+            {
+                echoed = true;
+            }
+            if line["kind"] == "turn_completed" {
+                ended = true;
+            }
+            accepted && echoed && ended
+        },
+    );
+    let accepted = lines
+        .iter()
+        .find(|line| line["payload"].get("command_id") == Some(&json!("c_in")))
+        .expect("the input was accepted");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    assert!(
+        lines.iter().any(|line| line["kind"] == "turn_completed"),
+        "the prompt's turn ended"
+    );
+    send_close_now(&client);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_clean(&assert_exited_0(status, &out, &stderr));
+}
+
+#[test]
+fn close_now_on_a_pending_approval_leaves_it_pending_and_exits_0() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])])
+    .unwrap();
+    setup.provider(&server);
+    // The standing ask, as `an_escalation_reaches_a_connected_client...`
+    // writes it.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "ask", "tool": "shell", "prefix": "echo hi"})
+        ),
+    )
+    .unwrap();
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"run it"}]}}"#,
+    );
+    let asked = until_session(&client, "permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().expect("the escalation was requested");
+    let request_id = request["payload"]["request_id"]
+        .as_str()
+        .expect("the request has an id")
+        .to_owned();
+    send_close_now(&client);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    let exited = assert_exited_0(status, &out, &stderr);
+    // This asserts presence, unlike the other tests' clean exit.
+    assert_eq!(
+        exited["payload"]["suspended_on"].as_str(),
+        Some(request_id.as_str())
+    );
+    assert!(
+        out.iter().all(|line| line["kind"] != "permission_resolved"),
+        "the shutdown left the request pending"
+    );
+    assert!(
+        out.iter().all(|line| line["kind"] != "tool_call_completed"),
+        "the shutdown ran no call"
+    );
+    assert_kinds_multiset(
+        &out,
+        &[
+            CLOSE_START.as_slice(),
+            &[
+                "step_started",
+                "assistant_message_started",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "permission_requested",
+                "fiber_exited",
+            ],
+        ]
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn close_now_while_idle_with_no_jobs_exits_0() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let _done = until_session(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send_close_now(&client);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_clean(&assert_exited_0(status, &out, &stderr));
+    assert_eq!(server.requests().len(), 1);
+    assert_kinds_multiset(
+        &out,
+        &STDOUT_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn close_without_now_waits_for_the_job_to_finish() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello(), hello()]).unwrap();
+    let (mut running, client, job_group, id) =
+        job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let _done = until_session(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let accepted = answer(&client, "c_close");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    // The ending-notice turn completes, and the session waits for the job.
+    let _notice = until_session(&client, "the notice turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        running.child.try_wait().unwrap().is_none(),
+        "the session waits for the job"
+    );
+    assert!(fakes::group_alive(job_group), "the job still runs");
+    fs::write(setup.workspace().join("go"), "").unwrap();
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_0(status, &out, &stderr);
+    let job = out
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .expect("the background job completed");
+    assert_eq!(job["payload"]["status"], "completed");
+    assert_kinds_multiset(
+        &out,
+        &[
+            CLOSE_START.as_slice(),
+            CLOSE_BG_STEP.as_slice(),
+            CLOSE_REPLY.as_slice(),
+            &[
+                "turn_started",
+                "step_started",
+                "jobs_pending_notified",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "turn_started",
+                "step_started",
+                "job_completed",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "fiber_exited",
+            ],
+        ]
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn a_closing_session_says_so_to_a_client_that_subscribes_mid_close() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello(), hello()]).unwrap();
+    let (running, client, _job_group, id) =
+        job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let done = until_session(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        done.iter()
+            .filter(|line| line["kind"] == "session_status")
+            .all(|line| line["payload"].get("closing").is_none()),
+        "no status carries closing before the close: {done:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let accepted = answer(&client, "c_close");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    // The job holds the session open, so a second client that subscribes
+    // now reads closing in the first status it is sent.
+    let second = Socket::connect(setup.deadline, &setup.session_command_socket(&id))
+        .expect("the session's socket accepted before the deadline");
+    send(
+        &second,
+        r#"{"id":"c_sub2","command":"subscribe","args":{"level":"summary"}}"#,
+    );
+    let subbed = until_session(&second, "the first session_status", |line| {
+        line["kind"] == "session_status"
+    });
+    let first = subbed
+        .iter()
+        .find(|line| line["kind"] == "session_status")
+        .expect("a session_status");
+    assert_eq!(first["payload"]["closing"], json!(true), "{first}");
+    // The first client waits for the ending notice, then the job ends and
+    // the session exits 0.
+    let _notice = until_session(&client, "the notice turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    fs::write(setup.workspace().join("go"), "").unwrap();
+    let _tail = until_session_close(&client);
+    drop(client);
+    drop(second);
+    let (status, out, stderr) = running.wait();
+    assert_exited_0(status, &out, &stderr);
+}
+
+#[test]
+fn close_now_after_close_stops_the_job_it_was_waiting_for() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[bg_call()]), hello(), hello()]).unwrap();
+    let (running, client, job_group, id) = job_session(&setup, JOB_SCRIPT_UNTIL_GO, &server, || {});
+    let _done = until_session(&client, "the prompt's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let accepted = answer(&client, "c_close");
+    assert_eq!(accepted["kind"], "command_accepted", "{accepted}");
+    let _notice = until_session(&client, "the notice turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send_close_now(&client);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert_exited_0(status, &out, &stderr);
+    let job = out
+        .iter()
+        .find(|line| line["kind"] == "job_completed")
+        .expect("the background job completed");
+    assert_eq!(job["payload"]["status"], "cancelled");
+    assert!(
+        !fakes::group_alive(job_group),
+        "the job's group outlived the session"
+    );
+    assert_eq!(server.requests().len(), 3);
+    assert_kinds_multiset(
+        &out,
+        &[
+            CLOSE_START.as_slice(),
+            CLOSE_BG_STEP.as_slice(),
+            CLOSE_REPLY.as_slice(),
+            &[
+                "turn_started",
+                "step_started",
+                "jobs_pending_notified",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+                "job_completed",
+                "fiber_exited",
+            ],
+        ]
+        .concat(),
+        &[],
+        Some(IGNORE_JOB_DELTA_DOC),
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn close_on_a_pending_review_escalation_denies_it_by_cancel() {
+    // A binary-level reproduction of a `close` taken while a review
+    // escalation waits: the reviewer's stage-1 failure raises a person ask,
+    // and the close denies it (`docs/testing.md`, "What a change ships
+    // with").
+    let setup = Setup::session_command_new_with_fm_root();
+    // A `write` under the data directory is not fast-pathed, so it reaches
+    // the review step: a `shell` call only reads, and the loop fast-paths
+    // it past the reviewer (`docs/permissions.md`, "Fast paths").
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        Response::status(400, "{}"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // The session's reviewer answers on the same fake server, as
+    // `crates/main/tests/tool_calls/tools.rs` `with_reviewer` wires it.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"}}),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"save the snippet"}]}}"#,
+    );
+    // Each receive below takes what remains of the test's `Deadline`,
+    // naming the wait (`docs/testing.md`, "Waits and timeouts").
+    let asked = until_session(&client, "the escalation's permission_requested", |line| {
+        line["kind"] == "permission_requested"
+    });
+    let request = asked.last().expect("the escalation was requested");
+    assert_eq!(request["payload"]["step"], "review");
+    let request_id = request["payload"]["request_id"].as_str().unwrap();
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let denied = until_session(&client, "the close's permission_resolved", |line| {
+        line["kind"] == "permission_resolved"
+    });
+    let resolved = denied
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .expect("the close resolved the request");
+    assert_eq!(resolved["payload"]["request_id"], request_id);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    // Nobody decided: the denial is the close's, with no reviewer object
+    // (`docs/events.md`, `permission_resolved`).
+    assert_eq!(resolved["payload"]["decided_by"], "cancel");
+    assert!(resolved["payload"].get("reviewer").is_none());
+    assert_eq!(
+        resolved["payload"]["reason"],
+        "The session closed while waiting for an answer."
+    );
+    let done = until_session(&client, "the denied turn's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let end = done.last().expect("the turn ended");
+    assert_eq!(end["payload"]["outcome"], "completed");
+    let completed = done
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the denied call completed");
+    assert_eq!(completed["payload"]["status"], "denied");
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    let exited = assert_exited_0(status, &out, &stderr);
+    // The denied request resolved in the turn: nothing stays pending.
+    assert_eq!(exited["payload"].get("suspended_on"), None);
+}
+
+#[test]
+fn a_session_in_a_worktree_it_made_keeps_the_worktree_when_dirty() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    git(setup.deadline, &setup.workspace(), &["init", "--quiet"]);
+    fs::write(setup.workspace().join("file.txt"), "x").unwrap();
+    git(setup.deadline, &setup.workspace(), &["add", "."]);
+    git(
+        setup.deadline,
+        &setup.workspace(),
+        &["commit", "--quiet", "-m", "first"],
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.start_session_in(&id, &setup.workspace(), &["--worktree"]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    // Behind the loop's startup: `extensions_loaded` is on stdout, so
+    // every startup line is in the log and the session parks for a
+    // client, so nothing else moves.
+    running.wait_for("extensions_loaded");
+    let events = fs::read_to_string(setup.session_dir(&id).join("events.jsonl")).unwrap();
+    let started: Value = complete_lines(&events).into_iter().next().unwrap();
+    assert_eq!(started["kind"], "session_started");
+    let workspace = started["payload"]["workspace"].as_str().unwrap();
+    let worktree = &started["payload"]["worktree"];
+    assert_eq!(worktree["path"].as_str().unwrap(), workspace);
+    let branch = worktree["branch"].as_str().unwrap();
+    assert!(workspace.ends_with(&format!("worktrees/{id}")));
+    assert_eq!(branch, format!("fiber/{id}"));
+    // The client dirties the worktree, then closes: the worktree holds
+    // something to lose, so it is kept.
+    fs::write(Path::new(workspace).join("dirty.txt"), "dirty").unwrap();
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let mut tail = until_session_close(&client);
+    tail.insert(0, sub);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(Path::new(workspace).join("dirty.txt").is_file());
+    assert!(
+        !git(
+            setup.deadline,
+            &setup.workspace(),
+            &["branch", "--list", branch]
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn the_notes_are_fixed_for_the_session_across_two_turns() {
+    // One session, two turns each with a reviewed call; the notes on disk
+    // change between the turns, but both reviewer requests carry the
+    // original text: the notes are fixed for the session
+    // (`docs/permissions.md`, "What the person tells it").
+    let setup = Setup::session_command_new_with_fm_root();
+    let first_lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let second_lua = setup.home().join("data/notes/y.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_first",
+            "write",
+            &json!({"path": first_lua, "content": "return {}\n"}),
+        )]),
+        text_reply("allow"),
+        hello(),
+        stream(&[function_call(
+            "write_second",
+            "write",
+            &json!({"path": second_lua, "content": "return {}\n"}),
+        )]),
+        text_reply("allow"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m",
+            "reviewer": {"model": "fake/m", "context": "Our org is acme."}}),
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_first","command":"prompt","args":{"content":[{"type":"text","text":"save the first snippet"}]}}"#,
+    );
+    until_session(&client, "the first turn's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // The notes change on disk between the turns; the running session
+    // keeps what it read when it started.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m",
+            "reviewer": {"model": "fake/m", "context": "Our org is globex."}}),
+    );
+    send(
+        &client,
+        r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"save the second snippet"}]}}"#,
+    );
+    until_session(&client, "the second turn's turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_eq!(out.last().unwrap()["kind"], "fiber_exited");
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 6);
+    let first_body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    let second_body: Value = serde_json::from_slice(&requests[4].body).unwrap();
+    let first_instructions = first_body["instructions"].as_str().unwrap();
+    let second_instructions = second_body["instructions"].as_str().unwrap();
+    assert_eq!(first_instructions, second_instructions);
+    assert!(
+        first_instructions.contains("Our org is acme."),
+        "{first_instructions:?}"
+    );
+    assert!(
+        !second_instructions.contains("Our org is globex."),
+        "{second_instructions:?}"
+    );
+}
+
+/// A delegate's parent and job id, as the CLI takes them.
+const PARENT: &str = "s_aaaaaaaaaaaaaaaa";
+const DELEGATE: &str = "j_bbbbbbbbbbbbbbbb";
+
+/// The session's durable lines.
+fn delegate_events(setup: &Setup, id: &str) -> Vec<Value> {
+    let text = fs::read_to_string(setup.session_dir(id).join("events.jsonl")).unwrap();
+    text.lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// A stream whose one item calls `ask_user` with `questions`.
+fn ask_user(questions: &Value) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "function_call",
+        "id": "fc_call_ask",
+        "call_id": "call_ask",
+        "name": "ask_user",
+        "arguments": json!({"questions": questions}).to_string()
+    }})])
+}
+
+fn delegate_questions() -> Value {
+    json!([
+        {"header": "Base", "question": "Which branch?", "multiSelect": true,
+         "options": [{"label": "main (Recommended)"}, {"label": "dev"}]},
+        {"header": "Name", "question": "What name?"}
+    ])
+}
+
+#[test]
+fn a_delegate_runs_one_turn_and_exits_with_its_parent_recorded() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    // The idle exit is an hour out: the exit below proves the run ended on
+    // its own, with no idle wait.
+    let (running, _stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    let (status, out, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert_eq!(exited["payload"]["text"], "Hello.");
+    let lines = delegate_events(&setup, &id);
+    assert_kinds_multiset(
+        &lines,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+    let started = lines
+        .iter()
+        .find(|line| line["kind"] == "session_started")
+        .expect("a session_started line");
+    assert_eq!(
+        started["payload"]["parent"],
+        json!({"session_id": PARENT, "delegate_id": DELEGATE})
+    );
+    assert!(started["payload"].get("worktree").is_none());
+}
+
+#[test]
+fn an_ask_user_call_ends_a_delegate_turn_with_its_questions() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let questions = delegate_questions();
+    let server = ProviderServer::start([ask_user(&questions)]).unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    let (running, _stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    let (status, out, stderr) = running.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert_eq!(exited["payload"]["questions"], questions);
+    let lines = delegate_events(&setup, &id);
+    assert_kinds_multiset(
+        &lines,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+}
+
+#[test]
+fn dropping_a_delegate_lifeline_exits_129_within_the_bound() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let prefix = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Working\"}\n\n";
+    let server = ProviderServer::start([Response::stall(200, prefix, prefix.len() + 100000)
+        .header("content-type", "text/event-stream")])
+    .unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    let (mut running, stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    // The model call started: the provider is stalled mid-turn.
+    running.wait_for("assistant_message_started");
+    // The parent is gone: EOF on the lifeline is a hangup.
+    drop(stdin);
+    let (status, out, stderr) = running.wait();
+    assert_eq!(status.code(), Some(129), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 129);
+    let lines = delegate_events(&setup, &id);
+    assert_kinds_multiset(
+        &lines,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+}
+
+#[test]
+fn a_parent_without_a_prompt_is_a_usage_error_and_starts_nothing() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let workspace = setup.workspace();
+    let (code, lines, stderr) = setup.run(&[
+        "session",
+        "--id",
+        "s_0123456789abcdef",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--parent",
+        PARENT,
+        "--delegate-id",
+        DELEGATE,
+    ]);
+    assert_eq!(code, Some(2));
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "fiber_exited");
+    assert_eq!(lines[0]["payload"]["exit_code"], 2);
+    assert!(stderr.contains("--prompt"), "{stderr}");
+    assert!(!setup.home().join("projects").exists());
+    assert!(!setup.home().join("run").exists());
+}
+
+/// Writes the fixture server's directory with an `echo` tool and a `greet`
+/// prompt, and configures it as the `fx` server beside the `fake/m` model.
+fn prompt_fixture(setup: &Setup) -> PathBuf {
+    let dir = setup.root.path().join("fx");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("tools.json"), r#"[{"name":"echo"}]"#).unwrap();
+    fs::write(
+        dir.join("prompts.json"),
+        r#"[{"name":"greet","description":"Greets someone.","arguments":[{"name":"who","required":true},{"name":"tone"}]}]"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("prompt-greet.json"),
+        r#"{"messages":[{"role":"user","content":{"type":"text","text":"Say hello to Ada, warmly."}}]}"#,
+    )
+    .unwrap();
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {"fx": {
+            "command": "/bin/bash",
+            "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+        }}}}),
+    );
+    dir
+}
+
+#[test]
+fn the_prompt_command_runs_a_servers_prompt() {
+    // Look up the shared MCP fixture before the deadline starts: the
+    // lookup warms the script past its first-exec stall under its own
+    // bound, so the stall never eats this test's wait margin.
+    fakes::mcp_fixture();
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let dir = prompt_fixture(&setup);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    // Behind the loop's startup: `extensions_loaded` is on stdout, so
+    // every startup line is in the log and `clients` lands after them.
+    // The loop parks waiting for a prompt, so nothing else moves.
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"/greet Ada warm"}]}}"#,
+    );
+    let rest = until_session(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let expanded = "Say hello to Ada, warmly.";
+    let turn_started = rest
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    assert_eq!(
+        turn_started["payload"]["input"][0]["content"][0]["text"],
+        expanded
+    );
+    // The server saw the `prompts/get` with the named arguments, and the
+    // fake provider's received user message carries the prompt's text.
+    let log = fs::read_to_string(dir.join("requests.log")).unwrap();
+    assert!(log.contains(r#""method":"prompts/get""#), "log:\n{log}");
+    assert!(
+        log.contains(r#""arguments":{"tone":"warm","who":"Ada"}"#),
+        "the get sends the named arguments: {log}",
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        String::from_utf8_lossy(&requests[0].body)
+            .contains(&serde_json::to_string(expanded).unwrap())
+    );
+    assert!(
+        rest.iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the fake model's text arrived: {rest:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(!setup.session_command_socket(&id).exists());
+    // The session was prompted, so its directory remains.
+    assert!(setup.session_dir(&id).join("events.jsonl").is_file());
+    let mut stream = vec![sub];
+    stream.extend(rest);
+    stream.extend(tail);
+    assert_kinds_multiset(
+        &stream,
+        &SOCKET_KINDS_ONE_TURN_AND_CLOSE,
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(&out, &STDOUT_KINDS_ONE_TURN_AND_CLOSE, &[], None, COUNT_DOC);
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn commands_answers_with_a_servers_prompts_tagged_with_its_name() {
+    // Look up the shared MCP fixture before the deadline starts: the
+    // lookup warms the script past its first-exec stall under its own
+    // bound, so the stall never eats this test's wait margin.
+    fakes::mcp_fixture();
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    prompt_fixture(&setup);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    let (mut events, result) = commands_answer(&client);
+    assert_eq!(
+        result,
+        json!({"commands": [
+            {"name": "greet", "description": "Greets someone.",
+             "argument_hint": "<who> [tone]", "tag": "fx"}]})
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    events.extend(until_session_close(&client));
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_kinds_multiset(
+        &events,
+        &[
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    // Stdout is the whole session here: this session was never prompted,
+    // so nothing was written to a session directory.
+    assert_kinds_multiset(
+        &out,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &out,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+}
+
+#[test]
+fn a_resumed_session_answers_commands_with_its_servers_prompts() {
+    // Look up the shared MCP fixture before the deadline starts: the
+    // lookup warms the script past its first-exec stall under its own
+    // bound, so the stall never eats this test's wait margin.
+    fakes::mcp_fixture();
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([stream(&[function_call(
+        "call_1",
+        "shell",
+        &json!({"command": "echo hi"}),
+    )])])
+    .unwrap();
+    setup.provider(&server);
+    prompt_fixture(&setup);
+    let id = doors::mint("s_");
+    let pending = suspend_on_an_approval(&setup, &id);
+    // The suspend rewrote `config.json` to the model alone: the resume
+    // needs the servers back.
+    prompt_fixture(&setup);
+
+    let mut running = setup.session_command_start_session(&id, &["--resume"]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    // Capture the replayed request before asking for commands: it can arrive
+    // before that command's answer and be consumed with it.
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let mut resumed = false;
+    let mut events = until_session(&client, "the re-raised permission request", |line| {
+        if line["kind"] == "fiber_started" && line["payload"]["resumed"] == true {
+            resumed = true;
+        }
+        resumed
+            && line["kind"] == "permission_requested"
+            && line["payload"]["request_id"] == pending.as_str()
+    });
+    assert_eq!(
+        events.last().unwrap()["payload"]["request_id"],
+        pending.as_str()
+    );
+
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let commands = until_session(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = commands.last().unwrap()["payload"]["result"].clone();
+    assert_eq!(
+        result,
+        json!({"commands": [
+            {"name": "greet", "description": "Greets someone.",
+             "argument_hint": "<who> [tone]", "tag": "fx"}]})
+    );
+    events.extend(commands);
+    send(
+        &client,
+        r#"{"id":"c_close_now","command":"close","args":{"now":true}}"#,
+    );
+    events.extend(until_session(&client, "the close answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_close_now"
+    }));
+    events.extend(until_session_close(&client));
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    for stream in [&events, &out] {
+        assert_eq!(
+            stream
+                .iter()
+                .filter(|line| line["kind"] == "clients")
+                .count(),
+            1,
+            "the resumed client was counted once"
+        );
+    }
+    // The resumed `clients` line is fixed, so it is counted too; the
+    // resumed-process stdout capture stays a multiset, with the complete
+    // durable log asserting the lifecycle edges below.
+    assert_kinds_multiset(
+        &events,
+        &[
+            "clients",
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "command_accepted",
+            "command_accepted",
+            "fiber_exited",
+        ],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+    assert_kinds_multiset(
+        &out,
+        &[
+            "clients",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "permission_requested",
+            "fiber_exited",
+        ],
+        &["clients"],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn a_skill_added_mid_session_reaches_the_model_and_loads() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([
+        hello(),
+        stream(&[function_call(
+            "call_late",
+            "skill",
+            &json!({"name": "late"}),
+        )]),
+        hello(),
+        stream(&[function_call(
+            "call_late_again",
+            "skill",
+            &json!({"name": "late"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    // Turn 1 writes the opening message, before the skill exists.
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let first = until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let mut stream = vec![sub];
+    stream.extend(first.clone());
+    assert_kinds_multiset(
+        &stream,
+        &[
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert!(
+        first
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the first turn ran: {first:?}"
+    );
+    // Installed mid-session, the skill reaches the model at the next turn
+    // start as one added line, and the `skill` tool loads it.
+    let dir = setup.workspace().join(".agents/skills/late");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: late\ndescription: Runs late.\n---\nRuns late.\n",
+    )
+    .unwrap();
+    send(
+        &client,
+        r#"{"id":"c_load","command":"prompt","args":{"content":[{"type":"text","text":"load the skill"}]}}"#,
+    );
+    let second = until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_kinds_multiset(
+        &second,
+        &[
+            "skills_changed",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    let changed = second
+        .iter()
+        .find(|line| line["kind"] == "skills_changed")
+        .expect("the check announced the added skill");
+    assert_eq!(changed["payload"]["added"][0]["name"], "late");
+    assert_eq!(changed["payload"]["added"][0]["description"], "Runs late.");
+    let path = changed["payload"]["added"][0]["path"].clone();
+    // The second request carries the added line's text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        String::from_utf8_lossy(&requests[1].body)
+            .contains("Fiber: skill late can now be loaded: Runs late."),
+        "the added line reached the model"
+    );
+    let completed = second
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the skill call completed");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["control"],
+        json!({"skill": {"name": "late", "path": path}})
+    );
+    // Switched off in `skills.disabled`, the skill is removed at the next
+    // turn start, and the `skill` tool refuses it again.
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "skills": {"disabled": ["late"]}}),
+    );
+    send(
+        &client,
+        r#"{"id":"c_load_off","command":"prompt","args":{"content":[{"type":"text","text":"load the skill"}]}}"#,
+    );
+    let third = until_session(&client, "the third turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert_kinds_multiset(
+        &third,
+        &[
+            "skills_changed",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    let removed = third
+        .iter()
+        .find(|line| line["kind"] == "skills_changed")
+        .expect("the check announced the removed skill");
+    assert_eq!(removed["payload"]["removed"], json!(["late"]));
+    let completed = third
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the skill call completed");
+    assert_eq!(completed["payload"]["status"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "invalid_arguments");
+    assert!(completed["payload"].get("control").is_none());
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    assert_kinds_multiset(
+        &tail,
+        &["command_accepted", "fiber_exited"],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert_kinds_multiset(
+        &out,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "skills_changed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "skills_changed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_edges(&setup, &id);
+}
+
+#[test]
+fn a_skill_rewritten_in_place_between_turns_is_offered_at_the_next_turn_start() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([
+        hello(),
+        stream(&[function_call(
+            "call_late",
+            "skill",
+            &json!({"name": "late"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    // The skill starts invalid, with a different size than the valid
+    // rewrite: a normally detectable change, in place at the same path.
+    let dir = setup.workspace().join(".agents/skills/late");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("SKILL.md"), "no header at all\n").unwrap();
+    // Turn 1 runs with the skill left out.
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    let first = until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    assert!(
+        first
+            .iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the first turn ran: {first:?}"
+    );
+    // Rewritten in place to a valid skill between turns.
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: late\ndescription: Runs late.\n---\nRuns late.\n",
+    )
+    .unwrap();
+    send(
+        &client,
+        r#"{"id":"c_load","command":"prompt","args":{"content":[{"type":"text","text":"load the skill"}]}}"#,
+    );
+    let second = until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let changed = second
+        .iter()
+        .find(|line| line["kind"] == "skills_changed")
+        .expect("the check announced the rewritten skill");
+    assert_eq!(changed["payload"]["added"][0]["name"], "late");
+    assert_eq!(changed["payload"]["added"][0]["description"], "Runs late.");
+    let path = changed["payload"]["added"][0]["path"].clone();
+    // The next turn's request carries the added line's text
+    // (`docs/system-prompt.md`, "Added and removed skills").
+    let requests = server.requests();
+    let second_request = requests.get(1).expect("the second turn sent a request");
+    assert!(
+        String::from_utf8_lossy(&second_request.body)
+            .contains("Fiber: skill late can now be loaded: Runs late."),
+        "the added line reached the model"
+    );
+    let completed = second
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .expect("the skill call completed");
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["control"],
+        json!({"skill": {"name": "late", "path": path}})
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_session_close(&client);
+    assert_eq!(
+        tail.last()
+            .expect("the close was answered and the session exited")["kind"],
+        "fiber_exited"
+    );
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+/// An `openai-responses` stream answering `Again.` in two fragments: the
+/// resumed delegate's reply.
+fn again() -> Response {
+    stream(&[
+        json!({"type": "response.output_text.delta", "delta": "Aga"}),
+        json!({"type": "response.output_text.delta", "delta": "in."}),
+        json!({"type": "response.output_item.done", "item": {
+            "type": "message", "content": [{"type": "output_text", "text": "Again."}]
+        }}),
+    ])
+}
+
+impl Setup {
+    /// Starts `fiber session --resume` as a delegate's later run: the same
+    /// id, workspace, parent and job, the message as its prompt, stdin
+    /// piped as its lifeline. The caller holds the returned stdin open
+    /// for the run, or drops it to take the lifeline path.
+    #[track_caller]
+    fn start_resume(
+        &self,
+        id: &str,
+        parent: &str,
+        delegate: &str,
+        message: &str,
+    ) -> (Running, std::process::ChildStdin) {
+        let workspace = self.workspace();
+        let args = vec![
+            "session",
+            "--id",
+            id,
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--resume",
+            "--prompt",
+            message,
+            "--parent",
+            parent,
+            "--delegate-id",
+            delegate,
+        ];
+        let (running, stdin) = self.spawn_session(&args, Stdio::piped());
+        (running, stdin.unwrap())
+    }
+}
+
+#[test]
+fn a_resumed_delegate_runs_its_prompt_as_one_turn_and_exits() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello(), again()]).unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    // Run 1, as ever.
+    let (first, _stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    let (status, _, stderr) = first.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    // Run 2 through the delegate resume line. The idle exit is an hour
+    // out: the exit below proves the run ended on its own, with no idle
+    // wait.
+    let (second, _lifeline) = setup.start_resume(&id, PARENT, DELEGATE, "again");
+    let (status, out, stderr) = second.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert_eq!(exited["payload"]["text"], "Again.");
+    let lines = delegate_events(&setup, &id);
+    assert_kinds_multiset(
+        &lines,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+    // One session for both runs.
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line["kind"] == "session_started")
+            .count(),
+        1
+    );
+    // The resumed run's `fiber_started` says so.
+    let started: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "fiber_started")
+        .collect();
+    assert_eq!(started.len(), 2);
+    assert_eq!(started[0]["payload"]["resumed"], false);
+    assert_eq!(started[1]["payload"]["resumed"], true);
+    // The resumed `turn_started` carries the resume's prompt.
+    let turns: Vec<&Value> = lines
+        .iter()
+        .filter(|line| line["kind"] == "turn_started")
+        .collect();
+    assert_eq!(turns.len(), 2);
+    assert!(!turns[0].to_string().contains("again"));
+    assert!(turns[1].to_string().contains("again"));
+}
+
+#[test]
+fn dropping_a_resumed_delegate_lifeline_exits_129_within_the_bound() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let prefix = "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"Working\"}\n\n";
+    let server = ProviderServer::start([
+        hello(),
+        Response::stall(200, prefix, prefix.len() + 100000)
+            .header("content-type", "text/event-stream"),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    setup.slow_idle();
+    let id = doors::mint("s_");
+    // Run 1 completes.
+    let (first, _stdin) = setup.start_delegate(&id, PARENT, DELEGATE, &[]);
+    let (status, _, stderr) = first.wait();
+    assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+    // Run 2 stalls mid-turn, holding its lifeline.
+    let (mut second, stdin) = setup.start_resume(&id, PARENT, DELEGATE, "again");
+    second.wait_for("assistant_message_started");
+    // The parent is gone: EOF on the resumed lifeline is a hangup.
+    drop(stdin);
+    let (status, out, stderr) = second.wait();
+    assert_eq!(status.code(), Some(129), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 129);
+    let lines = delegate_events(&setup, &id);
+    assert_kinds_multiset(
+        &lines,
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "turn_completed",
+            "fiber_exited",
+        ],
+        &[],
+        None,
+        COUNT_DOC,
+    );
+    assert_session_process_boundaries(
+        &lines,
+        &id,
+        SESSION_FIRST_DOC,
+        PROCESS_START_DOC,
+        PROCESS_END_DOC,
+    );
+}
+
+#[test]
+fn commands_answers_with_a_template_added_between_turns() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_first","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // A prompt template added between turns: no skill the model loads,
+    // only a `/name` the session runs.
+    workspace_skill(
+        &setup,
+        "ship",
+        "description: Ships it.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
+    );
+    send(
+        &client,
+        r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"hi again"}]}}"#,
+    );
+    until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // The post-turn `commands` answer lists the new template.
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let answered = until_session(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["commands"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|row| row["name"] == "ship" && row["tag"] == "template"),
+        "the template added between turns is listed: {result:?}"
+    );
+    // The template's slash command resolves as before.
+    send(
+        &client,
+        r#"{"id":"c_third","command":"prompt","args":{"content":[{"type":"text","text":"/ship 1.0"}]}}"#,
+    );
+    let third = until_session(&client, "the third turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let turn_started = third
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the template prompt started a turn");
+    assert!(
+        turn_started["payload"]["input"][0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Body."),
+        "the template expanded: {turn_started:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}
+
+#[test]
+fn commands_after_reload_keeps_current_rows_with_the_template_winning() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    workspace_skill(&setup, "keep", "description: Keeps it.\n");
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client, "the subscribe acknowledgement");
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_first","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
+    );
+    until_session(&client, "the first turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    // A reload picks up the new extension's commands: the rows change
+    // without any skill moving on disk.
+    install_lua(
+        &setup,
+        "clashbox",
+        "fiber.command('clash', { timeout = 5000, description = 'Clash ext.', run = function(text) host.status('clash ' .. text) end })\nfiber.command('other', { timeout = 5000, description = 'Other ext.', run = function(text) host.status('other ' .. text) end })\n",
+    );
+    send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+    until_session(&client, "the reloaded line", |line| {
+        line["kind"] == "reloaded"
+    });
+    send(&client, r#"{"id":"c_before","command":"commands"}"#);
+    let before = until_session(&client, "the pre-template commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_before"
+    });
+    let rows = before.last().unwrap()["payload"]["result"]["commands"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        rows.len(),
+        3,
+        "the reload added both extension rows: {rows:?}"
+    );
+    assert!(rows.iter().any(|row| row["name"] == "clash"
+        && row["tag"] == "fiber.test/clashbox"
+        && row["extension"] == true));
+    // A template named like the extension's row wins it: the refresh
+    // recomputes every row from the current sources, keeping the reload's
+    // unrelated rows and dropping the shadowed one.
+    workspace_skill(
+        &setup,
+        "clash",
+        "description: Clash template.\nargument-hint: <tag>\ndisable-model-invocation: true\n",
+    );
+    // The size and modification time just written: a later turn-start read
+    // that disagrees with them points at a torn read, while a read that
+    // agrees yet reports the old header points at the stale-cache path in
+    // `discover_cached` (`crates/loop/src/skills.rs:176`). Neither
+    // candidate is established as the cause.
+    let clash_skill = setup.workspace().join(".agents/skills/clash/SKILL.md");
+    let clash_written = fs::metadata(&clash_skill)
+        .map(|metadata| {
+            format!(
+                "size={} modified={:?}",
+                metadata.len(),
+                metadata.modified().ok()
+            )
+        })
+        .unwrap_or_else(|error| format!("unreadable: {error}"));
+    let clash_diagnostic = || {
+        let bytes = fs::read(&clash_skill)
+            .map(|bytes| format!("{} bytes: {bytes:?}", bytes.len()))
+            .unwrap_or_else(|error| format!("unreadable: {error}"));
+        let current = fs::metadata(&clash_skill)
+            .map(|metadata| {
+                format!(
+                    "size={} modified={:?}",
+                    metadata.len(),
+                    metadata.modified().ok()
+                )
+            })
+            .unwrap_or_else(|error| format!("unreadable: {error}"));
+        format!(
+            "clash SKILL.md path={} written=[{clash_written}] current=[{current}] bytes=[{bytes}]",
+            clash_skill.display(),
+        )
+    };
+    let turn_notices = |turn: &[Value]| {
+        turn.iter()
+            .filter(|line| line["kind"] == "notice")
+            .map(|line| {
+                format!(
+                    "code={} message={} path={}",
+                    line["payload"]["code"], line["payload"]["message"], line["payload"]["path"]
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    send(
+        &client,
+        r#"{"id":"c_second","command":"prompt","args":{"content":[{"type":"text","text":"hi again"}]}}"#,
+    );
+    let second_turn = until_session(&client, "the second turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    send(&client, r#"{"id":"c_cmds","command":"commands"}"#);
+    let answered = until_session(&client, "the commands answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_cmds"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["commands"].as_array().unwrap();
+    assert!(
+        second_turn.iter().any(|line| {
+            line["kind"] == "notice"
+                && line["payload"]["code"] == "skill_shadowed"
+                && line["payload"]["extension"] == "fiber.test/clashbox"
+        }),
+        "the turn-start refresh forwards the template's shadow notice: second_turn={second_turn:?} result={result:?} notices={:?} before={before:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
+    assert_eq!(
+        rows.len(),
+        3,
+        "no row lost and none restored: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
+    assert!(
+        rows.contains(&json!({"name": "keep", "description": "Keeps it.", "tag": "skill"})),
+        "the unrelated skill row stands: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
+    assert!(
+        rows.contains(
+            &json!({"name": "other", "description": "Other ext.", "tag": "fiber.test/clashbox", "extension": true})
+        ),
+        "the reload's unrelated extension row stands: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
+    assert!(
+        rows.contains(
+            &json!({"name": "clash", "description": "Clash template.", "argument_hint": "<tag>", "tag": "template"})
+        ),
+        "the template wins its name: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    assert!(
+        rows.iter()
+            .all(|row| row["tag"] != "fiber.test/clashbox" || row["name"] != "clash"),
+        "the shadowed extension row stays out: second_turn={second_turn:?} result={result:?} notices={:?} {} candidates: torn read vs stale cache in discover_cached (crates/loop/src/skills.rs:176), neither established as the cause",
+        turn_notices(&second_turn),
+        clash_diagnostic(),
+    );
+}
+
+/// `hooks` answers the session's registered rows with no arguments, and a
+/// reload reports the new snapshot: one declared hook is absent before its
+/// extension loads and present after.
+#[test]
+fn hooks_answers_registered_rows_and_reload_reports_the_new_snapshot() {
+    let setup = Setup::session_command_new_with_fm_root();
+    let server = ProviderServer::start([hello(), hello(), hello()]).unwrap();
+    setup.provider(&server);
+    install_lua(
+        &setup,
+        "hookbox",
+        "fiber.hook(\"before_tool\", { timeout = 5000, on_failure = \"blocking\", run = function() end })\n\
+         fiber.watch({ \"turn_completed\" }, { timeout = 5000, run = function() end })\n",
+    );
+    let id = doors::mint("s_");
+    let mut running = setup.session_command_start_session(&id, &[]);
+    let client = running.connect(&setup.session_command_socket(&id));
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let _sub = recv(&client, "the subscribe acknowledgement");
+    send(&client, r#"{"id":"c_hooks","command":"hooks"}"#);
+    let answered = until_session(&client, "the hooks answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_hooks"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["hooks"].as_array().unwrap().clone();
+    assert!(
+        rows.contains(
+            &json!({"kind": "hook", "extension": "fiber.test/hookbox", "point": "before_tool", "on_failure": "blocking"})
+        ),
+        "the extension hook row stands: {result:?}"
+    );
+    assert!(
+        rows.contains(
+            &json!({"kind": "watcher", "extension": "fiber.test/hookbox", "kinds": ["turn_completed"]})
+        ),
+        "the watcher row stands: {result:?}"
+    );
+    // A reload with a second extension reports the new snapshot without
+    // restarting the session.
+    install_lua(
+        &setup,
+        "second",
+        "fiber.hook(\"after_tool\", { phase = \"sanitize\", timeout = 5000, on_failure = \"non-blocking\", run = function() end })\n",
+    );
+    send(&client, r#"{"id":"c_reload","command":"reload"}"#);
+    until_session(&client, "the reloaded line", |line| {
+        line["kind"] == "reloaded"
+    });
+    send(&client, r#"{"id":"c_hooks2","command":"hooks"}"#);
+    let answered = until_session(&client, "the second hooks answer", |line| {
+        line["kind"] == "command_accepted" && line["payload"]["command_id"] == "c_hooks2"
+    });
+    let result = answered.last().unwrap()["payload"]["result"].clone();
+    let rows = result["hooks"].as_array().unwrap();
+    assert!(
+        rows.contains(
+            &json!({"kind": "hook", "extension": "fiber.test/second", "point": "after_tool", "on_failure": "non-blocking", "phase": "sanitize"})
+        ),
+        "the reload added the second hook row: {result:?}"
+    );
+    assert!(
+        rows.contains(
+            &json!({"kind": "watcher", "extension": "fiber.test/hookbox", "kinds": ["turn_completed"]})
+        ),
+        "the first watcher row stands: {result:?}"
+    );
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let _tail = until_session_close(&client);
+    drop(client);
+    let (status, _out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+}

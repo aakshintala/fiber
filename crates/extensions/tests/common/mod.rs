@@ -36,6 +36,26 @@ use serde_json::{Value, json};
 #[allow(unused_imports, reason = "each test file uses a different part")]
 pub(crate) use fakes::write_record;
 
+pub(crate) fn set_source_mtime(dir: &Path, mtime: std::time::SystemTime) {
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_type().unwrap().is_dir() {
+            set_source_mtime(&entry.path(), mtime);
+        } else {
+            std::fs::File::options()
+                .write(true)
+                .open(entry.path())
+                .unwrap()
+                .set_modified(mtime)
+                .unwrap();
+        }
+    }
+    std::fs::File::open(dir)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
 /// How far each round drives the fake clock: a day past any install or git
 /// bound, so the deadline, the grace and the drain all elapse.
 const FAR: Duration = Duration::from_secs(24 * 3600);

@@ -1,0 +1,416 @@
+//! Binary-level tests of `fiber sessions` and `fiber sessions export`
+//! (`docs/invocation.md`, "Commands and flags" and "Deleting and pruning";
+//! `docs/testing.md`, "Levels"): the built `fiber` runs in a temporary
+//! workspace with its own `FIBER_HOME`, over session directories built by
+//! hand or sessions a fake provider ran. Every run carries a wall-clock
+//! deadline.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use crate::support;
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+
+use fakes::ProviderServer;
+use serde_json::{Value, json};
+use support::{Deadline, Output, Setup, spawn_watched};
+
+/// The `session_started` first line of session `id` in `workspace`: a full
+/// envelope, so `resolve` keeps it, in this project's workspace.
+fn first(id: &str, workspace: &Path) -> String {
+    format!(
+        "{}\n",
+        json!({"kind": "session_started", "session_id": id, "ts": 0,
+            "schema_version": 1, "seq": 0,
+            "payload": {"workspace": workspace,
+                "variables": {"path": "/usr/bin", "names": [],
+                    "source": "inherited"}}})
+    )
+}
+
+const SECOND: &str = "{\"seq\":1,\"kind\":\"b\"}\n";
+const TORN: &str = "{\"seq\":2,\"kin";
+
+impl Setup {
+    fn new_with_fiber_export_root() -> Self {
+        let deadline = Deadline::start();
+        let setup = Self {
+            deadline,
+            root: fakes::TempDir::under(std::path::Path::new("/tmp"), "fiber-export"),
+        };
+        fs::create_dir_all(setup.home()).unwrap();
+        fs::create_dir_all(setup.workspace()).unwrap();
+        setup
+    }
+
+    /// The project's sessions directory, as the command derives it: a
+    /// workspace outside any repository is its own project.
+    fn sessions_sessions(&self) -> PathBuf {
+        log::sessions_dir(&self.home(), &fs::canonicalize(self.workspace()).unwrap())
+    }
+
+    /// A session directory with two complete lines, a torn tail, one
+    /// artifact and a lock file. The first line starts the session in
+    /// this workspace, so `resolve` keeps it.
+    fn session(&self, id: &str) {
+        let dir = self.sessions_sessions().join(id);
+        fs::create_dir_all(dir.join("artifacts")).unwrap();
+        fs::write(
+            dir.join("events.jsonl"),
+            format!("{}{SECOND}{TORN}", self.first_line(id)),
+        )
+        .unwrap();
+        fs::write(dir.join("artifacts/a_1.txt"), "artifact\n").unwrap();
+        fs::write(dir.join("session.lock"), "held").unwrap();
+    }
+
+    /// The `session_started` first line `session` writes for `id`.
+    fn first_line(&self, id: &str) -> String {
+        first(id, &fs::canonicalize(self.workspace()).unwrap())
+    }
+
+    /// Runs `fiber sessions export` with `args` in the workspace.
+    #[track_caller]
+    fn export(&self, args: &[&str]) -> Output {
+        let mut all = vec!["sessions", "export"];
+        all.extend_from_slice(args);
+        self.sessions_run_in_workspace(&all)
+    }
+
+    /// Runs `fiber` with `args` in the workspace.
+    #[track_caller]
+    fn sessions_run_in_workspace(&self, args: &[&str]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args(args)
+            .current_dir(self.workspace())
+            .env_clear()
+            .envs(fakes::check_run())
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.root.path())
+            .env("FIBER_HOME", self.home())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match self.deadline.recv(&finished) {
+            Ok(output) => output.unwrap(),
+            Err(_) => support::expired(self.deadline, group, &finished, "`fiber` to exit"),
+        };
+        watchdog.stand_down(self.deadline.cleanup_phase());
+        Output::from(output)
+    }
+}
+
+/// The workspace as the child saw it: the current directory, resolved.
+fn canonical(setup: &Setup) -> PathBuf {
+    fs::canonicalize(setup.workspace()).unwrap()
+}
+
+#[test]
+fn a_unique_prefix_exports_the_complete_lines_and_the_artifacts() {
+    let setup = Setup::new_with_fiber_export_root();
+    setup.session("s_exportaa01");
+    let run = setup.export(&["s_exportaa"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let target = canonical(&setup).join("s_exportaa01");
+    assert_eq!(run.stdout, format!("{}\n", target.display()), "stdout");
+    assert_eq!(
+        fs::read(target.join("events.jsonl")).unwrap(),
+        format!("{}{SECOND}", setup.first_line("s_exportaa01")).as_bytes()
+    );
+    assert_eq!(
+        fs::read(target.join("artifacts/a_1.txt")).unwrap(),
+        b"artifact\n"
+    );
+    assert!(!target.join("session.lock").exists());
+}
+
+#[test]
+fn an_explicit_relative_path_is_taken_from_the_workspace() {
+    let setup = Setup::new_with_fiber_export_root();
+    setup.session("s_exportbb01");
+    let run = setup.export(&["s_exportbb01", "deep/out"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let target = canonical(&setup).join("deep/out");
+    assert_eq!(run.stdout, format!("{}\n", target.display()), "stdout");
+    assert_eq!(
+        fs::read(target.join("events.jsonl")).unwrap(),
+        format!("{}{SECOND}", setup.first_line("s_exportbb01")).as_bytes()
+    );
+    assert_eq!(
+        fs::read(target.join("artifacts/a_1.txt")).unwrap(),
+        b"artifact\n"
+    );
+}
+
+#[test]
+fn an_existing_target_is_refused_and_left_alone() {
+    let setup = Setup::new_with_fiber_export_root();
+    setup.session("s_exportcc01");
+    let target = setup.workspace().join("out");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("keep"), "untouched").unwrap();
+    let run = setup.export(&["s_exportcc01", "out"]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert!(run.stderr.contains("already exists"), "{}", run.stderr);
+    assert!(run.stderr.contains("out"), "{}", run.stderr);
+    assert_eq!(fs::read(target.join("keep")).unwrap(), b"untouched");
+    assert!(!target.join("events.jsonl").exists());
+}
+
+#[test]
+fn an_ambiguous_prefix_names_every_match() {
+    let setup = Setup::new_with_fiber_export_root();
+    setup.session("s_amb11111");
+    setup.session("s_amb22222");
+    let run = setup.export(&["s_amb"]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert!(run.stderr.contains("s_amb11111"), "{}", run.stderr);
+    assert!(run.stderr.contains("s_amb22222"), "{}", run.stderr);
+}
+
+#[test]
+fn an_unknown_id_exits_1() {
+    let setup = Setup::new_with_fiber_export_root();
+    setup.session("s_exportdd01");
+    let run = setup.export(&["s_missing"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(run.stderr.contains("no session"), "{}", run.stderr);
+}
+
+#[test]
+fn sessions_help_and_export_help_print() {
+    let setup = Setup::new_with_fiber_export_root();
+    for args in [
+        &["help", "sessions"][..],
+        &["sessions", "--help"],
+        &["sessions", "export", "--help"],
+    ] {
+        let run = setup.sessions_run_in_workspace(args);
+        assert_eq!(run.code, Some(0), "{args:?}: {}", run.stderr);
+        assert_eq!(run.stderr, "", "{args:?}");
+        assert!(run.stdout.contains("export"), "{args:?}: {}", run.stdout);
+    }
+    let help = setup.sessions_run_in_workspace(&["help", "sessions"]);
+    let flag = setup.sessions_run_in_workspace(&["sessions", "--help"]);
+    assert_eq!(help.stdout, flag.stdout);
+    let export_help = setup.sessions_run_in_workspace(&["sessions", "export", "--help"]);
+    assert!(
+        export_help.stdout.contains("Usage: fiber sessions export"),
+        "{}",
+        export_help.stdout
+    );
+}
+
+/// A Fiber home with the fake provider answering `replies` turns, and a
+/// hub that idles out soon after its last client leaves, so none lingers
+/// past the test.
+fn listing_setup(replies: usize) -> (support::Setup, ProviderServer) {
+    let setup = support::Setup::new();
+    let server = ProviderServer::start((0..replies).map(|_| support::hello())).unwrap();
+    setup.provider(&server);
+    support::write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "hub": {"idle_exit_ms": 200}}),
+    );
+    (setup, server)
+}
+
+/// Runs `fiber` with `args` in `dir` to its exit, and gives its stdout;
+/// it must exit 0.
+#[track_caller]
+fn fiber_in(setup: &support::Setup, dir: &Path, args: &[&str]) -> String {
+    let mut command = setup.fiber(args);
+    command.current_dir(dir);
+    let output = support::run_to_exit(
+        setup.deadline,
+        &format!("fiber {}", args.join(" ")),
+        command,
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+/// The session id on the first line `fiber ask` printed.
+fn asked(stdout: &str) -> String {
+    let first: Value = serde_json::from_str(stdout.lines().next().unwrap()).unwrap();
+    first["session_id"].as_str().unwrap().to_owned()
+}
+
+/// The ids `fiber sessions --json` printed, checking each line's keys come
+/// in the documented order.
+fn listed_ids(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .map(|line| {
+            let row: Value = serde_json::from_str(line).unwrap();
+            let id = row["id"].as_str().unwrap().to_owned();
+            let keys = ["id", "state", "name", "waiting", "spend"].map(|key| format!("\"{key}\":"));
+            let at: Vec<usize> = keys
+                .iter()
+                .map(|key| line.find(key.as_str()).unwrap())
+                .collect();
+            assert!(at.is_sorted(), "{line}");
+            assert_eq!(row.as_object().unwrap().len(), 5, "{line}");
+            id
+        })
+        .collect()
+}
+
+/// Waits under the deadline until the hub's socket is gone: it idled out.
+#[track_caller]
+fn until_hub_gone(setup: &support::Setup) {
+    let socket = setup.hub_socket();
+    let (done, gone) = mpsc::channel();
+    thread::spawn(move || {
+        while socket.exists() {
+            thread::yield_now();
+        }
+        done.send(()).unwrap_or(());
+    });
+    let deadline = Deadline::start();
+    assert!(
+        deadline.recv(&gone).is_ok(),
+        "waited {:?} for the hub to idle out",
+        deadline.left()
+    );
+}
+
+#[test]
+fn the_list_is_the_repositorys_project_inside_one_and_every_project_outside() {
+    let (setup, _server) = listing_setup(3);
+    let repo = setup.workspace();
+    let init = std::process::Command::new("git")
+        .args(["init", "-q"])
+        .arg(&repo)
+        .status()
+        .unwrap();
+    assert!(init.success());
+    let other = setup.root.path().join("o");
+    fs::create_dir_all(&other).unwrap();
+    let mut mine = vec![
+        asked(&fiber_in(&setup, &repo, &["ask", "one"])),
+        asked(&fiber_in(&setup, &repo, &["ask", "two"])),
+    ];
+    let theirs = asked(&fiber_in(&setup, &other, &["ask", "three"]));
+    let mut inside = listed_ids(&fiber_in(&setup, &repo, &["sessions", "--json"]));
+    inside.sort();
+    mine.sort();
+    assert_eq!(inside, mine);
+    let mut every = mine.clone();
+    every.push(theirs);
+    every.sort();
+    for (dir, args) in [
+        (&repo, &["sessions", "--json", "--all"][..]),
+        (&other, &["sessions", "--json"]),
+    ] {
+        let mut listed = listed_ids(&fiber_in(&setup, dir, args));
+        listed.sort();
+        assert_eq!(listed, every, "{args:?} in {}", dir.display());
+    }
+    let text = fiber_in(&setup, &repo, &["sessions"]);
+    assert!(text.starts_with("id  "), "{text}");
+    assert_eq!(text.lines().count(), 3, "{text}");
+    until_hub_gone(&setup);
+}
+
+#[test]
+fn start_and_subscribe_take_their_own_answer_and_keep_the_feed_lines_before_it() {
+    // The hub's answers and the feed's lines come in no fixed order
+    // (docs/invocation.md): here a feed line comes before each answer.
+    use std::io::Write;
+    let (mut hub, client) = std::os::unix::net::UnixStream::pair().unwrap();
+    let status =
+        json!({"kind": "session_status", "session_id": "s_1", "payload": {"state": "idle"}});
+    let started = json!({"kind": "command_accepted", "payload": {"command_id": "c_start", "result": {"session_id": "s_1"}}});
+    let subscribed = json!({"kind": "command_accepted", "payload": {"command_id": "c_sub"}});
+    writeln!(hub, "{status}\n{started}\n{status}\n{subscribed}").unwrap();
+    let client = support::Socket::from(Deadline::start(), client);
+    assert_eq!(support::start_session(&client, "/w", "two"), "s_1");
+    support::subscribe(&client, "s_1");
+    assert_eq!(support::recv(&client, "the first kept status"), status);
+    assert_eq!(support::recv(&client, "the second kept status"), status);
+}
+
+#[test]
+fn a_session_the_hub_started_and_left_idle_is_listed_first_as_idle() {
+    let (setup, server) = listing_setup(2);
+    // The live session's reply waits for its release, so its turn stays
+    // `streaming` until the test lets it finish; the exited `ask one`
+    // takes the first reply at once.
+    server.hold_from(2, fakes::deadline::BUDGET);
+    let exited = asked(&fiber_in(&setup, &setup.workspace(), &["ask", "one"]));
+    let hub = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let (watch, _) = support::connect_hub(&setup, &hub);
+    watch.send(r#"{"id":"c_feed","command":"feed"}"#);
+    let ack = support::recv_answer(&watch, "c_feed", "the feed acknowledgement");
+    assert_eq!(ack["kind"], "command_accepted", "{ack}");
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    let guard = support::SessionGuard::arm(Deadline::start(), &workspace);
+    let live = support::start_session(&watch, &workspace, "two");
+    // The full subscribe releases the held first prompt at once, instead
+    // of waiting out the hub's 1 s hold.
+    support::subscribe(&watch, &live);
+    // The turn's start folds before its end: the `streaming` status proves
+    // the turn is running, which the pre-turn `idle` never does.
+    support::until(&watch, "the live turn's streaming status", |line| {
+        line["kind"] == "session_status"
+            && line["session_id"] == live.as_str()
+            && line["payload"]["state"] == "streaming"
+    });
+    // The hub lists only sessions its scan has found, and a status on the
+    // subscribed connection arrives without any scan: poll until the held
+    // live session appears. The unreleased hold keeps its turn from
+    // finishing, so its row says `streaming` on every run.
+    let poll_listed = |wanted: &str| loop {
+        let stdout = fiber_in(&setup, &setup.workspace(), &["sessions", "--json"]);
+        assert!(
+            !setup.deadline.left().is_zero(),
+            "waited until the deadline for the hub to list the live session as {wanted}: {stdout}"
+        );
+        if stdout.contains(&format!("\"id\":\"{live}\",\"state\":\"{wanted}\"")) {
+            break stdout;
+        }
+    };
+    poll_listed("streaming");
+    server.release();
+    // The reply the release sends finishes the turn: its end folds `idle`.
+    support::until(&watch, "the live turn's idle status", |line| {
+        line["kind"] == "session_status"
+            && line["session_id"] == live.as_str()
+            && line["payload"]["state"] == "idle"
+    });
+    // The listing lags the relayed status: the subscribe relay and the
+    // feed fold read the session on separate sockets with no ordering
+    // edge between them, so poll until the live row itself says `idle`.
+    let stdout = poll_listed("idle");
+    assert_eq!(listed_ids(&stdout), [live.clone(), exited]);
+    support::close_session(&support::Socket::connect(
+        Deadline::start(),
+        &setup.session_socket(&live),
+    ));
+    guard.wait_gone();
+    drop(watch);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("TERM");
+    hub.wait();
+}

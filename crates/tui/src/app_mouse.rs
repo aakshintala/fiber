@@ -233,9 +233,9 @@ impl App {
             TargetId::Rail(spot) => self.rail_click(spot),
             TargetId::Token(number) => self.open_token(number),
             TargetId::Turn(_) => Effect::None,
-            // The working line's interrupt clicks like Esc: `cancel`,
-            // only when busy and connected.
-            TargetId::Interrupt => self.on_esc(),
+            // The interrupt targets click like ⌥I: `cancel` of the turn on
+            // screen, only while it runs and the terminal is connected.
+            TargetId::Interrupt => self.interrupt_turn(),
         }
     }
 
