@@ -353,8 +353,9 @@ fn commands_lists_the_extensions_command_with_tag_and_description() {
     assert!(status.success(), "stderr: {stderr}");
 }
 
-/// `handoff` is no built-in command, so an extension may claim the name
-/// without `replaces`: it loads and the `commands` answer lists it.
+/// The retired name of `/compact` is no built-in command, so an extension
+/// may claim it without `replaces`: it loads and the `commands` answer
+/// lists it.
 #[test]
 fn an_extension_may_claim_the_retired_command_name() {
     let setup = Setup::new_with_fm_root();

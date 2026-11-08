@@ -3389,8 +3389,8 @@ fn unknown_slash_is_refused_while_paths_and_fresh_skills_are_sent() {
 }
 
 /// `/compact focus on X` restarts the context from a note requested with
-/// those instructions and draws the compaction band; `/handoff`, the name
-/// this command no longer has, is an unknown command that sends nothing.
+/// those instructions and draws the compaction band; the command's retired
+/// name is an unknown command that sends nothing.
 #[test]
 fn compact_with_instructions_restarts_from_a_note_that_names_them() {
     let setup = support::Setup::new();
